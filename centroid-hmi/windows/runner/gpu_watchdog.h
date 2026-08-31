@@ -18,23 +18,52 @@
 // display adapter, or when the graphics driver resets (TDR).
 //
 // Recovering requires rebuilding the EGL display, context and surface plus
-// Skia's GrDirectContext. The Flutter Windows embedder does not do that — it
+// Skia's GrDirectContext. The Flutter Windows embedder does not do that -- it
 // retries eglMakeCurrent every frame and fails every frame. Those sources ship
 // as a prebuilt flutter_windows.dll, so we cannot fix it there without forking
 // the engine. What the runner *can* do is destroy and recreate
 // FlutterViewController: that runs egl::Manager's destructor (eglTerminate,
 // releasing the dead device) and then its constructor (eglInitialize, creating
-// a fresh one). The Dart VM restarts with it, so the app reboots — which for a
+// a fresh one). The Dart VM restarts with it, so the app reboots -- which for a
 // 24/7 HMI beats a permanently frozen screen.
+//
+// --- Why this was rewritten (2026-08-31) -----------------------------------
+//
+// The first version inferred death from the ABSENCE of frames: probe by asking
+// the engine for one (ForceRedraw + the next-frame callback), and after two
+// unanswered probes call it dead. On 2026-08-31 a station froze at 19:47 and
+// was still frozen, still logging, thirty-six minutes later, with the default
+// exit-on-loss policy in force. The watchdog never declared anything.
+//
+// Two properties of that inference turned out to be wrong:
+//
+//  1. ABSENCE IS NOT OBSERVABLE FROM A STARVED TIMER. The tick was a WM_TIMER
+//     on the host window. WM_TIMER is the lowest-priority message there is:
+//     GetMessage synthesises it only when no other message is waiting. A lost
+//     context makes every frame fail in microseconds and immediately reschedule,
+//     so the platform thread's posted-message queue never empties and the tick
+//     is never generated. The failure that the watchdog exists to catch is
+//     precisely the failure that silences it. (SendMessage jumps that queue,
+//     which is why the frozen process still answered WM_NULL in 10 ms and
+//     looked "responding" throughout -- and why the host now drives this class
+//     from a timer-queue thread and marshals with SendMessageTimeout.)
+//
+//  2. ABSENCE IS THE SYMPTOM, NOT THE CONDITION. The engine knows the context
+//     is lost -- it says so, twice a frame. Waiting to notice that frames
+//     stopped is a slower and strictly weaker test than asking the device. So
+//     OnRendererLost() now exists: a POSITIVE report that the context is gone,
+//     which declares the loss immediately instead of waiting out a famine.
+//     The probe survives as the backstop for losses no device query catches.
 //
 // This class owns only the decision: is the renderer dead, and what should the
 // host do about it. It is deliberately free of Win32 and Flutter types so the
-// decision can be unit tested without a GPU — see test/gpu_watchdog_test.cpp.
+// decision can be unit tested without a GPU -- see test/gpu_watchdog_test.cpp.
 // FlutterWindow is the adapter that feeds it events and executes its actions.
 //
-// Detection works by probing: ask the engine for a frame (ForceRedraw) and arm
-// the next-frame callback, which only fires once a frame has actually been
-// presented. Consecutive unanswered probes mean the renderer is gone.
+// Every entry point takes the host's monotonic clock in milliseconds. The
+// watchdog never reads a clock itself: the repeat-loss guard needs one, and a
+// class that cannot be run at a thousand times speed in a test is a class
+// whose escalation rules never get tested.
 
 namespace tfc {
 
@@ -57,13 +86,36 @@ class GpuWatchdog {
     // What to do once the renderer is judged dead. The diagnosis in
     // gpu_diagnosis.h is written either way; this is only about what happens
     // after it. See CENTROID_GPU_ON_LOSS in flutter_window.cpp.
-    LossAction on_loss = LossAction::kExitProcess;
+    //
+    // The default is to rebuild the engine in place. It used to be to end the
+    // process, on the reasoning that the report should be the last thing in
+    // the log and a supervisor should do the restarting. On a plant HMI that
+    // trade is a bad one: a station that kills itself twice a day leaves the
+    // same dead screen a freeze does, for as long as it takes something else
+    // to notice. Rebuilding the engine takes seconds and the operator gets a
+    // screen back. Exiting remains the escalation -- see max_recovery_attempts
+    // and max_losses_in_window below -- rather than the first move.
+    LossAction on_loss = LossAction::kRestartEngine;
 
-    // Consecutive failed recoveries before the watchdog gives up for good.
-    // Restarting the engine restarts the Dart app with it, so a GPU that is
-    // never coming back would otherwise wipe the operator's UI on every
-    // backoff interval, forever. 0 means never give up.
+    // Consecutive failed recoveries before the watchdog stops rebuilding the
+    // engine and ends the process instead. Restarting the engine restarts the
+    // Dart app with it, so a GPU that is never coming back would otherwise
+    // wipe the operator's UI on every backoff interval, forever. Handing the
+    // problem to whatever supervises the process -- which can do things this
+    // process cannot, like waiting for the driver or rebooting -- is the
+    // better end of that road. 0 means never escalate.
     int max_recovery_attempts = 5;
+
+    // --- The loop guard ---------------------------------------------------
+    //
+    // Recovery that works is the point. Recovery that works, breaks, works,
+    // breaks is thrash: the operator's screen wipes every couple of minutes
+    // and no shift can be run against it. So separately from consecutive
+    // FAILED recoveries, count SUCCESSFUL ones: more than |max_losses_in_window|
+    // distinct loss episodes inside |loss_window_ms| means in-place recovery
+    // is not holding, and the process exits so something above it can act.
+    unsigned long long loss_window_ms = 600000;  // 10 minutes
+    int max_losses_in_window = 3;
   };
 
   // What the host should do in response to an event.
@@ -84,6 +136,17 @@ class GpuWatchdog {
 
     // Re-arm the tick timer with this period. 0 means "leave it alone".
     unsigned int set_timer_ms = 0;
+
+    // Why the renderer was judged dead, for the report and the log. Only
+    // meaningful on an action that reports, restarts or exits.
+    LossCause cause = LossCause::kNoFramesPresented;
+
+    // Set when this action is an ESCALATION: the configured on_loss was to
+    // recover in place, and the watchdog overrode it and asked to exit
+    // because recovery is not holding. Purely so the log can say which of the
+    // two guards fired rather than leaving an unexplained exit in a run
+    // configured to restart.
+    LossEscalation escalation = LossEscalation::kNone;
   };
 
   // Two overloads rather than a defaulted argument: `Config()` cannot be named
@@ -92,19 +155,28 @@ class GpuWatchdog {
   explicit GpuWatchdog(Config config);
 
   // The engine is up; begin watching.
-  Action OnStarted();
+  Action OnStarted(unsigned long long now_ms);
 
   // The tick timer fired: judge the outstanding probe, then start a new one.
-  Action OnTick();
+  Action OnTick(unsigned long long now_ms);
 
-  // The engine presented a frame — the only positive proof of a live renderer.
-  Action OnFramePresented();
+  // The engine presented a frame -- the only positive proof of a live renderer.
+  Action OnFramePresented(unsigned long long now_ms);
 
   // A window message arrived that commonly accompanies device loss (power
   // resume, display change, session change). This only brings the next probe
   // forward; the probe still decides whether anything actually broke, so a
   // benign resolution change cannot reboot the engine on its own.
-  Action OnDeviceLossHint();
+  Action OnDeviceLossHint(unsigned long long now_ms);
+
+  // Something positively established that the render context is gone -- the
+  // D3D11 device ANGLE renders through reports itself removed, or the host
+  // could not reach the platform thread at all. Unlike a missed probe this is
+  // not an inference from silence, so it declares the loss on the spot: there
+  // is nothing a second opinion could add, and every extra interval spent
+  // confirming it is an interval the operator spends in front of a dead
+  // screen.
+  Action OnRendererLost(LossCause cause, unsigned long long now_ms);
 
   // Stop watching, permanently. The host calls this when carrying out an
   // action threw: the window procedure that drives the watchdog is noexcept,
@@ -126,12 +198,24 @@ class GpuWatchdog {
   LossAction on_loss() const { return config_.on_loss; }
 
   int missed_probes() const { return missed_probes_; }
+  int missed_probes_before_recovery() const {
+    return config_.missed_probes_before_recovery;
+  }
   int recovery_attempts() const { return recovery_attempts_; }
   bool probe_outstanding() const { return probe_outstanding_; }
+  // Loss episodes counted inside the current loop-guard window.
+  int losses_in_window() const { return losses_in_window_; }
+  int max_losses_in_window() const { return config_.max_losses_in_window; }
 
  private:
   // Period to wait before judging the engine we just restarted.
   unsigned int BackoffMs() const;
+
+  // The single place a loss becomes an Action, whether it was inferred from
+  // missed probes or reported outright. Having one body means the escalation
+  // rules cannot apply to one route and not the other -- which is exactly the
+  // kind of asymmetry that let the previous version fail silently.
+  Action DeclareLoss(LossCause cause, unsigned long long now_ms);
 
   Config config_;
   bool disabled_ = false;
@@ -139,6 +223,12 @@ class GpuWatchdog {
   bool reported_loss_ = false;
   int missed_probes_ = 0;
   int recovery_attempts_ = 0;
+
+  // Loop guard state: when the current counting window opened, and how many
+  // distinct loss episodes have been declared inside it.
+  unsigned long long loss_window_start_ms_ = 0;
+  int losses_in_window_ = 0;
+  bool window_open_ = false;
 };
 
 // Parses CENTROID_GPU_WATCHDOG. Returns |fallback| when unset or unrecognised.

@@ -7,26 +7,46 @@
 #include <cstdlib>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <typeinfo>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "runner_log.h"
 
 // The GPU device-loss problem this file guards against is described in
-// gpu_watchdog.h. Everything below is adapter: window messages and engine
-// callbacks in, tfc::GpuWatchdog decisions out.
+// gpu_watchdog.h. Everything below is adapter: window messages, engine
+// callbacks and the watchdog's own timer thread in, tfc::GpuWatchdog decisions
+// out.
 //
 // Tunables, read once at startup:
 //   CENTROID_GPU_WATCHDOG=0               disable the watchdog entirely
 //   CENTROID_GPU_WATCHDOG_INTERVAL_MS=n   probe interval, default 5000
-//   CENTROID_GPU_ON_LOSS=exit|log|restart what to do once the renderer is
-//                                         judged dead, default exit
+//   CENTROID_GPU_ON_LOSS=restart|exit|log what to do once the renderer is
+//                                         judged dead, default restart
 
 namespace {
 
-// Timer id for the watchdog's WM_TIMER. Scoped to our window, so any value
-// that does not collide with another timer on the same HWND will do.
-constexpr UINT_PTR kWatchdogTimerId = 1;
+// The tick, sent from the timer-queue thread to the platform thread. WM_APP is
+// the range reserved for an application's own messages; nothing in the engine
+// or in Win32Window claims it.
+constexpr UINT kWatchdogTickMessage = WM_APP + 0x47;
+
+// The stale WM_TIMER id. Nothing arms it any more -- see the note on the tick
+// in flutter_window.h -- but a build that rolls back and forward could leave
+// one running, so teardown still kills it.
+constexpr UINT_PTR kLegacyWatchdogTimerId = 1;
+
+// How long the timer thread waits for the platform thread to take the tick.
+// Generous: the platform thread may legitimately be inside a long frame or a
+// modal resize loop, and being wrong here means declaring a healthy renderer
+// dead. On the frozen station a sent message came back in 10 ms.
+constexpr UINT kTickSendTimeoutMs = 4000;
+
+// Consecutive unanswered sends before the platform thread is declared wedged.
+// At a 5s period that is a minute of a thread that will not accept a message
+// even ahead of its posted queue.
+constexpr int kUnansweredSendsBeforeWedged = 12;
 
 std::optional<std::string> GetEnvVar(const char* name) {
   char* value = nullptr;
@@ -54,12 +74,10 @@ tfc::GpuWatchdog::Config WatchdogConfigFromEnvironment() {
 }
 
 bool WatchdogEnabledFromEnvironment() {
-  // On by default now, which it was not when the only thing it could do was
-  // restart the engine on a judgement call. What it does by default today is
-  // *detect and explain*: probing costs one ForceRedraw every five seconds,
-  // and the payoff is that a device loss writes one report saying why instead
-  // of thousands of engine errors saying that it happened. CENTROID_GPU_ON_LOSS
-  // still governs whether anything is done about it.
+  // On by default. Probing costs one ForceRedraw every five seconds, and the
+  // payoff is that a device loss is recovered from in seconds and explained in
+  // one block instead of thousands of engine errors saying that it happened.
+  // CENTROID_GPU_ON_LOSS still governs what is done about it.
   return tfc::ParseWatchdogEnabled(
       CStrOrNull(GetEnvVar("CENTROID_GPU_WATCHDOG")), true);
 }
@@ -68,8 +86,10 @@ bool WatchdogEnabledFromEnvironment() {
 // normal shutdown (0) and a crash-handler exit.
 constexpr int kGpuLossExitCode = 109;
 
+constexpr const char* kTag = "[gpu-watchdog]";
+
 void LogWatchdog(const std::string& message) {
-  std::cerr << "[gpu-watchdog] " << message << std::endl;
+  tfc::RunnerLogLine(kTag, message);
 }
 
 }  // namespace
@@ -77,9 +97,22 @@ void LogWatchdog(const std::string& message) {
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project),
       watchdog_(WatchdogConfigFromEnvironment()),
-      watchdog_enabled_(WatchdogEnabledFromEnvironment()) {}
+      watchdog_enabled_(WatchdogEnabledFromEnvironment()) {
+  // Throttles sized for the two very different cadences here: ticks are one
+  // every few seconds and worth seeing, frames can be sixty a second and are
+  // only worth sampling.
+  tick_log_ = tfc::LogThrottle(tfc::LogThrottle::Config{8, 12, 60000});
+  frame_log_ = tfc::LogThrottle(tfc::LogThrottle::Config{3, 600, 300000});
+  hint_log_ = tfc::LogThrottle(tfc::LogThrottle::Config{10, 20, 30000});
+  send_failure_log_ = tfc::LogThrottle(tfc::LogThrottle::Config{5, 10, 30000});
+  timer_thread_log_ = tfc::LogThrottle(tfc::LogThrottle::Config{3, 60, 300000});
+}
 
-FlutterWindow::~FlutterWindow() {}
+FlutterWindow::~FlutterWindow() {
+  // Belt and braces: the timer callback holds a raw `this`, so it must not
+  // outlive the object even if OnDestroy never ran.
+  StopWatchdogTimer();
+}
 
 bool FlutterWindow::CreateController() {
   RECT frame = GetClientArea();
@@ -91,6 +124,9 @@ bool FlutterWindow::CreateController() {
   // Ensure that basic setup of the controller was successful.
   if (!flutter_controller_->engine() || !flutter_controller_->view()) {
     flutter_controller_ = nullptr;
+    LogWatchdog(
+        "engine did NOT start: FlutterViewController came back without an "
+        "engine or a view");
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
@@ -107,6 +143,28 @@ bool FlutterWindow::CreateController() {
   // registered. The following call ensures a frame is pending to ensure the
   // window is shown. It is a no-op if the first frame hasn't completed yet.
   flutter_controller_->ForceRedraw();
+
+  sentinel_loss_logged_ = false;
+
+  // Say which adapter the engine is actually rendering on, so the sentinel's
+  // verdict can be read against the right GPU rather than assumed to be about
+  // it. Cheap, and it is the one piece of the renderer's graphics state the
+  // embedder does expose.
+  IDXGIAdapter* engine_adapter = nullptr;
+  if (flutter_controller_->engine()->GetGraphicsAdapter(&engine_adapter) &&
+      engine_adapter != nullptr) {
+    DXGI_ADAPTER_DESC desc = {};
+    if (SUCCEEDED(engine_adapter->GetDesc(&desc))) {
+      char described[160];
+      std::snprintf(described, sizeof(described),
+                    "engine renders on adapter [vendor 0x%04x device 0x%04x]",
+                    desc.VendorId, desc.DeviceId);
+      LogWatchdog(described);
+    }
+    engine_adapter->Release();
+  } else {
+    LogWatchdog("the engine did not report a graphics adapter");
+  }
 
   return true;
 }
@@ -134,8 +192,23 @@ bool FlutterWindow::OnCreate() {
   start_tick_ = ::GetTickCount64();
   last_frame_tick_ = start_tick_;
 
+  // Say what was read from the environment and what it resolved to, always.
+  // The 2026-08-31 run had CENTROID_GPU_ON_LOSS unset, took the default, and
+  // then did nothing at all -- and there was no single line anywhere saying
+  // what the policy even was.
+  const std::optional<std::string> raw_policy = GetEnvVar("CENTROID_GPU_ON_LOSS");
+  LogWatchdog(std::string("policy: CENTROID_GPU_ON_LOSS=") +
+              (raw_policy.has_value() ? ("\"" + *raw_policy + "\"")
+                                      : "<unset>") +
+              " -> on loss will " + tfc::DescribeLossAction(watchdog_.on_loss()) +
+              "; escalates to exit after repeated losses. Durable log: " +
+              (tfc::RunnerLogHasFile() ? tfc::RunnerLogPath()
+                                       : std::string("<stderr only>")));
+
   if (!watchdog_enabled_) {
-    LogWatchdog("disabled via CENTROID_GPU_WATCHDOG");
+    LogWatchdog(
+        "DISABLED via CENTROID_GPU_WATCHDOG. A lost render context will "
+        "freeze the UI and nothing will notice.");
     return true;
   }
 
@@ -150,21 +223,19 @@ bool FlutterWindow::OnCreate() {
     // Not fatal. The loss is still detected and still reported; the report
     // just cannot name the reason, and says so rather than implying health.
     LogWatchdog(
-        "sentinel D3D11 device could NOT be created — a device loss will be "
+        "sentinel D3D11 device could NOT be created -- a device loss will be "
         "detected but its reason will be unavailable");
   }
 
-  LogWatchdog(std::string("watching; on loss will ") +
-              tfc::DescribeLossAction(watchdog_.on_loss()));
+  watchdog_hwnd_.store(GetHandle());
 
-  watchdog_hwnd_ = GetHandle();
-
-  // Device loss usually — but not always — comes with one of these messages.
+  // Device loss usually -- but not always -- comes with one of these messages.
   // They only bring the next probe forward; the probe still decides whether
   // anything actually broke.
-  if (::WTSRegisterSessionNotification(watchdog_hwnd_,
+  if (::WTSRegisterSessionNotification(watchdog_hwnd_.load(),
                                        NOTIFY_FOR_THIS_SESSION)) {
     session_notifications_registered_ = true;
+    LogWatchdog("registered for RDP/console session change notifications");
   } else {
     // Not fatal: the periodic probe still catches the loss, just later.
     LogWatchdog("WTSRegisterSessionNotification failed (error " +
@@ -172,43 +243,258 @@ bool FlutterWindow::OnCreate() {
                 "); relying on the periodic probe only");
   }
 
+  LogWatchdog(std::string("session at startup: ") +
+              (::GetSystemMetrics(SM_REMOTESESSION) != 0
+                   ? "remote (RDP/terminal services)"
+                   : "console (local)"));
+
   Dispatch(WatchdogEvent::kStarted);
   return true;
 }
 
 void FlutterWindow::OnDestroy() {
-  if (watchdog_hwnd_ != nullptr) {
-    ::KillTimer(watchdog_hwnd_, kWatchdogTimerId);
+  StopWatchdogTimer();
+
+  HWND hwnd = watchdog_hwnd_.exchange(nullptr);
+  if (hwnd != nullptr) {
+    ::KillTimer(hwnd, kLegacyWatchdogTimerId);
     if (session_notifications_registered_) {
-      ::WTSUnRegisterSessionNotification(watchdog_hwnd_);
+      ::WTSUnRegisterSessionNotification(hwnd);
       session_notifications_registered_ = false;
     }
-    // Also guards against OnDestroy running twice: Win32Window::Destroy calls
-    // it directly, and again via the WM_DESTROY it triggers.
-    watchdog_hwnd_ = nullptr;
   }
   DestroyController();
 
   Win32Window::OnDestroy();
 }
 
-void FlutterWindow::Dispatch(WatchdogEvent event) {
+// --- The tick thread --------------------------------------------------------
+
+void CALLBACK FlutterWindow::WatchdogTimerThunk(void* context, BOOLEAN fired) {
+  (void)fired;
+  static_cast<FlutterWindow*>(context)->OnWatchdogTimerThread();
+}
+
+void FlutterWindow::OnWatchdogTimerThread() {
+  // The first thing this thread does is say that it ran. If the tick ever goes
+  // missing again, the absence of THIS line separates "the timer never fired"
+  // from "the timer fired and the platform thread did not take the message" --
+  // a distinction that cost three investigations to not have.
+  const tfc::LogThrottle::Decision fired =
+      timer_thread_log_.Record(::GetTickCount64());
+  const bool stopping = watchdog_stopping_.load();
+  HWND hwnd = watchdog_hwnd_.load();
+  if (fired.emit) {
+    char detail[128];
+    std::snprintf(detail, sizeof(detail), "hwnd=0x%p stopping=%s",
+                  static_cast<void*>(hwnd), stopping ? "yes" : "no");
+    LogWatchdog(std::string("timer thread fired; ") + detail +
+                tfc::LogThrottle::DescribeSuppression(fired));
+  }
+
+  if (stopping || hwnd == nullptr) {
+    return;
+  }
+
+  // SendMessageTimeout, not PostMessage. A posted message would sit behind
+  // whatever has saturated the queue -- which, during exactly the failure this
+  // watches for, is an engine failing frames as fast as it can schedule them.
+  // Sent messages jump that queue.
+  DWORD_PTR result = 0;
+  const LRESULT sent = ::SendMessageTimeoutW(
+      hwnd, kWatchdogTickMessage, 0, 0, SMTO_ABORTIFHUNG | SMTO_NORMAL,
+      kTickSendTimeoutMs, &result);
+
+  if (sent != 0) {
+    unanswered_sends_.store(0);
+    if (fired.emit) {
+      LogWatchdog("...and the platform thread answered the tick (result " +
+                  std::to_string(static_cast<long long>(result)) + ")");
+    }
+    return;
+  }
+
+  // The platform thread did not take a sent message. That is a much stronger
+  // statement than "it is busy", and it is logged every time it happens --
+  // throttled, because a wedged thread will do it on every tick.
+  const int unanswered = unanswered_sends_.fetch_add(1) + 1;
+  const tfc::LogThrottle::Decision decision =
+      send_failure_log_.Record(::GetTickCount64());
+  if (decision.emit) {
+    LogWatchdog("the platform thread did NOT answer a sent tick within " +
+                std::to_string(kTickSendTimeoutMs) + " ms (GetLastError " +
+                std::to_string(::GetLastError()) + "); " +
+                std::to_string(unanswered) + " consecutive, wedged at " +
+                std::to_string(kUnansweredSendsBeforeWedged) +
+                tfc::LogThrottle::DescribeSuppression(decision));
+  }
+
+  if (unanswered < kUnansweredSendsBeforeWedged) {
+    return;
+  }
+
+  // Nothing on the platform thread can be trusted now, the engine included, so
+  // this path deliberately touches neither. Write the report from here and end
+  // the process: a supervised restart is the only move left, and it is
+  // strictly better than a screen that stays dead until someone walks over.
+  //
+  // Latched by resetting the counter so a second pass cannot re-enter while
+  // the first is still writing.
+  unanswered_sends_.store(0);
+  LogWatchdog(
+      "the platform thread is WEDGED -- it has refused sent messages for "
+      "long enough that the message loop cannot be assumed alive. Reporting "
+      "from the watchdog thread and ending the process.");
+
+  // Reads device_probe_ and the tick stamps from this thread, which the
+  // platform thread also writes. Racy in principle; in practice this path is
+  // only reached once the platform thread has stopped answering at all, and a
+  // slightly torn report beats no report -- which is what the last three
+  // investigations had.
+  tfc::LossEvidence evidence;
+  evidence.cause = tfc::LossCause::kPlatformThreadWedged;
+  evidence.sentinel_available = device_probe_.available();
+  evidence.device_removed_reason = device_probe_.GetRemovedReason();
+  evidence.adapter_description = device_probe_.adapter_description();
+  evidence.adapter_vendor_id = device_probe_.vendor_id();
+  evidence.adapter_device_id = device_probe_.device_id();
+  evidence.remote_session = ::GetSystemMetrics(SM_REMOTESESSION) != 0;
+  evidence.ms_since_start = ::GetTickCount64() - start_tick_;
+  evidence.ms_since_last_frame = ::GetTickCount64() - last_frame_tick_;
+  tfc::RunnerLogBlock(tfc::FormatLossReport(evidence));
+
+  // Not PostQuitMessage: that needs the message loop this has just concluded
+  // is not running. ExitProcess after the report has been flushed.
+  std::cerr.flush();
+  std::fflush(nullptr);
+  ::ExitProcess(static_cast<UINT>(kGpuLossExitCode));
+}
+
+bool FlutterWindow::StartWatchdogTimer(unsigned int period_ms) {
+  // Clear the stop latch before arming, because OnDestroy runs BEFORE the
+  // window is ever created: Win32Window::Create opens with Destroy(), which
+  // calls OnDestroy() on a window that does not exist yet. Leaving the latch
+  // set there meant the timer thread fired on schedule and bowed out every
+  // time -- a watchdog that looked armed in the log and was not. Caught by
+  // running it; no unit test of this class could have.
+  watchdog_stopping_.store(false);
+
+  if (watchdog_timer_queue_ == nullptr) {
+    watchdog_timer_queue_ = ::CreateTimerQueue();
+    if (watchdog_timer_queue_ == nullptr) {
+      LogWatchdog("CreateTimerQueue failed (error " +
+                  std::to_string(::GetLastError()) +
+                  ") -- the watchdog cannot tick and is disabling itself");
+      return false;
+    }
+  }
+  if (watchdog_timer_ != nullptr) {
+    SetWatchdogPeriod(period_ms);
+    return true;
+  }
+  if (!::CreateTimerQueueTimer(&watchdog_timer_, watchdog_timer_queue_,
+                               &FlutterWindow::WatchdogTimerThunk, this,
+                               period_ms, period_ms, WT_EXECUTEDEFAULT)) {
+    watchdog_timer_ = nullptr;
+    LogWatchdog("CreateTimerQueueTimer failed (error " +
+                std::to_string(::GetLastError()) +
+                ") -- the watchdog cannot tick and is disabling itself");
+    return false;
+  }
+  watchdog_period_ms_ = period_ms;
+  LogWatchdog("tick armed on a timer-queue thread, every " +
+              std::to_string(period_ms) +
+              " ms (not WM_TIMER: that is starved by exactly the failure this "
+              "watches for)");
+  return true;
+}
+
+void FlutterWindow::SetWatchdogPeriod(unsigned int period_ms) {
+  if (watchdog_timer_ == nullptr || period_ms == 0 ||
+      period_ms == watchdog_period_ms_) {
+    return;
+  }
+  if (::ChangeTimerQueueTimer(watchdog_timer_queue_, watchdog_timer_, period_ms,
+                              period_ms)) {
+    LogWatchdog("tick period now " + std::to_string(period_ms) + " ms (was " +
+                std::to_string(watchdog_period_ms_) + " ms)");
+    watchdog_period_ms_ = period_ms;
+  } else {
+    LogWatchdog("ChangeTimerQueueTimer failed (error " +
+                std::to_string(::GetLastError()) + "); keeping " +
+                std::to_string(watchdog_period_ms_) + " ms");
+  }
+}
+
+void FlutterWindow::StopWatchdogTimer() {
+  // Nothing armed means nothing to stop. Without this, the OnDestroy that
+  // Win32Window::Create runs before the window exists would latch the stop
+  // flag for the life of the process. StartWatchdogTimer clears it too; both,
+  // because a watchdog that silently does not run is the failure mode this
+  // whole change exists to remove.
+  if (watchdog_timer_ == nullptr && watchdog_timer_queue_ == nullptr) {
+    return;
+  }
+
+  watchdog_stopping_.store(true);
+  if (watchdog_timer_ != nullptr) {
+    // INVALID_HANDLE_VALUE waits for a callback that is already running. A
+    // callback blocked in SendMessageTimeout to this very thread would
+    // deadlock, except that the send has its own timeout, so the wait is
+    // bounded by kTickSendTimeoutMs.
+    ::DeleteTimerQueueTimer(watchdog_timer_queue_, watchdog_timer_,
+                            INVALID_HANDLE_VALUE);
+    watchdog_timer_ = nullptr;
+  }
+  if (watchdog_timer_queue_ != nullptr) {
+    ::DeleteTimerQueueEx(watchdog_timer_queue_, INVALID_HANDLE_VALUE);
+    watchdog_timer_queue_ = nullptr;
+  }
+}
+
+// --- Driving the watchdog ---------------------------------------------------
+
+bool FlutterWindow::RenderDeviceIsLost() {
+  if (!device_probe_.available()) {
+    return false;
+  }
+  const std::uint32_t reason = device_probe_.GetRemovedReason();
+  if (reason == tfc::kDxgiOk) {
+    return false;
+  }
+  if (!sentinel_loss_logged_) {
+    sentinel_loss_logged_ = true;
+    char named[96];
+    LogWatchdog(
+        std::string("the render adapter reports itself REMOVED: ") +
+        tfc::DescribeRemovedReason(reason, named, sizeof(named)) +
+        ". Asked directly, not inferred -- declaring the loss now instead of "
+        "waiting two probe intervals for the frames to stop.");
+  }
+  return true;
+}
+
+void FlutterWindow::Dispatch(WatchdogEvent event, tfc::LossCause cause) {
   if (!watchdog_enabled_ || watchdog_.has_given_up()) {
     return;
   }
+  const unsigned long long now = ::GetTickCount64();
   try {
     switch (event) {
       case WatchdogEvent::kStarted:
-        ApplyAction(watchdog_.OnStarted());
+        ApplyAction(watchdog_.OnStarted(now));
         break;
       case WatchdogEvent::kTick:
-        ApplyAction(watchdog_.OnTick());
+        ApplyAction(watchdog_.OnTick(now));
         break;
       case WatchdogEvent::kFramePresented:
-        ApplyAction(watchdog_.OnFramePresented());
+        ApplyAction(watchdog_.OnFramePresented(now));
         break;
       case WatchdogEvent::kDeviceLossHint:
-        ApplyAction(watchdog_.OnDeviceLossHint());
+        ApplyAction(watchdog_.OnDeviceLossHint(now));
+        break;
+      case WatchdogEvent::kRendererLost:
+        ApplyAction(watchdog_.OnRendererLost(cause, now));
         break;
     }
   } catch (const std::exception& e) {
@@ -216,20 +502,29 @@ void FlutterWindow::Dispatch(WatchdogEvent event) {
     // engine's task runner: letting anything escape either one calls
     // std::terminate, which is an abort with no explanation attached. Failing
     // safe costs the recovery feature and leaves the app behaving exactly as
-    // it did before the watchdog existed.
-    LogWatchdog(std::string("disabling watchdog — ") + typeid(e).name() + ": " +
-                e.what());
-    DisableWatchdog();
+    // it did before the watchdog existed -- which is why it is now impossible
+    // for that to happen quietly.
+    DisableWatchdog(std::string("an action threw ") + typeid(e).name() + ": " +
+                    e.what());
   } catch (...) {
-    LogWatchdog("disabling watchdog — unknown exception");
-    DisableWatchdog();
+    DisableWatchdog("an action threw an exception of unknown type");
   }
 }
 
-void FlutterWindow::DisableWatchdog() {
+void FlutterWindow::DisableWatchdog(const std::string& why) {
+  // The loudest line in this file. A watchdog that switches itself off is the
+  // worst possible failure -- the screen dies and nothing is watching -- and
+  // for the 2026-08-31 incident this path could not be ruled out because it
+  // never said anything.
+  LogWatchdog(
+      "DISARMED -- from here on a lost render context will freeze the UI and "
+      "NOTHING will detect it. Cause: " +
+      why);
   watchdog_.Disable();
-  if (watchdog_hwnd_ != nullptr) {
-    ::KillTimer(watchdog_hwnd_, kWatchdogTimerId);
+  StopWatchdogTimer();
+  HWND hwnd = watchdog_hwnd_.load();
+  if (hwnd != nullptr) {
+    ::KillTimer(hwnd, kLegacyWatchdogTimerId);
   }
 }
 
@@ -237,18 +532,26 @@ void FlutterWindow::ApplyAction(const tfc::GpuWatchdog::Action& action) {
   // Before anything else: the report is the reason this code exists, and a
   // restart or an exit would otherwise destroy the evidence it reads.
   if (action.report_loss) {
-    ReportDeviceLoss();
+    ReportDeviceLoss(action.cause, action.escalation);
   }
 
   if (action.exit_process) {
+    if (action.escalation != tfc::LossEscalation::kNone) {
+      LogWatchdog(std::string("ESCALATING to exit although the policy is to ") +
+                  tfc::DescribeLossAction(watchdog_.on_loss()) + " -- " +
+                  tfc::DescribeEscalation(action.escalation));
+    }
     ExitAfterDeviceLoss();
     return;
   }
 
   if (action.restart_engine) {
-    LogWatchdog("renderer is not presenting frames (EGL context lost?) — "
-                "restarting the Flutter engine, attempt " +
-                std::to_string(watchdog_.recovery_attempts()));
+    LogWatchdog(std::string("RECOVERING in place: ") +
+                tfc::DescribeLossCause(action.cause) +
+                " Rebuilding the Flutter engine, attempt " +
+                std::to_string(watchdog_.recovery_attempts()) +
+                " (loss episode " + std::to_string(watchdog_.losses_in_window()) +
+                " in the guard window).");
     DestroyController();
     // Deliberately does not touch first_frame_shown_. If the window was already
     // shown it stays shown, and re-running Show() would undo an operator's
@@ -256,7 +559,17 @@ void FlutterWindow::ApplyAction(const tfc::GpuWatchdog::Action& action) {
     // still false and the window has never appeared — then we do want the next
     // successful frame to show it.
     if (!CreateController()) {
-      LogWatchdog("engine restart FAILED — will retry");
+      LogWatchdog(
+          "engine restart FAILED -- will retry on the next tick, and escalate "
+          "to exit once the attempts are exhausted");
+    } else {
+      LogWatchdog(
+          "engine rebuilt; waiting for it to present a frame before calling "
+          "this a recovery");
+      // The old sentinel may be a corpse on a dead adapter. A fresh one gives
+      // the next report something true to say.
+      device_probe_.Reset();
+      device_probe_.Create();
     }
     // CreateController's own ForceRedraw is the next probe; the watchdog
     // already accounted for that.
@@ -266,17 +579,25 @@ void FlutterWindow::ApplyAction(const tfc::GpuWatchdog::Action& action) {
     StartProbe();
   }
 
-  // A null handle means the window is going away — SetTimer would silently
-  // create an unowned timer that never routes a WM_TIMER back to us.
-  if (action.set_timer_ms != 0 && watchdog_hwnd_ != nullptr) {
-    ::SetTimer(watchdog_hwnd_, kWatchdogTimerId, action.set_timer_ms, nullptr);
+  if (action.set_timer_ms != 0) {
+    if (watchdog_timer_ == nullptr) {
+      if (!StartWatchdogTimer(action.set_timer_ms)) {
+        DisableWatchdog("the tick timer could not be created");
+      }
+    } else {
+      SetWatchdogPeriod(action.set_timer_ms);
+    }
   }
 }
 
-void FlutterWindow::ReportDeviceLoss() {
+void FlutterWindow::ReportDeviceLoss(tfc::LossCause cause,
+                                     tfc::LossEscalation escalation) {
   const unsigned long long now = ::GetTickCount64();
 
   tfc::LossEvidence evidence;
+  evidence.cause = cause;
+  evidence.escalation = escalation;
+
   evidence.sentinel_available = device_probe_.available();
   evidence.device_removed_reason = device_probe_.GetRemovedReason();
   evidence.adapter_description = device_probe_.adapter_description();
@@ -291,22 +612,25 @@ void FlutterWindow::ReportDeviceLoss() {
   evidence.ms_since_start = now - start_tick_;
   evidence.ms_since_last_frame = now - last_frame_tick_;
   evidence.missed_probes = watchdog_.missed_probes();
+  evidence.losses_in_window = watchdog_.losses_in_window();
+  evidence.max_losses_in_window = watchdog_.max_losses_in_window();
+  evidence.recovery_attempts = watchdog_.recovery_attempts();
 
   evidence.remote_session = ::GetSystemMetrics(SM_REMOTESESSION) != 0;
 
-  // Straight to stderr, which main.cpp has already pointed at the log file.
-  // Not through LogWatchdog: this is a block, and prefixing every line again
-  // would double the tag the report already carries.
-  std::cerr << tfc::FormatLossReport(evidence);
-  std::cerr.flush();
+  // Both sinks: the console for whoever is watching, and CENTROID_LOG_FILE for
+  // whoever reads it tomorrow. The [gpu-loss] prefix on every line is what
+  // run-hmi.ps1 -Report greps for; do not change it.
+  tfc::RunnerLogBlock(tfc::FormatLossReport(evidence));
 }
 
 void FlutterWindow::ExitAfterDeviceLoss() {
   LogWatchdog("ending the process so the report above is the last thing in "
               "this log; exit code " +
               std::to_string(kGpuLossExitCode) +
-              ". Set CENTROID_GPU_ON_LOSS=restart to rebuild the engine "
-              "instead, or =log to stay up.");
+              ". RegisterApplicationRestart should bring it back.");
+
+  StopWatchdogTimer();
 
   // Take the engine down first: that runs egl::Manager's destructor, which
   // releases the dead D3D device, and it stops the raster thread producing
@@ -337,7 +661,7 @@ void FlutterWindow::StartProbe() {
   //
   // Every SetNextFrameCallback registers a FRESH callback with the engine,
   // while the client wrapper keeps just one std::function behind them all. Its
-  // trampoline invokes that function and then nulls it, with no null check —
+  // trampoline invokes that function and then nulls it, with no null check --
   // so the second of two pending callbacks calls an empty std::function and
   // throws std::bad_function_call, which nothing catches and which ends the
   // process.
@@ -345,8 +669,12 @@ void FlutterWindow::StartProbe() {
   // Arming repeatedly without a frame in between is exactly what this watchdog
   // does when the renderer is down: probes stack up, one per interval, unseen
   // because no frame is presented to consume them. They come due together the
-  // moment the device works again — which is why the crash landed on the
+  // moment the device works again -- which is why the crash landed on the
   // morning an RDP session was reconnected, not on the evening it was dropped.
+  //
+  // Note that this guard does NOT weaken detection: the watchdog's own
+  // probe_outstanding_ is what counts misses, and it is set whether or not a
+  // new callback was armed here.
   if (!probe_armed_) {
     probe_armed_ = true;
     flutter_controller_->engine()->SetNextFrameCallback(
@@ -360,8 +688,29 @@ void FlutterWindow::OnFramePresented() {
   // free to arm a new one.
   probe_armed_ = false;
   last_frame_tick_ = ::GetTickCount64();
-  int attempts_before = watchdog_.recovery_attempts();
+  const int attempts_before = watchdog_.recovery_attempts();
+  const bool was_reported = watchdog_.has_reported_loss();
+
+  const tfc::LogThrottle::Decision decision = frame_log_.Record(last_frame_tick_);
+  if (decision.emit) {
+    LogWatchdog("frame presented; missed-probe count reset from " +
+                std::to_string(watchdog_.missed_probes()) + "/" +
+                std::to_string(watchdog_.missed_probes_before_recovery()) +
+                tfc::LogThrottle::DescribeSuppression(decision));
+  }
+
   Dispatch(WatchdogEvent::kFramePresented);
+
+  if (was_reported) {
+    // The counterpart to the loss report: the episode is over. Without this a
+    // log shows losses and never recoveries, and nobody can tell a station
+    // that healed from one that is still dead.
+    LogWatchdog(
+        "renderer is presenting frames again -- the loss episode reported "
+        "above has ENDED");
+    frame_log_.Reset();
+    tick_log_.Reset();
+  }
   if (attempts_before > 0 && !watchdog_.has_given_up()) {
     LogWatchdog("renderer healthy again after " +
                 std::to_string(attempts_before) + " recovery attempt(s)");
@@ -377,10 +726,35 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
-  // Handled before Flutter sees it — the timer is ours by id, and nothing in
-  // the engine should claim it.
-  if (message == WM_TIMER && wparam == kWatchdogTimerId) {
-    Dispatch(WatchdogEvent::kTick);
+  // Handled before Flutter sees it. Sent from the watchdog's timer thread; see
+  // the note on the tick in flutter_window.h.
+  if (message == kWatchdogTickMessage) {
+    const unsigned long long now = ::GetTickCount64();
+    const tfc::LogThrottle::Decision decision = tick_log_.Record(now);
+    if (decision.emit) {
+      LogWatchdog(
+          "tick: missed " + std::to_string(watchdog_.missed_probes()) + "/" +
+          std::to_string(watchdog_.missed_probes_before_recovery()) +
+          ", probe outstanding=" +
+          (watchdog_.probe_outstanding() ? "yes" : "no") + ", last frame " +
+          std::to_string(now - last_frame_tick_) + " ms ago, sentinel " +
+          (device_probe_.available() ? "watched" : "UNAVAILABLE") +
+          tfc::LogThrottle::DescribeSuppression(decision));
+    }
+
+    // Ask the device before counting silence. A positive answer is better
+    // evidence than any number of unanswered probes, and it arrives sooner.
+    if (RenderDeviceIsLost()) {
+      Dispatch(WatchdogEvent::kRendererLost, tfc::LossCause::kContextLost);
+    } else {
+      Dispatch(WatchdogEvent::kTick);
+    }
+    return 0;
+  }
+
+  // A WM_TIMER can still arrive from a timer this build no longer arms.
+  if (message == WM_TIMER && wparam == kLegacyWatchdogTimerId) {
+    ::KillTimer(hwnd, kLegacyWatchdogTimerId);
     return 0;
   }
 
@@ -408,7 +782,12 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       // as a reset (or different) device.
       if (wparam == PBT_APMRESUMEAUTOMATIC || wparam == PBT_APMRESUMESUSPEND) {
         if (watchdog_enabled_ && flutter_controller_) {
-          LogWatchdog("probing after power resume");
+          const tfc::LogThrottle::Decision decision =
+              hint_log_.Record(::GetTickCount64());
+          if (decision.emit) {
+            LogWatchdog("hint: power resume -- probing" +
+                        tfc::LogThrottle::DescribeSuppression(decision));
+          }
           NoteLossHint(tfc::LossHint::kPowerResume, 0);
           Dispatch(WatchdogEvent::kDeviceLossHint);
         }
@@ -417,7 +796,12 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
 
     case WM_DISPLAYCHANGE:
       if (watchdog_enabled_ && flutter_controller_) {
-        LogWatchdog("probing after display change");
+        const tfc::LogThrottle::Decision decision =
+            hint_log_.Record(::GetTickCount64());
+        if (decision.emit) {
+          LogWatchdog("hint: WM_DISPLAYCHANGE -- probing" +
+                      tfc::LogThrottle::DescribeSuppression(decision));
+        }
         NoteLossHint(tfc::LossHint::kDisplayChange, 0);
         Dispatch(WatchdogEvent::kDeviceLossHint);
       }
@@ -434,10 +818,16 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
         case WTS_SESSION_UNLOCK:
           if (watchdog_enabled_ && flutter_controller_) {
             char named[64];
-            LogWatchdog(
-                std::string("probing after session change — ") +
-                tfc::DescribeSessionChange(static_cast<unsigned long>(wparam),
-                                           named, sizeof(named)));
+            const tfc::LogThrottle::Decision decision =
+                hint_log_.Record(::GetTickCount64());
+            if (decision.emit) {
+              LogWatchdog(
+                  std::string("hint: session change -- ") +
+                  tfc::DescribeSessionChange(static_cast<unsigned long>(wparam),
+                                             named, sizeof(named)) +
+                  " -- probing" +
+                  tfc::LogThrottle::DescribeSuppression(decision));
+            }
             NoteLossHint(tfc::LossHint::kSessionChange,
                          static_cast<unsigned long>(wparam));
             Dispatch(WatchdogEvent::kDeviceLossHint);

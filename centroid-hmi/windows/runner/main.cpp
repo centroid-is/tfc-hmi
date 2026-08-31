@@ -10,6 +10,7 @@
 #include "flutter_window.h"
 #include "output_target.h"
 #include "path_utils.h"
+#include "runner_log.h"
 #include "utils.h"
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
@@ -103,6 +104,21 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     tfc::InstallCrashHandlers(tfc::DirectoryOf(log_path), log_path);
     std::cerr << "[startup] logging to " << log_path << " (keeping "
               << max_archives << " previous runs)" << std::endl;
+  }
+
+  // Open the runner's own durable sink, whatever happened above.
+  //
+  // On the kInherited path -- a terminal, `flutter run`, VS Code -- nothing
+  // above redirects anything, so every diagnostic the runner writes goes to a
+  // console and nowhere else. That is exactly how the 2026-08-31 freeze was
+  // investigated three times with the decisive line missing: it had been
+  // printed, into scrollback, and %TEMP%\hmi-stderr.log was zero bytes. From
+  // here on the GPU watchdog's lines and its loss report land in the log file
+  // as well as on stderr, in every launch mode. See runner_log.h.
+  tfc::InitRunnerLog(log_path);
+  if (tfc::RunnerLogHasFile()) {
+    std::cerr << "[startup] runner diagnostics also going to "
+              << tfc::RunnerLogPath() << std::endl;
   }
 
   free(debug_env);

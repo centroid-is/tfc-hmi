@@ -195,8 +195,16 @@ std::string FormatLossReport(const LossEvidence& evidence) {
 
   AppendLine(out, "================ GPU DEVICE LOSS ================");
   AppendLine(out,
-             "the renderer stopped presenting frames. What follows is why, so "
-             "that the EGL errors below it can be ignored.");
+             "the renderer is dead. What follows is why, so that the EGL "
+             "errors around it can be ignored.");
+
+  // First, and deliberately before any of the evidence: HOW this was
+  // established. A report that opens with a reason code invites the reader to
+  // assume the strongest possible test produced it, and for four weeks the
+  // only test there was could not distinguish a dead renderer from a watchdog
+  // nobody was ticking.
+  AppendLine(out,
+             std::string("detected by: ") + DescribeLossCause(evidence.cause));
 
   if (!evidence.sentinel_available) {
     // Saying nothing here would leave reason 0 looking like S_OK.
@@ -257,8 +265,54 @@ std::string FormatLossReport(const LossEvidence& evidence) {
          << evidence.missed_probes << " unanswered probe(s)";
   AppendLine(out, timing.str());
 
+  std::ostringstream history;
+  history << "history    : loss episode " << evidence.losses_in_window
+          << " of at most " << evidence.max_losses_in_window
+          << " allowed in the guard window; " << evidence.recovery_attempts
+          << " consecutive in-place recovery attempt(s) so far";
+  AppendLine(out, history.str());
+
+  if (evidence.escalation != LossEscalation::kNone) {
+    AppendLine(out, std::string("escalated  : ") +
+                        DescribeEscalation(evidence.escalation));
+  }
+
   AppendLine(out, "=================================================");
   return out.str();
+}
+
+const char* DescribeLossCause(LossCause cause) {
+  switch (cause) {
+    case LossCause::kNoFramesPresented:
+      return "no frames presented -- consecutive probes went unanswered. This "
+             "is an INFERENCE from silence: it is also what a watchdog that is "
+             "not being ticked looks like, so treat it as the weaker finding.";
+    case LossCause::kContextLost:
+      return "the render adapter reported itself REMOVED -- asked directly, "
+             "not inferred. This is the strong finding: the GPU or its driver "
+             "went down, and the reason code below names which way.";
+    case LossCause::kPlatformThreadWedged:
+      return "the platform thread did not answer a sent message inside the "
+             "timeout. Nothing running on that thread, the engine included, "
+             "can be assumed alive.";
+  }
+  return "unknown";
+}
+
+const char* DescribeEscalation(LossEscalation escalation) {
+  switch (escalation) {
+    case LossEscalation::kNone:
+      return "not escalated";
+    case LossEscalation::kRepeatedLosses:
+      return "in-place recovery WORKS but does not HOLD -- too many separate "
+             "losses inside the guard window. Exiting so a supervisor can do "
+             "what this process cannot.";
+    case LossEscalation::kRecoveryExhausted:
+      return "in-place recovery was tried the configured number of times and "
+             "never produced a frame. Exiting so a supervisor can restart the "
+             "process from scratch.";
+  }
+  return "not escalated";
 }
 
 LossAction ParseLossAction(const char* raw, LossAction fallback) {
