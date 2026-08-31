@@ -316,3 +316,17 @@ mean.
 back within reach of the collector's retention sweeping. It is refused there so
 that naming a collected key `audit_entry` — a free string in the collector
 config — cannot reach the trail by accident.
+
+**No admin screen may offer a delete, a prune or an export path over
+`audit_entry`.** Delete and prune are the obvious half: the trail is worth
+having only because it is append-only, section 2's Postgres role is what
+enforces that at the database, and on SQLite nothing enforces it at all — so on
+the demo backend the only thing between the trail and a "clear old entries"
+button is that nobody has written one. Export is on the list because it is the
+half of "export it first, then clear it" that sounds responsible. Today the
+property is written down in two places the person adding that button will never
+open: `DriftAuditSink` has exactly one method, and `drift_audit_sink_test.dart`
+reads the sink's own source to assert that no second one has appeared — the
+same shape as `kRetentionExemptTables` above, which refuses the table by name
+rather than trusting the sweep to skip it. This paragraph is the version of
+that decision a screen author can find.
