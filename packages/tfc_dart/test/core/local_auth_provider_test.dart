@@ -12,15 +12,19 @@
 // `PRAGMA foreign_keys = ON` is per-connection and enabled per database opened
 // in this file, for the same reason as in `access_repository_test.dart`.
 
+import 'dart:convert';
 import 'dart:io';
 
+// `isNull` / `isNotNull` are matchers here, not drift's SQL expressions of the
+// same names.
+import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:logger/logger.dart';
 import 'package:test/test.dart';
 import 'package:tfc_access/tfc_access.dart';
 import 'package:tfc_dart/core/access/access_repository.dart';
 import 'package:tfc_dart/core/access/local_auth_provider.dart';
 import 'package:tfc_dart/core/database_drift.dart'
-    show AppDatabase, AppUserData;
+    show AppDatabase, AppUserCompanion, AppUserData;
 
 Future<AppDatabase> _openDb() async {
   final db = AppDatabase.inMemoryForTest();
@@ -73,6 +77,70 @@ class _CountingRepository extends AccessRepository {
     userReads++;
     return super.user(username);
   }
+}
+
+/// Rewrites [username]'s row as a `pbkdf2-sha256` one, the way every row in
+/// every deployed database was written before Argon2id landed.
+///
+/// Local to this file on purpose, and assembled from the primitives that are
+/// still public because verification needs them forever. There is deliberately
+/// no library function for this: [PasswordHasher.hash] only makes Argon2id
+/// now, and a helper in `tfc_access` that wrote the retired algorithm would be
+/// a live write path for the very thing this migration exists to remove — which
+/// is how a retired algorithm comes back.
+Future<void> _plantLegacyPbkdf2Row(
+  AppDatabase db, {
+  required String username,
+  required String password,
+}) async {
+  final salt = List<int>.generate(16, (i) => i + 1);
+  final key = await Pbkdf2Kdf.deriveKey(
+    passphrase: password,
+    salt: salt,
+    iterations: Pbkdf2Kdf.iterations,
+  );
+  final legacy = PasswordHash(
+    hashB64: base64Encode(await key.extractBytes()),
+    saltB64: base64Encode(salt),
+    iterations: Pbkdf2Kdf.iterations,
+  );
+
+  await (db.update(db.appUser)..where((t) => t.username.equals(username)))
+      .write(AppUserCompanion(
+    passwordHash: Value(encodeStoredHash(legacy)),
+    salt: Value(legacy.saltB64),
+  ));
+}
+
+/// A repository that counts the write-backs `rehashPassword` performs, and
+/// otherwise delegates.
+///
+/// Counting is the only honest way to assert idempotence: two Argon2id hashes
+/// of the same password differ by their salt, so comparing stored values across
+/// two logins cannot tell "rewritten again" from "rewritten once".
+class _RehashCountingRepository extends AccessRepository {
+  _RehashCountingRepository(super.db);
+
+  int rehashes = 0;
+
+  @override
+  Future<int> rehashPassword(String username, PasswordHash hash) {
+    rehashes++;
+    return super.rehashPassword(username, hash);
+  }
+}
+
+/// A repository whose `rehashPassword` always fails — a read-only replica, a
+/// permissions change, a connection dropped between the read and the write.
+///
+/// The user in front of the panel typed the right password. The write-back is a
+/// convenience nobody asked for, and it must not be able to refuse them.
+class _RehashFailingRepository extends AccessRepository {
+  _RehashFailingRepository(super.db);
+
+  @override
+  Future<int> rehashPassword(String username, PasswordHash hash) =>
+      Future<int>.error(StateError('read-only replica'));
 }
 
 void main() {
@@ -236,6 +304,182 @@ void main() {
         reason: 'null means bad credentials; an outage must not be audited as '
             'a failed login attempt',
       );
+    });
+  });
+
+
+  group('migration to argon2id', () {
+    /// A provider over [r] logging into the shared capture, so the warning
+    /// assertions here work the same way the ones above do.
+    LocalAuthProvider providerFor(AccessRepository r) => LocalAuthProvider(
+          r,
+          logger: Logger(
+            filter: _AlwaysFilter(),
+            printer: _LevelTaggedPrinter(),
+            output: logOutput,
+          ),
+        );
+
+    Future<void> deleteEngineeringBehindTheApp() async {
+      await db.customStatement('PRAGMA foreign_keys = OFF');
+      await db
+          .customStatement("DELETE FROM app_role WHERE name = 'Engineering'");
+      await db.customStatement('PRAGMA foreign_keys = ON');
+    }
+
+    test('a pbkdf2-sha256 row signs in and comes out argon2id', () async {
+      await _plantLegacyPbkdf2Row(db, username: 'jon', password: 'hunter2');
+      final before = (await repo.user('jon'))!;
+      expect(before.passwordHash, startsWith('pbkdf2-sha256\$'),
+          reason: 'the fixture must really be a legacy row, or the rewrite '
+              'assertion below passes vacuously');
+
+      final user = await provider.authenticate('jon', 'hunter2');
+
+      expect(user, isNotNull,
+          reason: 'the migration must not change who can sign in');
+      expect(user!.username, 'jon');
+      expect(user.roleName, 'Engineering');
+
+      final after = (await repo.user('jon'))!;
+      expect(after.passwordHash, startsWith('argon2id\$'),
+          reason: 'asserted by the tag rather than by "the hash changed", '
+              'which a re-salted pbkdf2 row would also satisfy');
+      expect(after.salt, isNot(before.salt),
+          reason: 'the salt belongs to the hash it was derived with');
+    });
+
+    test('the rewrite is invisible to whoever signed in', () async {
+      await _plantLegacyPbkdf2Row(db, username: 'jon', password: 'hunter2');
+
+      final first = await provider.authenticate('jon', 'hunter2');
+      final second = await provider.authenticate('jon', 'hunter2');
+
+      expect(first, isNotNull);
+      expect(second, isNotNull,
+          reason: 'the rewritten row must verify against the password its '
+              'owner has always used — this is the lockout the migration '
+              'exists to avoid');
+      expect(second!.username, first!.username);
+      expect(second.roleName, first.roleName);
+    });
+
+    test('a second login rewrites nothing', () async {
+      await _plantLegacyPbkdf2Row(db, username: 'jon', password: 'hunter2');
+      final counting = _RehashCountingRepository(db);
+      final p = providerFor(counting);
+
+      expect(await p.authenticate('jon', 'hunter2'), isNotNull);
+      expect(counting.rehashes, 1);
+
+      expect(await p.authenticate('jon', 'hunter2'), isNotNull);
+      expect(counting.rehashes, 1,
+          reason: 'the row is argon2id at the current parameters now, so '
+              'needsRehash is false and there is nothing to do');
+    });
+
+    test('a user already on an argon2id row is never rewritten', () async {
+      // `jon` was created by the setUp, through createFirstUser, which has
+      // written Argon2id from the start since plan 07-14.
+      final counting = _RehashCountingRepository(db);
+
+      expect(await providerFor(counting).authenticate('jon', 'hunter2'),
+          isNotNull);
+
+      expect(counting.rehashes, 0);
+    });
+
+    test('a wrong password rewrites nothing', () async {
+      await _plantLegacyPbkdf2Row(db, username: 'jon', password: 'hunter2');
+      final before = (await repo.user('jon'))!;
+      final counting = _RehashCountingRepository(db);
+
+      expect(await providerFor(counting).authenticate('jon', 'wrong'), isNull);
+
+      expect(counting.rehashes, 0,
+          reason: 'there is no verified password in hand on this path; a '
+              'rewrite here would be a rewrite from an unverified string');
+      final after = (await repo.user('jon'))!;
+      expect(after.passwordHash, before.passwordHash);
+      expect(after.salt, before.salt);
+    });
+
+    test('a write-back that throws does not fail the login', () async {
+      // The central guarantee of this plan. A migration that locks out the
+      // people it exists to migrate is worse than no migration.
+      await _plantLegacyPbkdf2Row(db, username: 'jon', password: 'hunter2');
+      final p = providerFor(_RehashFailingRepository(db));
+
+      final user = await p.authenticate('jon', 'hunter2');
+
+      expect(user, isNotNull,
+          reason: 'the credentials were already judged and the answer was '
+              'yes; a housekeeping write nobody asked for must not be able to '
+              'refuse a correct password');
+      expect(user!.username, 'jon');
+      expect(user.roleName, 'Engineering');
+
+      final warnings =
+          logOutput.lines.where((l) => l.startsWith('warning|')).join('\n');
+      expect(warnings, isNotEmpty,
+          reason: 'a rewrite that cannot be written is an operational fault, '
+              'not a silent one');
+      expect(warnings, contains('jon'));
+      expect(warnings, contains('upgrad'));
+
+      final after = (await repo.user('jon'))!;
+      expect(after.passwordHash, startsWith('pbkdf2-sha256\$'),
+          reason: 'the row is untouched, so the next login tries again');
+    });
+
+    test('a login refused for a missing role does not rewrite the row',
+        () async {
+      await _plantLegacyPbkdf2Row(db, username: 'jon', password: 'hunter2');
+      final before = (await repo.user('jon'))!;
+      await deleteEngineeringBehindTheApp();
+      final counting = _RehashCountingRepository(db);
+
+      expect(
+          await providerFor(counting).authenticate('jon', 'hunter2'), isNull);
+
+      expect(counting.rehashes, 0,
+          reason: 'the refusal returns before the write-back; a session that '
+              'is not going to exist must not quietly rewrite a row');
+      final after = (await repo.user('jon'))!;
+      expect(after.passwordHash, before.passwordHash);
+      expect(after.salt, before.salt);
+    });
+
+    test('the password reaches no log line on any of the four paths', () async {
+      // A distinctive value: a short or common password could satisfy this
+      // assertion by simply not appearing anywhere, which proves nothing.
+      const password = 'correct-horse-battery-staple-7Q';
+
+      // The success-and-rewrite path.
+      await _plantLegacyPbkdf2Row(db, username: 'jon', password: password);
+      expect(await providerFor(repo).authenticate('jon', password), isNotNull);
+
+      // The wrong-password path.
+      expect(
+          await providerFor(repo).authenticate('jon', '$password-no'), isNull);
+
+      // The write-back-failure path — re-planted, because the row above is
+      // argon2id now and would have nothing to rewrite.
+      await _plantLegacyPbkdf2Row(db, username: 'jon', password: password);
+      expect(
+        await providerFor(_RehashFailingRepository(db))
+            .authenticate('jon', password),
+        isNotNull,
+      );
+
+      // The missing-role path.
+      await deleteEngineeringBehindTheApp();
+      expect(await providerFor(repo).authenticate('jon', password), isNull);
+
+      expect(logOutput.lines, isNotEmpty,
+          reason: 'two of those paths warn, so an empty capture would mean '
+              'this test asserts nothing');
+      expect(logOutput.lines.join('\n'), isNot(contains(password)));
     });
   });
 

@@ -1070,6 +1070,78 @@ void main() {
     });
   });
 
+  group('rehashPassword', () {
+    test('writes both columns and reports the one row it updated', () async {
+      await repo.createFirstUser(username: 'jon', password: 'hunter2');
+      final before = (await repo.user('jon'))!;
+      final fresh = await PasswordHasher.hash('hunter2');
+
+      final updated = await repo.rehashPassword('jon', fresh);
+
+      expect(updated, 1);
+      final after = (await repo.user('jon'))!;
+      expect(after.passwordHash, encodeStoredHash(fresh));
+      expect(after.salt, fresh.saltB64,
+          reason: 'the salt belongs to the hash it was derived with; leaving '
+              'the old one behind strands the row');
+      expect(after.salt, isNot(before.salt));
+      expect(after.roleName, before.roleName,
+          reason: 'it rewrites the stored form of a password, and nothing '
+              'else about the account');
+      expect(after.lastLoginAt, before.lastLoginAt);
+
+      final decoded = decodeStoredHash(after.passwordHash, saltB64: after.salt)!;
+      expect(
+        await PasswordHasher.verify(password: 'hunter2', stored: decoded),
+        isTrue,
+        reason: 'the same password the user has always used must still work, '
+            'or the migration has locked them out',
+      );
+    });
+
+    test('a username that no longer exists returns 0 and throws nothing',
+        () async {
+      // On the login path the row was read moments ago, so a zero row count
+      // means the account was deleted in between. That is a legitimate
+      // outcome, not an error — unlike setPassword, whose caller has no such
+      // guarantee and which therefore throws.
+      final fresh = await PasswordHasher.hash('hunter2');
+
+      expect(await repo.rehashPassword('ghost', fresh), 0);
+    });
+
+    test('it neither derives nor opens a transaction', () {
+      // The mirror image of the derive-before-transaction test below, and the
+      // pair reads as one statement: those three writers keep the ordering by
+      // convention, this one has nothing to order. It takes an already-derived
+      // hash and issues a single UPDATE, which is also what lets the login
+      // path decide *whether* to pay for a derivation before paying for one.
+      //
+      // Line endings normalised, and the end-of-method marker chosen, for the
+      // reasons spelled out in that test — the same CI round trip paid for
+      // both.
+      final source = File('lib/core/access/access_repository.dart')
+          .readAsStringSync()
+          .replaceAll('\r\n', '\n');
+
+      final start = source.indexOf('Future<int> rehashPassword(');
+      expect(start, greaterThan(-1), reason: 'rehashPassword must exist');
+      final end = source.indexOf('\n  }\n', start);
+      expect(end, greaterThan(-1),
+          reason: 'could not find the end of rehashPassword — the marker is a '
+              'literal newline-two-spaces-brace');
+      final body = source.substring(start, end);
+
+      expect(body, isNot(contains('PasswordHasher.hash')),
+          reason: 'deriving here would move the cost into the repository and '
+              'take the decision away from the caller that knows whether a '
+              'rewrite is due at all');
+      expect(body, isNot(contains('db.transaction')),
+          reason: 'a single UPDATE is atomic on its own; a transaction would '
+              'add a round trip to every migrating login for nothing');
+    });
+  });
+
   group('setPassword', () {
     test('writes a hash and salt that verify against the new password',
         () async {
