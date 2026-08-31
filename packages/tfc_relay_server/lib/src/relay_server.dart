@@ -40,6 +40,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'auth/file_token_validator.dart';
 import 'error_reporter.dart';
 import 'handle_table.dart';
+import 'health/cert_health_state_man.dart';
 import 'policy/key_policy.dart';
 import 'relay_session.dart';
 import 'server_config.dart';
@@ -260,6 +261,23 @@ final class RelayServer {
   HttpServer? _http;
   var _closed = false;
 
+  /// The gateway's own health producer, or null on a plaintext gateway.
+  ///
+  /// Built by [start] from the very [TlsConfig] the `SecurityContext` is built
+  /// from — one instance for the server, shared by every session, for the same
+  /// reason [api] is — and **only** when there is a certificate to report on.
+  /// A plaintext gateway has none, so it grows no key, which is what keeps
+  /// every existing fixture in this package byte-identical (06-03 measured the
+  /// cost of the opposite at 53 cases).
+  ///
+  /// Public because a deployment may want the number recomputed on a cadence
+  /// of its own — `certHealth?.refresh()` — the same seam and the same
+  /// argument [reloadTokens] carries for the credential file. It holds no
+  /// timer; see `cert_health_state_man.dart` for why, and for the Phase 8
+  /// merge note that ends with this getter being deleted.
+  CertHealthStateMan? get certHealth => _certHealth;
+  CertHealthStateMan? _certHealth;
+
   /// The one tick engine, built by [start] and stopped by [close].
   ///
   /// Exactly one per server, holding the server's only timer and the one
@@ -341,6 +359,18 @@ final class RelayServer {
         : (SecurityContext(withTrustedRoots: false)
           ..useCertificateChain(tls.chainPath)
           ..usePrivateKey(tls.keyPath, password: tls.keyPassword));
+    // From the same TlsConfig, one line later, so the number a panel reads can
+    // never be about a different file than the one the handshake presents.
+    // Computed once here so the value exists before the first subscribe —
+    // `fake_state_man.dart:93-107`'s argument for the other five health keys,
+    // applied to the sixth.
+    _certHealth = tls == null
+        ? null
+        : (CertHealthStateMan(
+            source: api,
+            chainPath: tls.chainPath,
+            nowMs: _now,
+          )..refresh());
     _http = await shelf_io.serve(
       webSocketHandler(
         _onConnect,
@@ -476,7 +506,14 @@ final class RelayServer {
 
       final session = RelaySession.serve(
         channel: channel,
-        api: api,
+        // **Policy over health over source.** `RelaySession` wraps whatever it
+        // is handed in its own per-session `PolicyStateMan`, so handing it the
+        // health overlay puts the two decorators in the order 06-09 argues
+        // for: `canSee` filters a key list that already contains the health
+        // key, and Phase 8 can delete the inner one without touching the
+        // outer. Read off `this` rather than captured, exactly as `validator`
+        // and `policy` are, because `_onConnect` runs long after `start`.
+        api: _certHealth ?? api,
         config: config,
         handles: handles,
         buffer: buffer,
