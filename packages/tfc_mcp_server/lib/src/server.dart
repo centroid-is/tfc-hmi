@@ -5,7 +5,6 @@ import 'package:mcp_dart/mcp_dart.dart';
 import 'package:tfc_dart/tfc_dart_core.dart' show McpDatabase;
 
 import 'audit/audit_log_service.dart';
-import 'identity/operator_identity.dart';
 import 'interfaces/alarm_reader.dart';
 import 'interfaces/drawing_index.dart';
 import 'interfaces/plc_code_index.dart';
@@ -64,8 +63,7 @@ import 'server_instructions.dart';
 /// The TFC MCP Server wrapping [McpServer] from mcp_dart.
 ///
 /// This server communicates over stdio using [StdioServerTransport].
-/// Every tool call is gated by [OperatorIdentity] validation and creates
-/// an audit trail via [AuditLogService].
+/// Every tool call creates an audit trail via [AuditLogService].
 ///
 /// **Subprocess contract:** This binary expects SIGTERM for clean shutdown.
 /// It will close database connections and flush logs before exiting.
@@ -73,7 +71,6 @@ import 'server_instructions.dart';
 /// and sends SIGTERM when the chat widget is disposed.
 class TfcMcpServer {
   TfcMcpServer({
-    required OperatorIdentity identity,
     required McpDatabase database,
     required StateReader stateReader,
     required AlarmReader alarmReader,
@@ -132,10 +129,9 @@ class TfcMcpServer {
     // Create audit service from database
     final auditService = AuditLogService(_database);
 
-    // Create tool registry with identity + audit middleware
+    // Create tool registry with audit middleware
     final registry = ToolRegistry(
       mcpServer: _mcpServer,
-      identity: identity,
       auditLogService: auditService,
     );
 
@@ -285,7 +281,8 @@ class TfcMcpServer {
       }
     }
 
-    // Resources (registered directly on McpServer, no identity/audit gate)
+    // Resources (registered directly on McpServer, outside the audit
+    // middleware)
     if (toggles.configEnabled) {
       registerConfigSnapshotResource(_mcpServer, configService);
     }
@@ -298,7 +295,8 @@ class TfcMcpServer {
     registerPlcCodeIndexResource(_mcpServer, plcCodeService);
     registerTechDocsResource(_mcpServer, techDocService);
 
-    // Prompts (registered directly on McpServer, no identity/audit gate)
+    // Prompts (registered directly on McpServer, outside the audit
+    // middleware)
     if (toggles.alarmsEnabled) {
       registerExplainAlarmPrompt(_mcpServer, alarmContextService);
       registerShiftHandoverPrompt(_mcpServer, alarmService, tagService);
@@ -319,7 +317,7 @@ class TfcMcpServer {
       );
     }
 
-    _logger.i('TFC MCP Server initialized with identity gate and audit trail');
+    _logger.i('TFC MCP Server initialized with audit trail');
   }
 
   final McpServer _mcpServer;

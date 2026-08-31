@@ -57,9 +57,6 @@ Future<void> main(List<String> arguments) async {
   final logger = createServerLogger();
   logger.i('Starting TFC MCP Server v$_version');
 
-  // Create operator identity from TFC_USER environment variable
-  final identity = EnvOperatorIdentity();
-
   // Build database config from env vars + CLI arg fallbacks.
   // Env vars (CENTROID_PG*) take precedence over CLI args, which take
   // precedence over hard-coded defaults.
@@ -94,7 +91,7 @@ Future<void> main(List<String> arguments) async {
   final alarmReader = EmptyAlarmReader();
 
   // Read tool toggle state. The HMI stores the MCP config device-locally
-  // and passes the toggles to spawned subprocesses via TFC_MCP_TOGGLES;
+  // and passes the toggles to spawned subprocesses via kMcpTogglesEnvVar;
   // the flutter_preferences table is only a fallback for pre-migration
   // databases (standalone launches otherwise default to all-enabled).
   final envToggles =
@@ -107,7 +104,6 @@ Future<void> main(List<String> arguments) async {
       'plcCode=${toggles.plcCodeEnabled}, proposals=${toggles.proposalsEnabled}');
 
   final server = TfcMcpServer(
-    identity: identity,
     database: db,
     stateReader: stateReader,
     alarmReader: alarmReader,

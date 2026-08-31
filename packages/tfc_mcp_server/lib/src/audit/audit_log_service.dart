@@ -9,6 +9,40 @@ import 'package:tfc_mcp_server/src/safety/proposal_declined_exception.dart';
 /// Status of an audit log entry.
 enum AuditStatus { pending, success, failed, declined }
 
+/// The value written to `operator_id` on an audit row raised by an MCP tool
+/// call.
+///
+/// **This column is provenance, not attribution.** It records that a machine
+/// ran a tool; it is not a claim that a person authorized one, and it never
+/// was. MCP cannot write — every write-shaped tool in this package returns a
+/// *proposal* (`lib/src/tools/access_template_tools.dart:28`: "they return a
+/// proposal"), so at the moment this row is written there is no person to
+/// name. The human's name lands on the **approval** row instead:
+/// `lib/core/access_template_store.dart:609` — an accepted proposal's row
+/// "still names the human who approved it rather than the agent that suggested
+/// it".
+///
+/// The value is the same provenance token the rest of the system already uses
+/// for machine-originated changes: it is what the HMI's access-audit trail
+/// maps to `MCP` for its **origin** column (`auditOriginLabel`,
+/// `lib/widgets/audit_trail_row.dart:208`). Note what that sentence does and
+/// does not say. That is a different column in a different database from this
+/// one, and `audit_trail_row.dart`'s own doc records that the origin is
+/// *planned* and nothing writes it yet. The token is shared; the field is not.
+/// Nothing renders this table — there is no UI reader of the MCP server's
+/// `AuditLog` anywhere in the app — so no display gaps either way.
+///
+/// It is a constant rather than a literal at the call site so the assertions
+/// that pin it cannot drift from the value actually written, and so that the
+/// root suite can name it across the package boundary through the barrel.
+///
+/// Do not read the absence of an operator name here as something lost. There
+/// is exactly one kind of identity in this system, the access session's
+/// signed-in user, and it is asserted where a change is applied. Inventing a
+/// second mechanism to fill this column is the thing that was deliberately
+/// removed.
+const kMcpAuditOperator = 'mcp';
+
 /// Service for recording audit trails of MCP tool invocations.
 ///
 /// Implements the pre-log/post-log pattern: every tool call creates a
