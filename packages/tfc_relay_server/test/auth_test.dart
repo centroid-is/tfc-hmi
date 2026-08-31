@@ -26,11 +26,16 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:test/test.dart';
+import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_relay_server/src/auth/auth_config.dart';
 import 'package:tfc_relay_server/src/auth/file_token_validator.dart';
 import 'package:tfc_relay_server/src/auth/identity.dart';
+import 'package:tfc_relay_server/src/error_codes.dart';
+import 'package:tfc_relay_server/src/error_reporter.dart';
+import 'package:tfc_relay_server/src/server_config.dart';
 import 'package:tfc_relay_server/src/token_validator.dart';
-import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
+
+import 'support/ws_harness.dart';
 
 /// Tokens long enough to clear [FileTokenValidator.minTokenLength], and
 /// visibly not words anyone would type by accident.
@@ -46,6 +51,22 @@ HelloParams _helloWith(String? token) => HelloParams(
       supported: const [protocolVersion],
       client: const PeerInfo('panel-under-test', '0.1.0'),
       token: token,
+    );
+
+/// A production fixture whose gateway checks [tokens], written to a temp file
+/// this case owns.
+///
+/// `relayFixture` passes `const PermissiveTokenValidator()` for `validator:`,
+/// which is the canonical default object `RelayServer` reads as "no validator
+/// configured" — so a `ServerConfig.auth` beside it is not the two-sources-of-
+/// truth configuration the constructor refuses.
+RelayFixture _gatewayOn(Map<String, Object?> tokens, {RelayErrorHandler? onError}) =>
+    relayFixture(
+      config: ServerConfig(
+        tick: ServerConfig.minTick,
+        auth: AuthConfig(tokenFilePath: _writeTokenFile(_tempDir(), tokens)),
+      ),
+      onError: onError,
     );
 
 /// A temp directory released with the case.
@@ -287,6 +308,113 @@ void main() {
     test('an empty token path is refused at construction', () {
       expect(() => AuthConfig(tokenFilePath: ''), throwsArgumentError);
     });
+  });
+
+  group('a session knows which station it is', () {
+    test('a valid token gives the session its station identity', () async {
+      final fixture = _gatewayOn(_twoStations());
+      await fixture.ready;
+
+      final raw = await fixture.request(Methods.hello,
+          params: _helloWith(_stationTwoToken).toJson(),
+          what: 'the hello result over a real socket');
+
+      expect(HelloResult.fromJson((raw as Map).cast<String, Object?>()).protocol,
+          protocolVersion);
+      expect(fixture.server.sessions.sessions.single.identity,
+          const Identity(stationId: 'ST201', role: Role.view),
+          reason: 'every surface downstream of the handshake asks the session '
+              'which station it is; a session that carries a protocol and no '
+              'identity is one the policy seam cannot answer about');
+    }, tags: 'ws');
+
+    test('a hello with no credential is refused when the gateway has a token '
+        'file', () async {
+      final fixture = _gatewayOn(_oneStation());
+      await fixture.ready;
+      final session = fixture.server.sessions.sessions.single;
+
+      final refusal = await fixture.refusal(Methods.hello,
+          params: _helloWith(null).toJson(),
+          what: 'a tokenless hello against a gateway with a token file');
+
+      expect(refusal.code, ServerErrorCodes.unauthorized);
+      expect(session.identity, isNull);
+      expect(session.sentCloseCode, CloseCodes.authExpired,
+          reason: 'the refusal answers first and the close is scheduled for '
+              'the next turn (relay_session.dart:846-849), so a panel learns '
+              'why before it learns that');
+    }, tags: 'ws');
+
+    test('a permissive gateway still accepts a hello with no credential',
+        () async {
+      // The control. Without it, the case above passes against a gateway that
+      // refuses every hello for any reason at all.
+      final fixture = relayFixture();
+      await fixture.ready;
+
+      final result = await fixture.hello();
+
+      expect(result.protocol, protocolVersion);
+      expect(fixture.server.sessions.sessions.single.identity?.role,
+          Role.operate);
+    }, tags: 'ws');
+
+    test('a second hello cannot change the session\'s identity', () async {
+      final fixture = _gatewayOn(_twoStations());
+      await fixture.ready;
+      await fixture.request(Methods.hello,
+          params: _helloWith(_stationOneToken).toJson(),
+          what: 'the first hello');
+      final session = fixture.server.sessions.sessions.single;
+
+      final second = await fixture.refusal(Methods.hello,
+          params: _helloWith(_stationTwoToken).toJson(),
+          what: 'a second hello on a session that already has one');
+
+      expect(second.code, ServerErrorCodes.alreadyHelloed);
+      expect(session.identity?.stationId, 'ST101',
+          reason: 'the credential is checked before the gate, so a second '
+              'hello carrying another station\'s token reaches the validator. '
+              'If it could overwrite the identity, a view station could talk '
+              'its way into an operate one on a handshake the gate then '
+              'refuses — the refusal being irrelevant, because the damage is '
+              'the field, not the answer');
+    }, tags: 'ws');
+
+    test('the credential appears in no message, close reason, status frame or '
+        'log', () async {
+      // Distinctive enough that a substring hit cannot be a coincidence, and
+      // long enough to clear the loader's floor so the only reason it is
+      // refused is that it is not in the file.
+      const presented = 'LEAKCANARY-8f3b1d64ac0e529716b4d8fa3c';
+      final reported = <String>[];
+      final fixture = _gatewayOn(_oneStation(),
+          onError: (error, stack, what) =>
+              reported.add('$what: $error\n$stack'));
+      await fixture.ready;
+
+      final refusal = await fixture.refusal(Methods.hello,
+          params: _helloWith(presented).toJson(),
+          what: 'a hello carrying a credential this gateway never issued');
+      final close = await fixture.awaitClose('the refused session closing');
+
+      // One rule, four surfaces, because a credential published on any of
+      // them is published (T-06-26).
+      expect(refusal.toString(), isNot(contains(presented)),
+          reason: 'the -32003 message and its data reach the panel and every '
+              'log that catches the refusal');
+      expect(close.closeReason, isNotNull,
+          reason: 'a null reason would satisfy every absence assertion below '
+              'while proving nothing (06-02-SUMMARY deviation 3)');
+      expect(close.closeReason, isNot(contains(presented)),
+          reason: 'the close reason is displayed to an operator');
+      expect(fixture.inbound.where((f) => f.contains(presented)), isEmpty,
+          reason: 'every frame the client received, which is where a '
+              'StatusParams.error would arrive');
+      expect(reported.where((r) => r.contains(presented)), isEmpty,
+          reason: 'the gateway\'s error sink — its log on a plant machine');
+    }, tags: 'ws');
   });
 
   // A security property no behavioural case can see. The sabotage arm proved

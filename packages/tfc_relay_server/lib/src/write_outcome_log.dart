@@ -77,6 +77,22 @@ final class WriteOutcomeEntry {
   /// never read as a filter today — a reconnect is by definition a different
   /// session, and filtering on it would rebuild the defect this log exists to
   /// fix.
+  ///
+  /// **Phase 6 landed identity and deliberately did not narrow on it.** The
+  /// hint is still the session id. `RelaySession.identity` now exists and
+  /// carries a `stationId`, so the narrowing 06-RESEARCH §E.6 offers as cheap
+  /// is finally *possible* — and it is still wrong while this field holds a
+  /// session id, because a reconnecting panel is a new session with a new id
+  /// and every post-reconnect `writeStatus` would be filtered to nothing.
+  /// That is exactly the failure 04-REVIEW CR-02 fixed by moving this log off
+  /// the socket.
+  ///
+  /// **The prerequisite, so the next reader does not have to re-derive it:**
+  /// narrowing becomes correct once the hint carries the **stationId**, which
+  /// is stable across reconnects. Changing the recorded field on its own is
+  /// not the work — a field whose meaning changed with no consumer is a change
+  /// nobody can test — so whoever does it lands the recorder and the filter
+  /// together, with a case that reconnects and still gets its answer.
   final String? ownerHint;
 
   /// The write this outcome is about, or null when the recorder had nothing to
