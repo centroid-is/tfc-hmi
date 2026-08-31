@@ -409,7 +409,10 @@ void main() {
     });
   });
 
-  group("the document's two standing verdicts", () {
+  // Named without a count on purpose. It read "two standing verdicts" until
+  // plan 06-06 closed §3.3 and made it three; a group whose name has to be
+  // re-edited every time the document moves is one that eventually is not.
+  group("the document's standing verdicts", () {
     test('§3.1 is closed — no `left open` survives for the knowledge indexes',
         () {
       final body = _section(doc, '3.1');
@@ -509,6 +512,99 @@ void main() {
       expect(body, contains('What stays open'),
           reason: 'the closed verdict has to name what it does NOT cover, or '
               'the rows above read as a contradiction rather than a scope');
+    });
+
+    // Added by plan 06-06, in the shape of the `§3.1 is closed` test above
+    // rather than the `§3.2` one: §3.3 was a `left open` entry with its
+    // closing condition written beside it — "Spec §7c and §9 put roles and
+    // users behind `AccessGroup.users`, and Phase 6 builds the screens that
+    // drive it. Closing it means gating those screens, not decorating this
+    // class." Plan 06-03 built `AccessAdminStore` and met it.
+    //
+    // Document and table together, or neither: that is the rule 04-12 wrote
+    // for §3.2 and it applies here for the same reason. A body saying
+    // "closed" beside a row saying `left open` is worse than either alone,
+    // because a reader believes whichever they happen to read.
+    test('§3.3 is closed — no `left open` survives for the access repository',
+        () {
+      final body = _section(doc, '3.3');
+      expect(body, isNot(contains('left open')),
+          reason: 'plan 06-03 put every write to `app_role` and `app_user` '
+              'behind `AccessAdminStore` and `kAccessAdminGroup`; a '
+              '`left open` here contradicts it');
+
+      // The closure, and the three things that make it checkable rather than
+      // a claim: which object closed it, which constant it asks, and where
+      // that object lives.
+      expect(body, contains('06-03'));
+      expect(body, contains('AccessAdminStore'));
+      expect(body, contains('kAccessAdminGroup'));
+      expect(body, contains('lib/core/access_admin_store.dart'));
+
+      // The scope of the closure, named as explicitly as §3.2 names its own.
+      // §3.3 closed the *path*, not the class: the repository is still
+      // constructible and still callable by anything holding an
+      // `AppDatabase`, and `first_user.dart` calls it on purpose. A section
+      // that dropped those sentences would have widened from "the screens are
+      // gated" to "the class refuses", which it does not.
+      expect(body, contains('does not claim'),
+          reason: 'the closed verdict has to name what it does NOT cover, or '
+              'a later reader will take the gate for a property of the class');
+      expect(body, contains('first_user.dart'));
+      expect(body, contains('not decorat'),
+          reason: 'the entry said in advance that closing it meant gating the '
+              'screens rather than decorating this class; the closure has to '
+              'say which of the two it did');
+
+      // And the row that points here agrees. Unlike §3.2 — which closed the
+      // authorization half and left its rows open on purpose — §3.3 closed
+      // the whole of its entry, so no row deferring to it may still say
+      // `left open`.
+      final pointing = doc
+          .split('\n')
+          .where((l) => l.startsWith('|') && l.contains('see §3.3'))
+          .toList();
+      expect(pointing, hasLength(greaterThanOrEqualTo(1)),
+          reason: 'the access-repository row that defers to §3.3 has gone');
+      for (final row in pointing) {
+        expect(row, contains('guarded by 06-03'),
+            reason: 'a row deferring to §3.3 does not carry the closed '
+                'verdict, in the vocabulary §2 fixes:\n$row');
+        expect(row, isNot(contains('left open')),
+            reason: 'a row deferring to §3.3 still says it is open:\n$row');
+      }
+    });
+
+    test('no file under `lib/pages/` constructs an `AccessRepository`', () {
+      // The honest form of §3.3's closure. `AccessRepository` refuses nobody:
+      // it takes an `AppDatabase` and writes. The gate lives in
+      // `AccessAdminStore`, which means it is a property of the path the UI
+      // takes and not of the class — so the checkable statement is that the
+      // page layer never builds one for itself and therefore cannot route
+      // around the store.
+      //
+      // `first_user.dart` is not a counter-example and is not an oversight:
+      // it *calls* a repository it got from `accessRepositoryProvider`, for
+      // the first-user window, which exists precisely for the state where
+      // nobody can hold `users` yet. It constructs nothing, so it does not
+      // match this grep, and §3.3 names it in as many words.
+      final built =
+          Process.runSync('grep', ['-rn', 'AccessRepository(', 'lib/pages']);
+      expect((built.stdout as String).trim(), isEmpty,
+          reason: 'a page builds its own AccessRepository and can then write '
+              '`app_role` or `app_user` with no `users` check and no audit '
+              'row. That is the bypass §3.3 was closed to prevent, and the '
+              'closure is about the path rather than the class, so this is '
+              'where it fails.');
+
+      // Not vacuous: the same tool over the same directory, with a pattern
+      // that must match. If `lib/pages` moved or the grep found nothing to
+      // search, this fails rather than passing on an empty walk.
+      final mentioned =
+          Process.runSync('grep', ['-rl', 'AccessRepository', 'lib/pages']);
+      expect((mentioned.stdout as String).trim(), isNotEmpty,
+          reason: 'no file under lib/pages mentions AccessRepository at all — '
+              'the search above found nothing to search');
     });
 
     test('the four `is! DriftPlcCodeIndex` type tests are gone from lib/', () {

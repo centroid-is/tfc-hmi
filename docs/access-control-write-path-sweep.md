@@ -53,7 +53,7 @@ no row is blank and no row says "probably".
 
 | Verdict | Meaning |
 |---|---|
-| `guarded by 03-NN` | a plan in this phase routes it through a guard |
+| `guarded by NN-NN` | a plan routes it through a guard. `03-NN` for the plans in this phase; one later row carries `06-03`, which closed §3.3 |
 | `route-gated (Phase 2)` | reachable only from a route in `kRaisedRoutes` |
 | `not widget-reachable` | provider or core machinery with no path from a widget; the row says which and why the claim holds |
 | `correct as-is` | the audit sink, the guards themselves, and the stores' own declarations |
@@ -105,7 +105,7 @@ file and call rather than by line.**
 | `packages/tfc_mcp_server/lib/src/audit/audit_log_service.dart:47, 85` | `_db.into(_auditLog).insert(...)`, `_db.update(_auditLog)` | `audit_log` (MCP's own) | `TfcMcpServer`, which runs **in the HMI process** (`lib/mcp/mcp_bridge_notifier.dart:266`, `lib/mcp/mcp_sse_server.dart:56`) | `left open: reached over MCP, not from a widget` — see §3.2 |
 | `lib/core/access_template_store.dart:286, 324, 383, 439-441, 498, 531-533` | `_db.into(...).insert` / `.insertOnConflictUpdate`, `_db.update(...)`, `_db.delete(...)` on the two v7 tables | `access_template`, `access_key_binding` | `AccessTemplateStore`, driven by the key repository (04-07, 04-08) and by accepted MCP proposals (04-09) | `correct as-is` — this **is** the guard; `kAccessTemplateGroup` (`users`) is checked and the audit row written above every one of these, over **both** tables. The binding lives in its own table rather than in the `configure`-gated key-mapping blob precisely so the gate is true of the data (ruled 2026-08-30, reversing spec §7b) |
 | `lib/pages/access_templates_section.dart:635, 1130` | `store.update(...)`, `store.delete(...)` | `access_template` | `AccessTemplatesSection`, mounted in `KeyRepositoryContent` (04-07) | `correct as-is` — these are calls **on `AccessTemplateStore`**, one row above, not on a database: the `users` gate and the audit row are inside them. Caught by the deliberately broad `.update(`/`.delete(` grep and recorded rather than filtered away, which is the point of the grep being broad. The section writes no binding at all — `bind`/`unbind` are 04-08's, per key |
-| `packages/tfc_dart/lib/core/access/access_repository.dart:177, 185, 201, 240, 247-249, 285, 340` | `db.into/update/delete` on `app_role` / `app_user` | roles and users | `accessRepositoryProvider`; Phase 6 owns the screens that drive it | `left open: the authorization store itself; Phase 6 gates it on \`users\`` — see §3.3 |
+| `packages/tfc_dart/lib/core/access/access_repository.dart:358, 373, 412, 545, 552-554, 590, 645, 722, 754-755, 781, 814` | `db.into/update/delete` on `app_role` / `app_user` | roles and users | `accessAdminStoreProvider` (06-04), which wraps `accessRepositoryProvider`; and `lib/pages/first_user.dart:141` for the first-user window alone | `guarded by 06-03` — `AccessAdminStore` asks `kAccessAdminGroup` (`users`) and writes a row, refusals included, above every one of the eight writes that reach these statements. The repository is not decorated: it owns the transaction and the last-`users`-holder invariant that must be evaluated inside it — see §3.3 |
 | `packages/tfc_dart/lib/core/preferences.dart:210, 254, 428` | `secureStorage.delete(key:)`, `db.customInsert(...)`, `database!.db.customUpdate(...)` | secure store, `flutter_preferences` | inside `Preferences` — the implementation `GuardedPreferences` wraps | `correct as-is` — these are the store the guard decorates; the check happens above them |
 | `lib/core/preferences.dart:54-84` | `_prefs.setBool/setInt/setDouble/setString/setStringList/remove/clear` | device-local | `SharedPreferencesWrapper implements PreferencesApi` | `correct as-is` — pure delegation with the caller's key |
 | `packages/tfc_dart/lib/core/database_drift.dart:374, 394, 444-527, 702-790, 847-856, 907, 990-1007, 1127-1317` | `into(...)`, `delete(...)`, `customStatement`, `customInsert` | every table | the database's own methods and migrations | `correct as-is` — this file *is* the store |
@@ -422,12 +422,64 @@ a better mood.
 
 ### 3.3 The access repository writes its own store
 
-`packages/tfc_dart/lib/core/access/access_repository.dart:177-340` writes
-`app_role` and `app_user` through raw Drift. It is the authorization store
-itself; a guard consulting the policy to decide whether the policy's own data
-may change would be circular. Spec §7c and §9 put roles and users behind
-`AccessGroup.users`, and Phase 6 builds the screens that drive it. Closing it
-means gating those screens, not decorating this class.
+`packages/tfc_dart/lib/core/access/access_repository.dart` writes `app_role` and
+`app_user` through raw Drift — twelve `into(...)` / `update(...)` / `delete(...)`
+statements. It is the authorization store itself; a guard consulting the policy
+to decide whether the policy's own data may change would be circular. Spec §7c
+and §9 put roles and users behind `AccessGroup.users`, and Phase 6 builds the
+screens that drive it. Closing it means gating those screens, not decorating
+this class.
+
+**Closed by Phase 6, plan 06-03.** The condition written above is the one that
+was met, so here is what met it, in a form a reader can check rather than take:
+
+- `AccessAdminStore` (`lib/core/access_admin_store.dart`) is the one object the
+  screens write through. It names its permission once, as `kAccessAdminGroup =
+  AccessGroup.users` — the same shape `access_template_store.dart` uses for
+  `kAccessTemplateGroup`.
+- **All eight writes ask that gate**: `createRole`, `updateRole`, `deleteRole`,
+  `renameRole`, `createUser`, `deleteUser`, `setUserRole` and `setUserPassword`.
+  There is no ninth, and there is no generic row builder — each write is paired
+  with one of 06-01's eight named `AuditRecord` constructors, which is what fixes
+  the itemKey vocabulary in one place.
+- **Every one of them records a row, refusals included.** The deny row is written
+  *before* the `AccessDenied` is thrown, because a refusal that leaves no trace
+  is the one kind of guard nobody can audit afterwards.
+  `test/core/access_admin_store_test.dart` drives a `configure`-only session —
+  the page editor who must not be able to grant themselves `users` — into all
+  eight, so the gate is checked rather than remembered.
+
+**What closing it did not mean, stated because the entry said so in advance.**
+The repository was *not* decorated. It still writes both tables through Drift,
+correctly, because it is the layer that owns `db.transaction` and the
+last-`users`-holder invariant that has to be evaluated inside it. A decorator
+here would have had to reach an `AccessSession` from `packages/tfc_dart`, which
+is the dependency `packages/tfc_access`'s purity rule exists to avoid, and it
+would have put the invariant outside the transaction that makes it an invariant.
+
+**What the closure does not claim.** `AccessRepository` remains constructible
+and callable directly by anything holding an `AppDatabase`; nothing about the
+class refuses. **The gate is a property of the path the UI takes, not of the
+class**, and the honest form of that claim is a test rather than a sentence: no
+file under `lib/pages/` constructs an `AccessRepository`, asserted in
+`test/core/phase_03_coverage_test.dart`. The page layer reaches the repository
+only through `accessAdminStoreProvider`, and the store is the thing that asks.
+
+One caller is a deliberate exception and is named here so the paragraph above is
+not read as more than it is: `lib/pages/first_user.dart:141` calls
+`repo.createFirstUser(...)` straight off `accessRepositoryProvider`. That is the
+first-user window, which exists precisely for the state in which nobody can hold
+`users` yet — `app_user` is empty — and it is checked *inside* the transaction
+rather than by a guard. It writes no other row and cannot run once an account
+exists.
+
+**The line span was dropped from this entry deliberately.** It read `:177-340`
+when the entry was written and every one of those numbers moved when 06-02 added
+the five user methods. This document's own reconciliation test matches by file
+and never by line for that reason, so a count of statements is the claim that
+survives a reformat. The §2 row above still lists today's lines, because that is
+the table's shape and because `scripts/sweep-write-paths.sh` reprints them on
+demand — but the argument this entry makes does not rest on them.
 
 ### 3.4 Secure storage is outside both guards
 
