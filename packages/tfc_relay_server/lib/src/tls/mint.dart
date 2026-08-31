@@ -54,7 +54,13 @@ import 'package:basic_utils/basic_utils.dart'
     show CryptoUtils, StringUtils, X509Utils;
 import 'package:pointycastle/asn1.dart';
 import 'package:pointycastle/export.dart'
-    show PrivateKeyParameter, RSAPrivateKey, RSAPublicKey, RSASignature, Signer;
+    show
+        PrivateKeyParameter,
+        RSAPrivateKey,
+        RSAPublicKey,
+        RSASignature,
+        SHA1Digest,
+        Signer;
 
 export 'package:pointycastle/export.dart' show RSAPrivateKey, RSAPublicKey;
 
@@ -67,7 +73,7 @@ export 'package:pointycastle/export.dart' show RSAPrivateKey, RSAPublicKey;
 /// `pair.privateKey as RSAPrivateKey`.
 typedef RelayKeyPair = ({RSAPublicKey publicKey, RSAPrivateKey privateKey});
 
-/// A fresh RSA-2048 keypair.
+/// A fresh RSA keypair, 2048 bits unless [keySize] says otherwise.
 ///
 /// Separate from [mintCertificate] on purpose: this costs 158–201 ms on a Mac
 /// and closer to a second on a Windows runner (06-RESEARCH §B.3), while a
@@ -78,8 +84,18 @@ typedef RelayKeyPair = ({RSAPublicKey publicKey, RSAPrivateKey privateKey});
 /// temptation is obvious, but dart:io's acceptance of an EC leaf on this path
 /// is **not measured** (06-RESEARCH A9), and the certificate that every panel
 /// in a fish factory trusts is not the place to find out.
-RelayKeyPair generateKeyPair() {
-  final pair = CryptoUtils.generateRSAKeyPair(keySize: 2048);
+///
+/// **Size is a parameter because lifetime is.** 2048 is the default and is
+/// right for the leaf: NIST SP 800-57 puts it at acceptable-through-2030 and
+/// the leaf is re-issued yearly. The root is not — it is provisioned once for
+/// ten years to every panel in the plant, which is the same argument
+/// [_extensions] already makes about the EKU decision ("narrowing it is a
+/// decision that cannot be revisited without a site visit to every panel"),
+/// applied to a parameter where it had not been. `relay_certs --ca` therefore
+/// asks for 4096, at a measured one-off cost of ~0.8 s at provisioning time
+/// and nothing at all afterwards. The fixtures keep the default.
+RelayKeyPair generateKeyPair({int keySize = 2048}) {
+  final pair = CryptoUtils.generateRSAKeyPair(keySize: keySize);
   return (
     publicKey: pair.publicKey as RSAPublicKey,
     privateKey: pair.privateKey as RSAPrivateKey,
@@ -113,6 +129,45 @@ Map<String, String> subjectNameFromPem(String pem) =>
         .tbsCertificate!
         .subject
         .map((oid, value) => MapEntry(oid, value ?? ''));
+
+/// The DER tag of an `ASN1PrintableString` — the one string type
+/// [_distinguishedName] can write.
+const int printableStringTag = 0x13;
+
+/// Which ASN.1 string type each attribute of the subject name in [pem] is
+/// written as, keyed by dotted OID.
+///
+/// The companion [subjectNameFromPem] cannot answer this: it returns text, and
+/// [_distinguishedName] then re-encodes every value as an
+/// `ASN1PrintableString`. The round trip therefore preserves the *characters*
+/// and not the *encoding*, while a verifier matches issuer to subject on DER
+/// bytes. `openssl`'s default for `CN` is `UTF8String`, so a CA root produced
+/// by anything but this tool yields a leaf whose issuer name does not match
+/// the root's subject name — no chain builds, and every panel reports
+/// `CERTIFICATE_VERIFY_FAILED`, which is byte-identical to what a wrong CA and
+/// an expired leaf produce (trap 16).
+///
+/// `relay_certs --leaf` reads this and refuses rather than minting a leaf that
+/// chains to nothing. (Copying the issuer's DER through verbatim would *fix*
+/// the foreign-CA case instead of reporting it, and is the shape to reach for
+/// if the plant ever needs a root minted elsewhere; it is a bigger change than
+/// this phase should make on the certificate path.)
+Map<String, int> subjectNameTagsFromPem(String pem) {
+  final cert =
+      ASN1Parser(CryptoUtils.getBytesFromPEMString(pem)).nextObject()
+          as ASN1Sequence;
+  final tbs = cert.elements!.first as ASN1Sequence;
+  // `[0] version` is `EXPLICIT ... OPTIONAL`, so a v1 certificate puts the
+  // subject one slot earlier. Everything this tool mints is v3.
+  final subject =
+      tbs.elements![tbs.elements!.first.tag == 0xA0 ? 5 : 4] as ASN1Sequence;
+  return {
+    for (final rdn in subject.elements!.cast<ASN1Set>())
+      for (final atv in rdn.elements!.cast<ASN1Sequence>())
+        (atv.elements!.first as ASN1ObjectIdentifier)
+            .objectIdentifierAsString!: atv.elements![1].tag!,
+  };
+}
 
 /// A signed X.509 certificate, as a PEM string.
 ///
@@ -154,7 +209,19 @@ String mintCertificate({
     ..add(_distinguishedName(subject))
     ..add(_publicKeyBlock(subjectPublicKey))
     ..add(ASN1Object(tag: 0xA3)
-      ..valueBytes = _extensions(sans: sans, ca: ca).encode());
+      ..valueBytes = _extensions(
+        sans: sans,
+        ca: ca,
+        subjectKeyId: _keyIdentifier(subjectPublicKey),
+        // Derived from the signing key rather than passed in: the issuer's
+        // public key *is* the public half of the key doing the signing, and
+        // an extra parameter would be a second thing a caller can get wrong
+        // in a way no test would notice until a rollover. `publicExponent` is
+        // computed from p, q and d by `RSAPrivateKey`'s constructor, so it is
+        // there whatever route the key arrived by.
+        authorityKeyId: _keyIdentifier(RSAPublicKey(
+            signingKey.modulus!, signingKey.publicExponent!)),
+      ).encode());
 
   final outer = ASN1Sequence()
     ..add(tbs)
@@ -185,7 +252,12 @@ ASN1Object _generalName(String name) {
 }
 
 /// The v3 extension block.
-ASN1Sequence _extensions({required List<String> sans, required bool ca}) {
+ASN1Sequence _extensions({
+  required List<String> sans,
+  required bool ca,
+  required Uint8List subjectKeyId,
+  required Uint8List authorityKeyId,
+}) {
   final exts = ASN1Sequence();
 
   if (sans.isNotEmpty) {
@@ -228,8 +300,36 @@ ASN1Sequence _extensions({required List<String> sans, required bool ca}) {
     exts.add(_extension('2.5.29.37', eku.encode()));
   }
 
+  // subjectKeyIdentifier and authorityKeyIdentifier. RFC 5280 asks conforming
+  // CAs for both so that path construction is possible, and nothing here needs
+  // them today — the chain is one hop and dart:io builds it. They matter at
+  // the *rollover*: two roots with the same subject name exist at once by
+  // design during one, and a verifier holding both has to try each in turn
+  // unless the leaf names the key that signed it. That moment is ten years
+  // from the provisioning visit and a long way from anyone who remembers this
+  // file, which is the argument for writing them now.
+  exts.add(_extension('2.5.29.14', ASN1OctetString(octets: subjectKeyId)
+      .encode()));
+  exts.add(_extension(
+      '2.5.29.35',
+      // `keyIdentifier [0] IMPLICIT OCTET STRING` — implicit, so the context
+      // tag *replaces* the OCTET STRING's, and a nested 0x04 here would be
+      // twenty bytes of payload nobody can match.
+      (ASN1Sequence()..add(ASN1Object(tag: 0x80)..valueBytes = authorityKeyId))
+          .encode()));
+
   return exts;
 }
+
+/// RFC 5280's method-1 key identifier: SHA-1 over the `subjectPublicKey` BIT
+/// STRING's contents, excluding the tag, the length and the unused-bits octet.
+///
+/// SHA-1, and deliberately: this is a name, not a signature. Every stack that
+/// reads the field computes it this way, and an identifier that disagreed with
+/// theirs would be worse than no identifier — it would name a key nobody can
+/// find.
+Uint8List _keyIdentifier(RSAPublicKey key) =>
+    SHA1Digest().process(_rsaPublicKeyDer(key));
 
 /// `Extension ::= SEQUENCE { extnID, critical DEFAULT FALSE, extnValue }`.
 ASN1Sequence _extension(String oid, Uint8List value, {bool critical = false}) {
@@ -298,13 +398,19 @@ ASN1Sequence _publicKeyBlock(RSAPublicKey key) {
   final algorithm = ASN1Sequence()
     ..add(ASN1ObjectIdentifier.fromName('rsaEncryption'))
     ..add(ASN1Null());
-  final rsaKey = ASN1Sequence()
-    ..add(ASN1Integer(key.modulus))
-    ..add(ASN1Integer(key.exponent));
   return ASN1Sequence()
     ..add(algorithm)
-    ..add(ASN1BitString(stringValues: rsaKey.encode()));
+    ..add(ASN1BitString(stringValues: _rsaPublicKeyDer(key)));
 }
+
+/// `RSAPublicKey ::= SEQUENCE { modulus, publicExponent }` — the bytes that go
+/// inside the `subjectPublicKey` BIT STRING, and the bytes [_keyIdentifier]
+/// hashes. One function so the two cannot drift: an identifier computed over
+/// something other than what the certificate carries names nothing.
+Uint8List _rsaPublicKeyDer(RSAPublicKey key) => (ASN1Sequence()
+      ..add(ASN1Integer(key.modulus))
+      ..add(ASN1Integer(key.exponent)))
+    .encode();
 
 Uint8List _sign(Uint8List bytes, RSAPrivateKey key) {
   final signer = Signer('SHA-256/RSA')

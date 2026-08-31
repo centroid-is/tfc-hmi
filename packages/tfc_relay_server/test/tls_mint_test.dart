@@ -42,6 +42,8 @@ const _keyUsage = '2.5.29.15';
 const _basicConstraints = '2.5.29.19';
 const _subjectAltName = '2.5.29.17';
 const _extKeyUsage = '2.5.29.37';
+const _subjectKeyId = '2.5.29.14';
+const _authorityKeyId = '2.5.29.35';
 
 /// The tbsCertificate of [pem], parsed.
 ASN1Sequence _tbsOf(String pem) {
@@ -74,6 +76,23 @@ List<({int tag, Uint8List value})> _subjectAltNames(String pem) {
   return [
     for (final n in names.elements!) (tag: n.tag!, value: n.valueBytes!),
   ];
+}
+
+/// The 20 bytes of `subjectKeyIdentifier`, which is a bare OCTET STRING.
+Uint8List? _subjectKeyIdOf(String pem) {
+  final octets = _extensionOctets(pem, _subjectKeyId);
+  if (octets == null) return null;
+  return (ASN1Parser(octets).nextObject() as ASN1OctetString).octets;
+}
+
+/// The `keyIdentifier` field of `authorityKeyIdentifier`, which is `[0]
+/// IMPLICIT` inside a SEQUENCE — so the bytes are the context-tagged object's
+/// value, not an OCTET STRING's contents.
+Uint8List? _authorityKeyIdOf(String pem) {
+  final octets = _extensionOctets(pem, _authorityKeyId);
+  if (octets == null) return null;
+  final seq = ASN1Parser(octets).nextObject() as ASN1Sequence;
+  return seq.elements!.first.valueBytes;
 }
 
 /// The serial number as the certificate carries it.
@@ -279,6 +298,31 @@ void main() {
         final bits = ASN1Parser(octets).nextObject() as ASN1BitString;
         expect(bits.stringValues, isNotEmpty);
       }
+    });
+
+    test('the leaf names the key that signed it, and the root names its own',
+        () {
+      final root = mintRoot();
+      final leaf = mintLeafWith();
+
+      expect(_subjectKeyIdOf(root), hasLength(20),
+          reason: 'RFC 5280 asks a conforming CA for a subjectKeyIdentifier so '
+              'that path construction is possible. SHA-1 of the subject public '
+              'key bit string is the convention every other stack writes, and '
+              'twenty bytes is what that is');
+      expect(_authorityKeyIdOf(leaf), _subjectKeyIdOf(root),
+          reason: 'this is the whole value of the pair: at a CA rollover two '
+              'roots with the same subject name exist at once, and a verifier '
+              'holding both has to try them in turn unless the leaf says which '
+              'key signed it. That is a long way from anyone who remembers '
+              'this file');
+      expect(_subjectKeyIdOf(leaf), isNot(_subjectKeyIdOf(root)),
+          reason: 'the leaf identifies its own key, not the issuer\'s — an '
+              'SKI copied from the issuer would make the leaf look like the '
+              'root to a verifier matching on the identifier');
+      expect(_authorityKeyIdOf(root), _subjectKeyIdOf(root),
+          reason: 'a self-signed root signed itself, so its authority is its '
+              'own key');
     });
   });
 

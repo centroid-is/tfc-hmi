@@ -33,15 +33,26 @@ import 'package:test/test.dart';
 
 import '../bin/relay_certs.dart' as cli;
 
+/// The DER bytes of the PEM at [path].
+Uint8List _derOf(String path) => Uint8List.fromList(base64.decode(File(path)
+    .readAsStringSync()
+    .split('\n')
+    .where((l) => !l.startsWith('-----') && l.trim().isNotEmpty)
+    .join()));
+
 /// The tbsCertificate of the PEM at [path].
 ASN1Sequence _tbsOf(String path) {
-  final pem = File(path).readAsStringSync();
-  final body = pem
-      .split('\n')
-      .where((l) => !l.startsWith('-----') && l.trim().isNotEmpty)
-      .join();
-  final cert = ASN1Parser(base64.decode(body)).nextObject() as ASN1Sequence;
+  final cert = ASN1Parser(_derOf(path)).nextObject() as ASN1Sequence;
   return cert.elements!.first as ASN1Sequence;
+}
+
+/// How many bits the subject public key in the PEM at [path] carries.
+int _keyBitsOf(String path) {
+  final spki = _tbsOf(path).elements![6] as ASN1Sequence;
+  final bits = spki.elements![1] as ASN1BitString;
+  final rsa = ASN1Parser(Uint8List.fromList(bits.stringValues!)).nextObject()
+      as ASN1Sequence;
+  return (rsa.elements!.first as ASN1Integer).integer!.bitLength;
 }
 
 /// The exact DER of [object], sliced to its own length — a parsed object's
@@ -63,6 +74,18 @@ DateTime _notAfter(String path) {
     ASN1GeneralizedTime(:final dateTimeValue?) => dateTimeValue.toUtc(),
     _ => throw StateError('notAfter is a ${end.runtimeType} with no date'),
   };
+}
+
+/// Where [needle] first appears in [haystack] at or after [from], or -1.
+int _indexOfBytes(List<int> haystack, List<int> needle, [int from = 0]) {
+  outer:
+  for (var i = from; i + needle.length <= haystack.length; i++) {
+    for (var j = 0; j < needle.length; j++) {
+      if (haystack[i + j] != needle[j]) continue outer;
+    }
+    return i;
+  }
+  return -1;
 }
 
 /// The GeneralName tag bytes in the subjectAltName extension.
@@ -317,6 +340,183 @@ void main() {
         reason: 'the --san values must reach mintCertificate unchanged; a CLI '
             'that normalised them to strings would ship the basic_utils '
             'defect through the front door');
+  });
+
+  group('a name this tool cannot reproduce', () {
+    /// The root at [source], rewritten so every subject attribute is a
+    /// `UTF8String` where it was a `PrintableString`, written to [target].
+    ///
+    /// This is what a CA produced by anything but this tool looks like:
+    /// `openssl`'s default encoding for `CN` is `UTF8String`. Made by flipping
+    /// one tag byte per attribute rather than committed as a fixture — the two
+    /// string types holding the same ASCII differ by exactly that byte, so
+    /// every length is unchanged and the DER still parses. The self-signature
+    /// no longer matches, which is irrelevant here: nothing verifies a CA's
+    /// self-signature, and the refusal this drives fires while reading the
+    /// name.
+    void writeForeignlyEncodedCa(String source, String target,
+        List<String> attributeValues) {
+      final der = _derOf(source);
+      for (final value in attributeValues) {
+        final needle = <int>[0x13, value.length, ...utf8.encode(value)];
+        // Every occurrence, not the first: a self-signed root carries the
+        // same name twice, as issuer and as subject, and flipping only the
+        // issuer leaves the subject — the field `--leaf` reads — untouched.
+        final at = <int>[];
+        for (var from = 0;; from = at.last + 1) {
+          final next = _indexOfBytes(der, needle, from);
+          if (next < 0) break;
+          at.add(next);
+        }
+        expect(at, hasLength(2),
+            reason: 'the rewrite has to find "$value" as a PrintableString in '
+                'both the issuer and the subject of a self-signed root, or '
+                'this case is asserting a refusal about nothing');
+        for (final index in at) {
+          der[index] = 0x0C;
+        }
+      }
+      File(target).writeAsStringSync(
+          '-----BEGIN CERTIFICATE-----\n'
+          '${base64.encode(der)}\n'
+          '-----END CERTIFICATE-----');
+    }
+
+    test('--leaf refuses a CA whose subject name it cannot re-encode',
+        () async {
+      final dir = freshOut();
+      writeForeignlyEncodedCa('${caDir.path}/ca.pem', '${dir.path}/foreign.pem',
+          ['Relay Private CA', 'Centroid']);
+
+      final code = await cli.run([
+        '--leaf',
+        '--ca-cert',
+        '${dir.path}/foreign.pem',
+        '--ca-key',
+        '${caDir.path}/ca-key.pem',
+        '--san',
+        'localhost',
+        '--out',
+        dir.path,
+      ], out: out, err: err);
+
+      expect(code, 1,
+          reason: 'subjectNameFromPem returns text and _distinguishedName '
+              're-encodes every value as a PrintableString, so the round trip '
+              'preserves the characters and not the encoding — while a '
+              'verifier matches issuer to subject on the DER bytes. The leaf '
+              'would chain to nothing, and every panel would report '
+              'CERTIFICATE_VERIFY_FAILED, which is the same message a wrong '
+              'CA and an expired leaf produce (trap 16)');
+      expect(err.toString(), contains('relay_certs --ca'),
+          reason: 'the refusal has to name the way out; an integrator who '
+              'reached here has a CA from somewhere else and needs to be told '
+              'that this tool signs against its own roots');
+      expect(File('${dir.path}/leaf.pem').existsSync(), isFalse,
+          reason: 'a refused run leaves no half-written key material behind');
+    });
+
+    test('a --cn PrintableString cannot carry is refused before anything is '
+        'written', () async {
+      final dir = freshOut();
+
+      final code = await cli.run([
+        '--ca',
+        '--cn',
+        'Sjávarútvegur',
+        '--out',
+        dir.path,
+      ], out: out, err: err);
+
+      expect(code, 1,
+          reason: 'ASN1PrintableString accepts any Dart string and '
+              'pointycastle does not validate the alphabet, so a non-ASCII '
+              'common name writes a certificate that is not valid DER. It '
+              'chains here, because both ends use the same encoder, and may '
+              'be refused by anything else that reads it');
+      expect(err.toString(), contains('--cn'),
+          reason: 'the integrator typed the option; the refusal names it');
+      expect(File('${dir.path}/ca.pem').existsSync(), isFalse);
+    });
+
+    test('an underscore in --org is refused for the same reason', () async {
+      final dir = freshOut();
+
+      expect(
+          await cli.run(
+              ['--ca', '--org', 'centroid_is', '--out', dir.path],
+              out: out,
+              err: err),
+          1,
+          reason: 'PrintableString excludes _, @ and * — the characters an '
+              'organisation name picks up when somebody copies it out of a '
+              'hostname or an email address');
+      expect(err.toString(), contains('--org'));
+    });
+
+    test('the names an integrator actually types are accepted', () async {
+      final dir = freshOut();
+
+      expect(
+          await cli.run([
+            '--ca',
+            '--cn',
+            'Relay Private CA (SVN)',
+            '--org',
+            'Centroid ehf.',
+            '--out',
+            dir.path,
+          ], out: out, err: err),
+          0,
+          reason: 'spaces, parentheses and full stops are all inside '
+              'PrintableString, and a rule that refused them would be the '
+              'refusal rather than the encoding getting in the way: $err');
+    });
+  });
+
+  group('how big the keys are', () {
+    test('the root gets 4096 bits and a leaf 2048', () async {
+      final dir = freshOut();
+      expect(await mintLeafInto(dir, sans: ['localhost']), 0, reason: '$err');
+
+      expect(_keyBitsOf('${caDir.path}/ca.pem'), greaterThan(4000),
+          reason: 'NIST SP 800-57 puts 2048-bit RSA at '
+              'acceptable-through-2030, and a root minted in 2026 for ten '
+              'years outlives that by six. This is the same argument mint.dart '
+              'already makes about the EKU — the root is provisioned once and '
+              'cannot be revisited without a site visit to every panel — '
+              'applied to the parameter where it had not been');
+      expect(_keyBitsOf('${dir.path}/leaf.pem'), lessThan(3000),
+          reason: 'the leaf is re-issued yearly and 2048 is right for a '
+              'one-year certificate; making it 4096 too would charge every '
+              'fixture in the phase for a property only the root needs');
+    });
+
+    test('--key-size overrides both defaults', () async {
+      final dir = freshOut();
+
+      expect(
+          await cli.run(
+              ['--ca', '--key-size', '2048', '--out', dir.path],
+              out: out,
+              err: err),
+          0,
+          reason: '$err');
+      expect(_keyBitsOf('${dir.path}/ca.pem'), lessThan(3000),
+          reason: 'an integrator with a hardware module or an inventory that '
+              'fixes the size needs a way to say so, and the fixtures need a '
+              'way to stay fast');
+    });
+
+    test('a --key-size that is not a positive number is refused', () async {
+      final dir = freshOut();
+
+      expect(
+          await cli.run(['--ca', '--key-size', 'big', '--out', dir.path],
+              out: out, err: err),
+          1);
+      expect(err.toString(), contains('--key-size'));
+    });
   });
 
   test('--help prints the usage and exits 0', () async {

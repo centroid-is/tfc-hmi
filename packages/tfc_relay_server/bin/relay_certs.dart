@@ -119,16 +119,22 @@ ArgParser _parser() => ArgParser()
   ..addOption('days',
       help: 'Validity in days. Defaults to 3650 for --ca and 365 for --leaf.',
       valueHelp: 'n')
+  // No parser default here either, and for the same reason.
+  ..addOption('key-size',
+      help: 'RSA key size in bits. Defaults to 4096 for --ca and 2048 for '
+          '--leaf.',
+      valueHelp: 'bits')
   ..addFlag('help', abbr: 'h', negatable: false, help: 'Show this usage.');
 
 int _mintRoot(ArgResults options, StringSink out) {
-  final dir = _outDirectory(options);
+  // Every refusal before the first side effect: the directory is not created
+  // and the keygen — the expensive part — is not paid for by a run that
+  // cannot finish.
   final days = _days(options, fallback: 3650);
-  final keys = generateKeyPair();
-  final dn = {
-    'CN': options.option('cn') ?? 'Relay Private CA',
-    'O': options.option('org')!,
-  };
+  final keySize = _keySize(options, fallback: 4096);
+  final dn = _distinguishedName(options, fallbackCn: 'Relay Private CA');
+  final dir = _outDirectory(options);
+  final keys = generateKeyPair(keySize: keySize);
   final now = DateTime.now().toUtc();
 
   final pem = mintCertificate(
@@ -147,10 +153,10 @@ int _mintRoot(ArgResults options, StringSink out) {
 }
 
 int _mintLeaf(ArgResults options, StringSink out) {
-  final dir = _outDirectory(options);
   final caCert = _readRequired(options, 'ca-cert');
   final caKey = _readRequired(options, 'ca-key');
   final days = _days(options, fallback: 365);
+  final keySize = _keySize(options, fallback: 2048);
 
   final sans = options.multiOption('san');
   if (sans.isEmpty) {
@@ -159,18 +165,19 @@ int _mintLeaf(ArgResults options, StringSink out) {
         'it at the handshake.');
   }
 
-  final keys = generateKeyPair();
+  final issuer = _reproducibleIssuer(caCert, options.option('ca-cert')!);
+  final subject = _distinguishedName(options, fallbackCn: sans.first);
+  final dir = _outDirectory(options);
+  final keys = generateKeyPair(keySize: keySize);
   final now = DateTime.now().toUtc();
 
   final pem = mintCertificate(
     signingKey: privateKeyFromPem(caKey),
     // Byte-identical to the CA's own subject name, because a verifier matches
-    // the two on DER bytes and not on how they render.
-    issuer: subjectNameFromPem(caCert),
-    subject: {
-      'CN': options.option('cn') ?? sans.first,
-      'O': options.option('org')!,
-    },
+    // the two on DER bytes and not on how they render. `_reproducibleIssuer`
+    // is what makes "byte-identical" true rather than hoped for.
+    issuer: issuer,
+    subject: subject,
     subjectPublicKey: keys.publicKey,
     sans: sans,
     notBefore: now.subtract(const Duration(days: 1)),
@@ -215,6 +222,79 @@ String _readRequired(ArgResults options, String name) {
     throw _Refused('--$name: no such file: $path');
   }
   return file.readAsStringSync();
+}
+
+/// The subject name for the certificate this run mints, refused if the
+/// encoder cannot carry it.
+///
+/// `pointycastle` writes whatever Dart string it is handed into a printable
+/// string and validates nothing, so `--cn "Sjávarútvegur"` or an organisation
+/// name carrying an underscore produces a certificate that is not valid DER.
+/// It chains here, because both ends use the same encoder, and may be refused
+/// by anything else that ever reads it — a Windows certificate store, an
+/// inventory tool, the OPC UA stack next door.
+Map<String, String> _distinguishedName(ArgResults options,
+    {required String fallbackCn}) {
+  final cn = options.option('cn');
+  return {
+    'CN': _printableOnly(cn ?? fallbackCn,
+        cn != null ? '--cn' : '--cn (defaulted from the first --san)'),
+    'O': _printableOnly(options.option('org')!, '--org'),
+  };
+}
+
+/// Letters, digits, space and `'()+,-./:=?` — the whole of PrintableString.
+final RegExp _printableAlphabet = RegExp(r"^[A-Za-z0-9 '()+,\-./:=?]+$");
+
+String _printableOnly(String value, String option) {
+  if (_printableAlphabet.hasMatch(value)) return value;
+  throw _Refused('$option is "$value", which the certificate name encoder '
+      'cannot carry. The alphabet is letters, digits, space and the '
+      'punctuation \'()+,-./:=? — no underscore, no @, no *, nothing outside '
+      'ASCII. The library does not check this, so the file would be written '
+      'and would not be valid; it would work against this tool\'s own CA and '
+      'be refused by anything else that reads it.');
+}
+
+/// The CA's subject name, or a refusal when this tool cannot reproduce it.
+///
+/// The issuer name on a leaf has to be **byte-identical** to the subject name
+/// on its root, and the round trip here goes through text: the name is read
+/// back as strings and written out again as printable strings. That preserves
+/// the characters and loses the encoding. `openssl` writes `CN` as a UTF8
+/// string by default, so a root minted anywhere but here yields a leaf that
+/// chains to nothing — and the message every panel then shows is the one a
+/// wrong CA and an expired leaf also show (trap 16). Refusing here costs one
+/// parse and turns that into a sentence at provisioning time.
+Map<String, String> _reproducibleIssuer(String caCertPem, String path) {
+  final foreign = subjectNameTagsFromPem(caCertPem)
+      .entries
+      .where((entry) => entry.value != printableStringTag)
+      .map((entry) => entry.key)
+      .toList();
+  if (foreign.isNotEmpty) {
+    throw _Refused('the CA at $path writes ${foreign.join(', ')} in its '
+        'subject name with a string encoding this tool cannot reproduce — '
+        'openssl uses a UTF8 string for the common name, relay_certs uses a '
+        'printable string. A verifier matches a leaf\'s issuer name to the '
+        'root\'s subject name on the raw bytes, so the leaf this run would '
+        'write chains to nothing and every panel reports '
+        'CERTIFICATE_VERIFY_FAILED, which is the same message a wrong CA and '
+        'an expired leaf produce. Mint the root with `relay_certs --ca` and '
+        'sign against that one.');
+  }
+  return subjectNameFromPem(caCertPem);
+}
+
+int _keySize(ArgResults options, {required int fallback}) {
+  final raw = options.option('key-size');
+  if (raw == null) return fallback;
+  final bits = int.tryParse(raw);
+  if (bits == null || bits < 2048) {
+    throw _Refused('--key-size must be a whole number of bits and at least '
+        '2048, not "$raw".');
+  }
+  return bits;
 }
 
 int _days(ArgResults options, {required int fallback}) {
