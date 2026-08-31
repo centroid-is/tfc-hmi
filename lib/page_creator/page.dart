@@ -567,9 +567,23 @@ class PageManager {
 
 class CreatePageWidget extends StatefulWidget {
   final AssetPage? initialPage;
-  final Function(AssetPage) onSave;
+
+  /// Applies the edit. Returns false when the caller refused it — a path that
+  /// is already taken, say — which keeps this dialog open with the operator's
+  /// text still in it instead of closing over a change that never landed.
+  final bool Function(AssetPage) onSave;
   final bool isSection;
   final String basePath;
+
+  /// What else changing the address costs, in the caller's words — e.g. that
+  /// this station's startup page points at the page being renamed. Shown
+  /// under the address checkbox once it is ticked.
+  final String? addressChangeNote;
+
+  /// Whether the address may be moved at all. False where the caller cannot
+  /// carry the move through — a section's own landing page is keyed by the
+  /// section's address, so changing one without the other only detaches it.
+  final bool allowAddressChange;
 
   const CreatePageWidget({
     super.key,
@@ -577,6 +591,8 @@ class CreatePageWidget extends StatefulWidget {
     required this.onSave,
     this.isSection = false,
     this.basePath = '',
+    this.addressChangeNote,
+    this.allowAddressChange = true,
   });
 
   @override
@@ -589,18 +605,37 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
   late bool _mirroringDisabled;
   late bool _published;
 
+  /// Whether an existing page's address should follow its new name.
+  ///
+  /// Off by default: the address is what links, bookmarks and the station's
+  /// startup setting point at, so renaming for readability must not quietly
+  /// move the page out from under them. Ignored when creating, where there is
+  /// no old address to keep.
+  bool _changeAddress = false;
+
   @override
   void initState() {
     super.initState();
     _labelController =
         TextEditingController(text: widget.initialPage?.menuItem.label ?? '');
+    _labelController.addListener(_onLabelChanged);
     _selectedIcon = widget.initialPage?.menuItem.icon ??
         (widget.isSection ? Icons.folder : Icons.pageview);
     _mirroringDisabled = widget.initialPage?.mirroringDisabled ?? false;
     _published = widget.initialPage?.published ?? true;
   }
 
-  String _buildPath(String label) {
+  /// The address this page already has, or null when it is being created.
+  String? get _existingPath => widget.initialPage?.menuItem.path;
+
+  /// Redraws the address preview as the name is typed.
+  void _onLabelChanged() {
+    if (_existingPath == null) return;
+    setState(() {});
+  }
+
+  /// The address [label] would produce, ignoring whether it is being applied.
+  String _slugPath(String label) {
     final slug = label
         .toLowerCase()
         .replaceAll(RegExp(r'[^a-z0-9\s]'), '')
@@ -609,8 +644,17 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
     return slug.isEmpty ? '$base/' : '$base/$slug';
   }
 
+  /// The address to save: the derived one when creating or when the operator
+  /// asked for it, and otherwise the address the page already had.
+  String _buildPath(String label) {
+    final existing = _existingPath;
+    if (existing != null && !_changeAddress) return existing;
+    return _slugPath(label);
+  }
+
   @override
   void dispose() {
+    _labelController.removeListener(_onLabelChanged);
     _labelController.dispose();
     super.dispose();
   }
@@ -638,6 +682,78 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
     );
   }
 
+  /// The page's address, and — when editing — the opt-in to move it.
+  ///
+  /// A page being created has no address worth showing: it is derived from
+  /// the name and nothing points at it yet.
+  Widget _buildAddressSection(BuildContext context) {
+    final existing = _existingPath;
+    if (existing == null) return const SizedBox.shrink();
+
+    final theme = Theme.of(context);
+    if (!widget.allowAddressChange) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Address', style: theme.textTheme.labelMedium),
+            Text(existing,
+                key: const ValueKey('page-address-preview'),
+                style: theme.textTheme.bodyMedium),
+          ],
+        ),
+      );
+    }
+
+    final proposed = _slugPath(_labelController.text.trim());
+    final wouldMove = _changeAddress && proposed != existing;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Address', style: theme.textTheme.labelMedium),
+          Text(
+            _changeAddress ? proposed : existing,
+            key: const ValueKey('page-address-preview'),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              fontFeatures: const [FontFeature.tabularFigures()],
+              color: wouldMove ? theme.colorScheme.error : null,
+            ),
+          ),
+          CheckboxListTile(
+            key: const ValueKey('page-address-change'),
+            contentPadding: EdgeInsets.zero,
+            controlAffinity: ListTileControlAffinity.leading,
+            dense: true,
+            value: _changeAddress,
+            onChanged: (value) =>
+                setState(() => _changeAddress = value ?? false),
+            title: const Text('Also update the address'),
+            subtitle: Text(
+              _changeAddress
+                  ? _addressWarning(existing, proposed)
+                  : 'Renaming leaves the address alone, so links and this '
+                      'station\'s startup setting keep working.',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// What ticking the address box actually does, spelled out.
+  String _addressWarning(String existing, String proposed) {
+    if (proposed == existing) {
+      return 'This name gives the same address, so nothing moves.';
+    }
+    final note = widget.addressChangeNote;
+    return 'Moves $existing to $proposed. Anything pointing at the old '
+        'address stops working.${note == null ? '' : ' $note'}';
+  }
+
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
@@ -649,6 +765,7 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
             decoration: InputDecoration(
                 labelText: widget.isSection ? 'Section Name' : 'Page Name'),
           ),
+          _buildAddressSection(context),
           const SizedBox(height: 16),
           Row(
             children: [
@@ -726,7 +843,9 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
                     navigationPriority: widget.initialPage?.navigationPriority,
                     published: _published,
                   );
-                  widget.onSave(page);
+                  // Closing on a refused edit used to throw the operator's
+                  // typing away behind a SnackBar they never got to act on.
+                  if (!widget.onSave(page)) return;
                   Navigator.pop(context);
                 },
                 child: Text(widget.initialPage != null ? 'Update' : 'Create'),

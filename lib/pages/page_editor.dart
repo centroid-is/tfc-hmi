@@ -3621,6 +3621,28 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     final roots = _temporaryPages.keys
         .where((path) => !childPaths.contains(path))
         .toList();
+
+    // A page can be somebody's child and still hang off nothing — two
+    // sections naming each other, or a subtree whose only parent was edited
+    // out of the stored JSON by hand. Those pages are in the file and in the
+    // save, but walking down from the roots never reaches them, so the Pages
+    // dialog showed no trace of them at all: not to open, not to move, not to
+    // delete. Treating them as roots is what puts them back within reach.
+    final reachable = <String>{};
+    final queue = List<String>.from(roots);
+    while (queue.isNotEmpty) {
+      final current = queue.removeLast();
+      if (!reachable.add(current)) continue;
+      for (final child in _temporaryPages[current]?.menuItem.children ??
+          const <MenuItem>[]) {
+        final path = child.path;
+        if (path == null || path.isEmpty || path == current) continue;
+        if (_temporaryPages.containsKey(path)) queue.add(path);
+      }
+    }
+    roots.addAll(
+        _temporaryPages.keys.where((path) => !reachable.contains(path)));
+
     roots.sort((a, b) {
       final pa = _temporaryPages[a]?.navigationPriority ?? 999;
       final pb = _temporaryPages[b]?.navigationPriority ?? 999;
@@ -3748,6 +3770,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         builder: (context, dialogSetState) {
           final roots = _getTopLevelPaths();
           final appItems = _appRegisteredTopLevel();
+          // One set for the whole tree, so a page listed under two sections
+          // (or a pair of sections naming each other) is drawn once and the
+          // recursion cannot chase itself off the stack.
+          final visited = <String>{};
           return StandardDialogFrame(
             title: 'Pages',
             // The restart caveat belongs with the change, not buried in the
@@ -3797,6 +3823,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                               dialogContext,
                               depth: 0,
                               reorderIndex: i,
+                              visited: visited,
                             ),
                       ],
                     ),
@@ -3848,16 +3875,39 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// resets to the default. Takes effect on the next app start, like every
   /// other change made in this dialog.
   void _setStartupUrl(String path, StateSetter dialogSetState) {
+    final previous = _startupUrl;
     _startupUrl = _startupUrl == path ? startupUrlDefault : path;
-    // Fire-and-forget on purpose (the toggle must feel instant), but a
-    // failed write means the lit rocket is lying — say so somewhere.
+    _writeStartupUrl(revertTo: previous);
+    dialogSetState(() {});
+  }
+
+  /// Points this station's startup setting at [path] without asking, because
+  /// the page it named has just been renamed or deleted out from under it.
+  void _retargetStartupUrl(String path) {
+    final previous = _startupUrl;
+    _startupUrl = path;
+    _writeStartupUrl(revertTo: previous);
+  }
+
+  /// Persists [_startupUrl]. The write is not awaited — the rocket has to
+  /// light the moment it is tapped — but a failure is no longer swallowed:
+  /// the field goes back to [revertTo] so the icon stops claiming something
+  /// that never reached the disk, and the operator is told.
+  void _writeStartupUrl({required String revertTo}) {
     unawaited(
       writeStartupUrl(ref.read(localPreferencesProvider), _startupUrl)
           .catchError((Object e) {
         debugPrint('startup URL write failed: $e');
+        if (!mounted) return;
+        setState(() => _startupUrl = revertTo);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not save the startup page on this station: '
+                '$e'),
+          ),
+        );
       }),
     );
-    dialogSetState(() {});
   }
 
   /// The per-row toggle marking [path] as this station's startup page.
@@ -3905,9 +3955,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     BuildContext dialogContext, {
     required int depth,
     required int reorderIndex,
+    required Set<String> visited,
   }) {
     final page = _temporaryPages[pageName];
     if (page == null) return SizedBox(key: ValueKey(pageName));
+    visited.add(pageName);
 
     final isSelected = _currentPage == pageName;
     final displayName = page.menuItem.label;
@@ -4090,28 +4142,176 @@ class _PageEditorState extends ConsumerState<PageEditor> {
               },
               children: [
                 for (int i = 0; i < page.menuItem.children.length; i++)
-                  if (page.menuItem.children[i].path == pageName)
-                    _buildSelfRefChild(
-                      page.menuItem.children[i],
-                      pageName,
-                      dialogSetState,
-                      dialogContext,
-                      depth: depth + 1,
-                      reorderIndex: i,
-                    )
-                  else
-                    _buildTreeNode(
-                      page.menuItem.children[i].path ?? '',
-                      dialogSetState,
-                      dialogContext,
-                      depth: depth + 1,
-                      reorderIndex: i,
-                    ),
+                  _buildChildNode(
+                    page.menuItem.children[i],
+                    pageName,
+                    dialogSetState,
+                    dialogContext,
+                    depth: depth + 1,
+                    reorderIndex: i,
+                    visited: visited,
+                  ),
               ],
             ),
         ],
       ),
     );
+  }
+
+  /// Picks the row for one entry in a section's children list.
+  ///
+  /// The list is stored data, so it can hold entries the tree cannot follow:
+  /// an item with no address, one naming a page that is gone, or — where two
+  /// sections name each other — one that has already been drawn further up.
+  /// Each used to collapse into a keyless placeholder, and two of them in the
+  /// same list took the whole editor down with a duplicate-key assertion.
+  /// They get a visible, individually-keyed row instead, so the entry can be
+  /// seen and deleted rather than crashing the dialog it lives in.
+  Widget _buildChildNode(
+    MenuItem child,
+    String parentPath,
+    StateSetter dialogSetState,
+    BuildContext dialogContext, {
+    required int depth,
+    required int reorderIndex,
+    required Set<String> visited,
+  }) {
+    final path = child.path;
+
+    // A section listing itself is its own landing page, not a step down.
+    if (path == parentPath) {
+      return _buildSelfRefChild(
+        child,
+        parentPath,
+        dialogSetState,
+        dialogContext,
+        depth: depth,
+        reorderIndex: reorderIndex,
+      );
+    }
+
+    if (path == null || path.isEmpty) {
+      return _buildBrokenChildRow(
+        key: ValueKey('broken-$parentPath-$reorderIndex'),
+        label: child.label,
+        icon: child.icon,
+        reason: 'No address — this entry points nowhere',
+        parentPath: parentPath,
+        childItem: child,
+        dialogSetState: dialogSetState,
+        dialogContext: dialogContext,
+        reorderIndex: reorderIndex,
+      );
+    }
+
+    if (!_temporaryPages.containsKey(path)) {
+      return _buildBrokenChildRow(
+        key: ValueKey('broken-$parentPath-$reorderIndex'),
+        label: child.label,
+        icon: child.icon,
+        reason: 'Missing page — nothing lives at $path',
+        parentPath: parentPath,
+        childItem: child,
+        dialogSetState: dialogSetState,
+        dialogContext: dialogContext,
+        reorderIndex: reorderIndex,
+      );
+    }
+
+    if (visited.contains(path)) {
+      return _buildBrokenChildRow(
+        key: ValueKey('repeat-$parentPath-$reorderIndex'),
+        label: child.label,
+        icon: child.icon,
+        reason: 'Listed twice — shown higher up the tree',
+        parentPath: parentPath,
+        childItem: child,
+        dialogSetState: dialogSetState,
+        dialogContext: dialogContext,
+        reorderIndex: reorderIndex,
+      );
+    }
+
+    return _buildTreeNode(
+      path,
+      dialogSetState,
+      dialogContext,
+      depth: depth,
+      reorderIndex: reorderIndex,
+      visited: visited,
+    );
+  }
+
+  /// A children-list entry the tree cannot follow, shown so it can be removed.
+  Widget _buildBrokenChildRow({
+    required Key key,
+    required String label,
+    required IconData icon,
+    required String reason,
+    required String parentPath,
+    required MenuItem childItem,
+    required StateSetter dialogSetState,
+    required BuildContext dialogContext,
+    required int reorderIndex,
+  }) {
+    final scheme = Theme.of(dialogContext).colorScheme;
+    return Padding(
+      key: key,
+      padding: const EdgeInsets.only(left: 20.0),
+      child: ListTile(
+        dense: true,
+        leading: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ReorderableDragStartListener(
+              index: reorderIndex,
+              child:
+                  const Icon(Icons.drag_handle, size: 20, color: Colors.grey),
+            ),
+            const SizedBox(width: 4),
+            Icon(icon, color: scheme.error),
+          ],
+        ),
+        title: Text(label.isEmpty ? '(unnamed)' : label),
+        subtitle: Text(reason, style: TextStyle(color: scheme.error)),
+        trailing: IconButton(
+          icon: const Icon(Icons.delete, size: 18),
+          tooltip: 'Remove this entry',
+          onPressed: () => _removeBrokenChild(
+            parentPath,
+            reorderIndex,
+            childItem,
+            dialogSetState,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Drops the [index]th entry of [parentPath]'s children list. Indexed
+  /// rather than matched by path, because the entries this clears up are
+  /// exactly the ones whose path is missing or duplicated.
+  void _removeBrokenChild(
+    String parentPath,
+    int index,
+    MenuItem expected,
+    StateSetter dialogSetState,
+  ) {
+    final parent = _temporaryPages[parentPath];
+    if (parent == null) return;
+    final children = List<MenuItem>.from(parent.menuItem.children);
+    if (index < 0 || index >= children.length) return;
+    // The tree may have been rebuilt under us; only remove what was shown.
+    if (children[index] != expected) return;
+    _saveToHistory();
+    setState(() {
+      children.removeAt(index);
+      _temporaryPages[parentPath] = parent.copyWith(
+        menuItem: parent.menuItem.copyWith(children: children),
+      );
+      _updateCurrentJson();
+    });
+    dialogSetState(() {});
   }
 
   /// Renders a self-referencing child as a leaf page.
@@ -4172,8 +4372,20 @@ class _PageEditorState extends ConsumerState<PageEditor> {
               ),
             IconButton(
               icon: const Icon(Icons.delete, size: 18),
-              onPressed: () =>
-                  _deletePage(mapKey, dialogSetState, dialogContext),
+              // This row is the section's own landing page, so deleting it
+              // deletes the section — which the confirm used to hide by
+              // naming the parent instead of the row that was tapped.
+              onPressed: () => _deletePage(
+                mapKey,
+                dialogSetState,
+                dialogContext,
+                displayLabel: childItem.label,
+                extraWarning: page == null
+                    ? null
+                    : 'This is the landing page of the "'
+                        '${page.menuItem.label}" section, so the whole '
+                        'section goes with it.',
+              ),
               tooltip: 'Delete',
             ),
           ],
@@ -4318,6 +4530,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           child: CreatePageWidget(
             initialPage: childPage,
             basePath: _buildBasePath(mapKey),
+            // This row is the section's landing page and is keyed by the
+            // section's own address; moving one without the other would only
+            // detach it from the section it belongs to.
+            allowAddressChange: false,
             onSave: (updatedPage) {
               _saveToHistory();
               setState(() {
@@ -4344,6 +4560,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                 _updateCurrentJson();
               });
               dialogSetState(() {});
+              return true;
             },
           ),
         ),
@@ -4624,6 +4841,24 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     return targets;
   }
 
+  /// How many levels sit below [pagePath] — 0 for a page or empty section.
+  /// Cycle-safe: a self-referencing or looping tree returns what it has
+  /// walked so far rather than recursing forever.
+  int _subtreeHeight(String pagePath, [Set<String>? seen]) {
+    final visited = seen ?? <String>{};
+    if (!visited.add(pagePath)) return 0;
+    var height = 0;
+    for (final child in _temporaryPages[pagePath]?.menuItem.children ??
+        const <MenuItem>[]) {
+      final path = child.path;
+      if (path == null || path.isEmpty || path == pagePath) continue;
+      if (!_temporaryPages.containsKey(path)) continue;
+      final below = 1 + _subtreeHeight(path, visited);
+      if (below > height) height = below;
+    }
+    return height;
+  }
+
   /// Why [targetPath] cannot receive [pagePath], or null when it can.
   String? _moveBlockedReason(String pagePath, String targetPath, int depth) {
     if (targetPath == pagePath) return 'This is the item being moved';
@@ -4632,7 +4867,16 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         ancestor: pagePath, candidate: targetPath)) {
       return 'Inside the item being moved';
     }
-    if (depth >= _maxSectionDepth) return 'Nesting limit reached';
+    // A section brings its own levels with it, so the limit has to be checked
+    // against the deepest page inside it — not just where the section lands.
+    // Without this a three-deep section could be dropped two levels down and
+    // end up nested past where the Add buttons will even appear.
+    final height = _subtreeHeight(pagePath);
+    if (depth + height >= _maxSectionDepth) {
+      return height == 0
+          ? 'Nesting limit reached'
+          : 'Too deep for what you are moving';
+    }
     return null;
   }
 
@@ -4772,7 +5016,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                         'A page with path "$newPath" already exists. Please choose a different name.'),
                   ),
                 );
-                return;
+                return false;
               }
               _saveToHistory();
               setState(() {
@@ -4806,6 +5050,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                 _updateCurrentJson();
               });
               dialogSetState(() {});
+              return true;
             },
           ),
         ),
@@ -4832,6 +5077,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
             initialPage: page,
             isSection: isSection,
             basePath: _buildBasePath(_findParentOf(pagePath)),
+            addressChangeNote: _startupUrl == pagePath
+                ? "This station's startup page points here and will follow the "
+                    'move.'
+                : null,
             onSave: (updatedPage) {
               final newPath = updatedPage.menuItem.path ?? '';
               if (newPath != pagePath && _temporaryPages.containsKey(newPath)) {
@@ -4841,7 +5090,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                         'A page with path "$newPath" already exists. Please choose a different name.'),
                   ),
                 );
-                return;
+                return false;
               }
               _saveToHistory();
               setState(() {
@@ -4853,11 +5102,18 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                   if (_currentPage == pagePath) {
                     _currentPage = newPath;
                   }
+                  // The station's startup page is stored as an address, so a
+                  // page that moves has to take the setting with it or the
+                  // next boot lands on a route that no longer exists.
+                  if (_startupUrl == pagePath) {
+                    _retargetStartupUrl(newPath);
+                  }
                 }
                 _temporaryPages[newPath] = updatedPage;
                 _updateCurrentJson();
               });
               dialogSetState(() {});
+              return true;
             },
           ),
         ),
@@ -4905,20 +5161,80 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     return changed ? result : null;
   }
 
+  /// Every page beneath [pagePath], excluding itself. Cycle-safe, so bad
+  /// stored data cannot hang the confirm dialog.
+  List<String> _descendantsOf(String pagePath) {
+    final found = <String>[];
+    final seen = <String>{pagePath};
+    final queue = <String>[pagePath];
+    while (queue.isNotEmpty) {
+      final current = queue.removeLast();
+      for (final child in _temporaryPages[current]?.menuItem.children ??
+          const <MenuItem>[]) {
+        final path = child.path;
+        // A section listing itself is its own landing page, not a child.
+        if (path == null || path.isEmpty || path == current) continue;
+        if (!seen.add(path)) continue;
+        if (_temporaryPages.containsKey(path)) found.add(path);
+        queue.add(path);
+      }
+    }
+    return found;
+  }
+
+  /// Spells out what pressing Delete costs, so nothing goes without warning:
+  /// how many assets are on the page, what happens to a section's contents,
+  /// and whether this station's startup setting is about to be reset.
+  String _deleteWarning(String pagePath, AssetPage page) {
+    final lines = <String>[];
+    final isSection = page.menuItem.isNavigationSection;
+    final children = isSection ? _descendantsOf(pagePath) : const <String>[];
+
+    if (children.isNotEmpty) {
+      final n = children.length;
+      lines.add('This section holds $n ${n == 1 ? 'page' : 'pages'}. '
+          'They are not deleted — they move to the top level.');
+    }
+
+    final assets = page.assets.length;
+    if (assets > 0) {
+      lines.add('$assets ${assets == 1 ? 'asset' : 'assets'} on it '
+          '${assets == 1 ? 'is' : 'are'} deleted with it.');
+    }
+
+    if (_startupUrl == pagePath) {
+      lines.add("This station starts on this page; the setting resets to "
+          '$startupUrlDefault.');
+    }
+
+    lines.add('Undo (Ctrl+Z) brings it back until you save.');
+    return lines.join('\n\n');
+  }
+
   void _deletePage(
     String pagePath,
     StateSetter dialogSetState,
-    BuildContext dialogContext,
-  ) {
-    final displayName = _temporaryPages[pagePath]?.menuItem.label ?? pagePath;
+    BuildContext dialogContext, {
+    String? displayLabel,
+    String? extraWarning,
+  }) {
+    final page = _temporaryPages[pagePath];
+    final displayName =
+        displayLabel ?? page?.menuItem.label ?? pagePath;
+    final warning = [
+      if (extraWarning != null) extraWarning,
+      if (page != null) _deleteWarning(pagePath, page),
+    ].join('\n\n');
+
     showConfirmDialog(
       context: dialogContext,
       title: 'Delete',
-      message: 'Delete "$displayName"?',
+      message: 'Delete "$displayName"?\n\n$warning',
       confirmLabel: 'Delete',
       destructive: true,
     ).then((confirmed) {
       if (!confirmed) return;
+      final startupWasHere = _startupUrl == pagePath;
       _saveToHistory();
       setState(() {
         _temporaryPages.remove(pagePath);
@@ -4927,9 +5243,20 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         if (_currentPage == pagePath) {
           _currentPage = _temporaryPages.keys.firstOrNull;
         }
+        // Leaving the setting pointed at a deleted address boots the station
+        // onto a route that no longer resolves.
+        if (startupWasHere) _retargetStartupUrl(startupUrlDefault);
         _updateCurrentJson();
       });
       dialogSetState(() {});
+      if (startupWasHere && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Deleted "$displayName". This station\'s startup '
+                'page reset to $startupUrlDefault.'),
+          ),
+        );
+      }
     });
   }
 
