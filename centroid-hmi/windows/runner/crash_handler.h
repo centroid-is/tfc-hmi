@@ -28,7 +28,14 @@ namespace tfc {
 // Installs the handlers. |dump_dir| is where minidumps are written; pass the
 // directory containing the log file. Safe to call once, early in wWinMain,
 // after stdio has been redirected so the records land in the log.
-void InstallCrashHandlers(const std::string& dump_dir);
+// |log_path| is the log file crash records are appended to directly, through a
+// handle of this module's own. It is deliberately not the same mechanism as
+// the process-wide stdout/stderr redirect: on a packaged, console-less launch
+// that redirect delivered nothing, and a crash record is the last line that
+// should depend on it. Empty disables the direct write, leaving stderr and
+// OutputDebugString.
+void InstallCrashHandlers(const std::string& dump_dir,
+                          const std::string& log_path);
 
 }  // namespace tfc
 

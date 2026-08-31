@@ -24,7 +24,10 @@ namespace {
 using tfc::CrashLatch;
 using tfc::CrashTime;
 using tfc::DescribeActiveException;
+using tfc::CleanTypeName;
+using tfc::FormatCppExceptionDetail;
 using tfc::FormatCrashRecord;
+using tfc::FormatFrameLine;
 using tfc::FormatInvalidParameterDetail;
 using tfc::FormatMinidumpPath;
 using tfc::FormatSehDetail;
@@ -47,6 +50,74 @@ bool Contains(const std::string& haystack, const std::string& needle) {
 }
 
 }  // namespace
+
+TEST(a_type_descriptor_becomes_a_readable_scoped_name) {
+  char out[64];
+  CHECK_EQ(std::string(CleanTypeName(out, sizeof(out), ".?AVbad_alloc@std@@")),
+           std::string("std::bad_alloc"));
+  CHECK_EQ(std::string(CleanTypeName(out, sizeof(out), ".?AUmy_struct@@")),
+           std::string("my_struct"));
+  CHECK_EQ(std::string(CleanTypeName(out, sizeof(out), ".?AVerror@io@fs@@")),
+           std::string("fs::io::error"));
+}
+
+// A name we cannot parse is still evidence. Handing back the mangled form beats
+// emitting a tidy-looking guess, which is how a wrong type ends up in a report.
+TEST(an_unparsable_type_descriptor_is_returned_verbatim) {
+  char out[64];
+  const char* templated = ".?AV?$vector@H@std@@";
+  CHECK_EQ(std::string(CleanTypeName(out, sizeof(out), templated)),
+           std::string(templated));
+  const char* not_a_type = "bad_alloc";
+  CHECK_EQ(std::string(CleanTypeName(out, sizeof(out), not_a_type)),
+           std::string(not_a_type));
+  const char* empty_scope = ".?AVa@@b@@";
+  CHECK_EQ(std::string(CleanTypeName(out, sizeof(out), empty_scope)),
+           std::string(empty_scope));
+}
+
+// Truncating a type name would silently rename the exception, so a buffer that
+// cannot hold it yields the raw form instead of a prefix of the answer.
+TEST(a_type_name_that_does_not_fit_is_not_truncated) {
+  char out[8];
+  const char* raw = ".?AVbad_alloc@std@@";
+  CHECK_EQ(std::string(CleanTypeName(out, sizeof(out), raw)), std::string(raw));
+}
+
+TEST(a_cpp_exception_detail_names_the_type_when_it_is_known) {
+  char out[128];
+  FormatCppExceptionDetail(out, sizeof(out), "std::bad_alloc",
+                           reinterpret_cast<const void*>(0x7ffb1234abcdULL));
+  CHECK_EQ(std::string(out),
+           std::string("code=0xE06D7363 (C++ throw) type=std::bad_alloc "
+                       "address=0x7ffb1234abcd"));
+}
+
+TEST(a_cpp_exception_detail_admits_when_the_type_is_unknown) {
+  char out[128];
+  FormatCppExceptionDetail(out, sizeof(out), nullptr, nullptr);
+  CHECK_EQ(std::string(out),
+           std::string("code=0xE06D7363 (C++ throw) type=(not recoverable) "
+                       "address=0x0"));
+}
+
+TEST(a_frame_line_reads_as_module_plus_offset) {
+  char out[128];
+  FormatFrameLine(out, sizeof(out), 3, "open62541.dll", 0x1a2b,
+                  reinterpret_cast<const void*>(0x7ffb00001a2bULL));
+  CHECK_EQ(std::string(out),
+           std::string("[crash]   #03 open62541.dll+0x1a2b (0x7ffb00001a2b)"));
+}
+
+// An address belonging to no module is the interesting case, not one to hide:
+// it is what a return through a corrupted pointer looks like.
+TEST(a_frame_line_says_so_when_no_module_owns_the_address) {
+  char out[128];
+  FormatFrameLine(out, sizeof(out), 0, nullptr, 0,
+                  reinterpret_cast<const void*>(0xdeadbeefULL));
+  CHECK_EQ(std::string(out),
+           std::string("[crash]   #00 <no module> (0xdeadbeef)"));
+}
 
 TEST(a_timestamp_is_fixed_width_and_sorts_as_a_filename) {
   char out[32];

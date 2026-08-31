@@ -63,6 +63,34 @@ void FormatInvalidParameterDetail(char* out, size_t out_len,
 // happens, and calling it "signal 22" helps nobody.
 const char* SignalKind(int signal_number);
 
+// Turns an MSVC type descriptor name into something a person can read:
+// ".?AVbad_alloc@std@@" becomes "std::bad_alloc". This is what makes an
+// 0xE06D7363 record say which exception it was instead of only that one
+// happened — the difference between "a C++ exception killed it" and "it ran
+// out of memory".
+//
+// Only the shape the compiler emits for a plain class or struct is decoded
+// (leading ".?AV"/".?AU", scopes separated by '@', trailing "@@"). Anything
+// else — templates, and the fragments of them that look like scopes — is
+// handed back verbatim: a name we cannot parse is still evidence, and a
+// half-decoded one would be a lie. Returns either |out| or |raw|, so both must
+// outlive the returned pointer.
+const char* CleanTypeName(char* out, size_t out_len, const char* raw);
+
+// Detail field for a C++ exception (0xE06D7363) whose type we managed to
+// recover. |type_name| may be null, which records the code alone rather than
+// pretending to a name.
+void FormatCppExceptionDetail(char* out, size_t out_len, const char* type_name,
+                              const void* address);
+
+// One line of a captured stack: "#03 open62541.dll+0x1a2b (0x7ffb1234abcd)".
+// |module| may be null for an address that belongs to no loaded module, which
+// is itself worth seeing — that is what a jump through a corrupted pointer
+// looks like.
+void FormatFrameLine(char* out, size_t out_len, unsigned index,
+                     const char* module, unsigned long long offset,
+                     const void* address);
+
 // Lets exactly one crash through. Two threads can fault at the same instant,
 // and a fault inside a crash handler must not recurse forever, so the loser
 // skips straight to ending the process.

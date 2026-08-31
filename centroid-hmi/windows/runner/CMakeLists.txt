@@ -51,6 +51,9 @@ target_link_libraries(${BINARY_NAME} PRIVATE "dbghelp.lib")
 # D3D11CreateDevice / IDXGIAdapter::GetDesc — the sentinel device the GPU
 # loss report asks GetDeviceRemovedReason(). See gpu_device_probe.h.
 target_link_libraries(${BINARY_NAME} PRIVATE "d3d11.lib" "dxgi.lib")
+# RegisterEventSource / ReportEvent — a crash record has to reach somewhere
+# that outlives the app's own log file.
+target_link_libraries(${BINARY_NAME} PRIVATE "advapi32.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.

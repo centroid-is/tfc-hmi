@@ -30,6 +30,23 @@ bool RedirectIOToFile(const char* path);
 // stdout/stderr — including crash records — goes nowhere at all.
 std::string DefaultLogPath();
 
+// Tells Windows this process is an unattended station, not a desktop app the
+// user is sitting in front of. Three separate requests, none of which implies
+// the others:
+//
+//   * the machine must not sleep or hibernate under a running line;
+//   * this process must not be throttled when nothing is on screen. A
+//     disconnected RDP session is the case that bites: Windows slows a
+//     background session's timers, the OPC UA keepalives stop arriving, and
+//     the servers drop their sessions — which is what an overnight log full of
+//     "Inactivity" is a picture of;
+//   * if it does crash, Windows should start it again rather than leave the
+//     line without an HMI until somebody notices.
+//
+// Every part is best-effort: all of it is a request Windows may decline (group
+// policy, a VM, an older build), and none of it is worth failing startup over.
+void ConfigureUnattendedOperation();
+
 // True when stdout is already a valid handle — a console, or a pipe from a
 // parent process such as the flutter tool. `flutter run` (and so the VS Code
 // debugger) gives the app pipes and no console, so this, not the presence of a
