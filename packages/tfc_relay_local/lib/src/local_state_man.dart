@@ -63,6 +63,8 @@ import 'dart:async';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import 'fanin.dart';
+import 'freshness_sweep.dart';
+import 'ingest.dart';
 import 'key_router.dart';
 import 'upstream_link.dart';
 
@@ -81,12 +83,25 @@ final class LocalStateMan implements StateManApi {
     // Allocation only. Nothing here opens a socket, starts a clock or spawns a
     // loop — see the library doc on why `StateMan._`'s constructor is the shape
     // being replaced.
+    _sweep = FreshnessSweep(
+      staleAfter: staleAfter,
+      store: _store,
+      lastArrival: _lastArrival,
+      degrade: _degrade,
+      now: _now,
+    );
     _fanIn = FanIn(
       open: _openUpstream,
       onValue: _onUpstreamValue,
       onUpstreamEnded: _onUpstreamEnded,
       onUpstreamError: _onUpstreamError,
       linger: linger,
+      // The listener gate. The sweep's clock runs on the transition off zero
+      // watchers and stops on the return to it — with nobody watching there is
+      // no timer, and the synchronous re-derivation in [read] is what makes
+      // that safe rather than merely cheap (state_man.dart:966-992).
+      onFirstWatcher: () => _sweep.start(),
+      onLastWatcher: () => _sweep.stop(),
     );
   }
 
@@ -146,6 +161,13 @@ final class LocalStateMan implements StateManApi {
   /// monitored item, and releases it when the last of them goes (SRV-07).
   late final FanIn _fanIn;
 
+  /// The clock that notices silence. Listener-gated; see `freshness_sweep.dart`.
+  late final FreshnessSweep _sweep;
+
+  /// Which keys have already been complained about, so a struct failing at
+  /// 10 Hz costs one log line rather than the log file.
+  final IngestLog _ingestLog = IngestLog();
+
   /// One counting handle per key, so [listen] answers the same object every
   /// time and the fan-in learns when the first listener arrives and the last
   /// one leaves.
@@ -187,6 +209,7 @@ final class LocalStateMan implements StateManApi {
     if (_disposed) return;
     _disposed = true;
     await _fanIn.dispose();
+    _sweep.dispose();
     _store.dispose();
     for (final link in links) {
       await link.dispose();
@@ -273,7 +296,14 @@ final class LocalStateMan implements StateManApi {
   @override
   DynamicValue? read(String key) {
     _touch(key);
-    return _store.peek(key);
+    final cached = _store.peek(key);
+    if (cached == null) return null;
+    // The verdict is RE-DERIVED here, not merely reported: the sweep's clock is
+    // parked whenever nobody is watching, and a read taken during a parked
+    // period must still be correct. `judge` does not write to the store — a
+    // read is not an event, and one that notified every listener would make a
+    // diagnostics page's poll a rebuild storm.
+    return _sweep.judge(key, cached);
   }
 
   /// Forces a round trip and answers a freshly-read value.
@@ -389,6 +419,28 @@ final class LocalStateMan implements StateManApi {
     _store.applyBatch(values);
   }
 
+  /// Converts a batch of raw upstream samples and applies it.
+  ///
+  /// The plant-facing entry point: a link's poll cycle or a converter's output
+  /// arrives here as key/raw pairs, and **one bad tag costs one tag**. See
+  /// `ingest.dart` for the per-key `try`/`catch` and why it is not per batch.
+  ///
+  /// One [applyUpstreamBatch] for the whole cycle, so the store makes one pass
+  /// and notifies k times for k changed keys — never a loop of single sets.
+  IngestOutcome ingestRaw(
+    Iterable<RawSample> samples, {
+    Quality quality = Quality.good,
+    DateTime? sourceTime,
+  }) {
+    final outcome = ingestSamples(samples,
+        quality: quality, sourceTime: sourceTime, log: _ingestLog);
+    applyUpstreamBatch(outcome.batch);
+    return outcome;
+  }
+
+  /// What this instance has refused at ingest, and how often.
+  IngestLog get ingestLog => _ingestLog;
+
   /// Applies a quality change **without** pretending a value arrived.
   ///
   /// The distinction is the whole freshness story: marking a value stale must
@@ -494,7 +546,14 @@ final class LocalStateMan implements StateManApi {
   /// widget test that builds a source without draining it, and an unobserved
   /// gateway has nobody to tell. 08-05 task 3 wires the freshness sweep behind
   /// this number.
-  int get liveTimers => 0;
+  int get liveTimers => _sweep.running ? 1 : 0;
+
+  /// The sweep's cadence: a quarter of [staleAfter], floored.
+  Duration get sweepInterval => _sweep.interval;
+
+  /// How many freshness passes have been made. A diagnostic, and the observable
+  /// that tells a case the listener gate actually opened.
+  int get freshnessSweeps => _sweep.sweeps;
 
   // ------------------------------------------------------- fan-in observation
 

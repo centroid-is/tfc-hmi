@@ -91,7 +91,11 @@ void main() {
       man.applyUpstreamBatch({st101Key: DynamicValue(value: 1)});
       final afterArrival = notifications;
 
-      await until(() => man.read(st101Key)!.quality == Quality.badStale);
+      // Probed on the NODE, not through read(): read() re-derives the verdict
+      // synchronously and would answer badStale before the sweep had staged
+      // anything, so it cannot witness "the sweep staged it exactly once".
+      // The node's cached value is changed by the sweep and by nothing else.
+      await until(() => handle.value.quality == Quality.badStale);
       expect(notifications - afterArrival, 1,
           reason: 'the sweep runs four times per deadline. A key needing no '
               'change must stage no change, or every listening page rebuilds '
