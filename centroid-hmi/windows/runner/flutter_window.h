@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "gpu_device_probe.h"
+#include "stderr_interposer.h"
 #include "gpu_diagnosis.h"
 #include "gpu_watchdog.h"
 #include "log_throttle.h"
@@ -180,6 +181,11 @@ class FlutterWindow : public Win32Window {
   tfc::GpuDeviceProbe device_probe_;
   // Latches so the transition is logged once rather than every tick.
   bool sentinel_loss_logged_ = false;
+
+  // Reads the engine's own stderr for the context-lost storm -- the one
+  // signal the 2026-09-01 freeze produced that no probe could see. Fires a
+  // posted message; the platform thread declares the loss.
+  tfc::StderrInterposer stderr_interposer_;
 
   // When the renderer was last rebuilt for a session change, so that the
   // several messages one disconnect/reconnect emits cost one rebuild, not

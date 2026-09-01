@@ -63,9 +63,35 @@ add_executable(path_utils_test
 )
 target_include_directories(path_utils_test PRIVATE "..")
 
-foreach(target gpu_watchdog_test gpu_diagnosis_test log_rotation_test
-               log_throttle_test output_target_test crash_record_test
-               path_utils_test)
+add_executable(egl_storm_detector_test
+  "egl_storm_detector_test.cpp"
+  "../egl_storm_detector.cpp"
+)
+target_include_directories(egl_storm_detector_test PRIVATE "..")
+
+# The interposer is fd surgery on a real pipe; it only exists -- and is only
+# testable -- on Windows. The detector logic it feeds is tested above on
+# every platform.
+if(WIN32)
+  add_executable(stderr_interposer_test
+    "stderr_interposer_test.cpp"
+    "../stderr_interposer.cpp"
+    "../egl_storm_detector.cpp"
+  )
+  target_include_directories(stderr_interposer_test PRIVATE "..")
+  target_link_libraries(stderr_interposer_test PRIVATE Threads::Threads)
+  # The test opens its capture file with plain _open/fopen; the *_s variants
+  # buy nothing in a test that owns its own path.
+  target_compile_definitions(stderr_interposer_test PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
+set(RUNNER_TEST_TARGETS gpu_watchdog_test gpu_diagnosis_test log_rotation_test
+    log_throttle_test output_target_test crash_record_test
+    path_utils_test egl_storm_detector_test)
+if(WIN32)
+  list(APPEND RUNNER_TEST_TARGETS stderr_interposer_test)
+endif()
+foreach(target IN LISTS RUNNER_TEST_TARGETS)
   if(MSVC)
     target_compile_options(${target} PRIVATE /W4)
   else()
@@ -80,3 +106,7 @@ add_test(NAME output_target COMMAND output_target_test)
 add_test(NAME crash_record COMMAND crash_record_test)
 add_test(NAME path_utils COMMAND path_utils_test)
 add_test(NAME gpu_diagnosis COMMAND gpu_diagnosis_test)
+add_test(NAME egl_storm_detector COMMAND egl_storm_detector_test)
+if(WIN32)
+  add_test(NAME stderr_interposer COMMAND stderr_interposer_test)
+endif()

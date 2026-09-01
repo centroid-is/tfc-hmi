@@ -32,6 +32,10 @@ namespace {
 // or in Win32Window claims it.
 constexpr UINT kWatchdogTickMessage = WM_APP + 0x47;
 
+// Posted from the stderr reader thread when the engine's own error output
+// crosses the context-lost storm threshold. wparam carries the match count.
+constexpr UINT kEglStormMessage = WM_APP + 0x48;
+
 // The stale WM_TIMER id. Nothing arms it any more -- see the note on the tick
 // in flutter_window.h -- but a build that rolls back and forward could leave
 // one running, so teardown still kills it.
@@ -251,6 +255,27 @@ bool FlutterWindow::OnCreate() {
               (::GetSystemMetrics(SM_REMOTESESSION) != 0
                    ? "remote (RDP/terminal services)"
                    : "console (local)"));
+
+  // The engine's stderr is the only witness for a context loss the sentinel
+  // and the frame probe both miss (see egl_storm_detector.h). Read it.
+  if (watchdog_enabled_) {
+    const HWND storm_hwnd = watchdog_hwnd_.load();
+    if (stderr_interposer_.Install(
+            tfc::EglStormDetector::Config(),
+            [storm_hwnd](unsigned int matches) {
+              ::PostMessage(storm_hwnd, kEglStormMessage,
+                            static_cast<WPARAM>(matches), 0);
+            })) {
+      LogWatchdog(
+          "stderr storm detector installed -- a burst of engine context-lost "
+          "errors now declares the renderer lost even when every probe "
+          "answers");
+    } else {
+      LogWatchdog(
+          "stderr storm detector could NOT be installed -- an EGL context "
+          "loss is only caught by the session-change rebuild");
+    }
+  }
 
   Dispatch(WatchdogEvent::kStarted);
   return true;
@@ -784,6 +809,19 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       Dispatch(WatchdogEvent::kRendererLost, tfc::LossCause::kContextLost);
     } else {
       Dispatch(WatchdogEvent::kTick);
+    }
+    return 0;
+  }
+
+  if (message == kEglStormMessage) {
+    if (watchdog_enabled_ && flutter_controller_ != nullptr) {
+      LogWatchdog(
+          "EGL context-lost STORM on the engine's stderr (" +
+          std::to_string(static_cast<unsigned int>(wparam)) +
+          " matching lines inside the detector window) -- the engine says "
+          "its context is gone, whatever the probes say. Declaring the "
+          "renderer lost.");
+      Dispatch(WatchdogEvent::kRendererLost, tfc::LossCause::kContextLost);
     }
     return 0;
   }

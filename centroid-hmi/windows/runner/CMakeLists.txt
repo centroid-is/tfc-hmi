@@ -8,6 +8,8 @@ project(runner LANGUAGES CXX)
 # Any new source files that you add to the application should be added here.
 add_executable(${BINARY_NAME} WIN32
   "crash_handler.cpp"
+  "egl_storm_detector.cpp"
+  "stderr_interposer.cpp"
   "crash_record.cpp"
   "flutter_window.cpp"
   "gpu_device_probe.cpp"
