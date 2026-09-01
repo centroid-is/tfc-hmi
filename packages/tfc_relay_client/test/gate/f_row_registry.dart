@@ -370,13 +370,14 @@ const List<GateRow> gateRows = <GateRow>[
 /// A [OutstandingKind.partial] entry is for a row that *has* a case whose named
 /// clauses are not all asserted yet. A partial entry for a row with no case is
 /// a missing entry wearing the wrong label, and the manifest says so.
-const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
-  'F15': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-12',
-    clause: 'the six TLS arms, the wss smoke row and the auth contrast',
-  ),
-};
+/// **Empty as of 07-12, and that emptiness is the phase's closing condition.**
+/// F15 was the last entry: its six arms, the `wss` smoke row and the auth
+/// contrast landed in `tls_gate_test.dart` and the entry was deleted in the
+/// same commit, which is the rule every plan in this phase followed. 07-13
+/// asserts this map is empty; if it is not, a plan landed rows without
+/// deleting what it owed, and the outstanding count has been overstating the
+/// remaining work ever since.
+const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{};
 
 /// Every catalogue clause the phase's green will **not** cover.
 ///
@@ -566,6 +567,42 @@ const List<Deviation> gateDeviations = <Deviation>[
         '500 ms ± 200 ms window, corroborated by a provoked transition; the '
         'age number is a surface decision, not a gate row.',
     followUp: 'post-milestone',
+  ),
+  Deviation(
+    row: 'F15',
+    clause: 'clear terminal error',
+    reason: 'the error is clear about its *class* and says nothing about its '
+        'cause, and three different faults arrive as one sentence. Measured in '
+        '07-12 and inherited from 06-07: an untrusted leaf, a link cut inside '
+        'the handshake and a gateway started with no TlsConfig at all all read '
+        'as "the gateway\'s certificate was not trusted by this panel", '
+        'because _refusalReason (connection_supervisor.dart:384-406) branches '
+        'on HandshakeException and dart:io raises it for a record layer that '
+        'gave up as well as for a leaf it refused. Those three faults have '
+        'three different people to call — the integrator with the token and '
+        'cert files, the network electrician, and whoever deployed the '
+        'gateway. The discriminator is already in the text '
+        '(CERTIFICATE_VERIFY_FAILED against "Connection terminated during '
+        'handshake") and a second if inside that branch is enough, but '
+        'narrowing an operator-facing sentence is a decision and not a typo. '
+        'F15c and F15e pin the current text so the plan that narrows it finds '
+        'out this gate depended on it.',
+    followUp: 'post-milestone',
+  ),
+  Deviation(
+    row: 'F15',
+    clause: 'proxy to a plain-TCP port / wrong cert',
+    reason: 'this injection is exercised by the F15 family and by one wss '
+        'smoke row, and by no other row in the catalogue: the other twenty-six '
+        'rows run plaintext. 06-RESEARCH §C.4 measured latency, throttle, '
+        'flap, blackhole, killOnce and reject as unchanged under TLS — the '
+        'FaultProxy is a byte relay (fault_proxy.dart:141-190) that shapes '
+        'ciphertext without inspecting it — so a second full lane over wss '
+        'would double an eight-minute budget to re-prove a measured property. '
+        '07-CONTEXT orchestrator ruling 3. What is genuinely not covered is a '
+        'fault whose *interaction* with the record layer differs, and exactly '
+        'one is known: F6\'s cutMidFrame, which has its own entry above.',
+    followUp: 'none — accepted',
   ),
   Deviation(
     row: 'F10',

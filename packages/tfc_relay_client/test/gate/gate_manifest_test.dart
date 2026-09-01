@@ -139,11 +139,19 @@ const _followUpDestinations = <String>{
 /// the property was wrong but because the read landed on the wrong side of a
 /// timer. The fix is a doctrine, not a wider band: read these inside an
 /// `until()` or `within()` window, or do not read them.
+/// `isSubscriptionStale` joined the list in 07-12, and it earned the place the
+/// same way `staleSubscriptions` did in 07-11: that plan made both of them
+/// compute the live verdict against `DateTime.now()` on every read rather than
+/// returning the set stored at the last tick. A getter whose value is a
+/// wall-clock computation schedules nothing and still ages, so two consecutive
+/// lines can disagree — which is the F5 flake exactly, in a surface that did not
+/// have the property when the list was written.
 const _wallClockSurfaces = <String>[
   'viewIsStale',
   'isReady',
   'linkState',
   'staleSubscriptions',
+  'isSubscriptionStale',
   'forwarding',
 ];
 
@@ -211,6 +219,65 @@ const _notAGateCase = <String, String>{
       'declares the grammar, the wall-clock surfaces and the skip spellings it '
           'searches for, and fabricates sample case sources to prove its own '
           'matchers match; it injects no fault and judges no row',
+};
+
+/// Cases in the gate directory that deliberately gate **no** catalogue row, and
+/// the written argument for each.
+///
+/// **Why an exemption rather than silence.** A case whose name does not match
+/// the row grammar is already invisible to discovery — it costs nothing and
+/// nobody is told. That is the hole this map closes from the other side: the two
+/// entries below are cases somebody could plausibly *renumber* into rows, and
+/// renumbering either of them would be wrong in a way no other arm in this file
+/// can see.
+///
+/// The `wss` smoke row is F1's scenario over TLS. Calling it `F1c:` would give
+/// F1 a third arm and report the catalogue as covering something it does not:
+/// F1 is already gated on the plaintext leg, and this case exists to prove the
+/// *fixture*, not the row. The auth contrast is ROADMAP criterion 4's second
+/// clause and the opposite side of the supervisor branch F15d sits on; it is
+/// not in the F1-F21 or G1-G6 catalogue at all, and giving it a number would
+/// invent a row rather than gate one.
+///
+/// Two arms hold it, and neither is decoration. One requires each exempted name
+/// to be a case that is actually in the directory — an exemption for a case that
+/// was renamed or deleted is a hole held open for nothing, and the next case to
+/// take the name inherits an argument nobody made about it. The other requires
+/// each exempted name to gate no row *under the grammar*, so the day somebody
+/// renames the smoke row to `F1c:` the exemption stops agreeing with the case
+/// and this file says so, instead of the row count quietly going up by an arm.
+///
+/// The reason floor is [_deviationReasonFloor] and not [_skipReasonFloor],
+/// deliberately: this is the same kind of claim a deviation makes — "the
+/// catalogue does not cover this and here is why that is right" — and it needs
+/// the argument, not a label.
+///
+/// **An entry lands in the same commit as the case it exempts, never before
+/// it.** 07-12's plan asks for both of its entries in the commit that lands the
+/// mechanism, and that cannot be done: the presence arm below would then be red
+/// for two commits, and an arm knowingly left red is the one thing this file
+/// exists to prevent — a red manifest stops being read, and the next real
+/// failure arrives into a report nobody trusts. So the auth contrast's entry
+/// arrives with the auth contrast.
+const _supportingCases = <String, String>{
+  'a full page survives a drop and a resync over wss':
+      'the wss smoke row (07-12 task 1). It is F1\'s scenario over TLS and it '
+          'exists to prove the fault fixture carries a full subscribe and '
+          'resync on a pinned link, not to re-prove F1 — which is already '
+          'gated on the plaintext leg by reconnect_gate_test.dart. Claiming it '
+          'as a second F1 arm would report the catalogue as covering a scenario '
+          'twice while the property it actually establishes (the fixture) is in '
+          'no row at all.',
+  'a refused credential stops the loop while a refused certificate does not':
+      'the auth-versus-TLS contrast (07-12 task 3). Both sides of one '
+          'supervisor branch in one comparison: a -32003 refusal reaches '
+          '_stop and the dial count freezes at one, a certificate refusal '
+          'reaches _down and it keeps climbing. That is ROADMAP criterion 4\'s '
+          'second clause, and the catalogue has no row for a credential the '
+          'gateway refuses — so numbering it would invent a row rather than '
+          'gate one. F15d asserts the certificate half against a computed '
+          'bound on its own; what only this case can say is that the two '
+          'faults take opposite branches.',
 };
 
 void main() {
@@ -378,6 +445,48 @@ void main() {
               'at all: $mislabelled. A partial entry for a row with no case is '
               'a missing entry wearing the wrong label, and it reads on the '
               'progress line as work that is nearly done');
+    });
+
+    test('every supporting case is in the directory, and gates no row', () {
+      final present = _caseNames(directory);
+
+      final vanished = [
+        for (final name in _supportingCases.keys)
+          if (!present.contains(name)) name,
+      ];
+      expect(vanished, isEmpty,
+          reason: 'these names are exempted from the row mapping as supporting '
+              'cases and no case in $_gateDir carries them: $vanished. An '
+              'exemption for a case that was renamed or deleted is a hole held '
+              'open for nothing, and the next case to take the name inherits '
+              'an argument nobody made about it — which is exactly how the '
+              'smoke row would become a silently unnumbered second F1');
+
+      final claiming = [
+        for (final name in _supportingCases.keys)
+          if (_rowsIn(name).isNotEmpty) '$name -> ${_rowsIn(name)}',
+      ];
+      expect(claiming, isEmpty,
+          reason: 'these supporting cases name a catalogue row under the '
+              'grammar: $claiming. A case cannot be both exempt from the row '
+              'mapping and a gate for a row — whichever of the two the reader '
+              'believes, the other one is wrong, and the count printed below '
+              'is computed from the grammar rather than from this map');
+    });
+
+    test('every supporting-case exemption is justified in writing', () {
+      final thin = [
+        for (final entry in _supportingCases.entries)
+          if (entry.value.length < _deviationReasonFloor)
+            '${entry.key} (${entry.value.length} chars)',
+      ];
+      expect(thin, isEmpty,
+          reason: 'these supporting-case reasons are shorter than '
+              '$_deviationReasonFloor characters: $thin. The entry is the only '
+              'record that a case in the gate directory gates nothing on '
+              'purpose; a reason that short says it is exempt without saying '
+              'why numbering it would be wrong, which is the argument the next '
+              'reader needs before they renumber it');
     });
 
     test('every case names a row the catalogue declares', () {
@@ -964,6 +1073,18 @@ List<GateCase> _cases(Directory directory) => [
         for (final match in _testCall.allMatches(file.code))
           ..._caseOf(file.name, match.group(1) ?? match.group(2) ?? ''),
     ];
+
+/// Every `test('…')` name in [directory], row-naming or not.
+///
+/// Wider than [_cases], which drops anything the grammar does not recognise —
+/// and the supporting-case arms need exactly what it drops. Reads the same
+/// comment-stripped source, so a name that only appears in prose is not a case
+/// here either.
+Set<String> _caseNames(Directory directory) => {
+      for (final file in _gateFiles(directory))
+        for (final match in _testCall.allMatches(file.code))
+          match.group(1) ?? match.group(2) ?? '',
+    };
 
 /// [name] as a gate case, or nothing if it names no row.
 List<GateCase> _caseOf(String file, String name) {
