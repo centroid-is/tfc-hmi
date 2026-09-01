@@ -935,6 +935,10 @@ class Ipv4MethodFields extends StatelessWidget {
               helperText: 'Example: 192.0.2.10',
             ),
             controller: controllers.ip,
+            // The on-screen keyboard on the stations switches to its keypad
+            // (digits plus `.`) for a number field, which is the whole of an
+            // IPv4 address — far fewer taps than the letter layout.
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
             validator: _validateIp,
             autovalidateMode: AutovalidateMode.onUserInteraction,
           ),
@@ -942,9 +946,10 @@ class Ipv4MethodFields extends StatelessWidget {
           TextFormField(
             decoration: const InputDecoration(
               labelText: 'Netmask or prefix',
-              helperText: 'Example: 255.255.255.0 or /24',
+              helperText: 'Example: 255.255.255.0 or 24',
             ),
             controller: controllers.netmask,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
             validator: _validateNetmask,
             autovalidateMode: AutovalidateMode.onUserInteraction,
           ),
@@ -955,10 +960,14 @@ class Ipv4MethodFields extends StatelessWidget {
               helperText: 'Example: 192.0.2.1 — leave empty for none',
             ),
             controller: controllers.gateway,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
             validator: _validateGateway,
             autovalidateMode: AutovalidateMode.onUserInteraction,
           ),
           const SizedBox(height: 10),
+          // Deliberately left on the letter keyboard: the station keypad has
+          // no comma and no space, so a numeric field here would make a
+          // second DNS server impossible to type.
           TextFormField(
             decoration: const InputDecoration(
               labelText: 'DNS servers (comma separated)',

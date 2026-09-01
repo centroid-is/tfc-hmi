@@ -638,7 +638,38 @@ void main() {
           reason: 'a greyed address inside the box reads as a real value');
     }
     expect(find.text('Example: 192.0.2.10'), findsOneWidget);
-    expect(find.text('Example: 255.255.255.0 or /24'), findsOneWidget);
+    expect(find.text('Example: 255.255.255.0 or 24'), findsOneWidget);
+  });
+
+  testWidgets('address fields ask for the keypad, the DNS list does not',
+      (tester) async {
+    final client = FakeNetworkManagerClient(devices: [_staticEthernet()]);
+    await pumpAndLoad(tester, _buildPage(client));
+
+    await tester.tap(find.text('eth0'));
+    await settle(tester);
+
+    TextInputType? keyboardOf(String label) => tester
+        .widget<TextField>(find.descendant(
+            of: find.widgetWithText(TextFormField, label),
+            matching: find.byType(TextField)))
+        .keyboardType;
+
+    // The station's on-screen keypad carries digits and `.` — the whole of an
+    // IPv4 address, and a bare prefix for the netmask.
+    for (final label in [
+      'IP Address',
+      'Netmask or prefix',
+      'Gateway (optional)',
+    ]) {
+      expect(keyboardOf(label),
+          const TextInputType.numberWithOptions(decimal: true),
+          reason: '$label is dotted digits, so it wants the keypad');
+    }
+
+    // That keypad has no comma and no space, so pinning DNS to it would make
+    // a second server impossible to enter.
+    expect(keyboardOf('DNS servers (comma separated)'), TextInputType.text);
   });
 
   testWidgets('an empty address field says it is required', (tester) async {
