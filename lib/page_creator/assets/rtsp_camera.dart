@@ -545,11 +545,6 @@ class _RtspCameraConfigEditor extends StatefulWidget {
 class _RtspCameraConfigEditorState extends State<_RtspCameraConfigEditor> {
   RtspCameraConfig get config => widget.config;
 
-  Widget _unavailablePlaceholder() => Tooltip(
-        message: 'Video playback is not available on this platform',
-        child: _Glyph(icon: Icons.videocam_off_outlined),
-      );
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
