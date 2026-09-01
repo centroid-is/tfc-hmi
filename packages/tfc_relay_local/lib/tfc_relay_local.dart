@@ -19,7 +19,10 @@
 /// open62541 native-asset build in front of 505 tests that have nothing to do
 /// with a PLC.
 ///
-/// Nothing is exported yet — the scaffold lands before the implementation, so
-/// that the pinned binding, the analyzer and CI are all in place and green
-/// before the first line of `LocalStateMan` is written.
+/// The contract comes first. `UpstreamLink` is exported before any adapter
+/// implements it, because three adapters and one composer are all written
+/// against it and an interface that arrives after its implementors is an
+/// interface each of them invented separately.
 library;
+
+export 'src/upstream_link.dart';
