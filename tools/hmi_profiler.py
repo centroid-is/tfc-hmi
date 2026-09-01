@@ -677,8 +677,14 @@ PG_QUERIES = {
         ) t
         """,
     ),
+    # These are lifetime totals, not rates -- which the title has to say,
+    # because read as rates they invert the conclusion. 21 770 sequential
+    # scans of a five-row preferences table reads as a table under constant
+    # load; the same counter six minutes later had moved by one. The
+    # "counters" section below gives the divisor.
     "scans": (
-        "Sequential scans (a missing index looks like this)",
+        "Sequential scans, cumulative since the counters were last reset "
+        "(a missing index looks like this)",
         ["table", "seq scans", "rows read per scan", "index scans"],
         """
         SELECT relname,
@@ -689,6 +695,26 @@ PG_QUERIES = {
          WHERE seq_scan > 0
          ORDER BY seq_tup_read DESC
          LIMIT 10
+        """,
+    ),
+    # Its own section on purpose: every other number psql reports here is a
+    # total since this instant, and a total with no divisor is what turns
+    # "read eleven times an hour" into "read eighty-eight times an hour".
+    # Kept separate so that if this query is the one that fails, it fails
+    # alone -- `collect_postgres` catches per section, and the scan counts
+    # are worth more than the epoch that divides them.
+    "counters": (
+        "Counters",
+        ["metric", "value"],
+        """
+        SELECT 'counting since', coalesce(stats_reset::text, 'never reset')
+          FROM pg_stat_database WHERE datname = current_database()
+        UNION ALL
+        SELECT 'counting for (hours)',
+               coalesce(round(
+                 (extract(epoch from (now() - stats_reset)) / 3600.0)::numeric,
+                 1)::text, '?')
+          FROM pg_stat_database WHERE datname = current_database()
         """,
     ),
     "sizes": (
@@ -1032,7 +1058,35 @@ def frame_stats(frames):
     }
 
 
-def summarise_timeline(payload, top=25):
+def in_window(start_us, window):
+    """Whether a block starting at `start_us` belongs to the recorded window.
+
+    `window` is the `(from_us, to_us)` pair [collect_window] reads off the VM's
+    own timeline clock, or None when the VM would not give one — in which case
+    everything is kept, exactly as before.
+
+    This exists because of a specific false positive. `clearCpuSamples` and
+    `getCpuSamples` are *isolate-scoped* service RPCs: the VM delivers them to
+    the target isolate as out-of-band messages, so the isolate handles them
+    inside a `DartIsolate::HandleMessage` block like any other message. Building
+    the `getCpuSamples` reply walks the whole sample ring in C++ with no Dart
+    frames on the stack, and the ring is a fixed size, so it costs the same
+    ~750 ms whether the window was 30 s or 300 s. Left in, it appears as one
+    enormous, perfectly reproducible "isolate stall" — 100 % native, no Dart
+    frames, exactly one per run — that the app never had. It is the profiler's
+    own footprint, and it is bracketed out here rather than reported.
+    """
+    if not window:
+        return True
+    from_us, to_us = window
+    if from_us is not None and start_us < from_us:
+        return False
+    if to_us is not None and start_us > to_us:
+        return False
+    return True
+
+
+def summarise_timeline(payload, top=25, window=None):
     """Total/mean/max duration per timeline event name.
 
     The Dart VM writes `Timeline.startSync`/`finishSync` — which is what the
@@ -1040,6 +1094,8 @@ def summarise_timeline(payload, top=25):
     trace events, one pair per thread. Only the embedder emits pre-durationed
     `X` events. Both are folded here; anything still open when the buffer ends
     is dropped rather than guessed at.
+
+    Blocks that started outside `window` are dropped — see [in_window].
     """
     totals = collections.Counter()
     counts = collections.Counter()
@@ -1054,7 +1110,8 @@ def summarise_timeline(payload, top=25):
     for event in payload.get("traceEvents", []) or []:
         phase = event.get("ph")
         if phase == "X":
-            record(event.get("name") or "?", event.get("dur") or 0)
+            if in_window(event.get("ts") or 0, window):
+                record(event.get("name") or "?", event.get("dur") or 0)
         elif phase == "B":
             open_blocks[(event.get("pid"), event.get("tid"))].append(
                 (event.get("name") or "?", event.get("ts") or 0)
@@ -1063,7 +1120,8 @@ def summarise_timeline(payload, top=25):
             stack = open_blocks[(event.get("pid"), event.get("tid"))]
             if stack:
                 name, start = stack.pop()
-                record(name, max((event.get("ts") or 0) - start, 0))
+                if in_window(start, window):
+                    record(name, max((event.get("ts") or 0) - start, 0))
 
     return [
         {
@@ -1077,12 +1135,14 @@ def summarise_timeline(payload, top=25):
     ]
 
 
-def timeline_blocks(payload):
+def timeline_blocks(payload, window=None):
     """Every completed timeline block as {name, tid, ts, dur}.
 
     Same B/E pairing as summarise_timeline, but keeping each block's own
     window instead of totalling them — that window is what lets us ask which
     samples were taken *during* one specific slow block.
+
+    Blocks that started outside `window` are dropped — see [in_window].
     """
     blocks = []
     open_blocks = collections.defaultdict(list)
@@ -1090,27 +1150,29 @@ def timeline_blocks(payload):
         phase = event.get("ph")
         key = (event.get("pid"), event.get("tid"))
         if phase == "X":
-            blocks.append(
-                {
-                    "name": event.get("name") or "?",
-                    "tid": event.get("tid"),
-                    "ts": event.get("ts") or 0,
-                    "dur": event.get("dur") or 0,
-                }
-            )
+            if in_window(event.get("ts") or 0, window):
+                blocks.append(
+                    {
+                        "name": event.get("name") or "?",
+                        "tid": event.get("tid"),
+                        "ts": event.get("ts") or 0,
+                        "dur": event.get("dur") or 0,
+                    }
+                )
         elif phase == "B":
             open_blocks[key].append((event.get("name") or "?", event.get("ts") or 0))
         elif phase == "E":
             if open_blocks[key]:
                 name, start = open_blocks[key].pop()
-                blocks.append(
-                    {
-                        "name": name,
-                        "tid": event.get("tid"),
-                        "ts": start,
-                        "dur": max((event.get("ts") or 0) - start, 0),
-                    }
-                )
+                if in_window(start, window):
+                    blocks.append(
+                        {
+                            "name": name,
+                            "tid": event.get("tid"),
+                            "ts": start,
+                            "dur": max((event.get("ts") or 0) - start, 0),
+                        }
+                    )
     return blocks
 
 
@@ -1220,6 +1282,16 @@ def collect_timeline(service, seconds):
     return payload
 
 
+def timeline_now(service):
+    """The VM's own timeline clock in microseconds, or None if unavailable.
+
+    Same clock as the `ts` field on every trace event, which is what makes it
+    usable as a window boundary against the recorded blocks.
+    """
+    stamp = service.try_call("getVMTimelineMicros", timeout=10.0)
+    return (stamp or {}).get("timestamp")
+
+
 def collect_window(service, isolate, seconds, period_us=250):
     """Record the timeline and the CPU profiler over the *same* window.
 
@@ -1232,6 +1304,14 @@ def collect_window(service, isolate, seconds, period_us=250):
 
     Recording the timeline does add overhead to the samples. That is the price
     of correlating them at all, and it is the same overhead DevTools imposes.
+
+    The returned `window` is the VM-clock bracket around the sleep alone. The
+    two `*CpuSamples` RPCs either side of it are isolate-scoped, so the isolate
+    handles them as ordinary messages and they land in the timeline as
+    `DartIsolate::HandleMessage` blocks of their own — the profiler measuring
+    itself. Callers pass the window to [summarise_timeline] and
+    [timeline_blocks] to exclude them; see [in_window] for what that cost
+    looked like when it was not excluded.
     """
     streams = ["Dart", "Embedder", "GC"]
     timeline_on = service.try_call("setVMTimelineFlags", {"recordedStreams": streams}) is not None
@@ -1239,9 +1319,11 @@ def collect_window(service, isolate, seconds, period_us=250):
         service.try_call("clearVMTimeline")
     service.try_call("setFlag", {"name": "profile_period", "value": str(period_us)}, timeout=10.0)
     service.call("clearCpuSamples", {"isolateId": isolate})
+    started = timeline_now(service)
 
     time.sleep(seconds)
 
+    ended = timeline_now(service)
     cpu = service.call(
         "getCpuSamples",
         {"isolateId": isolate, "timeOriginMicros": 0, "timeExtentMicros": 10**15},
@@ -1250,7 +1332,8 @@ def collect_window(service, isolate, seconds, period_us=250):
     timeline = service.try_call("getVMTimeline", timeout=180.0) if timeline_on else None
     if timeline_on:
         service.try_call("setVMTimelineFlags", {"recordedStreams": []})
-    return {"cpu": cpu, "timeline": timeline or {}}
+    window = (started, ended) if (started is not None or ended is not None) else None
+    return {"cpu": cpu, "timeline": timeline or {}, "window": window}
 
 
 def collect_memory(service, isolate):
@@ -1603,7 +1686,9 @@ def render_postgres(sections):
     if sections.get("error"):
         lines.append(f"_({sections['error']})_\n")
         return "\n".join(lines)
-    for key in ("database", "activity", "scans", "sizes", "statements"):
+    # "counters" sits next to "database" because it is what the numbers there
+    # -- and in "scans" -- are counted over.
+    for key in ("database", "counters", "activity", "scans", "sizes", "statements"):
         section = sections.get(key)
         if not section:
             continue
@@ -1728,8 +1813,8 @@ def gather(
         tree = build_call_tree(functions, samples)
         data["tree"] = tree
         data["hot_path"] = dominant_path(tree)
-        data["timeline"] = summarise_timeline(window["timeline"], top)
-        blocks = timeline_blocks(window["timeline"])
+        data["timeline"] = summarise_timeline(window["timeline"], top, window=window.get("window"))
+        blocks = timeline_blocks(window["timeline"], window=window.get("window"))
         data["slow"] = find_slow_blocks(
             blocks, factor=slow_factor, floor_us=slow_floor_us, keep=keep
         )
@@ -1848,7 +1933,7 @@ def cmd_slow(service, args):
         cpu = window["cpu"]
         functions = cpu.get("functions", []) or []
         samples = cpu.get("samples", []) or []
-        blocks = timeline_blocks(window["timeline"])
+        blocks = timeline_blocks(window["timeline"], window=window.get("window"))
         slow = find_slow_blocks(
             blocks,
             factor=args.slow_factor,
