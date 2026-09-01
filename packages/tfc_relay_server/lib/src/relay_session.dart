@@ -926,7 +926,22 @@ final class RelaySession {
           // a constant on the client that must match a server config nobody
           // diffs — fails silently a year later, as values an operator
           // believes are fresh.
-          capabilities: {'tickMs': config.tick.inMilliseconds},
+          //
+          // `heartbeatDeadlineMs` is the same argument about a different
+          // number, and it is the panel's own survival number: nothing this
+          // gateway *sends* keeps a session alive — only inbound application
+          // frames move `_lastSeen` — so a panel that is merely watching a
+          // page has to beat on a schedule derived from this deadline or the
+          // reaper takes it one deadline after its handshake, for ever, at a
+          // full page resync per cycle. That is not hypothetical: it is what
+          // this build did before there was a pump to advertise it to
+          // (07-08-SUMMARY deviation 3). Both keys are read from the config
+          // this session was built with, never from a literal.
+          capabilities: {
+            HelloCapabilities.tickMs: config.tick.inMilliseconds,
+            HelloCapabilities.heartbeatDeadlineMs:
+                config.heartbeatDeadline.inMilliseconds,
+          },
           sessionId: id,
           epoch: _epoch!,
           // Always false this phase: nothing is resumable until 03-09, and a

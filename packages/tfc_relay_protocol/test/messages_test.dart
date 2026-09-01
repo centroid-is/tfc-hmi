@@ -83,6 +83,87 @@ void main() {
             'invents a credential the panel never presented');
   });
 
+  test('hello advertises the heartbeat deadline', () {
+    // **Why the gateway has to say this number out loud.** The reaper closes
+    // any session that has been silent longer than `heartbeatDeadline`
+    // (`tick_engine.dart`), and the panel's only defence is to not be silent.
+    // A cadence hard-coded on the client is a number nobody diffs against the
+    // gateway's config: raise the deadline and the panel over-pings for ever;
+    // lower it and every healthy panel in the plant is reaped once a deadline,
+    // reconnecting and resyncing its whole page each time. That is not a
+    // hypothetical — it is what this build did before 07-08b, measured in
+    // 07-08-SUMMARY deviation 3.
+    //
+    // `tickMs` is the precedent in every respect: an additive key on the open
+    // `capabilities` map, so a gateway that does not send it and a client that
+    // does not read it are both still correct.
+    final result = HelloResult(
+      protocol: protocolVersion,
+      server: const PeerInfo('tfc-relay', '0.1.0'),
+      capabilities: const {'tickMs': 50, 'heartbeatDeadlineMs': 6000},
+      sessionId: 'sid',
+      epoch: 'e1',
+      resumed: false,
+      serverTime: 1786000000123,
+    );
+
+    final r = HelloResult.fromJson(viaJson(result.toJson()));
+    expect(r.capabilities[HelloCapabilities.heartbeatDeadlineMs], 6000,
+        reason: 'the deadline rides in the open capabilities map beside '
+            'tickMs, so a gateway that predates the key and a client that '
+            'ignores it are both still speaking this protocol');
+    expect(r.heartbeatDeadlineMs, 6000,
+        reason: 'the typed reader is what the client actually calls; a client '
+            'that reached into the map itself would be the second place the '
+            'key is spelled, and the first typo in it is silent');
+  });
+
+  test('an unusable heartbeat deadline reads as none at all', () {
+    // The same tolerance `FreshnessWatchdog.learnedTickMs` applies to `tickMs`,
+    // and for the same reason: `capabilities` is an open map, so whatever is
+    // under this key came off a wire and may be a string, a negative number,
+    // `1e999` decoded to Infinity, or absent. Every one of those has to mean
+    // "this gateway told me nothing" — a pump that divided a garbage value by
+    // three would either spin (0 ms) or never beat at all.
+    // The value is spliced in as raw JSON **text** rather than as a Dart
+    // object, because two of the cases below cannot be produced any other way:
+    // `jsonEncode` throws on Infinity and NaN (CLAUDE.md's wire hazards), so a
+    // fixture that built the frame with `jsonEncode` could never deliver the
+    // `1e999` poison this reader has to survive. Decoding is the direction the
+    // hazard actually arrives from.
+    HelloResult withCapability(String rawJson) =>
+        HelloResult.fromJson((jsonDecode('{'
+                '"protocol":"$protocolVersion",'
+                '"server":{"name":"tfc-relay","version":"0.1.0"},'
+                '"capabilities":{"heartbeatDeadlineMs":$rawJson},'
+                '"session":{"id":"s","epoch":"e","resumed":false},'
+                '"clock":{"serverTime":1786000000123}}') as Map)
+            .cast<String, Object?>());
+
+    for (final unusable in <String>[
+      'null',
+      '0',
+      '-1',
+      '"soon"',
+      // `1e999` decodes to Infinity in Dart, silently. It is named in
+      // CLAUDE.md as decode poison and it is the reason this reader exists at
+      // all rather than a bare `as int?`.
+      '1e999',
+      '-1e999',
+    ]) {
+      expect(withCapability(unusable).heartbeatDeadlineMs, isNull,
+          reason: 'a gateway that advertised $unusable as its heartbeat '
+              'deadline has advertised nothing usable, and the client must '
+              'fall back on its own floor rather than derive a cadence from '
+              'it');
+    }
+
+    expect(withCapability('6000.0').heartbeatDeadlineMs, 6000,
+        reason: 'JSON has one number type and a gateway written in another '
+            'language may well send 6000.0; refusing it would be refusing the '
+            'same number for its spelling');
+  });
+
   test('SubscribeResult: handles, snapshot, meta, and per-key rejection', () {
     final result = SubscribeResult(
       sub: 's1',
