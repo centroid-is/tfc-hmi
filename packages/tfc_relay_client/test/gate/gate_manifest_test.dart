@@ -762,21 +762,10 @@ void main() {
 
   group('no instant read of a wall-clock boolean', () {
     test('every staleness read happens inside a window', () {
-      final instants = <String>[];
-      for (final source in _allGateSources(directory)) {
-        final lines = source.code.split('\n');
-        for (var i = 0; i < lines.length; i++) {
-          final line = lines[i];
-          if (!line.contains('expect(')) continue;
-          if (_windowCalls.any(line.contains)) continue;
-          if (_exemptionOn(line) != null) continue;
-          for (final surface in _wallClockSurfaces) {
-            if (line.contains(surface)) {
-              instants.add('${source.name}:${i + 1} — $surface');
-            }
-          }
-        }
-      }
+      final instants = <String>[
+        for (final source in _allGateSources(directory))
+          ..._instantReadsIn(source),
+      ];
       expect(instants, isEmpty,
           reason: 'these lines read a wall-clock-derived value at an instant '
               'inside an expect(): $instants. This is the F5 flake exactly '
@@ -891,6 +880,79 @@ void main() {
           reason: 'a read already inside an until() window is being reported '
               'as an instant, which is the false positive that gets a sweep '
               'switched off rather than obeyed');
+    });
+
+    test('the two shapes that used to walk past the instant-read sweep do not',
+        () {
+      // 07-REVIEW WR-04 and IN-06. The line-scoped sweep this replaced passed
+      // green on all four of these; the first three are evasions and the
+      // fourth is the false positive that must not come with fixing them.
+      const multiLine = '''
+void main() {
+  test('F1: a thing', () {
+    expect(
+        fixture.client.viewIsStale,
+        isFalse,
+        reason: 'the house style for anything carrying a reason');
+  });
+}
+''';
+      // The line reported is the one the `expect(` starts on, not the one the
+      // surface is on: the message is then the same one the line-scoped sweep
+      // printed, and the reader's next step is unchanged.
+      expect(_instantReadsOf(multiLine), ['x.dart:3 — viewIsStale'],
+          reason: 'a multi-line expect() is the house style for every '
+              'assertion in this directory that carries a reason, and the '
+              'sweep saw neither the line with the expect( on it nor the line '
+              'with the surface on it');
+
+      const bound = '''
+void main() {
+  test('F1: a thing', () {
+    final parked = fixture.client.staleSubscriptions;
+    expect(parked, isEmpty);
+  });
+}
+''';
+      expect(_instantReadsOf(bound),
+          ['x.dart:4 — staleSubscriptions (via `parked`)'],
+          reason: 'reading the surface into a local one line above the expect '
+              'made the read invisible. A read is a read wherever the result '
+              'is parked');
+
+      const prose = '''
+void main() {
+  test('F1: a thing', () {
+    expect(fixture.client.viewIsStale, isTrue, reason: 'the until() above');
+  });
+}
+''';
+      expect(_instantReadsOf(prose), ['x.dart:3 — viewIsStale'],
+          reason: 'the word until( inside a reason string switched the arm '
+              'off for that line, silently, with no exemption marker and '
+              'nothing to grep for (IN-06)');
+
+      const recorder = '''
+void main() {
+  test('F1: a thing', () async {
+    final watching = fixture.client.linkStates.listen(states.add);
+    final trusted = fixture.client.isReady;
+    samples.add(trusted);
+    final counted = samples.where((s) => s).toList();
+    expect(states, isEmpty);
+    expect(counted, isNotEmpty);
+    expect(sample.trusted, isTrue);
+  });
+}
+''';
+      expect(_instantReadsOf(recorder), isEmpty,
+          reason: 'the sweep reported a transition recorder as an instant '
+              'read. `linkStates` contains `linkState`, `counted` was rebound '
+              'from something that is not a surface, and `sample.trusted` is '
+              'somebody else\'s field — and a sweep that cries wolf on the '
+              'three commonest correct spellings is a sweep the next reader '
+              'switches off rather than obeys, which is the failure '
+              '_windowExemption\'s doc is about');
     });
 
     test('an exemption is read only when it carries a real reason', () {
@@ -1122,6 +1184,270 @@ Set<String> _caseNames(Directory directory) => {
 List<GateCase> _caseOf(String file, String name) {
   final tokens = _tokensIn(name);
   return tokens.isEmpty ? const [] : [GateCase(file, name, tokens)];
+}
+
+/// [_instantReadsIn] against a fabricated source, for the falsification arms.
+///
+/// The same treatment `_cases` gets from the empty-directory and
+/// one-fabricated-case arms, and for the same reason: a sweep held only against
+/// the tree it is supposed to police reports green when its patterns have a
+/// typo in them.
+List<String> _instantReadsOf(String sample) => _instantReadsIn((
+      name: 'x.dart',
+      source: sample,
+      code: _stripCommentLines(sample),
+    ));
+
+/// Every instant read of a wall-clock surface in [source], as `file:line —
+/// surface`.
+///
+/// **Statement-scoped, not line-scoped** (07-REVIEW WR-04). The rule this
+/// enforces calls itself a rule about the directory; the shape it enforced was
+/// a rule about single-line `expect(`s, and two ordinary spellings walked past
+/// it:
+///
+///  * **a multi-line `expect(`**, which is the house style for anything
+///    carrying a `reason:`. The `expect(` and the surface land on different
+///    lines and neither line matches on its own.
+///  * **bound to a local first.** `final live = panel.client.staleSubscriptions;`
+///    reads the surface on one line and the `expect(live, …)` below it names
+///    nothing the sweep knew about. A read is a read wherever the result is
+///    parked, so a binding carries the surface's name forward to every
+///    `expect(` after it in the same file — and a rebinding of the same name
+///    from something that is *not* a surface takes the name back, which is
+///    what keeps `final trusted = samples.where((s) => s.trusted)` from
+///    inheriting the tag its own sampler put on `trusted` two hundred lines
+///    above.
+///
+/// Both tests run against the call with **string literals blanked**, so prose
+/// in a `reason:` can neither switch the arm off by containing `until(`
+/// (07-REVIEW IN-06) nor trip it by quoting a surface's name.
+///
+/// The surfaces are matched on word boundaries, which is not decoration:
+/// `linkStates.listen(states.add)` contains `linkState`, and a substring match
+/// would tag every transition recorder in the directory as an instant read of
+/// the state it is deliberately collecting over a window.
+List<String> _instantReadsIn(_Source source) {
+  final found = <String>[];
+  // Local name -> the surface it was bound from, in source order.
+  final tagged = <String, String>{};
+
+  for (final statement in _statementsIn(source.code)) {
+    final code = _withoutLiterals(statement.text);
+
+    if (statement.isExpect) {
+      if (_windowCalls.any(code.contains)) continue;
+      if (statement.lines.any((line) => _exemptionOn(line) != null)) continue;
+      for (final surface in _wallClockSurfaces) {
+        if (_namesSurface(code, surface)) {
+          found.add('${source.name}:${statement.line} — $surface');
+        }
+      }
+      for (final entry in tagged.entries) {
+        if (_namesLocal(code, entry.key)) {
+          found.add('${source.name}:${statement.line} — ${entry.value} '
+              '(via `${entry.key}`)');
+        }
+      }
+      continue;
+    }
+
+    // A binding. The surface it was read from travels with the name.
+    final surface = _windowCalls.any(code.contains)
+        ? null
+        : _wallClockSurfaces
+            .where((surface) => _namesSurface(code, surface))
+            .firstOrNull;
+    if (surface == null) {
+      tagged.remove(statement.name);
+    } else {
+      tagged[statement.name!] = surface;
+    }
+  }
+  return found;
+}
+
+/// Whether [code] reads [surface] as a member — `client.viewIsStale` counts,
+/// `linkStates` does not.
+bool _namesSurface(String code, String surface) =>
+    RegExp('(?<![\\w\$])$surface(?![\\w\$])').hasMatch(code);
+
+/// Whether [code] names the bare local [name].
+///
+/// Stricter than [_namesSurface] by one character: a local is an identifier on
+/// its own, so `sample.trusted` is a field on somebody else's record and not
+/// the local this sweep tagged.
+bool _namesLocal(String code, String name) =>
+    RegExp('(?<![\\w\$.])$name(?![\\w\$])').hasMatch(code);
+
+/// [text] with the contents of every string literal blanked, spaces for
+/// characters so offsets and line breaks survive.
+String _withoutLiterals(String text) {
+  final out = StringBuffer();
+  var quote = '';
+  for (var i = 0; i < text.length; i++) {
+    final char = text[i];
+    if (quote.isNotEmpty) {
+      if (char == r'\' && i + 1 < text.length) {
+        out.write(text[i + 1] == '\n' ? '\n  ' : '  ');
+        i++;
+        continue;
+      }
+      if (char == quote) {
+        quote = '';
+        out.write(char);
+        continue;
+      }
+      out.write(char == '\n' ? '\n' : ' ');
+      continue;
+    }
+    if (char == "'" || char == '"') quote = char;
+    out.write(char);
+  }
+  return out.toString();
+}
+
+/// One statement the instant-read sweep judges: an `expect(` call captured
+/// whole, or a `final`/`var` binding.
+typedef _Statement = ({
+  bool isExpect,
+  String? name,
+  int line,
+  List<String> lines,
+  String text,
+});
+
+/// Every `expect(` call and every local binding in [code], in source order.
+///
+/// The bracket walk is [_argumentAt]'s, for the reason that one exists: it
+/// steps over string literals, so a `reason:` containing a bracket or an
+/// apostrophe cannot end a call early.
+List<_Statement> _statementsIn(String code) {
+  final lineStarts = <int>[0];
+  for (var i = 0; i < code.length; i++) {
+    if (code[i] == '\n') lineStarts.add(i + 1);
+  }
+  int lineAt(int index) {
+    var low = 0;
+    var high = lineStarts.length - 1;
+    while (low < high) {
+      final mid = (low + high + 1) ~/ 2;
+      if (lineStarts[mid] <= index) {
+        low = mid;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return low + 1;
+  }
+
+  List<String> linesOf(int from, int to) =>
+      code.substring(lineStarts[lineAt(from) - 1], to).split('\n');
+
+  final found = <_Statement>[];
+  var quote = '';
+  for (var i = 0; i < code.length; i++) {
+    final char = code[i];
+    if (quote.isNotEmpty) {
+      if (char == r'\') {
+        i++;
+      } else if (char == quote) {
+        quote = '';
+      }
+      continue;
+    }
+    if (char == "'" || char == '"') {
+      quote = char;
+      continue;
+    }
+
+    if (code.startsWith('expect(', i) &&
+        (i == 0 || !RegExp(r'[\w$.]').hasMatch(code[i - 1]))) {
+      final end = _callEnd(code, i + 6);
+      found.add((
+        isExpect: true,
+        name: null,
+        line: lineAt(i),
+        lines: linesOf(i, end),
+        text: code.substring(i, end),
+      ));
+      i = end - 1;
+      continue;
+    }
+
+    if (_bindingHead.matchAsPrefix(code, i) case final head?) {
+      // Ends at the first `;` outside a bracket or a literal, so a binding
+      // whose initialiser is a multi-line call is one statement.
+      final end = _statementEnd(code, head.end);
+      found.add((
+        isExpect: false,
+        name: head.group(1),
+        line: lineAt(i),
+        lines: linesOf(i, end),
+        text: code.substring(i, end),
+      ));
+      i = head.end - 1;
+      continue;
+    }
+  }
+  return found;
+}
+
+/// `final name =` or `var name =`, at a statement boundary.
+final _bindingHead = RegExp(r'(?<![\w$])(?:final|var)\s+(\w+)\s*=(?!=)');
+
+/// The index just past the `)` that closes a call whose `(` is at [open].
+int _callEnd(String code, int open) {
+  var depth = 0;
+  var quote = '';
+  for (var i = open; i < code.length; i++) {
+    final char = code[i];
+    if (quote.isNotEmpty) {
+      if (char == r'\') {
+        i++;
+      } else if (char == quote) {
+        quote = '';
+      }
+      continue;
+    }
+    if (char == "'" || char == '"') {
+      quote = char;
+    } else if ('([{'.contains(char)) {
+      depth++;
+    } else if (')]}'.contains(char)) {
+      depth--;
+      if (depth == 0) return i + 1;
+    }
+  }
+  return code.length;
+}
+
+/// The index of the `;` that ends the statement beginning at [from].
+int _statementEnd(String code, int from) {
+  var depth = 0;
+  var quote = '';
+  for (var i = from; i < code.length; i++) {
+    final char = code[i];
+    if (quote.isNotEmpty) {
+      if (char == r'\') {
+        i++;
+      } else if (char == quote) {
+        quote = '';
+      }
+      continue;
+    }
+    if (char == "'" || char == '"') {
+      quote = char;
+    } else if ('([{'.contains(char)) {
+      depth++;
+    } else if (')]}'.contains(char)) {
+      if (depth == 0) return i;
+      depth--;
+    } else if (char == ';' && depth == 0) {
+      return i;
+    }
+  }
+  return code.length;
 }
 
 /// The reason on [line]'s window exemption, or null if it carries none.
