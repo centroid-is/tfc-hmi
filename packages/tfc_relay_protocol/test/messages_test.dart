@@ -164,6 +164,74 @@ void main() {
             'same number for its spelling');
   });
 
+  test('a hello result names the gateway process that answered', () {
+    // Advisory only. It exists so that a wire capture taken on a LAN carrying
+    // both a bench gateway and the plant gateway can be attributed without
+    // correlating source ports — the Sparkplug `publisherId` adoption
+    // (07-RESEARCH-PUBSUB), landed here because it costs one optional key.
+    final result = HelloResult(
+      protocol: protocolVersion,
+      server: const PeerInfo('tfc-relay', '0.1.0'),
+      sessionId: 'sid',
+      epoch: 'e1',
+      resumed: false,
+      serverTime: 1786000000123,
+      publisherId: 'gw-st101',
+    );
+
+    final wire = result.toJson();
+    expect(wire['publisherId'], 'gw-st101',
+        reason: 'the publisher name rides at the top level beside `protocol`, '
+            'not inside `session` or `clock`: it identifies the process, '
+            'which outlives every session it serves');
+
+    expect(HelloResult.fromJson(viaJson(wire)).publisherId, 'gw-st101',
+        reason: 'a name that does not survive the round trip is a capture '
+            'that still cannot be attributed, which is the whole of what the '
+            'field is for');
+  });
+
+  test('a hello result with no publisher name is byte-identical to the '
+      'frame this build sent before the field existed', () {
+    final result = HelloResult(
+      protocol: protocolVersion,
+      server: const PeerInfo('tfc-relay', '0.1.0'),
+      sessionId: 'sid',
+      epoch: 'e1',
+      resumed: false,
+      serverTime: 1786000000123,
+    );
+
+    final wire = result.toJson();
+    expect(wire.containsKey('publisherId'), isFalse,
+        reason: 'absent means absent, not an explicit null: a decoder in the '
+            'plant that reads `publisherId` and finds JSON null must be '
+            'unreachable, because the key is never sent at all');
+
+    // The literal is the point. Asserting `toJson` against another call of
+    // `toJson` would pass no matter what either one emitted; only a frozen
+    // string can testify that a gateway which sets no publisher name puts the
+    // exact same bytes on the wire as the build that had no such field. The
+    // protocol version is interpolated because bumping it is a deliberate
+    // wire change with its own decision, and this arm is making a claim about
+    // one optional key, not about the version constant.
+    expect(
+        jsonEncode(wire),
+        '{"protocol":"$protocolVersion",'
+        '"server":{"name":"tfc-relay","version":"0.1.0"},'
+        '"session":{"id":"sid","epoch":"e1","resumed":false},'
+        '"clock":{"serverTime":1786000000123}}',
+        reason: 'an already-deployed panel decodes this frame; a byte that '
+            'moved is a fleet-wide handshake failure, and the additive-'
+            'optional idiom is what makes the field safe in both directions '
+            'with no version negotiation');
+
+    expect(HelloResult.fromJson(viaJson(wire)).publisherId, isNull,
+        reason: 'a frame with no publisher key decodes to no publisher, and '
+            'throws nothing — the gateways already in the plant send exactly '
+            'this frame');
+  });
+
   test('SubscribeResult: handles, snapshot, meta, and per-key rejection', () {
     final result = SubscribeResult(
       sub: 's1',
@@ -227,6 +295,43 @@ void main() {
     final s = StatusParams.fromJson(viaJson(status.toJson()));
     expect(s.alias, 'ST201');
     expect(s.error, 'BadNotConnected');
+  });
+
+  test('a status frame names the gateway that observed the link', () {
+    // Status is a notification: it arrives with no request to correlate it
+    // against. On a LAN carrying two gateways that both watch an alias called
+    // `ST201`, a capture of "ST201 went disconnected" is ambiguous without
+    // this, and the two answers ("the bench rig lost its fake PLC" versus
+    // "the plant lost a real one") are not close to each other.
+    final status = StatusParams(
+      alias: 'ST201',
+      state: 'disconnected',
+      error: 'BadNotConnected',
+      publisherId: 'gw-st101',
+    );
+
+    final wire = status.toJson();
+    expect(wire['publisherId'], 'gw-st101');
+    expect(StatusParams.fromJson(viaJson(wire)).publisherId, 'gw-st101',
+        reason: 'the client routes this notification through the DTO '
+            '(connection_supervisor), so a field that does not survive '
+            'fromJson is a field no client can ever read');
+  });
+
+  test('a status frame with no publisher name is byte-identical to the '
+      'frame this build sent before the field existed', () {
+    final status =
+        StatusParams(alias: 'ST201', state: 'disconnected', error: 'Bad');
+
+    final wire = status.toJson();
+    expect(wire.containsKey('publisherId'), isFalse);
+    expect(jsonEncode(wire),
+        '{"alias":"ST201","state":"disconnected","error":"Bad"}',
+        reason: 'status is the notification path, where a decoder that '
+            'chokes throws somewhere nothing catches (03-REVIEW WR-06). The '
+            'frame a publisher-less gateway sends must not have moved by a '
+            'byte');
+    expect(StatusParams.fromJson(viaJson(wire)).publisherId, isNull);
   });
 
   test('WriteParams round-trips and can never poison a frame', () {

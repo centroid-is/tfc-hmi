@@ -138,7 +138,15 @@ import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 /// `freshness_contract.dart:60-64`) because it is the pipe reporting on
 /// itself. Named as a constant rather than spelled at each site so Phase 8's
 /// reserved list and this producer cannot drift apart by a typo.
-const certDaysToExpiryKey = 'PIPE.cert.days_to_expiry';
+///
+/// Since 08-02 the *name* lives in the protocol package with the rest of the
+/// `PIPE.` vocabulary, which by then had producers in three packages at once;
+/// this stays as the alias every existing caller already imports. The
+/// *producer* — the file below — deliberately did not move with it (ruling 9
+/// as amended): it is judged by socket-level cases here, and relocating it
+/// would have put an upstream package's native build in front of this suite
+/// for the sake of one string.
+const certDaysToExpiryKey = PipeKeys.certDaysToExpiry;
 
 /// The shared source, plus one key the gateway knows and the plant does not.
 ///
