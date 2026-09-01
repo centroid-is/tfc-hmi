@@ -169,8 +169,9 @@ const String contractKitPackage = 'tfc_stateman_contract';
 /// self-deleting list with an owner beats a red suite, because a phase whose
 /// own gate is red cannot tell a new failure from a known one.
 ///
-///  * **1 still owed by 08-06** — `holdToRun`, landing in this plan's task 3.
-///    `write` and `writeStatus` are written; the count came down with them.
+///  * **0 owed by 08-06** — `write`, `writeStatus` and `holdToRun` are all
+///    written, and the count came down with each of them in the commit that
+///    closed it.
 ///  * **4 owed by 08-11** — `browse`, `timeseries`, `historyViews`,
 ///    `preferences`. 08-11 sets `supportsDataServices: false` on the contract
 ///    leg and decides which of the four the gateway answers at all; the three
@@ -179,7 +180,7 @@ const String contractKitPackage = 'tfc_stateman_contract';
 /// The plan that closes each member decrements this in the same commit. A
 /// member that quietly starts working without this number moving is a member
 /// nobody decided to ship.
-const int declaredUnimplementedMembers = 5;
+const int declaredUnimplementedMembers = 4;
 
 /// A forwarder is forbidden in the composer, by name.
 ///
