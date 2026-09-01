@@ -22,7 +22,7 @@
 /// the plant does not stamp it), and the only place a per-subscription age
 /// exists at all is inside `FreshnessWatchdog`, which keeps `_evaluatedAt` in
 /// the gateway's clock and publishes only the verdict derived from it
-/// (`freshness_watchdog.dart:217`, `staleSubscriptionsAt`). So this file asserts
+/// (`freshness_watchdog.dart`, `staleSubscriptionsNow`). So this file asserts
 /// the *transition timing* of the boolean instead — the surface an operator
 /// actually sees — and no getter is invented here to make a number appear.
 /// 07-11 wires the staleness surface (07-CONTEXT ruling 1) and F13's outstanding

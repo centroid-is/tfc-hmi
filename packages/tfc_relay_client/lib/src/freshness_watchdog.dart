@@ -61,12 +61,36 @@
 /// **Whose clock.** Per-subscription age is measured in the *gateway's* time,
 /// never the panel's. On a tick that is free — `TickParams.serverTime` and
 /// `SubTick.evaluatedAt` are both server wall-clock epoch ms, verified live in
-/// 04-RESEARCH Finding 5b. Between ticks, [FreshnessWatchdog.staleSubscriptionsAt]
-/// converts the caller's local instant into server time with the offset
-/// captured at hello (`ClockOffset` in `clock_offset.dart`, whose `toServer`
-/// this mirrors: `offset = localNow - hello.serverTime`). A panel whose own
-/// clock is ten minutes wrong is a panel with a wrong clock, not a plant with
-/// 1500 dead tags — CLI-05 says warn and keep showing values.
+/// 04-RESEARCH Finding 5b. Between ticks the gateway's clock has to be
+/// *estimated*, and [serverNowMs] is that estimate. It is built from an anchor
+/// pair — one gateway instant against one reading of this panel's **monotonic**
+/// elapsed clock — and it never reads the panel's wall clock at all.
+///
+/// **Why not the wall clock and an offset** (07-REVIEW CR-01). The shape this
+/// replaced converted `DateTime.now()` into server time with the offset
+/// captured at `hello`, which was correct exactly as long as the two clocks'
+/// relationship stayed what it was at the handshake. Nothing maintained that:
+/// the offset was captured once per connection, and 07-08b's heartbeat turned
+/// connections from six-second things into multi-day ones. An NTP correction on
+/// a fish-factory panel with a dead CMOS battery (`clock_offset.dart:19-21`)
+/// then moved every verdict by the whole step — backwards, a subscription whose
+/// plant-side source had genuinely stopped read **fresh**, which is the one
+/// thing CLAUDE.md's Core Value forbids; forwards, the grey plant CLI-05 rules
+/// out. A `Stopwatch` cannot step, so neither can the verdict.
+///
+/// **Why the anchor is re-derived from ticks, and why not from every tick.**
+/// A monotonic clock does not step but it does drift — tens of ppm against the
+/// gateway's disciplined clock is seconds a day, and the limit here is
+/// seconds — so the anchor has to follow the gateway over a long connection.
+/// Every tick carries `serverTime` and is therefore a sample of it. But a
+/// sample is only ever *late*: transit delay makes the gateway look earlier
+/// than it is, never later. Adopting every sample would mean a link whose
+/// frames are minutes behind re-bases the estimate onto its own backlog and
+/// reports the page it is minutes behind on as current — F20's lie, which
+/// 07-11 wired this surface to catch. So [_sampleServerClock] adopts a sample
+/// that *raises* the estimate unconditionally (a raise can only mean the anchor
+/// had fallen behind) and one that lowers it only within one tick period, which
+/// is jitter and accumulated drift rather than a link falling behind.
 library;
 
 import 'dart:async';
@@ -147,10 +171,28 @@ final class FreshnessWatchdog {
   /// The verdict from the most recent tick.
   Set<String> _staleSubs = const <String>{};
 
+  /// The gateway instant this panel's clock is anchored to, and the reading of
+  /// [_monotonic] taken at the same moment. Null until the first anchor.
+  int? _serverAnchorMs;
+  int? _localAnchorMs;
+
+  /// Elapsed milliseconds from a clock that cannot be stepped.
+  ///
+  /// Injected only by the suite, which needs to move it without waiting.
+  final int Function() _monotonic;
+
   FreshnessWatchdog({
     required this.config,
     required this.onViewFreshnessChanged,
-  });
+    int Function()? monotonic,
+  }) : _monotonic = monotonic ?? _elapsedClock();
+
+  /// A fresh monotonic clock, one per watchdog. Only differences are ever read
+  /// from it, so where it starts does not matter.
+  static int Function() _elapsedClock() {
+    final elapsed = Stopwatch()..start();
+    return () => elapsed.elapsedMilliseconds;
+  }
 
   /// Whether the link has gone [ClientConfig.freshnessDeadline] without a
   /// single frame of any kind.
@@ -187,6 +229,7 @@ final class FreshnessWatchdog {
   void sawTick(TickParams tick) {
     if (_disposed) return;
     sawFrame(InboundFrame.tick);
+    _sampleServerClock(tick.serverTime);
     for (final entry in tick.subs.entries) {
       _evaluatedAt[entry.key] = entry.value.evaluatedAt;
     }
@@ -206,16 +249,53 @@ final class FreshnessWatchdog {
   /// The same verdict for the one id a widget renders.
   bool isSubscriptionStale(String subId) => _staleSubs.contains(subId);
 
-  /// The same verdict between ticks, for a caller holding a local instant.
+  /// Anchors the gateway's clock at a handshake.
   ///
-  /// [localNowMs] is converted into the gateway's clock with [clockOffsetMs] —
-  /// `ClockOffset.offsetMs`, captured at hello as `localNow - serverTime`, so
-  /// subtracting it is that type's `toServer`. A panel whose clock is ten
-  /// minutes fast has an offset ten minutes large and every verdict here is
-  /// unchanged: a disagreement about what time it is is not a disagreement
-  /// about the process, and CLI-05 says warn, never grey the plant.
-  Set<String> staleSubscriptionsAt(int localNowMs, {required int clockOffsetMs}) =>
-      _staleAt(localNowMs - clockOffsetMs);
+  /// `hello` is the one moment this panel knows a gateway instant whose
+  /// transit delay is half a round trip rather than a queue — see the library
+  /// doc on why a tick is a worse sample than this one.
+  void anchorServerClock(int serverTimeMs) {
+    if (_disposed) return;
+    _serverAnchorMs = serverTimeMs;
+    _localAnchorMs = _monotonic();
+  }
+
+  /// The gateway's clock now, estimated from the anchor and locally elapsed
+  /// time. Null until something has anchored it.
+  ///
+  /// Never a function of the panel's wall clock: see the library doc's "whose
+  /// clock", and 07-REVIEW CR-01 for what it cost when it was.
+  int? get serverNowMs {
+    final serverAt = _serverAnchorMs;
+    final localAt = _localAnchorMs;
+    if (serverAt == null || localAt == null) return null;
+    return serverAt + (_monotonic() - localAt);
+  }
+
+  /// The live verdict: every subscription aged against [serverNowMs].
+  ///
+  /// Empty before the first anchor, which is a client that has not completed a
+  /// handshake and has no subscriptions to judge either.
+  ///
+  /// **Live, because a saturated link keeps delivering old frames**
+  /// (07-RESEARCH §B.4): [staleSubscriptions], the verdict stored at the last
+  /// tick, compares two fields of one delayed frame, agrees with itself for
+  /// ever, and renders a minute-behind page as current.
+  Set<String> staleSubscriptionsNow() {
+    final now = serverNowMs;
+    return now == null ? const <String>{} : _staleAt(now);
+  }
+
+  /// The same live verdict for the one id a widget renders.
+  ///
+  /// One lookup rather than a set built and thrown away, because this is the
+  /// per-rebuild path (07-REVIEW IN-01).
+  bool isSubscriptionStaleNow(String subId) {
+    final now = serverNowMs;
+    if (now == null) return false;
+    final at = _evaluatedAt[subId];
+    return at != null && now - at > _subscriptionLimitMs;
+  }
 
   /// Forgets a subscription — an unsubscribe, or a snapshot that dropped it.
   ///
@@ -249,6 +329,42 @@ final class FreshnessWatchdog {
     if (tick == null) return linkMs;
     final derived = (tick * config.subscriptionStalenessMultiple).round();
     return derived > linkMs ? derived : linkMs;
+  }
+
+  /// Takes one tick's `serverTime` as a sample of the gateway's clock.
+  ///
+  /// **Asymmetric on purpose**, and the asymmetry is the whole of the library
+  /// doc's third paragraph. Transit delay only ever makes a sample *late*, so:
+  ///
+  ///  * a sample that says the gateway is **later** than this anchor predicts
+  ///    can only mean the anchor had fallen behind — adopted, always;
+  ///  * a sample that says it is **earlier**, by no more than one tick period,
+  ///    is jitter or the drift a monotonic crystal accumulates against a
+  ///    disciplined clock — adopted, so a multi-day connection tracks;
+  ///  * a sample that says it is earlier by *more* than that is a link falling
+  ///    behind, and adopting it would re-base the estimate onto the backlog and
+  ///    report the page this panel is minutes behind on as current. Refused —
+  ///    which is what makes the F20 verdict survive this change.
+  ///
+  /// The last rule has one escape: a shortfall past
+  /// [ClientConfig.implausibleClockThreshold] is not a backlog any live session
+  /// would survive, it is the gateway's own clock being corrected backwards.
+  /// Refusing that for ever would leave the estimate permanently ahead and grey
+  /// a healthy plant, so it re-anchors.
+  void _sampleServerClock(int serverTimeMs) {
+    final localNow = _monotonic();
+    final serverAt = _serverAnchorMs;
+    final localAt = _localAnchorMs;
+    if (serverAt != null && localAt != null) {
+      final shortfall = (serverAt + (localNow - localAt)) - serverTimeMs;
+      final tolerated = _tickMs ?? 0;
+      if (shortfall > tolerated &&
+          shortfall <= config.implausibleClockThreshold.inMilliseconds) {
+        return;
+      }
+    }
+    _serverAnchorMs = serverTimeMs;
+    _localAnchorMs = localNow;
   }
 
   /// Ages every recorded subscription against an instant in the gateway's

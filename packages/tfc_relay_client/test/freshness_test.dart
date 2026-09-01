@@ -30,7 +30,7 @@
 library;
 
 import 'dart:async';
-import 'dart:io' show Platform;
+import 'dart:io' show Directory, File, Platform;
 
 import 'package:tfc_relay_client/src/client_config.dart';
 import 'package:tfc_relay_client/src/freshness_watchdog.dart';
@@ -85,6 +85,16 @@ ClientConfig testConfig() => ClientConfig(
       freshnessDeadline: deadline,
       deadlineFloor: const Duration(milliseconds: 10),
     );
+
+/// A monotonic clock the case moves by hand.
+///
+/// The watchdog's elapsed-time seam, injected so a case can watch a
+/// subscription age without waiting out a real staleness limit. A `Stopwatch`
+/// would do everything except stand still.
+final class FakeElapsed {
+  int ms = 0;
+  int read() => ms;
+}
 
 /// Records every fresh/stale transition the watchdog announces, in order.
 final class TransitionLog {
@@ -355,10 +365,14 @@ void main() {
           reason: 'a plant fault announced itself as a stream fault');
     });
 
-    test('a wrong local clock does not make every subscription look stale', () {
-      final watchdog =
-          FreshnessWatchdog(config: testConfig(), onViewFreshnessChanged: (_) {});
+    test('the live verdict ages on the monotonic clock between ticks', () {
+      final elapsed = FakeElapsed();
+      final watchdog = FreshnessWatchdog(
+          config: testConfig(),
+          onViewFreshnessChanged: (_) {},
+          monotonic: elapsed.read);
       addTearDown(watchdog.dispose);
+      watchdog.learnedTickMs(period.inMilliseconds);
 
       const frozenAt = serverEpochMs;
       final serverTime = serverEpochMs + period.inMilliseconds;
@@ -367,35 +381,135 @@ void main() {
         's2': const SubTick(seq: 0, evaluatedAt: frozenAt),
       }));
 
-      // A panel whose clock is right: the 52 ms same-machine skew measured in
-      // 04-RESEARCH Finding 5b.
-      const rightClockSkewMs = 52;
-      // A moment chosen so the frozen subscription is past the deadline and
-      // its still-evaluating neighbour is not. The case would prove nothing at
-      // an instant where both were stale, or where neither was.
-      final localNow = serverTime +
-          rightClockSkewMs +
-          deadline.inMilliseconds -
-          period.inMilliseconds ~/ 2;
-      final rightClock =
-          watchdog.staleSubscriptionsAt(localNow, clockOffsetMs: rightClockSkewMs);
+      // A moment chosen so the frozen subscription is past the limit and its
+      // still-evaluating neighbour is not. The case would prove nothing at an
+      // instant where both were stale, or where neither was.
+      final limitMs = period.inMilliseconds * 30;
+      elapsed.ms += limitMs - period.inMilliseconds ~/ 2;
 
-      // The same panel with its clock set ten minutes fast. `clockOffset` is
-      // captured at hello as `localNow - serverTime`, so it carries the error
-      // too, and CLI-05 says that warns — it never greys the plant.
-      const tenMinutesMs = 10 * 60 * 1000;
-      final wrongClock = watchdog.staleSubscriptionsAt(
-        localNow + tenMinutesMs,
-        clockOffsetMs: rightClockSkewMs + tenMinutesMs,
-      );
+      expect(watchdog.staleSubscriptionsNow(), equals(<String>{'s2'}),
+          reason: 'the frozen subscription was not caught between ticks, '
+              'which is the whole of what this surface is for');
+      expect(watchdog.isSubscriptionStaleNow('s2'), isTrue);
+      expect(watchdog.isSubscriptionStaleNow('s1'), isFalse,
+          reason: 'a healthy neighbour was condemned along with the dead one');
+    });
 
-      expect(rightClock, equals(<String>{'s2'}),
-          reason: 'the frozen subscription was not caught between ticks');
-      expect(wrongClock, equals(rightClock),
-          reason: 'a panel with a wrong wall clock condemned subscriptions the '
-              'gateway says are current: a disagreement about what time it is '
-              'is not a disagreement about the process, and CLI-05 says warn, '
-              'never grey the plant');
+    test('a panel\'s wall clock is not an input to the verdict', () {
+      // **07-REVIEW CR-01, as a structural pin.** The shape this replaced read
+      // `DateTime.now()` and converted it with a `clockOffset` captured once
+      // per connection at `hello`. Reproduced before the fix: with the offset
+      // held at its captured value — which is what happens, because nothing
+      // re-derives it — a three-second backward RTC step made a subscription
+      // the gateway had not evaluated for two whole limits read **fresh**.
+      //
+      // The behavioural cases in this group pin the replacement. This one pins
+      // that the input is gone, because the replacement is only worth
+      // anything for as long as nobody adds the wall clock back beside it: a
+      // single `DateTime.now()` on this path re-opens the same hole and every
+      // case around it stays green.
+      for (final path in <String>[
+        'lib/src/freshness_watchdog.dart',
+        'lib/src/remote_state_man.dart',
+      ]) {
+        final source = File(path);
+        expect(source.existsSync(), isTrue,
+            reason: 'this case reads the implementation as text, so it must '
+                'run with the tfc_relay_client package root as the working '
+                'directory; dart test was invoked from '
+                '${Directory.current.path} and found no $path');
+
+        final lines = source.readAsLinesSync();
+        final hits = <String>[
+          for (var i = 0; i < lines.length; i++)
+            if (lines[i].contains('DateTime.now()') &&
+                !lines[i].trimLeft().startsWith('///') &&
+                !lines[i].trimLeft().startsWith('//'))
+              '$path:${i + 1}  ${lines[i].trim()}',
+        ];
+
+        expect(hits, isEmpty,
+            reason: 'the staleness path reads this panel\'s wall clock '
+                'again:\n${hits.map((hit) => '  $hit').join('\n')}\n\n'
+                'A wall clock steps — NTP correcting a fish-factory panel\'s '
+                'dead CMOS battery is the case `clock_offset.dart:19-21` '
+                'describes — and a verdict computed from one steps with it: '
+                'backwards, a dead subscription renders fresh, which is the '
+                'one failure CLAUDE.md\'s Core Value forbids. Age against '
+                'FreshnessWatchdog.serverNowMs, which is anchored on a '
+                'Stopwatch and cannot step.');
+      }
+    });
+
+    test('a late tick does not re-anchor the gateway\'s clock', () {
+      // The arm that keeps F20 true across CR-01's fix. Re-deriving the
+      // anchor from every tick is the obvious way to track the gateway, and it
+      // is wrong in exactly the case this surface was wired for: on a
+      // saturated link every sample arrives late, so an anchor that adopted
+      // them would re-base onto the backlog and report the page this panel is
+      // minutes behind on as current.
+      final elapsed = FakeElapsed();
+      final watchdog = FreshnessWatchdog(
+          config: testConfig(),
+          onViewFreshnessChanged: (_) {},
+          monotonic: elapsed.read);
+      addTearDown(watchdog.dispose);
+      watchdog.learnedTickMs(period.inMilliseconds);
+
+      watchdog.anchorServerClock(serverEpochMs);
+
+      // Real time passes; the link falls behind by all of it but one tick, so
+      // the frame that finally lands was built almost a whole limit ago.
+      final limitMs = period.inMilliseconds * 30;
+      elapsed.ms += limitMs * 2;
+      final builtAt = serverEpochMs + period.inMilliseconds;
+      watchdog.sawTick(TickParams(serverTime: builtAt, subs: {
+        's1': SubTick(seq: 1, evaluatedAt: builtAt),
+      }));
+
+      expect(watchdog.staleSubscriptionsNow(), equals(<String>{'s1'}),
+          reason: 'a tick that spent two staleness limits in a queue was taken '
+              'as evidence of what time it is at the gateway, so the panel '
+              'aged the frame against the moment the frame itself was built '
+              'and called it current. That is F20 exactly, reintroduced '
+              'through the clock rather than through sawTick');
+      expect(watchdog.staleSubscriptions, isEmpty,
+          reason: 'the last-tick verdict is the blind one by construction, and '
+              'this case is only a contrast if the two disagree here');
+    });
+
+    test('an on-time tick re-anchors, so a long connection tracks drift', () {
+      // The other side of the asymmetry. A monotonic clock cannot step but it
+      // does drift — tens of ppm against a disciplined gateway is seconds a
+      // day, and the limit is seconds — so an anchor taken at `hello` and
+      // never refined would grey a healthy plant on a connection the heartbeat
+      // now keeps up for days.
+      final elapsed = FakeElapsed();
+      final watchdog = FreshnessWatchdog(
+          config: testConfig(),
+          onViewFreshnessChanged: (_) {},
+          monotonic: elapsed.read);
+      addTearDown(watchdog.dispose);
+      watchdog.learnedTickMs(period.inMilliseconds);
+
+      watchdog.anchorServerClock(serverEpochMs);
+
+      // This panel's crystal has run fast: a whole limit of local time passed
+      // while the gateway advanced by a limit less half a tick period. The
+      // shortfall is inside one tick period, so it is drift and is adopted.
+      final limitMs = period.inMilliseconds * 30;
+      elapsed.ms += limitMs;
+      final gatewayNow = serverEpochMs + limitMs - period.inMilliseconds ~/ 2;
+      watchdog.sawTick(TickParams(serverTime: gatewayNow, subs: {
+        's1': SubTick(seq: 1, evaluatedAt: gatewayNow),
+      }));
+
+      expect(watchdog.serverNowMs, gatewayNow,
+          reason: 'the anchor did not follow a sample that arrived on time, so '
+              'this panel\'s estimate of the gateway\'s clock is now half a '
+              'tick ahead of it and every hour of connection adds more. A '
+              'panel that has been up a week greys a running plant');
+      expect(watchdog.staleSubscriptionsNow(), isEmpty);
     });
 
     test('fifty subscriptions add no timers — one link, one deadline', () {
@@ -467,8 +581,11 @@ void main() {
   group('the verdict a screen reads ages between ticks', () {
     test('the last-tick verdict and the live verdict disagree once local time '
         'has passed, and the live one is the honest one', () {
-      final watchdog =
-          FreshnessWatchdog(config: testConfig(), onViewFreshnessChanged: (_) {});
+      final elapsed = FakeElapsed();
+      final watchdog = FreshnessWatchdog(
+          config: testConfig(),
+          onViewFreshnessChanged: (_) {},
+          monotonic: elapsed.read);
       addTearDown(watchdog.dispose);
       watchdog.learnedTickMs(period.inMilliseconds);
 
@@ -481,9 +598,9 @@ void main() {
       }));
 
       // The limit is the advertised cadence times the multiple, floored at the
-      // link deadline. Both halves are read below at an instant well past it.
+      // link deadline. Both halves are read below well past it.
       final limitMs = period.inMilliseconds * 30;
-      final wellPast = serverEpochMs + limitMs * 2;
+      elapsed.ms += limitMs * 2;
 
       expect(watchdog.staleSubscriptions, isEmpty,
           reason: 'the last-tick verdict is the arithmetic of one frame '
@@ -493,13 +610,11 @@ void main() {
               'expectation is not a property anybody wants — it is the '
               'measurement of the surface that must never be the one a screen '
               'reads');
-      expect(
-          watchdog.staleSubscriptionsAt(wellPast, clockOffsetMs: 0),
-          equals(<String>{'s1'}),
+      expect(watchdog.staleSubscriptionsNow(), equals(<String>{'s1'}),
           reason: 'the live verdict ages the same subscription against the '
-              'caller\'s own instant, and ${limitMs * 2} ms after its last '
-              'evaluation it did not report it stale. That is the arithmetic '
-              'this whole surface exists for');
+              'gateway clock estimated from elapsed time, and ${limitMs * 2} '
+              'ms after its last evaluation it did not report it stale. That '
+              'is the arithmetic this whole surface exists for');
     });
 
     test('a panel whose frames have stopped reports its subscription stale', () async {

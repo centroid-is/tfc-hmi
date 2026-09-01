@@ -482,6 +482,11 @@ final class ConnectionSupervisor {
       // one's cadence. `HelloResult` owns the tolerance rule, so a gateway
       // that advertises nothing usable leaves the pump on its own floor.
       heartbeat?.learnedDeadlineMs(hello.heartbeatDeadlineMs);
+      // The gateway's clock, anchored against this panel's monotonic one. The
+      // handshake is the least-delayed sample of it this connection will ever
+      // see — half a round trip rather than a queue — which is why the anchor
+      // is taken here and only refined from ticks (07-REVIEW CR-01).
+      watchdog.anchorServerClock(hello.serverTime);
       _clockOffset = ClockOffset.fromHello(
         hello.serverTime,
         _now(),

@@ -556,7 +556,7 @@ const List<Deviation> gateDeviations = <Deviation>[
     reason: 'the *age* half, reassigned to 07-11 by 07-05 on the expectation '
         'that wiring the staleness surface would give the client an age to '
         'assert against. It did not: 07-CONTEXT ruling 1 wires the live '
-        '**verdict** (staleSubscriptionsAt returns a Set<String>), and the '
+        '**verdict** (staleSubscriptionsNow returns a Set<String>), and the '
         'only per-subscription age in the client remains '
         'FreshnessWatchdog._evaluatedAt, kept in the gateway\'s clock and '
         'exposed solely as the verdict derived from it. Publishing an age '
