@@ -9,6 +9,10 @@
 ///
 /// A dropped stream retries on its own every [RtspCameraView.retryDelay]; an
 /// operator should never have to touch a camera tile to bring it back.
+///
+/// Liveness is decided by [RtspLiveness] from frames arriving, not from
+/// libmpv's error stream — see that class for why the error stream cannot be
+/// trusted when a page carries more than one camera.
 library;
 
 import 'dart:async';
@@ -80,6 +84,108 @@ abstract class RtspCameraPlayback {
   ValueListenable<RtspCameraStatus> get status;
   Widget buildVideo(BuildContext context, BoxFit fit);
   Future<void> dispose();
+}
+
+/// Decides whether a camera counts as live, from the only signal that turned
+/// out to be trustworthy: frames arriving.
+///
+/// libmpv's error stream is not a death signal. FFmpeg's log callback is
+/// process-global, so an `ffmpeg:`-prefixed failure raised by *one* player
+/// surfaces on an unrelated player's error stream. Observed against a real
+/// UniFi camera on 2026-09-01: a page with one healthy camera and one
+/// unreachable one blanked the healthy tile to "No signal" and restarted its
+/// stream every 5 s, indefinitely — the healthy player kept being handed
+/// `tcp: Connection to tcp://10.50.1.1:554 failed` from the dead one, a port
+/// it never dials. Alone, the same camera ran for minutes without a single
+/// error. On a plant page of eight tiles, one camera off its PoE port would
+/// take down all eight.
+///
+/// So: frames arriving beat any error, an error only counts while nothing is
+/// decoding, and a stream that goes quiet for [stallTimeout] without saying so
+/// is dead. The class is pure — it holds no timers and reads no clock — so the
+/// whole policy is testable without libmpv.
+@visibleForTesting
+class RtspLiveness {
+  RtspLiveness({this.stallTimeout = const Duration(seconds: 10)});
+
+  /// How long frames may stop arriving before a live stream counts as dead.
+  /// Generous next to a 30 fps feed: this catches a silent death, it is not a
+  /// dropped-frame detector.
+  final Duration stallTimeout;
+
+  RtspCameraStatus _status = RtspCameraStatus.connecting;
+  RtspCameraStatus get status => _status;
+
+  /// Frames have been seen at least once since the last [reopened].
+  bool _decoding = false;
+  Duration? _lastPosition;
+  DateTime? _lastFrameAt;
+
+  /// A retry is owed: the stream died and has not come back on its own.
+  bool _retryPending = false;
+  bool get retryPending => _retryPending;
+
+  /// libmpv reported a frame size — a socket that connected is not a picture,
+  /// so nothing counts as live before this.
+  void videoSized() => _decoding = true;
+
+  /// Playback position moved, i.e. a frame decoded. Cancels any pending retry:
+  /// restarting a stream that is painting pictures is never right.
+  void frame(Duration position, DateTime now) {
+    if (position == _lastPosition) return;
+    _lastPosition = position;
+    // Media time moves before the first picture does — libmpv emits a position
+    // while it is still negotiating. Counting that as a heartbeat would make an
+    // unreachable camera look alive and swallow the very error that proves it
+    // is not, leaving the tile spinning forever instead of retrying.
+    if (!_decoding) return;
+    _lastFrameAt = now;
+    _status = RtspCameraStatus.live;
+    _retryPending = false;
+  }
+
+  /// An error arrived on the player's error stream. Only believed while
+  /// nothing is decoding — see the class doc.
+  void error(DateTime now) {
+    if (_isFlowing(now)) return;
+    _die();
+  }
+
+  /// libmpv reached the end of the stream. A finished feed is a dead camera,
+  /// not a completed movie, and unlike the error stream this one is scoped to
+  /// the player that raised it.
+  void completed() => _die();
+
+  /// Called on a timer: has a live stream gone quiet without saying so?
+  void tick(DateTime now) {
+    if (_status != RtspCameraStatus.live) return;
+    if (_isFlowing(now)) return;
+    _die();
+  }
+
+  /// The stream is being (re)opened.
+  void reopened() {
+    _status = RtspCameraStatus.connecting;
+    _decoding = false;
+    _lastPosition = null;
+    _lastFrameAt = null;
+    _retryPending = false;
+  }
+
+  /// The owner has armed the retry it was owed.
+  void retryArmed() => _retryPending = false;
+
+  bool _isFlowing(DateTime now) {
+    final last = _lastFrameAt;
+    return last != null && now.difference(last) < stallTimeout;
+  }
+
+  void _die() {
+    _status = RtspCameraStatus.noSignal;
+    _decoding = false;
+    _lastFrameAt = null;
+    _retryPending = true;
+  }
 }
 
 class RtspCameraView extends StatefulWidget {
@@ -268,12 +374,18 @@ class _LiveBadge extends StatelessWidget {
 class _MediaKitPlayback implements RtspCameraPlayback {
   static bool _initialized = false;
 
+  /// How often the stall watchdog asks [RtspLiveness] whether frames are still
+  /// arriving. Coarse on purpose — it is a death check, not a frame counter.
+  static const Duration _tickInterval = Duration(seconds: 2);
+
   final Player _player;
   late final VideoController _controller;
   final _status = ValueNotifier<RtspCameraStatus>(RtspCameraStatus.connecting);
   final _subscriptions = <StreamSubscription<void>>[];
   final String _url;
+  final _liveness = RtspLiveness();
   Timer? _retryTimer;
+  Timer? _watchdog;
   bool _disposed = false;
 
   _MediaKitPlayback(RtspCameraConfig config)
@@ -283,18 +395,34 @@ class _MediaKitPlayback implements RtspCameraPlayback {
     if (config.muted) {
       unawaited(_player.setVolume(0).catchError((_) {}));
     }
-    _subscriptions.add(_player.stream.error.listen((_) => _onDead()));
+    _subscriptions.add(_player.stream.error.listen((_) {
+      _liveness.error(DateTime.now());
+      _publish();
+    }));
     // A finished stream is a dead camera feed, not a completed movie.
     _subscriptions.add(_player.stream.completed.listen((completed) {
-      if (completed) _onDead();
+      if (!completed) return;
+      _liveness.completed();
+      _publish();
     }));
     // Width flips non-null when frames actually decode — "connected" at the
     // socket level is not a picture.
     _subscriptions.add(_player.stream.width.listen((width) {
-      if (width != null && width > 0 && !_disposed) {
-        _status.value = RtspCameraStatus.live;
-      }
+      if (width == null || width <= 0) return;
+      _liveness.videoSized();
+      _publish();
     }));
+    // Position advances once per decoded frame: the heartbeat that says the
+    // camera is genuinely up, and the only thing that can clear a spurious
+    // error raised by another player.
+    _subscriptions.add(_player.stream.position.listen((position) {
+      _liveness.frame(position, DateTime.now());
+      _publish();
+    }));
+    _watchdog = Timer.periodic(_tickInterval, (_) {
+      _liveness.tick(DateTime.now());
+      _publish();
+    });
     _openMedia();
   }
 
@@ -309,19 +437,33 @@ class _MediaKitPlayback implements RtspCameraPlayback {
   }
 
   void _openMedia() {
-    _status.value = RtspCameraStatus.connecting;
+    _liveness.reopened();
+    _publish();
     unawaited(_player.open(Media(_url), play: true).catchError((_) {
-      _onDead();
+      _liveness.error(DateTime.now());
+      _publish();
     }));
   }
 
-  void _onDead() {
+  /// Mirrors [RtspLiveness] onto the widget, and arms or stands down the retry
+  /// it asks for. A stream that came back on its own cancels its own retry —
+  /// restarting a tile that is painting pictures is what made a healthy camera
+  /// blank every 5 s.
+  void _publish() {
     if (_disposed) return;
-    _status.value = RtspCameraStatus.noSignal;
-    _retryTimer ??= Timer(RtspCameraView.retryDelay, () {
+    _status.value = _liveness.status;
+    if (_liveness.retryPending) {
+      if (_retryTimer == null) {
+        _retryTimer = Timer(RtspCameraView.retryDelay, () {
+          _retryTimer = null;
+          if (!_disposed) _openMedia();
+        });
+        _liveness.retryArmed();
+      }
+    } else if (_liveness.status == RtspCameraStatus.live) {
+      _retryTimer?.cancel();
       _retryTimer = null;
-      if (!_disposed) _openMedia();
-    });
+    }
   }
 
   @override
@@ -339,6 +481,7 @@ class _MediaKitPlayback implements RtspCameraPlayback {
   @override
   Future<void> dispose() async {
     _disposed = true;
+    _watchdog?.cancel();
     _retryTimer?.cancel();
     for (final s in _subscriptions) {
       await s.cancel();
