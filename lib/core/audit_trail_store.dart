@@ -482,15 +482,45 @@ class AuditTrailStore {
           predicate = predicate == null ? clause : predicate! & clause;
         }
 
+        // ## Why these compare as text and not as datetimes
+        //
+        // The database sets `DriftDatabaseOptions(storeDateTimeAsText: true)`,
+        // and drift compares two `Expression<DateTime>` by wrapping both sides
+        // in `JULIANDAY(...)` (see `_Comparison.writeInto`) — regardless of
+        // dialect. `julianday` is a SQLite function. Postgres does not have it,
+        // so the window filter died there with
+        //
+        //     ERROR: function julianday(text) does not exist
+        //
+        // and the page reported the trail unavailable on every real station,
+        // while every test passed because the tests run on SQLite.
+        //
+        // `dartCast<String>` changes only the Dart type — drift emits no CAST —
+        // so the column is compared as the text it already is, and both engines
+        // get a plain `at >= ?`. The bound value is serialised by the database's
+        // OWN type mapping rather than a hand-rolled format, so it matches what
+        // was written byte for byte.
+        //
+        // **The constraint this relies on**: ISO-8601 sorts lexicographically
+        // only while every row carries the same UTC offset. Drift writes `...Z`
+        // for a UTC `DateTime` and `... +hh:mm` for a local one, and those two
+        // do not sort against each other. Every row on a station is written by
+        // that station, so this holds today; normalising `at` to UTC on write
+        // (and migrating existing rows) is what would make it hold by
+        // construction rather than by circumstance.
+        final atText = t.at.dartCast<String>();
+        String asStored(DateTime v) =>
+            _db.typeMapping.mapToSqlVariable(v)! as String;
+
         final window = query.window;
         if (window != null) {
-          and(t.at.isBiggerOrEqualValue(window.start));
-          and(t.at.isSmallerOrEqualValue(window.end));
+          and(atText.isBiggerOrEqualValue(asStored(window.start)));
+          and(atText.isSmallerOrEqualValue(asStored(window.end)));
         }
 
         final before = query.before;
         if (before != null) {
-          and(t.at.isSmallerThanValue(before));
+          and(atText.isSmallerThanValue(asStored(before)));
         }
 
         if (query.keyPrefix.isNotEmpty) {
