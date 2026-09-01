@@ -210,18 +210,6 @@ class NavDropdownState extends ConsumerState<NavDropdown> {
     return items;
   }
 
-  /// Recursively counts all items (sections + pages) in the tree.
-  int _countAllItems(MenuItem item) {
-    int count = 0;
-    for (final child in item.children) {
-      count += 1;
-      if (child.children.isNotEmpty) {
-        count += _countAllItems(child);
-      }
-    }
-    return count;
-  }
-
   @override
   Widget build(BuildContext context) {
     // Capture the parent context so we can safely navigate after the popup closes
@@ -265,8 +253,18 @@ class NavDropdownState extends ConsumerState<NavDropdown> {
             // so nothing is lost by closing early.
             closeSidePane(immediate: true);
 
-            final totalItems = _countAllItems(widget.menuItem);
-            final menuHeight = totalItems * NavDropdown.itemHeight;
+            // Sized from the entries that will actually be shown, not from a
+            // separate count of the tree.
+            //
+            // These were two computations of the same number — `_countAllItems`
+            // walked the tree and `buildFlatMenu` built the rows — and hiding
+            // locked entries made them disagree: the popup was sized and
+            // positioned for rows that no longer existed, so it opened floating
+            // in the middle of the screen instead of anchored above the button.
+            // Building first and measuring the result cannot drift.
+            final items = buildFlatMenu(widget.menuItem,
+                parentContext: parentContext);
+            final menuHeight = items.length * NavDropdown.itemHeight;
             final RenderBox button =
                 innerContext.findRenderObject() as RenderBox;
             final RenderBox overlay = Overlay.of(innerContext)
@@ -306,8 +304,7 @@ class NavDropdownState extends ConsumerState<NavDropdown> {
                 // BUG-002 fix: use root navigator so the popup route does not
                 // share a HeroController with Beamer's nested Navigator.
                 useRootNavigator: true,
-                items: buildFlatMenu(widget.menuItem,
-                    parentContext: parentContext),
+                items: items,
                 constraints: BoxConstraints(
                   minWidth: NavDropdown.menuWidth,
                   maxWidth: NavDropdown.menuWidth,
