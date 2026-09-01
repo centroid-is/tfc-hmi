@@ -41,16 +41,41 @@ class Evaluator {
   final StateMan stateMan;
   final ExpressionConfig expression;
   StreamSubscription? subscription;
-  StreamController<String?> streamController =
-      StreamController<String?>.broadcast();
+
+  /// Each evaluation, as the variable bindings that satisfied the expression,
+  /// or null when it is not satisfied.
+  ///
+  /// This used to carry the *formatted* string -- `formatWithValues(map)` --
+  /// which meant every listener paid for it whether or not it wanted one.
+  /// Formatting walks `DynamicValue.toString()` per bound variable, and for a
+  /// struct that is `MapBase.mapToString` over every member; it ran on every
+  /// tag update of every variable of every alarm rule, every collector sample
+  /// condition and every conditional icon on screen. Two of those three
+  /// callers throw the string away: [Collector] only asks whether the
+  /// condition is non-null, and the icon asset only calls [eval]. The
+  /// bindings are already in hand, so handing them over and letting [state]
+  /// -- the one caller that wants text -- do the formatting costs nothing and
+  /// takes the string builder off the path of the two that do not.
+  StreamController<Map<String, DynamicValue>?> streamController =
+      StreamController<Map<String, DynamicValue>?>.broadcast();
 
   Evaluator({required this.stateMan, required this.expression});
 
   Stream<bool> eval() {
-    return state().map((state) => state != null).distinct().startWith(false);
+    return _evaluations()
+        .map((bindings) => bindings != null)
+        .distinct()
+        .startWith(false);
   }
 
+  /// The satisfied expression rendered with its values, or null when it is
+  /// not satisfied. Alarms show this text, so it is built here and only here.
   Stream<String?> state() {
+    return _evaluations().map((bindings) =>
+        bindings == null ? null : expression.value.formatWithValues(bindings));
+  }
+
+  Stream<Map<String, DynamicValue>?> _evaluations() {
     streamController.onListen = () async {
       final variables = expression.value.extractVariables();
       final List<Stream<DynamicValue>> streams;
@@ -73,12 +98,7 @@ class Evaluator {
               .asMap()
               .entries
               .map((e) => MapEntry(e.value, values[e.key])));
-          final result = expression.value.evaluate(map);
-          if (result) {
-            streamController.add(expression.value.formatWithValues(map));
-          } else {
-            streamController.add(null);
-          }
+          streamController.add(expression.value.evaluate(map) ? map : null);
         },
         onError: (error, stack) {
           streamController.addError(error, stack);
@@ -170,8 +190,21 @@ class Expression {
         .toList();
   }
 
+  /// [formula] parsed into tokens, computed once.
+  ///
+  /// [formula] is final, so the token list cannot change -- yet every
+  /// `evaluate()` and every `formatWithValues()` used to re-run the regex,
+  /// the substring/trim per token and `parseLiteral`'s toLowerCase +
+  /// `double.tryParse` + `int.tryParse`, on every tag update of every
+  /// variable of every alarm rule, collector sample condition and conditional
+  /// icon on screen. A parse that throws (an invalid formula) is not cached,
+  /// so it still throws the same [ArgumentError] on every call.
+  List<_Token>? _tokens;
+
   // List of (variable, operator, variable, operator, variable, ...)
-  List<_Token> _parseExpression() {
+  List<_Token> _parseExpression() => _tokens ??= _parseExpressionUncached();
+
+  List<_Token> _parseExpressionUncached() {
     if (formula.isEmpty) return [];
 
     // Get all matches (both operators and the text between them)
@@ -224,20 +257,21 @@ class Expression {
     return tokens;
   }
 
+  /// Operator precedence, built once rather than as a fresh LinkedHashMap on
+  /// every evaluation -- and evaluation happens per tag update.
+  static const Map<String, int> _precedence = {
+    'OR': 1,
+    'AND': 2,
+    '==': 3,
+    '!=': 3,
+    '<': 3,
+    '<=': 3,
+    '>': 3,
+    '>=': 3,
+  };
+
   DynamicValue _evaluate(
       List<_Token> tokens, Map<String, DynamicValue> variables) {
-    // Define operator precedence
-    final precedence = {
-      'OR': 1,
-      'AND': 2,
-      '==': 3,
-      '!=': 3,
-      '<': 3,
-      '<=': 3,
-      '>': 3,
-      '>=': 3,
-    };
-
     // Convert infix tokens to RPN using the Shunting-yard algorithm
     final outputQueue = <_Token>[];
     final operatorStack = <_Token>[];
@@ -253,8 +287,8 @@ class Expression {
         // Operator
         while (operatorStack.isNotEmpty &&
             operatorStack.last.operator != null &&
-            precedence[operatorStack.last.operator]! >=
-                precedence[token.operator]!) {
+            _precedence[operatorStack.last.operator]! >=
+                _precedence[token.operator]!) {
           outputQueue.add(operatorStack.removeLast());
         }
         operatorStack.add(token);
