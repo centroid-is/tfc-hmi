@@ -364,6 +364,29 @@ jobs:
         GATE_LANE_BUDGET: "1"
       run: dart test test/gate/gate_manifest_test.dart
 
+    # The plant side, last, because it holds every other relay package as a
+    # dependency and is judged against the same contract kit. A step, not a
+    # job, for the same reason as its two neighbours: steps run sequentially,
+    # and STATE.md's operational rule is that analyze/test never run in two
+    # packages at once. This one binds OPC UA listening ports and drives a
+    # blocking FFI call on a 10 ms timer, so a neighbour sharing the runner is
+    # a different machine in a way that shows up as a flake, not a slowdown.
+    #
+    # It is also the ONLY step in this job that builds a native asset: it pins
+    # open62541 by git SHA, and `dart pub get` triggers hook/build.dart, which
+    # downloads and CMake-builds the open62541 C tree. Two consequences worth
+    # knowing before anyone investigates a red run here. A failure with no `❌`
+    # line and no test output is the known download-flake class — rerun the
+    # job rather than reading the diff. And no apt packages are installed for
+    # it on purpose: the tfc-dart-test job already builds the same native asset
+    # on all three OSes with none, which is evidence rather than optimism.
+    - name: Test tfc_relay_local
+      working-directory: packages/tfc_relay_local
+      run: |
+        dart pub get
+        dart analyze
+        dart test
+
   tfc-dart-test:
     strategy:
       fail-fast: false
