@@ -44,6 +44,20 @@ const int fixtureNamespace = 1;
 /// the tag the operator would have typed rather than a number.
 NodeId fixtureNodeId(String key) => NodeId.fromString(fixtureNamespace, key);
 
+/// A binding value with an explicit OPC UA type.
+///
+/// **An `int` has no deducible OPC UA type and the binding says so by
+/// throwing** (`opcua_serializer.dart:334`): Int16/Int32/Int64/UInt* are all
+/// candidates and guessing one silently would produce a node whose data type
+/// disagrees with every later write. `subscription_inactivity_test.dart:43-44`
+/// passes `typeId: NodeId.int32` for the same reason; this is that, in one
+/// place, so no lever can forget it.
+DynamicValue fixtureValue(Object? value, {String? name}) => DynamicValue(
+      value: value,
+      name: name,
+      typeId: value is int ? NodeId.int32 : null,
+    );
+
 /// An in-process OPC UA server with the levers this phase's plans need.
 ///
 /// Two kinds of node, because the binding gives them different powers and the
@@ -175,14 +189,14 @@ final class OpcUaServerFixture {
 
   void _addNodes() {
     for (final key in valueKeys) {
-      final seed = _plainValues[key] ?? DynamicValue(value: 0, name: key);
+      final seed = _plainValues[key] ?? fixtureValue(0, name: key);
       _server.addVariableNode(fixtureNodeId(key), seed);
       _plainValues[key] = seed;
     }
     for (final key in writeKeys) {
       _writeCounts.putIfAbsent(key, () => 0);
       _writeLog.putIfAbsent(key, () => <DynamicValue>[]);
-      _sourceValues.putIfAbsent(key, () => DynamicValue(value: 0, name: key));
+      _sourceValues.putIfAbsent(key, () => fixtureValue(0, name: key));
       _server.addDataSourceVariableNode(
         fixtureNodeId(key),
         browseName: key,
@@ -219,7 +233,7 @@ final class OpcUaServerFixture {
   /// reports that instant, so a write followed by a wait produces a value
   /// whose source time is provably older than its arrival.
   void setValue(String key, Object? value) {
-    final shaped = DynamicValue(value: value, name: key);
+    final shaped = fixtureValue(value, name: key);
     if (_sourceValues.containsKey(key)) {
       _sourceValues[key] = shaped;
       return;

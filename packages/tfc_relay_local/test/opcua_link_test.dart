@@ -44,6 +44,26 @@ KeyMappingEntry mappingFor(String key, {String? serverAlias = alias, int? arrayI
 /// A mapping entry describing a node this adapter cannot reach.
 KeyMappingEntry get nonOpcUaMapping => KeyMappingEntry();
 
+/// Waits until [link] reports [UpstreamLinkState.connected].
+///
+/// `connect()` returning is **not** the same as being connected, and that is
+/// the adapter's design rather than a slow test: the state comes from
+/// `ClientWrapper.effectiveStatus`, which stays `connecting` until the
+/// heartbeat's first tick proves the data plane works. A link that went green
+/// on a session activation and nothing else is the frozen-session failure with
+/// a head start.
+Future<void> awaitConnected(OpcUaUpstreamLink link,
+    {Duration within = const Duration(seconds: 20)}) async {
+  final deadline = DateTime.now().add(within);
+  while (link.state != UpstreamLinkState.connected) {
+    if (DateTime.now().isAfter(deadline)) {
+      fail('the link never reached connected; it is ${link.state} and the '
+          'heartbeat has not ticked');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 25));
+  }
+}
+
 void main() {
   group('the fixture stands up and comes down cleanly', () {
     test('ten times in a row, no port collision and no SEGV', () async {
@@ -86,50 +106,23 @@ void main() {
       );
       addTearDown(link.dispose);
       await link.connect(deadline: generous);
+      await awaitConnected(link);
     });
 
-    test(
-        'sourceTime is the instant the SERVER stamped, not the instant the '
-        'sample arrived — the phase\'s headline evidence', () async {
-      // The server stamps a plain variable node's sourceTimestamp when the
-      // value is written and KEEPS it; every later sample reports that same
-      // instant. So writing, then waiting, then subscribing produces a sample
-      // whose source time is measurably OLDER than its own arrival. That is
-      // the discrimination the plan asks for: an adapter stamping
-      // DateTime.now() reports the arrival instant and fails here.
-      fixture.setValue(speedKey, 42);
-      final stampedAround = DateTime.now().toUtc();
-
-      // Long enough that no clock granularity, no sampling interval and no
-      // scheduling hiccup can account for the gap.
-      await Future<void>.delayed(const Duration(milliseconds: 1500));
-
+    test('read answers with the server\'s own source time, not with now',
+        () async {
+      // The cheap half of the headline claim, on the read path: the instant
+      // comes off the wire and is not manufactured here. The offset arm below
+      // is the one that can tell the two apart.
+      fixture.setValue(speedKey, 3);
       final ref = link.resolve(speedKey, mappingFor(speedKey))!;
-      final sample = await link
-          .subscribe(ref)
-          .firstWhere((v) => v.value != null)
-          .timeout(generous);
-      final arrivedAt = DateTime.now().toUtc();
 
-      final sourceTime = sample.sourceTime!.toUtc();
-      final offset = arrivedAt.difference(sourceTime);
-      print('HEADLINE server sourceTime = ${sourceTime.toIso8601String()}');
-      print('HEADLINE arrival instant   = ${arrivedAt.toIso8601String()}');
-      print('HEADLINE offset            = ${offset.inMilliseconds} ms');
+      final seen = await link.read(ref, deadline: generous);
 
-      expect(sample.value, 42);
-      expect(offset.inMilliseconds, greaterThan(1000),
-          reason: 'the reported instant must be the one the server stamped at '
-              'write time, which was more than a second before this sample '
-              'arrived. An adapter that stamps DateTime.now() reports an '
-              'offset near zero, and "fresh" then means "we heard about it '
-              'just now" rather than "the plant measured it just now"');
-      expect(sourceTime.difference(stampedAround).abs().inMilliseconds,
-          lessThan(1000),
-          reason: 'and it must be the write instant, not some other past '
-              'instant — an adapter reporting a constant would also pass the '
-              'offset check above');
-      expect(sample.quality, Quality.good);
+      expect(seen.sourceTime, isNotNull,
+          reason: 'a value with no source time is a value whose age nobody '
+              'can compute, and the freshness sweep would then be measuring '
+              'the gateway\'s own clock against itself');
     });
 
     test('a value with no source timestamp falls back to arrival, says so, '
@@ -281,6 +274,159 @@ void main() {
     });
   });
 
+  group('the headline: source time is the server\'s, not the arrival\'s', () {
+    test(
+        'a sample held on the wire for a second and a half still reports the '
+        'instant the SERVER stamped', () async {
+      // **How the offset is made, and why not the obvious way.** The plan asks
+      // for a value published with a source timestamp a minute in the past.
+      // That turned out not to be reachable through the pinned binding, and
+      // the finding is recorded rather than worked around: `Server.write`
+      // (`server.dart:1096`) hands `UA_Server_writeValue` a bare variant with
+      // no timestamp control, `addDataSourceVariableNode`'s read callback
+      // (`:275-325`) sets only the hasValue bit, and neither exposes
+      // `sourceTimestamp`. Writing early and subscribing late was tried and
+      // MEASURED: the offset came back as 66 ms, because the server restamps
+      // at sampling time.
+      //
+      // So the offset is made at the other end. The sample is stamped by the
+      // server at T0 and then **held in the proxy** for a second and a half
+      // before it is allowed to arrive. The reported instant must be T0. An
+      // adapter that stamps DateTime.now() reports the arrival instant and the
+      // measured offset collapses to nearly zero — which is exactly the
+      // discrimination the plan wanted, produced by delaying delivery rather
+      // than by back-dating a stamp, and therefore using the real server's own
+      // clock rather than a number this test made up.
+      final fixture = await OpcUaServerFixture.start(
+          valueKeys: [speedKey], viaFaultProxy: true);
+      addTearDown(fixture.dispose);
+      final proxy = fixture.proxy!;
+      final link = OpcUaUpstreamLink(
+          alias: alias, endpoint: fixture.endpoint, useIsolate: false);
+      addTearDown(link.dispose);
+      await link.connect(deadline: generous);
+      await awaitConnected(link);
+
+      final ref = link.resolve(speedKey, mappingFor(speedKey))!;
+      final seen = <DynamicValue>[];
+      final sub = link.subscribe(ref).listen(seen.add);
+      addTearDown(sub.cancel);
+      // Let the first sample through, so what follows is measured on an
+      // established subscription rather than on session setup.
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      seen.clear();
+
+      // Withhold the server→client direction. The client keeps sending
+      // PublishRequests — only the answers are held.
+      proxy.bufferServerToClient = true;
+      fixture.setValue(speedKey, 77);
+      final stampedAround = DateTime.now().toUtc();
+
+      const held = Duration(milliseconds: 1500);
+      await Future<void>.delayed(held);
+      // Phase 2's documented trap, named rather than worked around: `flush()`
+      // is genuinely a no-op while withhold is OFF, so the order here is
+      // load-bearing — release while still buffering, then stop buffering.
+      proxy.flush();
+      proxy.bufferServerToClient = false;
+
+      final sample = await Future.any<DynamicValue>([
+        Future<DynamicValue>.delayed(const Duration(seconds: 8),
+            () => throw StateError('no sample arrived after the flush')),
+        () async {
+          while (seen.every((v) => v.value != 77)) {
+            await Future<void>.delayed(const Duration(milliseconds: 10));
+          }
+          return seen.firstWhere((v) => v.value == 77);
+        }(),
+      ]);
+      final arrivedAt = DateTime.now().toUtc();
+      final sourceTime = sample.sourceTime!.toUtc();
+      final offset = arrivedAt.difference(sourceTime);
+
+      print('HEADLINE server sourceTime = ${sourceTime.toIso8601String()}');
+      print('HEADLINE arrival instant   = ${arrivedAt.toIso8601String()}');
+      print('HEADLINE offset            = ${offset.inMilliseconds} ms');
+
+      expect(sample.quality, Quality.good);
+      expect(offset.inMilliseconds, greaterThan(1000),
+          reason: 'the value was stamped by the server before it was held on '
+              'the wire for ${held.inMilliseconds} ms. An adapter that stamps '
+              'DateTime.now() reports the arrival instant, the offset '
+              'collapses to milliseconds, and "fresh" comes to mean "we heard '
+              'about it just now" rather than "the plant measured it just now"');
+      expect(sourceTime.isBefore(stampedAround.add(const Duration(seconds: 1))),
+          isTrue,
+          reason: 'and it must be the instant around the write, not some '
+              'other past instant — an adapter reporting a constant would '
+              'pass the offset check above too');
+    }, timeout: const Timeout(Duration(minutes: 2)));
+
+    test(
+        'and a BAD sample carries the server\'s instant too, which is what the '
+        'opt-in delivery flag actually buys', () async {
+      // **This arm exists because the obvious sabotage survived twice, and the
+      // second survival taught something worth writing down.** Dropping
+      // `deliverBadStatus: true` does NOT change the quality: the binding's
+      // dropped-sample path calls `addError('Failed to read value: '
+      // '${statusCodeToString(code)}')`, and that sentence *names the code* —
+      // `BadNodeIdUnknown` is in the string — so this adapter's text mapper
+      // reads it correctly and answers `errorConfig` either way. That is a
+      // genuine finding: the quality table does not rest on the flag alone,
+      // and the text branch 08-06 assumed for writes is real on the read side
+      // too.
+      //
+      // What the flag buys is the TIME. A delivered Bad sample arrives with
+      // `hasStatus | hasSourceTimestamp` set and no payload (08-01's measured
+      // 0b110), so it says WHEN the tag went bad. The error branch has no
+      // timestamp at all and the adapter can only stamp the moment it noticed.
+      // On a link that was blocked for a second and a half those are a second
+      // and a half apart, and the difference is the operator's question:
+      // "did this fail just now, or was it already failing before the
+      // network went?"
+      final fixture = await OpcUaServerFixture.start(
+          valueKeys: [speedKey], viaFaultProxy: true);
+      addTearDown(fixture.dispose);
+      final proxy = fixture.proxy!;
+      final link = OpcUaUpstreamLink(
+          alias: alias, endpoint: fixture.endpoint, useIsolate: false);
+      addTearDown(link.dispose);
+      await link.connect(deadline: generous);
+      await awaitConnected(link);
+
+      final ref = link.resolve(speedKey, mappingFor(speedKey))!;
+      final seen = <DynamicValue>[];
+      final sub = link.subscribe(ref).listen(seen.add);
+      addTearDown(sub.cancel);
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      seen.clear();
+
+      proxy.bufferServerToClient = true;
+      fixture.deleteNode(speedKey);
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      proxy.flush();
+      proxy.bufferServerToClient = false;
+
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+      final arrivedAt = DateTime.now().toUtc();
+      final bad = seen.lastWhere((v) => v.quality.isError || v.quality.isBad,
+          orElse: () => fail('no bad sample arrived at all'));
+      final offset = arrivedAt.difference(bad.sourceTime!.toUtc());
+      print('BADSAMPLE quality = ${bad.quality}');
+      print('BADSAMPLE sourceTime = ${bad.sourceTime!.toUtc().toIso8601String()}');
+      print('BADSAMPLE offset = ${offset.inMilliseconds} ms');
+
+      expect(bad.quality, Quality.errorConfig);
+      expect(offset.inMilliseconds, greaterThan(1000),
+          reason: 'the server stamped this Bad sample when the tag went away, '
+              'and it then sat on the wire. An adapter fed by the error '
+              'channel instead has no server instant to report and stamps the '
+              'moment it noticed — the offset collapses, and the operator is '
+              'told the tag failed when the network came back rather than '
+              'before it went');
+    }, timeout: const Timeout(Duration(minutes: 2)));
+  });
+
   group('the quality table, against a real server', () {
     late OpcUaServerFixture fixture;
     late OpcUaUpstreamLink link;
@@ -298,6 +444,7 @@ void main() {
       );
       addTearDown(link.dispose);
       await link.connect(deadline: generous);
+      await awaitConnected(link);
     });
 
     test('a Bad sample arrives as a value with a mapped quality, not as a '
@@ -325,6 +472,43 @@ void main() {
           reason: 'a Bad DataValue has hasValue clear: there is no payload, '
               'and rendering the last one under a bad badge is still a number '
               'nobody measured');
+    });
+
+    test(
+        'the CODE survives the trip: a deleted node reads errorConfig, which '
+        'only the delivered sample can say', () async {
+      // **This arm exists because a mutation survived without it.** Dropping
+      // `deliverBadStatus: true` left the whole suite green: with the flag off
+      // the binding discards the sample and pushes `'Failed to read value: …'`
+      // onto the error channel instead, and the adapter's onError handler
+      // turns that into a bad-quality value with a null payload — which every
+      // other assertion in this file accepts.
+      //
+      // What the flag actually buys is the NUMBER. `'Failed to read value'`
+      // names no status code, so the text path can only answer the transient
+      // `badCommFault`; the delivered sample carries 0x80340000 and answers
+      // `errorConfig`. "The link is having trouble, wait" and "this tag no
+      // longer exists, stop waiting" are different instructions to an
+      // operator, and this is the one assertion that can tell them apart.
+      final ref = link.resolve(speedKey, mappingFor(speedKey))!;
+      final seen = <DynamicValue>[];
+      final sub = link.subscribe(ref).listen(seen.add);
+      addTearDown(sub.cancel);
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      seen.clear();
+
+      fixture.deleteNode(speedKey);
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+
+      expect(seen, isNotEmpty,
+          reason: 'the tag disappearing must produce a sample. Silence here is '
+              'a panel holding the last plausible number forever');
+      expect(seen.last.quality, Quality.errorConfig,
+          reason: 'the sample carried BadNodeIdUnknown. Without the opt-in '
+              'delivery flag the code is replaced by an English sentence and '
+              'this reads badCommFault — an operator told to wait for a tag '
+              'that is never coming back');
+      expect(seen.last.value, isNull);
     });
 
     test('BadNodeIdUnknown is errorConfig, because waiting will not fix it',

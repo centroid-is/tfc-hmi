@@ -69,8 +69,7 @@ final Directory testRoot = Directory('test');
 ///    anticipated it as a bare `_timer` field with no entry anywhere; 08-05's
 ///    house rules require every timer to arrive with an allow-list entry, and
 ///    the second list is the reconciliation.
-///  * 08-07's `runIterate` driver — one per OPC UA link, started on connect
-///    and stopped on disconnect. Still anticipated, not pre-approved.
+///  * 08-07's `runIterate` driver — **landed**, entry below.
 const Map<String, String> periodicTimerAllowList = <String, String>{
   // 08-05, task 3. Listener-gated: started when the store gains its first
   // watcher and stopped when it loses its last, so with nobody watching there
@@ -78,6 +77,15 @@ const Map<String, String> periodicTimerAllowList = <String, String>{
   // replaced by a deadline check on paths that already run — only a clock can
   // notice silence, and the frozen-session failure emits nothing at all.
   'freshness_sweep.dart': '08-05 — the listener-gated freshness sweep',
+  // 08-07, task 2. ONE supervised iterate driver per OPC UA link, owned by the
+  // link, started inside connect() (the session cannot activate unless somebody
+  // is turning the crank) and cancelled in dispose() before the client is
+  // deleted. The shape it REPLACES is what earns the entry: `state_man.dart`
+  // spawns two unawaited `() async {…}()` loops per client (`:1364`, `:1398`)
+  // driving the same blocking FFI call with a bare `Logger()`, no error seam
+  // and nothing that stops. Errors here go to a list a test reads and to an
+  // injected callback (T-08-27).
+  'opcua_upstream_link.dart': '08-07 — the supervised runIterate driver',
 };
 
 /// Files permitted to hold a **retained one-shot** `Timer(`, each naming the
@@ -112,11 +120,11 @@ const Map<String, String> literalPortAllowList = <String, String>{};
 
 /// `Timer.periodic(` occurrences under `lib/src`.
 ///
-/// **One, landed by 08-05 task 3:** the freshness sweep. Moves when a plan on
-/// [periodicTimerAllowList] lands, and only then. A timer that appears without
-/// its allow-list entry is caught by the offender case rather than by this
-/// number, which is why both exist.
-const int declaredPeriodicTimers = 1;
+/// **Two:** 08-05 task 3's freshness sweep, and 08-07 task 2's supervised
+/// `runIterate` driver. Moves when a plan on [periodicTimerAllowList] lands,
+/// and only then. A timer that appears without its allow-list entry is caught
+/// by the offender case rather than by this number, which is why both exist.
+const int declaredPeriodicTimers = 2;
 
 /// Retained one-shot `Timer(` occurrences under `lib/src`.
 ///
@@ -141,23 +149,44 @@ const int declaredRetainedTimers = 1;
 ///    write all funnel through, so the deadline cannot go missing on one of
 ///    them and stay present on the others.
 ///
-/// It moves again when 08-07's adapters land, and it moves **by a number
-/// somebody wrote down** — every one of those call sites has to carry a
-/// `deadline` argument or a `.timeout(`, and the offender case is what
-/// enforces that. `state_man.dart:1868` is one line of the shape this pins:
-/// `await client.awaitConnect()` inside a read, with no deadline, leaving the
-/// caller pending forever against a disconnected PLC (T-08-10).
-const int declaredUpstreamAwaitSites = 3;
+/// And, since 08-07, the OPC UA adapter's own three — the only places in this
+/// package that touch a socket rather than another object in it:
+///
+///  * `OpcUaUpstreamLink.connect` — `client.connect(endpoint)`, bounded.
+///  * `OpcUaUpstreamLink.read` — `client.read(nodeId)`, bounded. This is the
+///    line that refuses to inherit `state_man.dart:1868`'s
+///    `await client.awaitConnect()` inside a read: no deadline there, so a
+///    disconnected PLC pends the caller forever (T-08-10). `ClientWrapper`
+///    does not bound it either, which is why the bound is applied at the
+///    adapter boundary rather than by editing `tfc_dart`.
+///  * `OpcUaUpstreamLink.write` — `client.write(nodeId, value)`, bounded, and
+///    counted again below.
+///
+/// It moves **by a number somebody wrote down** — every one of those call
+/// sites has to carry a `deadline` argument or a `.timeout(`, and the offender
+/// case is what enforces that.
+const int declaredUpstreamAwaitSites = 6;
 
 /// Lines under `lib/` that call `.write(` on an upstream.
 ///
 /// The `no_retry_test.dart:182-293` seam shape, scoped to this package.
 ///
-/// **One, landed by 08-06:** `LocalStateMan._crossIntoThePlant`. It must never
-/// become "one per protocol with a wrapper around them" — the wrapper is where
-/// a retry goes. Anyone adding a second site trips this pin rather than a code
-/// review, which is the whole reason the number is written down (T-08-22).
-const int declaredUpstreamWriteSites = 1;
+/// **Two, and the second one is the point of the first.**
+///
+///  * `LocalStateMan._crossIntoThePlant` (08-06) — the composer's one crossing,
+///    which the engage write, every hold tick and the release write all funnel
+///    through.
+///  * `OpcUaUpstreamLink.write` (08-07) — the adapter's one crossing into the
+///    actual socket.
+///
+/// Two layers, one call site each, and neither may become "one per protocol
+/// with a wrapper around them" — the wrapper is where a retry goes. Anyone
+/// adding a third site trips this pin rather than a code review, which is the
+/// whole reason the number is written down (T-08-22). The **behavioural** half
+/// of the same property is `opcua_fault_test.dart`'s write-during-reconnect
+/// arm: this pin counts call sites, that arm counts what reached the wire
+/// while `ClientWrapper` was re-establishing a session underneath it.
+const int declaredUpstreamWriteSites = 2;
 
 /// The dev-dependency test kit that must never be reachable from `lib/`.
 const String contractKitPackage = 'tfc_stateman_contract';
@@ -299,8 +328,8 @@ void main() {
               'than prevented (T-08-10)');
     });
 
-    test('the upstream call-site count is the declared one — three since '
-        '08-06, so this case counts something as well as being non-vacuous',
+    test('the upstream call-site count is the declared one — six since '
+        '08-07, so this case counts something as well as being non-vacuous',
         () {
       expect(upstreamAwaitSites(libRoot), hasLength(declaredUpstreamAwaitSites),
           reason: 'a new upstream call site should be a deliberate edit to '
@@ -319,8 +348,8 @@ void main() {
               '— and on a hold-to-run engage it is a jog nobody is holding');
     });
 
-    test('the upstream write call-site count is the declared one — ONE since '
-        '08-06, and it stays one', () {
+    test('the upstream write call-site count is the declared one — one per '
+        'layer since 08-07, and it stays one per layer', () {
       expect(upstreamWriteSites(libRoot), hasLength(declaredUpstreamWriteSites),
           reason: 'the gateway\'s crossing into the plant is the one place a '
               'retry could hide. no_retry_test.dart pins the server\'s at '
