@@ -91,8 +91,9 @@ final class LocalStateMan implements StateManApi {
       now: _now,
     );
     _fanIn = FanIn(
-      open: _openUpstream,
+      router: router,
       onValue: _onUpstreamValue,
+      onRefusedRoute: _refuse,
       onUpstreamEnded: _onUpstreamEnded,
       onUpstreamError: _onUpstreamError,
       linger: linger,
@@ -567,29 +568,6 @@ final class LocalStateMan implements StateManApi {
   int get liveLingerTimers => _fanIn.liveLingerTimers;
 
   // ---------------------------------------------------------- fan-in callbacks
-
-  /// What the fan-in subscribes to for [key], or null when there is nothing
-  /// upstream to subscribe to.
-  ///
-  /// The route is taken **once**, at the moment the refcount leaves zero, and
-  /// the epoch-stamped [UpstreamRef] the link minted rides inside the
-  /// [ClaimedRoute] for the life of that subscription. Re-resolving inside one
-  /// epoch would be pointless work; re-resolving after an `epochStream` event
-  /// is necessary and is 08-08's.
-  Stream<DynamicValue>? _openUpstream(String key) {
-    final route = router.route(key);
-    switch (route) {
-      case ClaimedRoute(link: final link, ref: final ref):
-        return link.subscribe(ref);
-      case PipeKeyRoute():
-        // The gateway's own namespace. No link is ever consulted for one of
-        // these — 08-09's producer owns the whole prefix.
-        return null;
-      case RefusedRoute():
-        _refuse(route);
-        return null;
-    }
-  }
 
   void _onUpstreamValue(String key, DynamicValue value) =>
       applyUpstreamBatch(<String, DynamicValue>{key: value});

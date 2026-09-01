@@ -68,10 +68,11 @@ import 'dart:async';
 
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
-/// Opens the upstream feed for [key], or answers null when there is nothing
-/// upstream to open — a `PIPE.*` key the gateway produces itself, or a key the
-/// router refused.
-typedef OpenUpstream = Stream<DynamicValue>? Function(String key);
+import 'key_router.dart';
+
+/// Told that [route] can never be served, so the composer can record the
+/// refusal as a value rather than leaving the key eternally not-yet-known.
+typedef OnRefusedRoute = void Function(RefusedRoute route);
 
 /// One key's shared upstream subscription and the count of who wants it.
 final class _FanInEntry {
@@ -98,14 +99,15 @@ final class _FanInEntry {
 /// The refcount, the shared subscription, and the release.
 final class FanIn {
   FanIn({
-    required OpenUpstream open,
+    required this.router,
     required void Function(String key, DynamicValue value) onValue,
     required void Function(String key) onUpstreamEnded,
     required void Function(String key, Object error) onUpstreamError,
+    required OnRefusedRoute onRefusedRoute,
     this.linger = Duration.zero,
     void Function()? onFirstWatcher,
     void Function()? onLastWatcher,
-  })  : _open = open,
+  })  : _onRefusedRoute = onRefusedRoute,
         _onValue = onValue,
         _onUpstreamEnded = onUpstreamEnded,
         _onUpstreamError = onUpstreamError,
@@ -124,7 +126,12 @@ final class FanIn {
   /// pays nothing, because at [Duration.zero] no timer is created at all.
   final Duration linger;
 
-  final OpenUpstream _open;
+  /// Which link owns a key. **The route is taken here and nowhere else**, which
+  /// is what makes "one upstream subscription per key, however many clients"
+  /// a property of one file rather than an arrangement between two.
+  final KeyRouter router;
+
+  final OnRefusedRoute _onRefusedRoute;
   final void Function(String key, DynamicValue value) _onValue;
   final void Function(String key) _onUpstreamEnded;
   final void Function(String key, Object error) _onUpstreamError;
@@ -180,7 +187,7 @@ final class FanIn {
 
     if (entry.opened) return;
     entry.opened = true;
-    final stream = _open(key);
+    final stream = _openUpstream(key);
     if (stream == null) return;
     entry.sub = stream.listen(
       (value) => _onValue(key, value),
@@ -191,6 +198,34 @@ final class FanIn {
       onDone: () => _onUpstreamEnded(key),
       cancelOnError: false,
     );
+  }
+
+  /// The one place an upstream subscription is created.
+  ///
+  /// The key is routed **once**, at the moment its refcount leaves zero, and
+  /// the epoch-stamped [UpstreamRef] the link minted rides inside the
+  /// [ClaimedRoute] for the life of the subscription. Nothing re-resolves
+  /// inside an epoch: the handle already carries one and the link refuses a
+  /// superseded handle itself (SRV-07). Re-resolution belongs after an
+  /// `epochStream` event and is 08-08's, for the reason in the library doc.
+  ///
+  /// The `switch` is exhaustive over the sealed [KeyRoute] on purpose. A sixth
+  /// refusal reason or a fourth arm added later is a compile error here rather
+  /// than a case falling quietly to a default, so **do not soften it**.
+  Stream<DynamicValue>? _openUpstream(String key) {
+    final route = router.route(key);
+    switch (route) {
+      case ClaimedRoute(link: final link, ref: final ref):
+        return link.subscribe(ref);
+      case PipeKeyRoute():
+        // The gateway's own namespace. No link is ever consulted for one of
+        // these — 08-09's producer owns the whole prefix, and that is what
+        // makes a keymapping unable to shadow a health key.
+        return null;
+      case RefusedRoute():
+        _onRefusedRoute(route);
+        return null;
+    }
   }
 
   /// One fewer client wants [key].
