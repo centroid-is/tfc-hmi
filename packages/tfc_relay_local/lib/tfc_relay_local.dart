@@ -25,6 +25,7 @@
 /// interface each of them invented separately.
 library;
 
+export 'src/fanin.dart';
 export 'src/key_router.dart';
 export 'src/local_state_man.dart';
 export 'src/upstream_link.dart';

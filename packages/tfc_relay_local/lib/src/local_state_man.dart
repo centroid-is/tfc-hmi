@@ -62,6 +62,7 @@ import 'dart:async';
 
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
+import 'fanin.dart';
 import 'key_router.dart';
 import 'upstream_link.dart';
 
@@ -76,7 +77,18 @@ final class LocalStateMan implements StateManApi {
     this.connectDeadline = const Duration(seconds: 10),
     DateTime Function()? now,
   })  : links = List<UpstreamLink>.unmodifiable(links),
-        _now = now ?? DateTime.now;
+        _now = now ?? DateTime.now {
+    // Allocation only. Nothing here opens a socket, starts a clock or spawns a
+    // loop — see the library doc on why `StateMan._`'s constructor is the shape
+    // being replaced.
+    _fanIn = FanIn(
+      open: _openUpstream,
+      onValue: _onUpstreamValue,
+      onUpstreamEnded: _onUpstreamEnded,
+      onUpstreamError: _onUpstreamError,
+      linger: linger,
+    );
+  }
 
   /// The configured links, in the order the router offers keys to them.
   ///
@@ -130,6 +142,15 @@ final class LocalStateMan implements StateManApi {
   /// (`fake_state_man.dart:133-140`).
   final Map<String, DateTime> _lastArrival = <String, DateTime>{};
 
+  /// The refcount that makes thirty panels on one key cost the PLC one
+  /// monitored item, and releases it when the last of them goes (SRV-07).
+  late final FanIn _fanIn;
+
+  /// One counting handle per key, so [listen] answers the same object every
+  /// time and the fan-in learns when the first listener arrives and the last
+  /// one leaves.
+  final Map<String, _WatchedKey> _handles = <String, _WatchedKey>{};
+
   bool _disposed = false;
 
   // ---------------------------------------------------------------- lifecycle
@@ -165,6 +186,7 @@ final class LocalStateMan implements StateManApi {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    await _fanIn.dispose();
     _store.dispose();
     for (final link in links) {
       await link.dispose();
@@ -173,11 +195,30 @@ final class LocalStateMan implements StateManApi {
 
   // --------------------------------------------------------------- value path
 
-  /// The store's node for [key] — the same instance every time.
+  /// The handle for [key] — the same instance every time.
+  ///
+  /// A **counting view** of the store's node rather than the node itself, and
+  /// the reason is SRV-07 rather than taste. `listen` is documented as the
+  /// primary read path — the one widgets use — so if only `subscribe`
+  /// refcounted, thirty panels bound through `listen` would open one upstream
+  /// subscription that nothing could ever release. There is no `unlisten` on
+  /// the interface, which makes `removeListener` reaching zero the **only
+  /// observable release point** on this path; the wire package agrees, which is
+  /// why `ValueStoreNode.listenerCount` is public at `value_store.dart:118`
+  /// ("this is the only place the truth lives").
+  ///
+  /// Taking the handle costs nothing. A diagnostics page that enumerates every
+  /// key must not subscribe the whole plant by looking at it.
   @override
   ValueListenable<DynamicValue> listen(String key) {
     _touch(key);
-    return _store.node(key);
+    return _handles.putIfAbsent(
+        key,
+        () => _WatchedKey(
+              node: _store.node(key),
+              attach: () => _fanIn.attach(key),
+              detach: () => _fanIn.detach(key),
+            ));
   }
 
   /// A view of the same node, for stream-consuming code.
@@ -199,10 +240,18 @@ final class LocalStateMan implements StateManApi {
     controller = StreamController<DynamicValue>(
       onListen: () {
         node.addListener(push);
+        // The refcount moves on LISTEN, not on the call to subscribe: a stream
+        // nobody listened to is not a subscription and must not cost the PLC
+        // anything. Single-subscription rather than broadcast so onListen and
+        // onCancel are exactly one client each — a broadcast controller fires
+        // onListen only for the first of its listeners, and the refcount would
+        // then be wrong by however many panels shared the stream.
+        _fanIn.attach(key);
         push();
       },
       onCancel: () {
         node.removeListener(push);
+        _fanIn.detach(key);
       },
     );
     return controller.stream;
@@ -446,6 +495,124 @@ final class LocalStateMan implements StateManApi {
   /// gateway has nobody to tell. 08-05 task 3 wires the freshness sweep behind
   /// this number.
   int get liveTimers => 0;
+
+  // ------------------------------------------------------- fan-in observation
+
+  /// Clients watching [key] right now, through `listen` or `subscribe`.
+  int listenerCount(String key) => _fanIn.listenerCount(key);
+
+  /// Keys holding a live upstream subscription — the SRV-07 release assertion.
+  int get openUpstreamSubscriptions => _fanIn.openUpstreamSubscriptions;
+
+  /// Linger timers armed right now. Zero at the default [linger].
+  int get liveLingerTimers => _fanIn.liveLingerTimers;
+
+  // ---------------------------------------------------------- fan-in callbacks
+
+  /// What the fan-in subscribes to for [key], or null when there is nothing
+  /// upstream to subscribe to.
+  ///
+  /// The route is taken **once**, at the moment the refcount leaves zero, and
+  /// the epoch-stamped [UpstreamRef] the link minted rides inside the
+  /// [ClaimedRoute] for the life of that subscription. Re-resolving inside one
+  /// epoch would be pointless work; re-resolving after an `epochStream` event
+  /// is necessary and is 08-08's.
+  Stream<DynamicValue>? _openUpstream(String key) {
+    final route = router.route(key);
+    switch (route) {
+      case ClaimedRoute(link: final link, ref: final ref):
+        return link.subscribe(ref);
+      case PipeKeyRoute():
+        // The gateway's own namespace. No link is ever consulted for one of
+        // these — 08-09's producer owns the whole prefix.
+        return null;
+      case RefusedRoute():
+        _refuse(route);
+        return null;
+    }
+  }
+
+  void _onUpstreamValue(String key, DynamicValue value) =>
+      applyUpstreamBatch(<String, DynamicValue>{key: value});
+
+  /// The upstream stream for [key] ended.
+  ///
+  /// **The node is not closed and the value is not forgotten.** The key is
+  /// marked [Quality.badCommFault] and keeps its number: staleness and link
+  /// loss are statements about whether the reading can be trusted, not claims
+  /// that it never existed. The band guard is what stops this overwriting a
+  /// key that is already worse news — `errorConfig` means the tag is gone and
+  /// waiting will not fix it, and repainting that as a comm fault tells the
+  /// operator to wait for something never coming back.
+  void _onUpstreamEnded(String key) {
+    final cached = _store.peek(key);
+    if (cached == null) {
+      _degrade(<String, DynamicValue>{
+        key: DynamicValue(value: null, quality: Quality.badCommFault),
+      });
+      return;
+    }
+    if (Quality.badCommFault.band <= cached.quality.band) return;
+    _degrade(<String, DynamicValue>{
+      key: cached.copyWith(quality: Quality.badCommFault),
+    });
+  }
+
+  /// An error on one key's upstream stream costs that key and nothing else.
+  void _onUpstreamError(String key, Object error) {
+    _upstreamErrors[key] = redactUpstreamError(error.toString()) ?? '';
+    _onUpstreamEnded(key);
+  }
+
+  /// The last upstream error per key, already redacted (T-08-08).
+  Map<String, String> get upstreamErrors =>
+      Map<String, String>.unmodifiable(_upstreamErrors);
+  final Map<String, String> _upstreamErrors = <String, String>{};
+}
+
+/// A counting view of one store node.
+///
+/// Delegates every member to the node — so `value` is the node's value and a
+/// registered listener is registered *on the node*, which is where
+/// `listenerCount` reads from and where a teardown assertion looks. What it
+/// adds is the two transitions the node has no hook for
+/// (`value_store.dart:66`): first listener in, last listener out.
+final class _WatchedKey implements ValueListenable<DynamicValue> {
+  _WatchedKey({
+    required this.node,
+    required void Function() attach,
+    required void Function() detach,
+  })  : _attach = attach,
+        _detach = detach;
+
+  final ValueStoreNode node;
+  final void Function() _attach;
+  final void Function() _detach;
+
+  int _count = 0;
+
+  @override
+  DynamicValue get value => node.value;
+
+  @override
+  void addListener(VoidCallback listener) {
+    node.addListener(listener);
+    _count++;
+    if (_count == 1) _attach();
+  }
+
+  @override
+  void removeListener(VoidCallback listener) {
+    // Measured rather than assumed: removing a listener that was never added
+    // is a documented no-op on the node, and a refcount that decremented on
+    // one would release an upstream subscription somebody is still watching.
+    final before = node.listenerCount;
+    node.removeListener(listener);
+    if (node.listenerCount == before) return;
+    if (_count == 0) return;
+    _count--;
+    if (_count == 0) _detach();
+  }
 }
 
 /// One key's answer plus whether it came from the wire, so [LocalStateMan.readMany]
