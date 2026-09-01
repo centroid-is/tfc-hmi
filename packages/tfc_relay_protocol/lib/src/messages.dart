@@ -153,6 +153,35 @@ final class HelloResult {
   /// clock offset from this so staleness is measured against one clock.
   final int serverTime;
 
+  /// A stable name for the *gateway process*, from server config. Null when
+  /// the deployment configured none. 08-13 wires the config; nothing in this
+  /// package produces it.
+  ///
+  /// **What it buys.** A capture taken on a LAN carrying a bench gateway and
+  /// the plant gateway shows two handshakes that are otherwise identical in
+  /// every field an engineer would read — same protocol, same server name and
+  /// version, differing only in a session id neither machine chose. This names
+  /// which process answered, so "ST201 disconnected" can be attributed without
+  /// correlating source ports against a topology nobody wrote down. The
+  /// Sparkplug `publisherId` adoption (07-RESEARCH-PUBSUB); the plant's own
+  /// `@conn` catalogue reached for the same thing under other names.
+  ///
+  /// **Advisory, and a client must not treat it as identity.** Nothing routes
+  /// on it, nothing is authorised by it, and it is set by whoever wrote the
+  /// gateway's config file — which makes it a label, not a claim. Identity is
+  /// the Phase 6 token, checked by the policy decorator; a client that granted
+  /// anything on the strength of this string would be trusting a value the
+  /// wire hands it for free.
+  ///
+  /// It sits at the **top level** of [toJson], beside `protocol`, rather than
+  /// inside `session` or `clock`: it identifies the process, which outlives
+  /// every session it serves.
+  ///
+  /// Omitted from [toJson] when null rather than emitted as `null` — the
+  /// [HelloParams.token] idiom and the library rule, which is what makes the
+  /// field compatible in both directions with no version negotiation.
+  final String? publisherId;
+
   const HelloResult({
     required this.protocol,
     required this.server,
@@ -161,6 +190,7 @@ final class HelloResult {
     required this.epoch,
     required this.resumed,
     required this.serverTime,
+    this.publisherId,
   });
 
   factory HelloResult.fromJson(Map<String, Object?> json) {
@@ -175,6 +205,7 @@ final class HelloResult {
       epoch: session['epoch'] as String,
       resumed: session['resumed'] as bool,
       serverTime: (clock['serverTime'] as num).toInt(),
+      publisherId: json['publisherId'] as String?,
     );
   }
 
@@ -184,6 +215,7 @@ final class HelloResult {
         if (capabilities.isNotEmpty) 'capabilities': capabilities,
         'session': {'id': sessionId, 'epoch': epoch, 'resumed': resumed},
         'clock': {'serverTime': serverTime},
+        if (publisherId != null) 'publisherId': publisherId,
       };
 
   /// [HelloCapabilities.heartbeatDeadlineMs], or null when this gateway
@@ -463,18 +495,45 @@ final class StatusParams {
   final String state;
   final String? error;
 
-  const StatusParams({required this.alias, required this.state, this.error});
+  /// A stable name for the *gateway process* that observed this link, from
+  /// server config. Null when the deployment configured none. 08-12 emits it;
+  /// nothing in this package produces it.
+  ///
+  /// **Why status carries it too.** This is a notification: it arrives with no
+  /// request to correlate it against, so unlike every result shape there is
+  /// nothing in the exchange that says who sent it. On a LAN where a bench rig
+  /// and the plant gateway both watch an alias spelled `ST201`, a captured
+  /// "ST201 went disconnected" has two readings — the rig lost its fake PLC,
+  /// or the plant lost a real one — and they are not close to each other.
+  ///
+  /// **Advisory, exactly as on [HelloResult.publisherId]:** nothing routes on
+  /// it and a client must not treat it as identity. Identity is the Phase 6
+  /// token.
+  ///
+  /// Omitted from [toJson] when null (the library rule), so the frame a
+  /// gateway with no configured name sends is byte-for-byte the frame this
+  /// build sent before the field existed.
+  final String? publisherId;
+
+  const StatusParams({
+    required this.alias,
+    required this.state,
+    this.error,
+    this.publisherId,
+  });
 
   factory StatusParams.fromJson(Map<String, Object?> json) => StatusParams(
         alias: json['alias'] as String,
         state: json['state'] as String,
         error: json['error'] as String?,
+        publisherId: json['publisherId'] as String?,
       );
 
   Map<String, Object?> toJson() => {
         'alias': alias,
         'state': state,
         if (error != null) 'error': error,
+        if (publisherId != null) 'publisherId': publisherId,
       };
 }
 
