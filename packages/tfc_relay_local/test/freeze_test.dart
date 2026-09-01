@@ -161,15 +161,26 @@ const int declaredRetainedTimers = 1;
 ///    adapter boundary rather than by editing `tfc_dart`.
 ///  * `OpcUaUpstreamLink.write` — `client.write(nodeId, value)`, bounded, and
 ///    counted again below.
-///  * `OpcUaUpstreamLink._reopenSessionIfNeeded` — the session dial after a
-///    drop, bounded. It is a RECONNECT, which the standing constraint allows
-///    on the read/subscribe side; what it may never do is re-issue a write,
-///    and that half is proven behaviourally rather than by this count.
 ///
 /// It moves **by a number somebody wrote down** — every one of those call
 /// sites has to carry a `deadline` argument or a `.timeout(`, and the offender
 /// case is what enforces that.
-const int declaredUpstreamAwaitSites = 7;
+///
+/// **A seventh site exists that this sweep structurally cannot see, and that
+/// is a finding rather than an oversight.**
+/// `OpcUaUpstreamLink._reopenSessionIfNeeded` dials
+/// `client.connect(_endpoint).timeout(_connectDeadline)` and *stores* the
+/// future instead of awaiting it on that line — it has to, because `dispose`
+/// awaits that same future rather than deleting the native client out from
+/// under an in-flight connect (a SEGV, measured, not theorised). The sweep
+/// requires the word `await` on the line, so a **non-awaited** upstream call
+/// escapes it completely. This one is bounded — the `.timeout(` is right
+/// there — but the next one might not be. Widening the sweep to drop the
+/// `await` requirement while keeping the deadline requirement would also
+/// re-count every site in `local_state_man.dart` under a rule 08-05 and 08-06
+/// did not agree to, so it is **recorded for 08-13's gate** rather than done
+/// here on the way past.
+const int declaredUpstreamAwaitSites = 6;
 
 /// Lines under `lib/` that call `.write(` on an upstream.
 ///
@@ -332,7 +343,7 @@ void main() {
               'than prevented (T-08-10)');
     });
 
-    test('the upstream call-site count is the declared one — seven since '
+    test('the upstream call-site count is the declared one — six since '
         '08-07, so this case counts something as well as being non-vacuous',
         () {
       expect(upstreamAwaitSites(libRoot), hasLength(declaredUpstreamAwaitSites),
