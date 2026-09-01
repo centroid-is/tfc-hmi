@@ -60,6 +60,8 @@
 /// field. What this file adds is the *router* and the *ingest result*.
 library;
 
+import 'dart:convert';
+
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
@@ -194,6 +196,65 @@ final class UpstreamLinkBinding {
       'UpstreamLinkBinding(${link.alias} @ ${serverAlias ?? '<unnamed>'})';
 }
 
+/// What an ingest of a keymapping file applied, and what it refused.
+///
+/// **The first five fields are the shipped shape, field for field.**
+/// `StateMan.updateKeyMappings` (`state_man.dart:2086-2223`) returns
+/// `KeyMappingsUpdateResult {added, removed, changed, resubscribed,
+/// reloadReasons}` (`:702-735`) and — this is the part HLTH-03 depends on —
+/// **it never throws**. It classifies. [rejected] is the sixth field on that
+/// shape rather than a new exception, because a keymapping file is an
+/// operator-editable input and an input that can refuse itself wholesale is a
+/// denial of service one typo wide (T-08-14).
+final class KeyMappingsIngestResult {
+  /// Accepted keys present in the new mappings but not the old.
+  final Set<String> added;
+
+  /// Keys present in the old mappings but not accepted from the new.
+  final Set<String> removed;
+
+  /// Keys accepted from both whose entry differs.
+  final Set<String> changed;
+
+  /// Changed keys whose live upstream subscription was re-pointed in place.
+  ///
+  /// **Always empty here, and that is not a stub.** The router holds no
+  /// subscriptions — 08-05's fan-in does — so nothing at this layer can have
+  /// been re-pointed. The field exists because the shape is the shipped one
+  /// and 08-05 fills it without changing the type every caller switches on.
+  final Set<String> resubscribed;
+
+  /// Why a full rebuild is still required. Empty when the whole edit applied
+  /// live.
+  final List<String> reloadReasons;
+
+  /// The keys this ingest refused, and why. **Per key, never per file.**
+  final Map<String, RouteRefusal> rejected;
+
+  bool get requiresReload => reloadReasons.isNotEmpty;
+
+  KeyMappingsIngestResult({
+    required Set<String> added,
+    required Set<String> removed,
+    required Set<String> changed,
+    required Set<String> resubscribed,
+    required List<String> reloadReasons,
+    required Map<String, RouteRefusal> rejected,
+  })  : added = Set<String>.unmodifiable(added),
+        removed = Set<String>.unmodifiable(removed),
+        changed = Set<String>.unmodifiable(changed),
+        resubscribed = Set<String>.unmodifiable(resubscribed),
+        reloadReasons = List<String>.unmodifiable(reloadReasons),
+        rejected = Map<String, RouteRefusal>.unmodifiable(rejected);
+
+  @override
+  String toString() => 'KeyMappingsIngestResult(added: ${added.length}, '
+      'removed: ${removed.length}, changed: ${changed.length}, '
+      'resubscribed: ${resubscribed.length}, rejected: ${rejected.length}, '
+      'requiresReload: $requiresReload'
+      '${requiresReload ? ', reasons: ${reloadReasons.join('; ')}' : ''})';
+}
+
 /// Routes a key to exactly one link, or to exactly one named refusal.
 ///
 /// The router **knows no protocol**. It offers the key to each link in the
@@ -229,7 +290,9 @@ class KeyRouter {
   /// mistake is to say so rather than to guess.
   final Set<String?> ambiguousAliases;
 
-  KeyMappings _mappings;
+  KeyMappings _mappings = KeyMappings(nodes: <String, KeyMappingEntry>{});
+
+  late KeyMappingsIngestResult _lastIngest;
 
   KeyRouter({
     required List<UpstreamLinkBinding> links,
@@ -238,8 +301,13 @@ class KeyRouter {
   })  : links = List<UpstreamLinkBinding>.unmodifiable(links),
         disabledAliases = Set<String?>.unmodifiable(
             disabledAliases.map(StateManConfig.normalizeAlias)),
-        ambiguousAliases = _ambiguitiesIn(links),
-        _mappings = mappings;
+        ambiguousAliases = _ambiguitiesIn(links) {
+    // Construction is an ingest like any other, so a file handed to the
+    // constructor is reserved-checked exactly as one handed to
+    // [applyKeyMappings] is. A squatted name that only got refused on *reload*
+    // would be served for the whole first run of the gateway.
+    applyKeyMappings(mappings);
+  }
 
   /// The simple case: each link answers to the `server_alias` that is its own
   /// name. This is the constructor the plan describes — an ordered
@@ -262,7 +330,111 @@ class KeyRouter {
   KeyMappings get mappings => _mappings;
 
   /// Every key the router will attempt to route.
+  ///
+  /// Rejected keys are **not** here. A refused mapping is not a mapping.
   Iterable<String> get keys => _mappings.nodes.keys;
+
+  /// What the most recent ingest — including the one at construction —
+  /// applied and refused.
+  KeyMappingsIngestResult get lastIngest => _lastIngest;
+
+  /// Takes [next] as the keymapping file, per key.
+  ///
+  /// **Never throws, classifies instead**, which is the whole of HLTH-03's
+  /// usefulness: one bad mapping in a file of 1,500 costs exactly that
+  /// mapping. The shipped `updateKeyMappings` established this shape and the
+  /// only thing added here is the sixth field.
+  ///
+  /// Two classes of key are refused:
+  ///
+  ///  * **`PIPE.` names** ([RouteRefusal.reservedPrefix]), tested with
+  ///    [PipeKeys.isPipeKey]. That spelling lives in the protocol package for
+  ///    a reason worth repeating: `PIPE.` acquires producers in three packages
+  ///    at once, a key name is matched by AlarmMan configuration out in the
+  ///    plant, and a second spelling does not fail a test — it compiles, keeps
+  ///    every suite green, and quietly stops matching every deployment. So the
+  ///    reserved list and the producer cannot drift apart by a typo, because
+  ///    there is only one place to make one. **Do not write the literal here.**
+  ///  * **`$` names** ([RouteRefusal.substitutionUnsupported]), which can never
+  ///    route on the gateway at all (departure 2). Refusing them at the door
+  ///    rather than per read is the same argument as `_throwIfUnresolved`'s:
+  ///    an unresolved key addresses a node that cannot exist, and four faults
+  ///    with one symptom is how a templated key stays broken without anyone
+  ///    being able to say why.
+  ///
+  /// The test is a **prefix** test in both directions. `ST101.PIPE.flow` is a
+  /// conveyor tag on a plant that has pipes, and rejecting it would cost that
+  /// tag silently: a page reading unknown forever, and nothing in any log
+  /// saying why.
+  KeyMappingsIngestResult applyKeyMappings(KeyMappings next) {
+    final rejected = <String, RouteRefusal>{};
+    final accepted = <String, KeyMappingEntry>{};
+    for (final entry in next.nodes.entries) {
+      final refusal = _refuseAtIngest(entry.key);
+      if (refusal != null) {
+        rejected[entry.key] = refusal;
+        continue;
+      }
+      accepted[entry.key] = entry.value;
+    }
+
+    final previous = _mappings.nodes;
+    final added = <String>{};
+    final removed = <String>{};
+    final changed = <String>{};
+    final reloadReasons = <String>[];
+
+    for (final key in accepted.keys) {
+      if (!previous.containsKey(key)) added.add(key);
+    }
+    for (final entry in previous.entries) {
+      final now = accepted[entry.key];
+      if (now == null) {
+        removed.add(entry.key);
+        continue;
+      }
+      // The shipped comparison, verbatim in spirit: encode both and compare
+      // the JSON. The model is generated and has no `==`, and a field added to
+      // it later is compared for free.
+      if (jsonEncode(now.toJson()) != jsonEncode(entry.value.toJson())) {
+        changed.add(entry.key);
+        final reason = _reloadReasonFor(entry.key, entry.value, now);
+        if (reason != null) reloadReasons.add(reason);
+      }
+    }
+
+    _mappings = KeyMappings(nodes: accepted);
+    return _lastIngest = KeyMappingsIngestResult(
+      added: added,
+      removed: removed,
+      changed: changed,
+      // Nothing at this layer holds a subscription to re-point; see the field.
+      resubscribed: const <String>{},
+      reloadReasons: reloadReasons,
+      rejected: rejected,
+    );
+  }
+
+  /// Why [key] cannot be a keymapping at all, or null if it can.
+  RouteRefusal? _refuseAtIngest(String key) {
+    if (PipeKeys.isPipeKey(key)) return RouteRefusal.reservedPrefix;
+    if (key.contains(r'$')) return RouteRefusal.substitutionUnsupported;
+    return null;
+  }
+
+  /// Whether a changed entry can be applied live, following the shipped rule:
+  /// only edits whose state is frozen at construction time ask for a reload.
+  static String? _reloadReasonFor(
+      String key, KeyMappingEntry before, KeyMappingEntry after) {
+    if (before.m2400Node != null || after.m2400Node != null) {
+      return '$key: M2400 extraction is captured per stream when the '
+          'subscription is built, so an edit to it cannot be applied in place';
+    }
+    if (before.modbusNode != null || after.modbusNode != null) {
+      return '$key: a classic Modbus register spec is frozen at construction';
+    }
+    return null;
+  }
 
   /// Where [key] goes.
   ///
