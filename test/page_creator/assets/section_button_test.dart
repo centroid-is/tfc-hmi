@@ -221,6 +221,427 @@ void main() {
     });
   });
 
+  group('exclusiveSetsOf — what the config declares', () {
+    SectionRef r(String key, [String? tag]) =>
+        SectionRef(key: key, exclusiveGroup: tag);
+
+    test('no tags is no sets, which is every page saved before this existed',
+        () {
+      expect(exclusiveSetsOf([r('a'), r('b'), r('c')]), isEmpty);
+    });
+
+    test('two sections sharing a tag are one set', () {
+      final sets = exclusiveSetsOf([
+        r('transport'),
+        r('film', 'Line 2 packing'),
+        r('vacuum', 'Line 2 packing'),
+      ]);
+      expect(sets, [
+        const ExclusiveSet(name: 'Line 2 packing', members: [1, 2])
+      ]);
+    });
+
+    test('a tag on its own section is not a set — it has no alternative', () {
+      expect(exclusiveSetsOf([r('film', 'Line 2 packing'), r('t')]), isEmpty);
+    });
+
+    test('two lines are two sets, not one four-way choice', () {
+      // The trap in a free-text tag: tagging all four modes `packing` would
+      // declare that starting film on line 2 holds off film on line 3.
+      final sets = exclusiveSetsOf([
+        r('l2film', 'Line 2 packing'),
+        r('l2vac', 'Line 2 packing'),
+        r('l3film', 'Line 3 packing'),
+        r('l3vac', 'Line 3 packing'),
+      ]);
+      expect(sets.map((s) => s.name), ['Line 2 packing', 'Line 3 packing']);
+      expect(sets.map((s) => s.members), [
+        [0, 1],
+        [2, 3]
+      ]);
+    });
+
+    test('tags are trimmed, so a stray space does not split a pair', () {
+      final sets = exclusiveSetsOf([
+        r('film', 'Line 2 packing'),
+        r('vacuum', ' Line 2 packing '),
+      ]);
+      expect(sets, hasLength(1));
+      expect(sets.single.members, [0, 1]);
+    });
+
+    test('a blank tag is a peer, not a set of blanks', () {
+      expect(exclusiveSetsOf([r('a', '   '), r('b', '')]), isEmpty);
+    });
+
+    test('a set keeps the place of its first member', () {
+      final sets = exclusiveSetsOf([
+        r('film', 'B'),
+        r('t1'),
+        r('vac', 'B'),
+        r('x', 'A'),
+        r('y', 'A'),
+      ]);
+      expect(sets.map((s) => s.name), ['B', 'A']);
+    });
+  });
+
+  group('reduceExclusiveSet — one choice, one state', () {
+    const running = SectionMode.running;
+    const cleaning = SectionMode.cleaning;
+    const stopped = SectionMode.stopped;
+    const blocked = SectionMode.blocked;
+    const unknown = SectionMode.unknown;
+
+    test('the mode that has the line, with its twin held off, IS the state',
+        () {
+      // The whole point. Film running / vacuum held is the interlock working,
+      // not two sections disagreeing.
+      expect(reduceExclusiveSet(const [running, blocked]), running);
+      expect(reduceExclusiveSet(const [blocked, running]), running);
+    });
+
+    test('cleaning has the line too', () {
+      expect(reduceExclusiveSet(const [cleaning, stopped]), cleaning);
+    });
+
+    test('running outranks cleaning — the line carrying product wins', () {
+      // Reachable and legal: the permissive keys off q_xEnabled only, so a
+      // section already cleaning stays cleaning when its twin starts in auto.
+      expect(reduceExclusiveSet(const [cleaning, running]), running);
+    });
+
+    test('neither selected is stopped, not mixed', () {
+      expect(reduceExclusiveSet(const [stopped, stopped]), stopped);
+    });
+
+    test('held with NOTHING running is still yellow — that is not the '
+        'exclusion', () {
+      // i_xPermissive := NOT other.q_xEnabled. Nothing here has q_xEnabled,
+      // so whatever holds this section is elsewhere and is news.
+      expect(reduceExclusiveSet(const [blocked, stopped]), blocked);
+      expect(reduceExclusiveSet(const [blocked, blocked]), blocked);
+    });
+
+    test('a member held while its twin only CLEANS is not explained either',
+        () {
+      expect(reduceExclusiveSet(const [blocked, cleaning]), cleaning,
+          reason: 'the cleaning member has the line, so this reduces');
+      // ...but heldByAlternative below must not call that one explained.
+    });
+
+    test('two in auto still reads Running, because they both are', () {
+      // Impossible while the ladder holds, and there is no seam to draw for
+      // two sections in the same mode. The pane is where a failed interlock
+      // gets reported — see the widget test.
+      expect(reduceExclusiveSet(const [running, running]), running);
+    });
+
+    test('a member nobody can read stops the whole set collapsing', () {
+      expect(reduceExclusiveSet(const [running, unknown]), isNull);
+      expect(reduceExclusiveSet(const [stopped, unknown]), isNull);
+    });
+
+    test('a set of one is not a set', () {
+      expect(reduceExclusiveSet(const [running]), isNull);
+      expect(reduceExclusiveSet(const []), isNull);
+    });
+  });
+
+  group('resolveFaceModes — what the face compares', () {
+    const sets = [ExclusiveSet(name: 'Line 2 packing', members: [1, 2])];
+
+    test('peers are passed straight through when nothing is declared', () {
+      const modes = [
+        SectionMode.running,
+        SectionMode.stopped,
+        SectionMode.blocked,
+      ];
+      expect(resolveFaceModes(modes, const []), same(modes),
+          reason: 'the non-exclusive case must be untouched, not recomputed');
+    });
+
+    test('the live wet-area button: three peers running, both choices in a '
+        'mode, reads as agreement', () {
+      // ST101/ST201/ST301 transport + a film/vacuum pair, which is exactly
+      // what /boxes/wet-area index 150 drives. This used to be permanently
+      // split.
+      final face = resolveFaceModes(const [
+        SectionMode.running, // ST101 transport
+        SectionMode.running, // ST201 film
+        SectionMode.blocked, // ST201 vacuum, held by film
+        SectionMode.running, // ST201 transport
+      ], const [
+        ExclusiveSet(name: 'Line 2 packing', members: [1, 2])
+      ]);
+      expect(face, [
+        SectionMode.running,
+        SectionMode.running,
+        SectionMode.running,
+      ]);
+      expect(SectionGroup(face).mixed, isFalse);
+    });
+
+    test('a set that does not reduce still contributes every member', () {
+      final face = resolveFaceModes(const [
+        SectionMode.running,
+        SectionMode.running,
+        SectionMode.unknown,
+      ], sets);
+      // The set holds one section nobody can read, so it refuses to collapse
+      // and the face sees all three — which is how the `!` reaches the disc.
+      expect(face, hasLength(3));
+      expect(SectionGroup(face).anyUnreadable, isTrue);
+    });
+
+    test('a genuine peer disagreement is untouched by any of this', () {
+      final face = resolveFaceModes(const [
+        SectionMode.running,
+        SectionMode.blocked,
+        SectionMode.running,
+        SectionMode.stopped, // a peer standing still — the thing to notice
+      ], sets);
+      expect(SectionGroup(face).mixed, isTrue);
+      expect(SectionGroup(face).busiest, SectionMode.running);
+      expect(SectionGroup(face).quietest, SectionMode.stopped);
+    });
+
+    test('the set sits where its first member was configured', () {
+      final face = resolveFaceModes(const [
+        SectionMode.stopped,
+        SectionMode.running,
+        SectionMode.blocked,
+      ], sets);
+      expect(face, [SectionMode.stopped, SectionMode.running]);
+    });
+  });
+
+  group('heldByAlternative — which holds are the interlock working', () {
+    const sets = [ExclusiveSet(name: 'Line 2 packing', members: [0, 1])];
+
+    test('held while the twin runs is explained', () {
+      expect(
+          heldByAlternative(
+              0, const [SectionMode.blocked, SectionMode.running], sets),
+          isTrue);
+    });
+
+    test('held while the twin only cleans is NOT explained', () {
+      // The ladder negates q_xEnabled, not q_xCleanEnabled. Something else is
+      // holding this section, and the pane has to keep saying so.
+      expect(
+          heldByAlternative(
+              0, const [SectionMode.blocked, SectionMode.cleaning], sets),
+          isFalse);
+    });
+
+    test('held with the twin idle is not explained', () {
+      expect(
+          heldByAlternative(
+              0, const [SectionMode.blocked, SectionMode.stopped], sets),
+          isFalse);
+    });
+
+    test('a peer is never explained away', () {
+      expect(
+          heldByAlternative(
+              0, const [SectionMode.blocked, SectionMode.running], const []),
+          isFalse);
+    });
+
+    test('a section that is not held is not held', () {
+      expect(
+          heldByAlternative(
+              1, const [SectionMode.blocked, SectionMode.running], sets),
+          isFalse);
+    });
+  });
+
+  group('groupStartable — Run all never starts an alternative', () {
+    const sets = [ExclusiveSet(name: 'Line 2 packing', members: [1, 2])];
+
+    test('with nothing declared it is exactly the old modes.any(canStart)', () {
+      for (final modes in [
+        const [SectionMode.stopped],
+        const [SectionMode.running],
+        const [SectionMode.running, SectionMode.stopped],
+        const [SectionMode.blocked, SectionMode.unknown],
+        const <SectionMode>[],
+      ]) {
+        expect(groupStartable(modes, const []), modes.any(canStart),
+            reason: 'the peer case must not change: $modes');
+      }
+    });
+
+    test('an idle pair alone leaves Run all dead', () {
+      // Both starts would land in one scan, both pass i_xPermissive computed
+      // from the previous scan, both latch — and the NEXT scan FB_Section
+      // drops both. Run all would stop the line it was pressed to start.
+      expect(
+          groupStartable(const [
+            SectionMode.running,
+            SectionMode.stopped,
+            SectionMode.stopped,
+          ], sets),
+          isFalse);
+    });
+
+    test('a stopped peer still makes Run all live', () {
+      expect(
+          groupStartable(const [
+            SectionMode.stopped,
+            SectionMode.stopped,
+            SectionMode.stopped,
+          ], sets),
+          isTrue);
+    });
+  });
+
+  group('planModeSwitch — composed from the three commands that exist', () {
+    const set = ExclusiveSet(name: 'Line 2 packing', members: [0, 1]);
+
+    test('the hand-over: stop what has the line, start the other', () {
+      expect(
+        planModeSwitch(
+          modes: const [SectionMode.running, SectionMode.blocked],
+          set: set,
+          target: 1,
+        ),
+        const SectionSwitchPlan(stop: [0], start: 1),
+      );
+    });
+
+    test('a free alternative is a plain start, not a hand-over', () {
+      final plan = planModeSwitch(
+        modes: const [SectionMode.stopped, SectionMode.stopped],
+        set: set,
+        target: 1,
+      );
+      expect(plan, const SectionSwitchPlan(stop: [], start: 1));
+      expect(plan!.isHandover, isFalse,
+          reason: 'nothing is stopped, so nothing needs confirming — this is '
+              'the Run this pane always had');
+    });
+
+    test('the mode that already has the line is not offered — Start toggles',
+        () {
+      expect(
+        planModeSwitch(
+          modes: const [SectionMode.running, SectionMode.blocked],
+          set: set,
+          target: 0,
+        ),
+        isNull,
+        reason: 'p_cmd_Start on a running section STOPS it',
+      );
+      expect(
+        planModeSwitch(
+          modes: const [SectionMode.cleaning, SectionMode.stopped],
+          set: set,
+          target: 0,
+        ),
+        isNull,
+      );
+    });
+
+    test('a cleaning alternative is stopped first, like a running one', () {
+      // Cleaning is not exclusive in the PLC, but the target still cannot be
+      // started while the other mode is in it — and leaving a washdown running
+      // under a line that just went to auto is not what "switch" means.
+      expect(
+        planModeSwitch(
+          modes: const [SectionMode.cleaning, SectionMode.stopped],
+          set: set,
+          target: 1,
+        ),
+        const SectionSwitchPlan(stop: [0], start: 1),
+      );
+    });
+
+    test('a member nobody can read cancels the whole switch', () {
+      expect(
+        planModeSwitch(
+          modes: const [SectionMode.unknown, SectionMode.stopped],
+          set: set,
+          target: 1,
+        ),
+        isNull,
+        reason: 'stopping a section whose state cannot be read is blind',
+      );
+    });
+
+    test('held by something OUTSIDE the set buys nothing and is refused', () {
+      // Neither alternative is running, so the exclusion is not what holds
+      // the target. Stopping the twin would cost the line and change nothing.
+      expect(
+        planModeSwitch(
+          modes: const [SectionMode.stopped, SectionMode.blocked],
+          set: set,
+          target: 1,
+        ),
+        isNull,
+      );
+      expect(
+        planModeSwitch(
+          modes: const [SectionMode.cleaning, SectionMode.blocked],
+          set: set,
+          target: 1,
+        ),
+        isNull,
+        reason: 'a cleaning twin does not take the permissive away',
+      );
+    });
+
+    test('a target outside the set is refused', () {
+      expect(
+        planModeSwitch(
+          modes: const [SectionMode.running, SectionMode.stopped],
+          set: set,
+          target: 5,
+        ),
+        isNull,
+      );
+    });
+  });
+
+  group('shortMemberNames — what tells a set\'s members apart', () {
+    // The four buttons on a set's row have about eighty pixels each. Full
+    // labels ellipsised to "Line …" twice over and the operator could not
+    // tell film from vacuum; inside one entry the shared half is already in
+    // the heading above them.
+    test('the words the members share are dropped', () {
+      expect(shortMemberNames(const ['Line 2 film', 'Line 2 vacuum']),
+          ['Film', 'Vacuum']);
+    });
+
+    test('nothing shared, nothing trimmed', () {
+      expect(shortMemberNames(const ['Film', 'Vacuum']), ['Film', 'Vacuum']);
+    });
+
+    test('the last word is never eaten, even when every word is shared', () {
+      // Two members labelled the same are indistinguishable however they are
+      // printed; what must not happen is a button with nothing on it.
+      final same = shortMemberNames(const ['Line 2 film', 'Line 2 film']);
+      expect(same, ['Film', 'Film']);
+      expect(same.every((n) => n.isNotEmpty), isTrue);
+    });
+
+    test('a trim that leaves a stub is refused', () {
+      // "2" is not a button an operator can act on.
+      expect(shortMemberNames(const ['Line 2', 'Line 2 vacuum']),
+          ['Line 2', 'Line 2 vacuum']);
+    });
+
+    test('matching is case-insensitive, the kept text is not rewritten', () {
+      expect(shortMemberNames(const ['ST201 Film wrap', 'st201 Vacuum seal']),
+          ['Film wrap', 'Vacuum seal']);
+    });
+
+    test('a lone label is left alone', () {
+      expect(shortMemberNames(const ['Line 2 film']), ['Line 2 film']);
+    });
+  });
+
   group('SectionRef.displayLabel', () {
     test('an explicit label wins', () {
       expect(SectionRef(key: 'a.b.c', label: 'ST101').displayLabel, 'ST101');
