@@ -29,12 +29,12 @@
 ///     (`no_retry_test.dart:327-364`, `handler_table_test.dart:289-296`,
 ///     `teardown_test.dart:496-499` all learned this the same way).
 ///
-/// Four of the five counts are **zero today**, because on day one this package
-/// is one interface file. A case named "no timer outside the allow-list" that
+/// Several counts were **zero on day one**, because on day one this package was
+/// one interface file. A case named "no timer outside the allow-list" that
 /// passes over a tree with no timers in it is a case nobody should trust
-/// without its empty-directory sibling, and the case names below say so out
-/// loud rather than letting a future reader mistake an empty tree for a clean
-/// one.
+/// without its empty-directory sibling, so the ones that are still zero say so
+/// out loud in their names rather than letting a future reader mistake an
+/// empty tree for a clean one. 08-05 moved four of them off zero.
 @TestOn('vm')
 @Tags(['meta'])
 library;
@@ -58,19 +58,49 @@ final Directory testRoot = Directory('test');
 /// Files permitted to hold a `Timer.periodic(`, each naming the plan that
 /// earned the entry.
 ///
-/// **Empty on day one.** Three entries are anticipated and none of them is
-/// pre-approved — the plan that lands each one adds it here in the same
-/// commit, which is what makes a fourth timer a decision rather than a drift:
+/// **One entry, added by 08-05 in the same commit as the timer it names.**
+/// Nothing is pre-approved — the plan that lands each timer adds its entry
+/// here in the same commit, which is what makes the next one a decision rather
+/// than a drift:
 ///
-///  * 08-05's freshness sweep — listener-gated, interval derived from
-///    `staleAfter`. Only a clock can notice silence, so this one cannot be
-///    replaced by a deadline check on paths that already run.
-///  * 08-05's fan-in linger — a one-shot `Timer(linger, …)` per key at
-///    refcount zero, not a periodic; it lands as a named `_timer` field
-///    instead of an entry here.
+///  * 08-05's freshness sweep — **landed**, entry below.
+///  * 08-05's fan-in linger — **landed**, on [retainedTimerAllowList] rather
+///    than here, because it is a one-shot rather than a periodic. 08-03
+///    anticipated it as a bare `_timer` field with no entry anywhere; 08-05's
+///    house rules require every timer to arrive with an allow-list entry, and
+///    the second list is the reconciliation.
 ///  * 08-07's `runIterate` driver — one per OPC UA link, started on connect
-///    and stopped on disconnect.
-const Map<String, String> periodicTimerAllowList = <String, String>{};
+///    and stopped on disconnect. Still anticipated, not pre-approved.
+const Map<String, String> periodicTimerAllowList = <String, String>{
+  // 08-05, task 3. Listener-gated: started when the store gains its first
+  // watcher and stopped when it loses its last, so with nobody watching there
+  // is no timer at all. Interval is staleAfter ~/ 4 with a floor. It cannot be
+  // replaced by a deadline check on paths that already run — only a clock can
+  // notice silence, and the frozen-session failure emits nothing at all.
+  'freshness_sweep.dart': '08-05 — the listener-gated freshness sweep',
+};
+
+/// Files permitted to hold a **retained one-shot** `Timer(`, each naming the
+/// plan that earned the entry.
+///
+/// A second list rather than a second meaning on the first, because the two
+/// hazards are different: a `Timer.periodic` runs forever and a retained
+/// `Timer(` runs once but can outlive the thing it was scheduled about. The
+/// naming rule (`Timer(` must appear on a line that also names a `_timer`
+/// field, so it is reachable and cancellable) is necessary and was never
+/// sufficient — it says a timer *can* be cancelled, not that anybody decided
+/// it should exist. 08-05's house rules require both of this plan's timers to
+/// be allow-listed in the same commit that creates them; 08-03 anticipated the
+/// linger as a `_timer` field rather than an entry here, and this is the
+/// reconciliation: it is both.
+const Map<String, String> retainedTimerAllowList = <String, String>{
+  // 08-05, task 2. ONE-SHOT, not a periodic: armed per key when its refcount
+  // reaches zero and cancelled by any new subscribe for that key, which is the
+  // guard against the bug the incumbent documents at state_man.dart:2736-2739
+  // (a timer that removes by key and evicts the live entry that replaced it).
+  // Defaults to Duration.zero, in which case no timer is created at all.
+  'fanin.dart': '08-05 — the fan-in linger, one-shot per key at refcount zero',
+};
 
 /// Test files permitted to hold a literal port number, each naming why.
 ///
@@ -82,21 +112,35 @@ const Map<String, String> literalPortAllowList = <String, String>{};
 
 /// `Timer.periodic(` occurrences under `lib/src`.
 ///
-/// Moves when a plan on [periodicTimerAllowList] lands, and only then. A
-/// timer that appears without its allow-list entry is caught by the offender
-/// case rather than by this number, which is why both exist.
-const int declaredPeriodicTimers = 0;
+/// **One, landed by 08-05 task 3:** the freshness sweep. Moves when a plan on
+/// [periodicTimerAllowList] lands, and only then. A timer that appears without
+/// its allow-list entry is caught by the offender case rather than by this
+/// number, which is why both exist.
+const int declaredPeriodicTimers = 1;
+
+/// Retained one-shot `Timer(` occurrences under `lib/src`.
+///
+/// **One, landed by 08-05 task 2:** the fan-in linger. It moves when a plan on
+/// [retainedTimerAllowList] lands, and only then.
+const int declaredRetainedTimers = 1;
 
 /// Lines under `lib/` that await an upstream `connect`/`read`/`write`.
 ///
-/// Zero because this package is declarations only today. It moves the moment
-/// 08-06's write path or 08-07's adapter lands, and it moves **by a number
-/// somebody wrote down** — every one of those call sites has to carry a
-/// `deadline` argument or a `.timeout(`, and the offender case is what
-/// enforces that. `state_man.dart:1868` is one line of the shape this pins:
-/// `await client.awaitConnect()` inside a read, with no deadline, leaving the
-/// caller pending forever against a disconnected PLC (T-08-10).
-const int declaredUpstreamAwaitSites = 0;
+/// **Two, both landed by 08-05** and both deliberately singular:
+///
+///  * `LocalStateMan.start` — the one place a link is opened, bounded by
+///    `connectDeadline`.
+///  * `LocalStateMan._readOne` — the one place an upstream read is awaited,
+///    which is why `readFresh` is written as a one-key `readMany` rather than
+///    as a second call site that could lose its deadline independently.
+///
+/// It moves again when 08-06's write path and 08-07's adapters land, and it
+/// moves **by a number somebody wrote down** — every one of those call sites
+/// has to carry a `deadline` argument or a `.timeout(`, and the offender case
+/// is what enforces that. `state_man.dart:1868` is one line of the shape this
+/// pins: `await client.awaitConnect()` inside a read, with no deadline, leaving
+/// the caller pending forever against a disconnected PLC (T-08-10).
+const int declaredUpstreamAwaitSites = 2;
 
 /// Lines under `lib/` that call `.write(` on an upstream.
 ///
@@ -107,6 +151,35 @@ const int declaredUpstreamWriteSites = 0;
 
 /// The dev-dependency test kit that must never be reachable from `lib/`.
 const String contractKitPackage = 'tfc_stateman_contract';
+
+/// `StateManApi` members `LocalStateMan` has not written yet.
+///
+/// **This number must reach zero, and each unit of it has an owner.** 07-01's
+/// `gateOutstanding` doctrine, applied to a class rather than to a gate: a
+/// self-deleting list with an owner beats a red suite, because a phase whose
+/// own gate is red cannot tell a new failure from a known one.
+///
+///  * **3 owed by 08-06** — `write`, `writeStatus`, `holdToRun`. The write
+///    path is its own plan because the three-state outcome, the cmd minting
+///    and the no-retry seam are one subject.
+///  * **4 owed by 08-11** — `browse`, `timeseries`, `historyViews`,
+///    `preferences`. 08-11 sets `supportsDataServices: false` on the contract
+///    leg and decides which of the four the gateway answers at all; the three
+///    data services are Phase 10's to fill.
+///
+/// The plan that closes each member decrements this in the same commit. A
+/// member that quietly starts working without this number moving is a member
+/// nobody decided to ship.
+const int declaredUnimplementedMembers = 7;
+
+/// A forwarder is forbidden in the composer, by name.
+///
+/// `policy_state_man.dart:80-87`'s reason, which `cert_health_state_man.dart:
+/// 153-158` then repeats: a `noSuchMethod` forwarder silently absorbs a member
+/// added to `StateManApi` in a later phase — the new member works, unpoliced,
+/// and nothing says so. Explicit member-by-member implementation makes a new
+/// member a compile error and therefore a decision.
+const String forwarderSpelling = 'noSuchMethod';
 
 /// Retry shapes forbidden on an upstream write line.
 const List<String> retryShapes = <String>[
@@ -145,11 +218,14 @@ void main() {
       expect(dartFilesIn(empty), isEmpty);
       expect(timerOffenders(empty), isEmpty);
       expect(periodicTimerCount(empty), 0);
+      expect(retainedTimerCount(empty), 0);
       expect(mentionsOf(empty, contractKitPackage), isEmpty);
       expect(upstreamAwaitSites(empty), isEmpty);
       expect(unboundedUpstreamAwaits(empty), isEmpty);
       expect(upstreamWriteSites(empty), isEmpty);
       expect(retryShapedWrites(empty), isEmpty);
+      expect(unimplementedMemberSites(empty), isEmpty);
+      expect(forwarderSites(empty), isEmpty);
       expect(literalPortLines(empty), isEmpty,
           reason: 'pointed at an empty directory a sweep that reports an '
               'occurrence is inventing rather than measuring, and nothing it '
@@ -158,13 +234,20 @@ void main() {
   });
 
   group('freeze 1: timers are named', () {
-    test('no Timer.periodic outside the allow-list — which is empty today, so '
-        'this case rests on its empty-directory sibling', () {
+    test('no repeating or retained timer outside the two allow-lists', () {
       expect(timerOffenders(libSrc), isEmpty,
           reason: 'a repeating or retained timer exists in a file that no plan '
               'put on the allow-list. Add the entry in the same commit as the '
               'timer, naming the plan, or the fourth one is a drift nobody '
               'decided on');
+    });
+
+    test('the retained one-shot timer count is the declared one', () {
+      expect(retainedTimerCount(libSrc), declaredRetainedTimers,
+          reason: 'a one-shot timer that outlives what it was scheduled about '
+              'is the incumbent\'s documented bug (state_man.dart:2736-2739). '
+              'Each one is a named field in an allow-listed file, and the '
+              'total is written down so a second one is a decision');
     });
 
     test('the repeating-timer count is the declared one', () {
@@ -206,8 +289,8 @@ void main() {
               'than prevented (T-08-10)');
     });
 
-    test('the upstream call-site count is the declared one — zero today, so '
-        'the empty-directory arm is what carries this', () {
+    test('the upstream call-site count is the declared one — two since 08-05, '
+        'so this case now counts something as well as being non-vacuous', () {
       expect(upstreamAwaitSites(libRoot), hasLength(declaredUpstreamAwaitSites),
           reason: 'a new upstream call site should be a deliberate edit to '
               'this number, so that the person adding it reads the rule '
@@ -232,6 +315,40 @@ void main() {
               'retry could hide. no_retry_test.dart pins the server\'s at '
               'exactly one call site for this reason; this is the same pin '
               'with tfc_relay_local/lib as the scope');
+    });
+  });
+
+  group('freeze 6: the composer owes what it says it owes', () {
+    test('the unimplemented-member count is the declared one', () {
+      expect(unimplementedMemberSites(libSrc),
+          hasLength(declaredUnimplementedMembers),
+          reason: 'every member left unwritten names the plan that owes it, '
+              'and the total is written down here so 08-06 and 08-11 can '
+              'decrement it rather than discover it. A member that starts '
+              'working without this number moving is a member nobody decided '
+              'to ship');
+    });
+
+    test('every unimplemented member names an owning plan', () {
+      final anonymous = unimplementedMemberSites(libSrc)
+          .where((site) => !RegExp(r'08-\d\d').hasMatch(site))
+          .toList();
+      expect(anonymous, isEmpty,
+          reason: 'an UnimplementedError with no plan id in it is a TODO, and '
+              'a TODO is a thing nobody owns');
+    });
+
+    test('no file under lib/ forwards with noSuchMethod', () {
+      // Comments are skipped here, unlike freeze 2's kit sweep. The two are
+      // different hazards: a commented-out *import* is one keystroke from a
+      // real one, while a doc comment arguing that a forwarder must not be
+      // used is the argument this sweep exists to enforce — the same reason
+      // `teardown_test.dart:510-512` skips `///` when hunting timers.
+      expect(forwarderSites(libSrc), isEmpty,
+          reason: 'policy_state_man.dart:80-87. A forwarder absorbs a member '
+              'added to StateManApi in a later phase: the new member works, '
+              'unpoliced, and nothing says so. Explicit delegation makes it a '
+              'compile error and therefore a decision');
     });
   });
 
@@ -292,9 +409,15 @@ List<String> timerOffenders(Directory directory) {
       // cannot outlive the turn it was scheduled in and it holds nothing open
       // (`teardown_test.dart:519-522`). A constructed `Timer(...)` can do
       // both, so it has to be reachable through a named field to be
-      // cancellable.
-      if (line.contains('Timer(') && !line.contains('_timer')) {
-        offenders.add('${file.path}:${i + 1}: $line');
+      // cancellable — AND its file has to be one a plan put on the retained
+      // list. The naming rule alone says a timer can be cancelled, not that
+      // anybody decided it should exist.
+      if (line.contains('Timer(')) {
+        if (!line.contains('_timer')) {
+          offenders.add('${file.path}:${i + 1}: $line');
+        } else if (!retainedTimerAllowList.containsKey(name)) {
+          offenders.add('${file.path}:${i + 1}: $line');
+        }
       }
     }
   }
@@ -308,6 +431,18 @@ int periodicTimerCount(Directory directory) {
     for (final line in file.readAsLinesSync()) {
       if (_isDocComment(line)) continue;
       if (line.contains('Timer.periodic(')) count++;
+    }
+  }
+  return count;
+}
+
+/// How many retained one-shot `Timer(` occurrences live under [directory].
+int retainedTimerCount(Directory directory) {
+  var count = 0;
+  for (final file in dartFilesIn(directory)) {
+    for (final line in file.readAsLinesSync()) {
+      if (_isDocComment(line)) continue;
+      if (line.contains('Timer(')) count++;
     }
   }
   return count;
@@ -371,6 +506,40 @@ List<String> retryShapedWrites(Directory directory) => upstreamWriteSites(
         directory)
     .where((site) => retryShapes.any((shape) => site.contains(shape)))
     .toList();
+
+/// Every line under [directory] that throws an [UnimplementedError].
+///
+/// Comments are skipped for the usual reason — a doc comment arguing about an
+/// unwritten member is not an unwritten member — and the line itself is kept
+/// so the "names its owner" case can read the plan id out of it.
+List<String> unimplementedMemberSites(Directory directory) {
+  final sites = <String>[];
+  for (final file in dartFilesIn(directory)) {
+    final lines = file.readAsLinesSync();
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      if (_isAnyComment(line)) continue;
+      if (!line.contains('UnimplementedError(')) continue;
+      sites.add('${file.path}:${i + 1}: ${line.trim()}');
+    }
+  }
+  return sites;
+}
+
+/// Every non-comment line under [directory] that names the forwarder.
+List<String> forwarderSites(Directory directory) {
+  final sites = <String>[];
+  for (final file in dartFilesIn(directory)) {
+    final lines = file.readAsLinesSync();
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      if (_isAnyComment(line)) continue;
+      if (!line.contains(forwarderSpelling)) continue;
+      sites.add('${file.path}:${i + 1}: ${line.trim()}');
+    }
+  }
+  return sites;
+}
 
 /// A four- or five-digit integer that is not part of a longer identifier.
 final RegExp _portLiteral = RegExp(r'\b\d{4,5}\b');

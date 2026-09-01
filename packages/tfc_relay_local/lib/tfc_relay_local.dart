@@ -25,6 +25,10 @@
 /// interface each of them invented separately.
 library;
 
+export 'src/fanin.dart';
+export 'src/freshness_sweep.dart';
+export 'src/ingest.dart';
 export 'src/key_router.dart';
+export 'src/local_state_man.dart';
 export 'src/upstream_link.dart';
 export 'src/value_shaping.dart';
