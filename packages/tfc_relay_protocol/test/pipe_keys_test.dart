@@ -167,6 +167,25 @@ void main() {
       }
     });
 
+    test('the lane sets and the suffix rule cannot disagree', () {
+      // There are two mechanisms here — the declared sets, which the send
+      // buffer can read at startup, and `ridesPriorityLane`, which is what a
+      // per-alias key has to be judged by. They agree today. Nothing above
+      // makes them *keep* agreeing: a key added to `priorityLane` whose suffix
+      // says conflated leaves the partition intact and appears in neither
+      // hand-written list, so every other arm in this group still passes while
+      // one key is filed two different ways depending on which side of the
+      // send buffer is asking. That is the drift this file exists to prevent,
+      // wearing a different hat.
+      expect(PipeKeys.declared.where(PipeKeys.ridesPriorityLane).toSet(),
+          PipeKeys.priorityLane);
+      expect(
+          PipeKeys.declared
+              .where((k) => !PipeKeys.ridesPriorityLane(k))
+              .toSet(),
+          PipeKeys.conflatedLane);
+    });
+
     test('the lane is decided by suffix, so a new alias needs no edit here',
         () {
       // `bench-rig-7` appears in no list in the library. If this passes, the
