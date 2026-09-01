@@ -1,6 +1,6 @@
 /// The link that cannot carry the page, and the recovery from it.
 ///
-/// **F20 — Slow link, doesn't fit.** `throttle(100 kbit/s)`, same page (needs
+/// **F20:** Slow link, doesn't fit. `throttle(100 kbit/s)`, same page (needs
 /// ~5.8x the link): conflation engages: reduced cadence,
 /// every delivered value is the *latest* (never an old queued one — assert
 /// with a monotonically incremented test key); queue stays bounded;
@@ -8,15 +8,21 @@
 /// `PIPE.link_degraded` + `PIPE.effective_hz` reflect it and an AlarmMan alarm
 /// fires (§7.7).
 ///
-/// **F21 — Slow link recovers.** `throttle(100 kbit/s)` 60 s, then unthrottle:
+/// **F21:** Slow link recovers. `throttle(100 kbit/s)` 60 s, then unthrottle:
 /// conflation disengages, cadence returns to 10 Hz, `PIPE.link_degraded`
 /// clears, alarm auto-resolves; no burst of backlogged frames on recovery (the
 /// conflating map means there is no backlog to flush).
 ///
-/// **G6 — Slow link recovers.** F21 currently has no un-throttle arm; throttle
+/// **G6:** Slow link recovers. F21 currently has no un-throttle arm; throttle
 /// 60 s, un-throttle, assert the client
 /// converges to current values with **no backlog flush** — the conflating map
 /// means recovery has nothing queued to drain.
+///
+/// **F21 and G6 share one case, named `F21/G6: …`.** They are the same
+/// scenario read out of two catalogue tables — §7.5's row and §D.1's — so
+/// asserting the recovery twice would buy nothing and cost the lane another
+/// twenty-four seconds. The manifest's grammar reads both ids out of the one
+/// name, which is what that grammar is for.
 ///
 /// **The same page as F19, and the oversubscription is measured rather than
 /// quoted.** `plantPage(200)` at 10 Hz is the row's "same page", and 07-10
