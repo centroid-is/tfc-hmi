@@ -53,6 +53,10 @@ Future<void> _startStub() async {
   );
 
   final stderrBuf = StringBuffer();
+  // Whether the interpreter died before it could speak. Without this a
+  // start-up failure and a slow start-up look identical in the CI log.
+  int? stubExit;
+  unawaited(_serverProcess!.exitCode.then((code) => stubExit = code));
   _serverProcess!.stderr
       .transform(const SystemEncoding().decoder)
       .listen((line) {
@@ -73,10 +77,17 @@ Future<void> _startStub() async {
     }
   });
 
-  _stubPort = await completer.future.timeout(const Duration(seconds: 30),
+  // Two minutes, not thirty seconds. The first Python process of a `dart
+  // test` run pays interpreter cold-start, and on a hosted Windows runner
+  // that has been seen to take over thirty seconds while printing nothing at
+  // all -- CI run 33506143133 lost this suite in setUpAll with an empty
+  // stderr, then started twelve more stubs in the same job in under a second
+  // each. This budget is a liveness guard, not an assertion about speed.
+  _stubPort = await completer.future.timeout(const Duration(seconds: 120),
       onTimeout: () => throw StateError(
           'Stub server did not start (python=$python, '
-          'script=$stubScript, stderr=$stderrBuf)'));
+          'script=$stubScript, '
+          'exit=${stubExit ?? 'still running'}, stderr=$stderrBuf)'));
 }
 
 void _stopStub() {

@@ -1,4 +1,10 @@
-@Timeout(Duration(minutes: 3))
+// Ten minutes, not three. This test shells out to `dart build cli`, which
+// AOT-compiles the package and runs its native build hooks from cold -- the
+// wall clock here measures the toolchain and the runner, not the code under
+// test. Measured on CI run 33506143133: 39 s on ubuntu-latest, 65 s on a
+// healthy macos-latest, and over 180 s on a macos-latest that was merely
+// slow, which is what tripped the old budget. The timeout is a hang guard.
+@Timeout(Duration(minutes: 10))
 library;
 
 import 'dart:io';
@@ -29,11 +35,17 @@ void main() {
       // it explicitly is a usage error -- "Unexpected arguments:
       // bin/tfc_mcp_server.dart", exit 64. Dart 3.12 (what Flutter 3.44.9
       // bundles) accepts its absence too, so this works either side of that.
+      //
+      // The elapsed time is printed on success too, so the log carries the
+      // margin against the file timeout rather than only reporting it once
+      // that budget has already been blown.
+      final clock = Stopwatch()..start();
       final result = await Process.run(
         'dart',
         ['build', 'cli', '-o', outputDir],
         workingDirectory: workingDir,
       );
+      stdout.writeln('dart build cli took ${clock.elapsed.inSeconds}s');
 
       // Print stderr for debugging if compilation fails
       if (result.exitCode != 0) {
