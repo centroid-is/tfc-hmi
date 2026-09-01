@@ -61,8 +61,10 @@ final class HeartbeatPump {
     required bool Function() isReady,
     required CurrentPeer peer,
     int Function()? elapsed,
+    void Function(String complaint)? onComplaint,
   })  : _isReady = isReady,
         _peer = peer,
+        _onComplaint = onComplaint,
         _now = elapsed ?? _elapsedClock() {
     _lastOutboundMs = _now();
   }
@@ -88,6 +90,10 @@ final class HeartbeatPump {
   /// call — `deadline.dart`'s seam, so a reconnect landing mid-beat cannot
   /// retarget the ping at the replacement socket.
   final CurrentPeer _peer;
+
+  /// Where a word about the gateway's configuration goes — the same list
+  /// `RemoteStateMan.complaints` publishes. Null in a harness that wires none.
+  final void Function(String complaint)? _onComplaint;
 
   /// Elapsed milliseconds from a clock that cannot be stepped.
   ///
@@ -148,7 +154,44 @@ final class HeartbeatPump {
   void learnedDeadlineMs(int? advertised) {
     if (_deadlineMs == advertised) return;
     _deadlineMs = advertised;
+    _complainIfUnbeatable(advertised);
     if (_beat != null) _arm();
+  }
+
+  /// Says so when the gateway's patience is shorter than this panel's floor
+  /// can promise (07-REVIEW WR-01).
+  ///
+  /// **The worst-case silence is two periods, not one.** [noteOutbound]'s skip
+  /// rule means an outbound frame landing just after a beat suppresses the
+  /// next one, so the gateway last sees a frame at `kp+e` and next sees one at
+  /// `(k+2)p`. At the derived period that is two thirds of the deadline and
+  /// safe by construction. At the floor it is a flat two floors against
+  /// whatever the gateway chose — so a gateway advertising two floors or less
+  /// reaps this panel anyway, with the pump running and
+  /// [debugHeartbeatsSent] climbing, which is the six-second-resync defect
+  /// this class exists to fix wearing a green light.
+  ///
+  /// [period] does not bend for it: the floor is this panel's own limit on
+  /// what it will do about somebody else's configuration, and a panel beating
+  /// ten times a second because a gateway asked is a self-inflicted load
+  /// multiplied by every screen in the factory. What changes is that the panel
+  /// stops being silent about a configuration it cannot satisfy. `period`'s
+  /// doc used to assert the floor "is faster than any deadline a sane gateway
+  /// would set"; that was an unenforced assumption about someone else's
+  /// config file, and `ServerConfig.minHeartbeatDeadline` is now the other
+  /// half of it.
+  void _complainIfUnbeatable(int? advertised) {
+    final complain = _onComplaint;
+    if (complain == null || advertised == null) return;
+    final floorMs = config.heartbeatFloor.inMilliseconds;
+    if (floorMs * 2 < advertised) return;
+    complain('this gateway advertises a $advertised ms heartbeat deadline and '
+        'this panel will not beat faster than its $floorMs ms floor. The '
+        'skip-on-traffic rule means the gateway can see up to ${floorMs * 2} '
+        'ms of silence between beats, so it will reap this session and the '
+        'panel will resync its whole page every cycle. Raise the gateway\'s '
+        'heartbeatDeadline above ${floorMs * 3} ms, or lower '
+        'ClientConfig.heartbeatFloor.');
   }
 
   /// How often this pump beats, given what the gateway has told it.
@@ -162,9 +205,12 @@ final class HeartbeatPump {
   /// of that and a tenth would be nine wasted frames per deadline per panel.
   ///
   /// Against a gateway that advertises nothing, the floor is the whole answer:
-  /// beating at [ClientConfig.heartbeatFloor] is conservative — it is faster
-  /// than any deadline a sane gateway would set — and the alternative, not
-  /// beating at all, is the defect this class exists to fix.
+  /// beating at [ClientConfig.heartbeatFloor] is conservative, and the
+  /// alternative — not beating at all — is the defect this class exists to
+  /// fix. Against a gateway that advertises a deadline the floor *cannot*
+  /// beat, the floor still wins and [_complainIfUnbeatable] says so; that
+  /// combination used to be an unenforced assumption written down here as
+  /// "faster than any deadline a sane gateway would set".
   Duration get period {
     final learned = _deadlineMs;
     final derived =

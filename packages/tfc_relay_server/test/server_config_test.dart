@@ -112,6 +112,58 @@ void main() {
               'the ping interval, so a tie is still lost by the heartbeat');
     });
 
+    test('a deadline no client could beat is refused', () {
+      // **07-REVIEW WR-01, the other half.** The only bound here was the
+      // relationship with `pingInterval`, which is a bound from above. Nothing
+      // bounded it from below, and a deadline below the reference client's
+      // floor is a gateway that reaps every healthy panel in the plant once a
+      // cycle for ever — 07-08's measurement, reinstated by configuration with
+      // the client's heartbeat pump running and its counters climbing.
+      //
+      // The number is three times `ClientConfig.heartbeatFloor`'s 1 s default,
+      // for the reason the pump derives its own period the same way: the
+      // client's skip-on-traffic rule means the gateway can see up to two
+      // floors of silence between beats, so two floors is the failure and
+      // three is the smallest deadline with any margin at all.
+      expect(
+          () => ServerConfig(heartbeatDeadline: const Duration(seconds: 2)),
+          throwsA(argumentErrorNaming(['2000 ms', '3000 ms'])),
+          reason: 'a gateway configured to reap after two seconds accepted the '
+              'configuration silently. Every panel in the plant then resyncs '
+              'its whole page every two seconds, and the only symptom from '
+              'outside is that sessionCount keeps returning to normal');
+
+      expect(
+          () => ServerConfig(
+                heartbeatDeadline: ServerConfig.defaultMinHeartbeatDeadline,
+              ),
+          returnsNormally,
+          reason: 'the floor itself must be usable, or the bound is really a '
+              'bound one millisecond higher and nobody can tell');
+    });
+
+    test('a gateway may go below the floor by saying so', () {
+      // The escape, and it is the same one `ClientConfig.deadlineFloor` is: a
+      // liveness case has to watch a reap happen inside its own budget, and a
+      // suite that waited three seconds per arm is a suite somebody deletes.
+      // Lowering the floor is a sentence the caller has to write; inheriting a
+      // 400 ms deadline from a default is not.
+      expect(
+          () => ServerConfig(
+                heartbeatDeadline: const Duration(milliseconds: 400),
+                minHeartbeatDeadline: const Duration(milliseconds: 100),
+              ),
+          returnsNormally);
+      expect(
+          () => ServerConfig(
+                heartbeatDeadline: const Duration(milliseconds: 50),
+                minHeartbeatDeadline: const Duration(milliseconds: 100),
+              ),
+          throwsA(argumentErrorNaming(['50 ms', '100 ms'])),
+          reason: 'the lowered floor is still a floor; a knob that stops being '
+              'checked once it is set is not one');
+    });
+
     test('a deadline comfortably inside the ping interval is accepted', () {
       expect(
           () => ServerConfig(

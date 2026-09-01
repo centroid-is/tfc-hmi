@@ -161,6 +161,11 @@ final class RemoteStateMan implements StateManApi {
       config: config,
       isReady: () => _supervisor.state == LinkState.ready,
       peer: () => _supervisor.peer,
+      // A gateway whose deadline this panel's floor cannot beat reaps it
+      // anyway, with the pump running (07-REVIEW WR-01). It surfaces on the
+      // one diagnostic list this client has rather than in the silence that
+      // hid the original defect for a phase.
+      onComplaint: (complaint) => _supervisor.resync.complaints.add(complaint),
     );
 
     // Built here and handed over: `ConnectionSupervisor.dispose` disposes the

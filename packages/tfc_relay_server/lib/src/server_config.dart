@@ -48,7 +48,28 @@ final class ServerConfig {
   /// How long a session may go without an app-level heartbeat before it is
   /// reaped. 6 s is OPC UA's 3× LifetimeCount ratio over a 2 s app heartbeat.
   /// This — not [pingInterval] — is the liveness deadline.
+  ///
+  /// Bounded above by [pingInterval] and below by [minHeartbeatDeadline].
   final Duration heartbeatDeadline;
+
+  /// The shortest [heartbeatDeadline] this gateway will accept.
+  ///
+  /// **The bound the reaper was missing** (07-REVIEW WR-01). A panel that is
+  /// only watching a page beats a `ping` at
+  /// `ClientConfig.heartbeatFloor` at the fastest, and its skip-on-traffic
+  /// rule means this gateway can see up to **two** floors of silence between
+  /// beats. So a deadline at or below two floors reaps every healthy panel in
+  /// the plant once a cycle — 07-08's measured three-reaps-in-twenty-one-
+  /// seconds, reinstated by configuration alone, with the panel's pump running
+  /// and its counters climbing. Nothing here noticed: the only bound was the
+  /// one against [pingInterval], which is a bound from the other end.
+  ///
+  /// **A parameter rather than a constant**, for the reason
+  /// `ClientConfig.deadlineFloor` is one: `liveness_test.dart` has to watch a
+  /// reap happen inside its own budget and a suite that waited three seconds
+  /// per arm is a suite somebody deletes. Going below the floor is then a
+  /// sentence the caller writes rather than a default they inherit.
+  final Duration minHeartbeatDeadline;
 
   /// WebSocket ping period: NAT keepalive, and a backstop for a client whose
   /// heartbeat logic is broken while its socket still works. Never the reaper.
@@ -218,9 +239,15 @@ final class ServerConfig {
   /// this is the smallest stall threshold that means anything above it.
   static const Duration minStallThreshold = Duration(milliseconds: 10);
 
+  /// Three times `ClientConfig.heartbeatFloor`'s 1 s default — the smallest
+  /// deadline a panel on its floor can meet with any margin at all. See
+  /// [minHeartbeatDeadline].
+  static const Duration defaultMinHeartbeatDeadline = Duration(seconds: 3);
+
   ServerConfig({
     this.tick = const Duration(milliseconds: 100),
     this.heartbeatDeadline = const Duration(seconds: 6),
+    this.minHeartbeatDeadline = defaultMinHeartbeatDeadline,
     this.pingInterval = const Duration(seconds: 20),
     this.stallThreshold = const Duration(milliseconds: 300),
     this.maxPending = 4096,
@@ -242,6 +269,18 @@ final class ServerConfig {
           '${_ms(minTick)}–${_ms(maxTick)}: below it the server burns a core '
           'redrawing screens nobody reads that fast, above it the plant '
           'arrives as a slideshow');
+    }
+    if (heartbeatDeadline < minHeartbeatDeadline) {
+      throw ArgumentError(
+          'heartbeatDeadline (${_ms(heartbeatDeadline)}) is below '
+          'minHeartbeatDeadline (${_ms(minHeartbeatDeadline)}): a panel that '
+          'is only watching a page beats at its ClientConfig.heartbeatFloor '
+          'and skips a beat whenever it has just sent something else, so this '
+          'gateway can see two floors of silence from a perfectly healthy '
+          'panel. A deadline that short reaps every screen in the plant once '
+          'a cycle, for ever, and the only symptom from outside is that '
+          'sessionCount keeps coming back. Lower minHeartbeatDeadline '
+          'deliberately if this is a fault case rather than a gateway');
     }
     if (heartbeatDeadline >= pingInterval) {
       throw ArgumentError(

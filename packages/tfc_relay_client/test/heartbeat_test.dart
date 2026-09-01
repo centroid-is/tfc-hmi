@@ -131,6 +131,7 @@ final class _Rig {
       isReady: () => isReady,
       peer: () => hasPeer ? scripted.peer : null,
       elapsed: elapsed,
+      onComplaint: complaints.add,
     );
     if (deadlineMs != null) pump.learnedDeadlineMs(deadlineMs);
     addTearDown(pump.dispose);
@@ -139,6 +140,10 @@ final class _Rig {
 
   final _ScriptedPeer scripted;
   late final HeartbeatPump pump;
+
+  /// What the pump had to say about the gateway's configuration. Wired to the
+  /// same list `RemoteStateMan.complaints` publishes.
+  final List<String> complaints = <String>[];
 
   /// The link's readiness, as the pump sees it. Flipped by cases that want a
   /// beat to land on a link that has gone since the timer was armed.
@@ -336,6 +341,52 @@ void main() {
               'ten times a second, which is a self-inflicted load multiplied '
               'by every screen in the factory. The floor is the panel\'s own '
               'limit on what it will do about somebody else\'s configuration');
+    });
+
+    test('a gateway the floor cannot beat is complained about, not ignored',
+        () {
+      // **07-REVIEW WR-01.** The traffic-skip rule means the worst-case
+      // silence the gateway sees is *two* periods, not one: an outbound frame
+      // landing just after a beat suppresses the next one, so the gateway last
+      // sees a frame at `kp+e` and next sees one at `(k+2)p`. At the derived
+      // period that is two thirds of the deadline and safe. At the floor it is
+      // a flat two floors — so any gateway advertising a deadline of two
+      // floors or less reaps this panel anyway, with the pump running and
+      // `debugHeartbeatsSent` climbing, reinstating the exact six-second
+      // resync defect the pump exists to fix.
+      //
+      // The pump cannot fix that from this end: the floor is the panel's own
+      // limit on what it will do about somebody else's configuration. What it
+      // can do is stop being silent about it.
+      final rig = _Rig(floor: const Duration(seconds: 1), deadlineMs: 2000);
+
+      expect(rig.pump.period, const Duration(seconds: 1),
+          reason: 'the clamp itself is unchanged: the panel still refuses to '
+              'beat faster than its floor');
+      expect(rig.complaints, hasLength(1),
+          reason: 'the gateway advertises a 2000 ms deadline and this panel '
+              'cannot promise a frame more often than every 2000 ms, so it '
+              'will be reaped for silence and resync its whole page every '
+              'cycle — and said nothing about it. `RemoteStateMan.complaints` '
+              'is the only diagnostic surface this client has');
+      expect(rig.complaints.single, contains('2000'),
+          reason: 'a complaint that does not name the number it is about '
+              'sends whoever reads it back to the gateway\'s config file to '
+              'guess which one');
+      expect(rig.complaints.single, contains('heartbeatDeadline'),
+          reason: 'the complaint has to name the setting to raise, or it is a '
+              'report of a fault with no repair attached');
+    });
+
+    test('a gateway with enough patience for the floor is not complained about',
+        () {
+      final rig = _Rig(floor: const Duration(seconds: 1), deadlineMs: 6000);
+
+      expect(rig.complaints, isEmpty,
+          reason: 'the intended configuration produced a complaint. A '
+              'diagnostic surface that fires on the healthy case is one an '
+              'operator stops reading, which is the grey-that-cries-wolf '
+              'failure in a different surface');
     });
 
     test('a gateway that advertises nothing leaves the pump on its floor', () {

@@ -100,6 +100,14 @@ const _sub = 'page-under-test';
 ServerConfig _reaperConfig() => ServerConfig(
       tick: ServerConfig.minTick,
       heartbeatDeadline: _deadline,
+      // Said out loud, because [_deadline] is far below the floor a real
+      // gateway is held to (07-REVIEW WR-01): a panel beating at
+      // `ClientConfig.heartbeatFloor` cannot meet 400 ms, so a *gateway*
+      // configured this way reaps every healthy screen in the plant once a
+      // cycle. These arms are about the mechanism and not the number — see the
+      // library doc above — so the floor is lowered here rather than the arms
+      // being made to wait three seconds each.
+      minHeartbeatDeadline: _deadline,
       pingInterval: _pingInterval,
     );
 
