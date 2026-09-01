@@ -113,21 +113,30 @@ class _NavAlarmBadgeState extends State<NavAlarmBadge>
           child: SizedBox(
             width: NavAlarmBadge.size,
             height: NavAlarmBadge.size,
-            child: AnimatedBuilder(
-              animation: _controller,
-              builder: (context, _) => CustomPaint(
-                painter: AlarmPulsePainter(
-                  color: color,
-                  dotOutlineColor: outline,
-                  progress: widget.progressOverride ?? _controller.value,
-                  // Two rings, not the beacon's three: at badge size three
-                  // rings land on top of each other and read as a smudge.
-                  rings: 2,
-                  // A fatter dot and a thinner outline than the beacon's. At
-                  // this size the beacon's proportions leave a ~1 px dot
-                  // inside a 2 px outline — a hollow ring, not an alarm.
-                  dotRadiusFactor: 0.42,
-                  dotOutlineWidth: 1.0,
+            // The boundary is what keeps this animation affordable. The badge
+            // sits in the Scaffold's navigation bar, where the nearest repaint
+            // boundary above it is the window root -- so without one HERE,
+            // every pulse tick marked the whole window dirty and a station
+            // repainted its entire page (65 asset subtrees on the one
+            // measured, 2026-09-01, at ~22 fps) to animate a 24 px dot. With
+            // it, a tick repaints exactly this SizedBox.
+            child: RepaintBoundary(
+              child: AnimatedBuilder(
+                animation: _controller,
+                builder: (context, _) => CustomPaint(
+                  painter: AlarmPulsePainter(
+                    color: color,
+                    dotOutlineColor: outline,
+                    progress: widget.progressOverride ?? _controller.value,
+                    // Two rings, not the beacon's three: at badge size three
+                    // rings land on top of each other and read as a smudge.
+                    rings: 2,
+                    // A fatter dot and a thinner outline than the beacon's. At
+                    // this size the beacon's proportions leave a ~1 px dot
+                    // inside a 2 px outline — a hollow ring, not an alarm.
+                    dotRadiusFactor: 0.42,
+                    dotOutlineWidth: 1.0,
+                  ),
                 ),
               ),
             ),

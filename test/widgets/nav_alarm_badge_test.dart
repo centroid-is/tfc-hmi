@@ -60,6 +60,35 @@ void main() {
     }
   });
 
+  testWidgets('the pulse repaints behind its own boundary, not the window',
+      (tester) async {
+    // The badge lives in the Scaffold's navigation bar, where the nearest
+    // repaint boundary above it is the window root. Without one of its own,
+    // every animation tick marked the entire window dirty: measured
+    // 2026-09-01 on a station, a 24 px dot repainted a 65-asset page at
+    // ~22 fps around the clock. This pins the boundary so the pulse can
+    // never again cost more than its own pixels.
+    await tester.pumpWidget(wrap(
+      const NavAlarmBadge(
+          level: AlarmLevel.error, child: Icon(Icons.ac_unit)),
+    ));
+
+    expect(
+        find.ancestor(
+            of: pulsePaint(), matching: find.byType(RepaintBoundary)),
+        findsWidgets,
+        reason: 'The animated pulse must be isolated by a RepaintBoundary '
+            'inside the badge, or each tick repaints the whole window.');
+
+    // And the boundary must sit INSIDE the badge -- an ancestor somewhere up
+    // in the harness would not protect a real Scaffold.
+    expect(
+        find.descendant(
+            of: find.byType(NavAlarmBadge),
+            matching: find.byType(RepaintBoundary)),
+        findsOneWidget);
+  });
+
   testWidgets('the rings animate while alarming', (tester) async {
     await tester.pumpWidget(wrap(
       const NavAlarmBadge(

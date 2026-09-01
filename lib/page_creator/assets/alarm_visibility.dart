@@ -386,14 +386,22 @@ class _AlarmVisibilityState extends ConsumerState<AlarmVisibility>
       // (and its layout pass) every frame — this runs 24/7 on a mimic.
       return _markerTappable(
         onTap: () => _showPane(context),
-        paint: (paintSize) => AnimatedBuilder(
-          animation: _controller,
-          builder: (context, _) => CustomPaint(
-            size: paintSize,
-            painter: AlarmPulsePainter(
-              color: fill,
-              dotOutlineColor: ring,
-              progress: _controller.value,
+        // The boundary keeps the 24/7 pulse from repainting anything but
+        // itself. On the page canvas each asset already gets one, but this
+        // marker also renders outside that canvas (panes, previews), where
+        // the nearest boundary above it can be the window root -- and a
+        // boundless pulse repaints the world (measured 2026-09-01 on the nav
+        // badge, this painter's sibling).
+        paint: (paintSize) => RepaintBoundary(
+          child: AnimatedBuilder(
+            animation: _controller,
+            builder: (context, _) => CustomPaint(
+              size: paintSize,
+              painter: AlarmPulsePainter(
+                color: fill,
+                dotOutlineColor: ring,
+                progress: _controller.value,
+              ),
             ),
           ),
         ),
