@@ -185,6 +185,40 @@ final class ClientConfig {
   /// moving for longer than anybody expected.
   Duration get holdDeadman => holdPulsePeriod * holdMissedPulsesBeforeStop;
 
+  /// The fastest this panel will ever beat its heartbeat at the gateway.
+  ///
+  /// **What the heartbeat is for.** Nothing the gateway *sends* keeps a
+  /// session alive; only inbound application frames move its `_lastSeen`, and
+  /// its reaper closes any session that has been silent longer than the
+  /// deadline it advertises at `hello`. A panel that is merely watching a page
+  /// — which is what every panel in the plant does all shift — sends nothing
+  /// at all after its handshake, so without a periodic frame of its own it is
+  /// closed with `4003`, redials, and resyncs its whole page, once a deadline,
+  /// for ever. That was measured on this build before `HeartbeatPump` existed:
+  /// three reaps and three redials in twenty-one idle seconds (07-08-SUMMARY
+  /// deviation 3). CLAUDE.md's Flutter-web constraint rules out the other
+  /// answer — "no browser ping frames — **server pings + app heartbeat**".
+  ///
+  /// **This is a floor, not the period.** The period is a third of the
+  /// deadline the gateway advertised, which is how the panel follows a gateway
+  /// that was reconfigured rather than carrying a constant nobody diffs. This
+  /// number is what stops that arithmetic from producing something absurd
+  /// against a gateway that advertises a very short deadline, or nothing at
+  /// all: one second is already thirty frames a minute per panel, and a
+  /// hundred panels beating faster than that is a self-inflicted load with no
+  /// operator-visible benefit. See `HeartbeatPump.period`.
+  ///
+  /// **Validated with `_positive`, never `_atLeastFloor`.** The same
+  /// load-bearing choice [holdPulsePeriod] and [connectTimeout] make, and for
+  /// the same reason: this is a *cadence*, not a deadline on an answer.
+  /// Nothing waits on one beat and a dropped one costs nothing the next does
+  /// not fix, so routing it through the deadline validator would only forbid
+  /// the legitimate caller — a gate case that has to observe several beats
+  /// inside its own budget and therefore sets this below
+  /// [defaultDeadlineFloor]. 05-07 learned this on the hold cadence; the
+  /// lesson is written down here rather than rediscovered.
+  final Duration heartbeatFloor;
+
   /// The smallest deadline any of the three above may be set to.
   ///
   /// A parameter rather than a constant on purpose; see the library doc.
@@ -365,6 +399,7 @@ final class ClientConfig {
     this.subscriptionStalenessMultiple = 30,
     this.holdPulsePeriod = const Duration(milliseconds: 100),
     this.holdMissedPulsesBeforeStop = 10,
+    this.heartbeatFloor = const Duration(seconds: 1),
     this.token,
     this.tls,
     this.allowTokenOverPlaintext = false,
@@ -401,6 +436,12 @@ final class ClientConfig {
     // give up inside its own budget sets this to a few hundred milliseconds,
     // which is below the deadline floor and has nothing to do with it.
     _positive('connectTimeout', connectTimeout);
+
+    // The third cadence, validated the third time for the same reason. Zero
+    // here would be the worst of the three: `Timer.periodic(Duration.zero)`
+    // is a beat every event-loop turn, which is a panel flooding the one
+    // gateway that serves every screen in the factory.
+    _positive('heartbeatFloor', heartbeatFloor);
 
     _positive('backoffBase', backoffBase);
     _positive('backoffCap', backoffCap);
