@@ -517,6 +517,71 @@ void main() {
     });
   });
 
+  group('the heartbeat floor', () {
+    test('the default floor is one second', () {
+      expect(ClientConfig().heartbeatFloor, const Duration(seconds: 1),
+          reason: 'the floor is what the pump falls back on against a gateway '
+              'that advertises no deadline, and it is the ceiling on how fast '
+              'a gateway can talk this panel into beating. One second is '
+              'already sixty frames a minute per panel and is faster than any '
+              'deadline a sane gateway would set; the alternative — no floor '
+              'and no advertisement — is a panel that never beats, which is '
+              'the reaping this knob exists to end');
+    });
+
+    test('a heartbeat floor under the deadline floor constructs, because a '
+        'cadence is not a deadline', () {
+      // The same regression case the hold cadence has, for the same mistake,
+      // written out again because the mistake is mechanical: `_atLeastFloor`
+      // is right there beside `_positive` in the constructor and it is the
+      // wrong one. A gate case that has to watch several beats inside its own
+      // budget sets this to 40 ms; routed through the deadline validator that
+      // is an ArgumentError, and the only way back is to lower `deadlineFloor`
+      // in the same breath — which changes what every *deadline* in the case
+      // means, to buy a cadence.
+      final config = ClientConfig(heartbeatFloor: const Duration(milliseconds: 40));
+
+      expect(config.heartbeatFloor, const Duration(milliseconds: 40),
+          reason: 'a 40 ms heartbeat floor against the default 500 ms deadline '
+              'floor threw at construction, so the cadence was routed through '
+              'the deadline-floor validator. Nothing waits on one beat and a '
+              'dropped one costs nothing the next one covers');
+      expect(config.deadlineFloor, ClientConfig.defaultDeadlineFloor,
+          reason: 'the floor is still the researched default, so the case '
+              'above was judged against it rather than against one the case '
+              'quietly lowered for itself');
+    });
+
+    test('a zero heartbeat floor is refused by name', () {
+      expect(
+        () => ClientConfig(heartbeatFloor: Duration.zero),
+        throwsA(isA<ArgumentError>().having(
+          (e) => e.message.toString(),
+          'message',
+          allOf(contains('heartbeatFloor'), contains('0 ms')),
+        )),
+        reason: 'zero would arm the pump\'s periodic timer at Duration.zero, '
+            'which is a beat every turn of the event loop — one panel '
+            'flooding the single gateway that serves every screen in the '
+            'factory, on the one path that runs whenever the link is healthy',
+      );
+    });
+
+    test('a negative heartbeat floor is refused by name', () {
+      expect(
+        () => ClientConfig(heartbeatFloor: const Duration(milliseconds: -100)),
+        throwsA(isA<ArgumentError>().having(
+          (e) => e.message.toString(),
+          'message',
+          allOf(contains('heartbeatFloor'), contains('-100 ms')),
+        )),
+        reason: 'a negative floor would let a gateway advertising a very '
+            'short deadline drive the period below zero, and a panel that '
+            'never beats is a panel the reaper takes once a deadline for ever',
+      );
+    });
+  });
+
   group('the freshness deadline cannot learn a transport period', () {
     test('no field or parameter of the config is derived from the server '
         'cadence', () {

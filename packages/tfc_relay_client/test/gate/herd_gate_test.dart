@@ -905,17 +905,26 @@ void main() {
               'a value that arrived after a larger one is an old queued value '
               'being delivered late — never an old queued one is the clause, '
               'and this is the only place it can be seen');
-      // CONFLATION IS NOT EVICTION. Asked as "was anybody thrown off *for
-      // being slow*" rather than "was anybody thrown off", because on this
-      // build the answer to the second question is yes for reasons that have
-      // nothing to do with this row — see `heartbeatReaps` and 07-08-SUMMARY's
-      // finding. This case is fourteen seconds long and the heartbeat deadline
-      // is six, so the background reaping is printed and the row asserts the
-      // eviction it is actually about.
+      // CONFLATION IS NOT EVICTION, and since 07-08b the row asks it **both
+      // ways**. When 07-08 wrote this clause it could only ask "was anybody
+      // thrown off *for being slow*", because the answer to "was anybody
+      // thrown off" was yes for a reason that had nothing to do with this row:
+      // no client sent a periodic heartbeat, so every panel was reaped once
+      // every six seconds and a fourteen-second case saw two of them
+      // (07-08-SUMMARY deviation 3). 07-08b built the pump, so the general
+      // question is answerable again and the general clause is restored.
+      //
+      // Both arms stay, and they fail differently. `evictedForBackpressure` is
+      // the row's own clause — 4004 on a throttled-but-conflating panel — and
+      // it is the one that would still be here if the heartbeat were ever
+      // removed. `heartbeatReaps` is now a **regression arm on the pump**, on
+      // the one case in the suite where it is hardest: a fourteen-second
+      // window on a link metered to ten kilobytes a second, where a heartbeat
+      // that queued behind telemetry would arrive late and the reaper would
+      // take a panel that is doing everything right.
       print('F12: ${fixture.evictedForBackpressure.length} panels thrown off '
-          'for being slow; ${fixture.heartbeatReaps.length} background '
-          'heartbeat reaps over the case (see 07-08-SUMMARY: no client sends a '
-          'periodic heartbeat, so every panel is reaped once a deadline)');
+          'for being slow, ${fixture.heartbeatReaps.length} reaped for '
+          'silence, ${fixture.evictions.length} evicted in total');
       expect(fixture.evictedForBackpressure, isEmpty,
           reason: 'the gateway threw a panel off for being slow: '
               '${fixture.evictedForBackpressure}. Conflation is not eviction: '
@@ -923,6 +932,19 @@ void main() {
               'disconnected. This is the two-tier boundary G5 pairs from the '
               'other side, and 4004 firing on a throttled-but-conflating panel '
               'is the gateway punishing a slow link for being slow');
+      expect(fixture.heartbeatReaps, isEmpty,
+          reason: 'the gateway reaped ${fixture.heartbeatReaps.length} panels '
+              'for silence over this window. The throttled panel\'s link is '
+              'metered to $_f12Throttle bytes/s while a ${keys.length}-key '
+              'page pours down it, which is the hardest place in this suite '
+              'for a heartbeat to get out — and it is also the place where '
+              'being reaped hurts most, because the panel then has to resync '
+              'the whole page across the same throttle');
+      expect(fixture.evictions, isEmpty,
+          reason: 'the gateway threw ${fixture.evictions.length} panels off '
+              'over this case: ${fixture.evictions}. Nothing here should cost '
+              'anybody their session — one link is slow and the other is '
+              'untouched');
 
       // ISOLATION, again and structurally: whatever the background is doing,
       // it is doing it equally to both panels. A throttle that caused its own
@@ -1020,13 +1042,30 @@ void main() {
               'cannot get out inside this budget is a snapshot being starved '
               'by the backlog');
 
-      // As in F12: the question is whether anybody was thrown off *for the
-      // condition this row injects*, not whether anybody was thrown off. A
-      // flapping link cuts sockets by definition, and the background heartbeat
-      // reaping is this build's own (07-08-SUMMARY).
+      // As in F12: the row's own question is whether anybody was thrown off
+      // *for the condition this row injects*. What is different since 07-08b
+      // is that the second question — was anybody reaped for silence — has a
+      // right answer again, so it is asked rather than merely printed.
+      //
+      // **`evictions` as a whole is deliberately not asserted here, and F12
+      // does assert it.** A flapping link resets every pair it carries
+      // (`fault_proxy.dart`'s `_dropForFlap`), so sockets die by design in
+      // this case; what must not happen is the *gateway* choosing to end a
+      // session. `heartbeatReaps` is that question in the form this row can
+      // ask it: no session here lives longer than the 1500 ms up-half, so a
+      // reap would mean the deadline is being missed on a link that is only
+      // briefly up — which is the panel losing a race it should not be in.
       print('G2: ${fixture.evictedForBackpressure.length} panels thrown off '
-          'for being slow, ${fixture.heartbeatReaps.length} background '
-          'heartbeat reaps');
+          'for being slow, ${fixture.heartbeatReaps.length} reaped for '
+          'silence');
+      expect(fixture.heartbeatReaps, isEmpty,
+          reason: 'the gateway reaped ${fixture.heartbeatReaps.length} panels '
+              'for silence over a flapping, throttled link. Every session in '
+              'this case is younger than the flap\'s up-half and far younger '
+              'than the heartbeat deadline, so a reap here is not the panel '
+              'being quiet — it is the gateway holding a session across a '
+              'reset it should have noticed, or a heartbeat that cannot get '
+              'out at $_g2Throttle bytes/s');
       expect(fixture.evictedForBackpressure, isEmpty,
           reason: 'the gateway threw a panel off for being slow while the link '
               'was throttled and flapping: ${fixture.evictedForBackpressure}. '

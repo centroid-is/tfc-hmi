@@ -295,6 +295,9 @@ final List<_Seam> _seams = <_Seam>[
 /// The one file group 2 reads, relative to the package root.
 const _remoteStateManPath = 'lib/src/remote_state_man.dart';
 
+/// The one file group 2b reads — the heartbeat's carve-out.
+const _heartbeatPumpPath = 'lib/src/heartbeat_pump.dart';
+
 // ---------------------------------------------------------------------------
 // The behavioural arm.
 // ---------------------------------------------------------------------------
@@ -419,6 +422,94 @@ void main() {
                 'whose answer has not come back is sending it again — which '
                 'is an operator\'s decision and never this process\'s.');
       }
+    });
+  });
+
+  group('the heartbeat is a carve-out, and the carve-out is fenced', () {
+    // **Why this group exists at all.** The group above pins
+    // `remote_state_man.dart` at zero `Timer(`, and that pin is what made
+    // 07-08 escalate the missing heartbeat as a Rule 4 finding rather than
+    // fixing it inline: a periodic client-to-gateway frame needs a timer, and
+    // the file that would have held it is the file that may not.
+    //
+    // 07-08b did not loosen that pin. It put the timer in a file of its own
+    // and fenced that file here, which is the difference between a carve-out
+    // and an exception. The write path still schedules nothing; one other file
+    // schedules exactly one thing, and the two cases below say what it is
+    // allowed to be.
+    //
+    // **What this does not claim.** Same limit as the group above, in the same
+    // words: this pins a scheduling primitive and a method name, not control
+    // flow. A `for` loop inside `_sendBeat` would pass both cases. What it
+    // catches is the shape that actually ships — a second timer added to "also
+    // re-send X every N seconds", and a send site widened from `ping` to
+    // something with an effect on the plant.
+    test('$_heartbeatPumpPath schedules exactly one thing', () {
+      final source = File(_heartbeatPumpPath);
+      expect(source.existsSync(), isTrue,
+          reason: 'this case reads the implementation as text and found no '
+              '$_heartbeatPumpPath; dart test was invoked from '
+              '${Directory.current.path}. If the pump was renamed or removed, '
+              'this pin has to move with it — a carve-out whose fence stopped '
+              'matching anything is a carve-out with no fence');
+
+      final periodic = _mentions(source, RegExp(r'Timer\.periodic\('))
+          .map((hit) => '$_heartbeatPumpPath:${hit.$1}  ${hit.$2.trim()}')
+          .toList();
+      expect(periodic, hasLength(1),
+          reason: 'the heartbeat pump holds ${periodic.length} periodic '
+              'timers, not one:\n${periodic.map((h) => '  $h').join('\n')}\n\n'
+              'One is the whole permission this file was given. A second '
+              'periodic timer in here is something else being scheduled '
+              'alongside the heartbeat, with the heartbeat\'s exemption and '
+              'without the heartbeat\'s argument — and `debugTimerCount` would '
+              'go on answering 1, because it reports the field rather than '
+              'counting the timers. If the new one is genuinely a liveness '
+              'frame, say here why it cannot carry anything else.');
+
+      final oneShot = _mentions(source, RegExp(r'(?<!\.)\bTimer\('))
+          .map((hit) => '$_heartbeatPumpPath:${hit.$1}  ${hit.$2.trim()}')
+          .toList();
+      expect(oneShot, isEmpty,
+          reason: 'the heartbeat pump now schedules a one-shot timer as well:\n'
+              '${oneShot.map((h) => '  $h').join('\n')}\n\n'
+              'A `Timer(...)` here is a delay before doing something once, and '
+              'the only things this class does are beat and stop. A retry '
+              'after a failed beat would be the first one written, and a beat '
+              'that is worth retrying two hundred milliseconds later is a beat '
+              'the next period covers anyway.');
+    });
+
+    test('the heartbeat names one method, and it is ping', () {
+      final source = File(_heartbeatPumpPath);
+      expect(source.existsSync(), isTrue,
+          reason: 'no $_heartbeatPumpPath to read; see the case above');
+
+      final named = _mentions(source, RegExp(r'Methods\.\w+'));
+      expect(named, isNotEmpty,
+          reason: 'the pump names no protocol method at all in non-comment '
+              'text, so the assertion below is about an empty list — either '
+              'the send site moved out of this file, in which case the fence '
+              'is around the wrong thing, or the sweep stopped reading it');
+
+      final spellings = <String>{
+        for (final (_, text) in named)
+          for (final match in RegExp(r'Methods\.\w+').allMatches(text))
+            match.group(0)!,
+      };
+      expect(spellings, {'Methods.ping'},
+          reason: 'the heartbeat pump names $spellings. It may name '
+              '`Methods.ping` and nothing else.\n\n'
+              'This is the fence, and the thing on the other side of it is a '
+              'timer that fires on its own schedule with no operator behind '
+              'it. `ping` is safe there because it has no effect on the plant '
+              'and no outcome anybody has to reconcile; a write, a hold tick '
+              'or even a read on that same timer is a frame nobody asked for, '
+              'sent on a repeating schedule, with none of the bookkeeping '
+              '`RemoteStateMan.write` does — and in the worst case it is a '
+              'machine moving because a timer went off.\n\n'
+              'If the pump genuinely needs a second method, it is no longer a '
+              'heartbeat and it does not belong behind this exemption.');
     });
   });
 
