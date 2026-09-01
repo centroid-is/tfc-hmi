@@ -86,6 +86,10 @@ bool WatchdogEnabledFromEnvironment() {
 // normal shutdown (0) and a crash-handler exit.
 constexpr int kGpuLossExitCode = 109;
 
+// One disconnect or reconnect emits several WM_WTSSESSION_CHANGE messages
+// within a second or so. One rebuild answers all of them.
+constexpr unsigned long long kSessionRebuildDebounceMs = 3000;
+
 constexpr const char* kTag = "[gpu-watchdog]";
 
 void LogWatchdog(const std::string& message) {
@@ -683,6 +687,38 @@ void FlutterWindow::StartProbe() {
   flutter_controller_->ForceRedraw();
 }
 
+void FlutterWindow::RebuildForSessionChange(const char* why) {
+  if (!watchdog_enabled_ || flutter_controller_ == nullptr) {
+    return;
+  }
+
+  const unsigned long long now = ::GetTickCount64();
+  if (last_session_rebuild_ms_ != 0 &&
+      now - last_session_rebuild_ms_ < kSessionRebuildDebounceMs) {
+    return;
+  }
+  last_session_rebuild_ms_ = now;
+
+  LogWatchdog(std::string("session change (") + why +
+              ") -- REBUILDING the renderer rather than probing it. The probe "
+              "cannot see this class of loss: the next-frame callback is "
+              "answered whether or not rasterisation succeeded.");
+
+  DestroyController();
+  // As in the loss recovery: leave first_frame_shown_ alone so an already
+  // visible window stays visible and an operator's maximise survives.
+  if (!CreateController()) {
+    LogWatchdog(
+        "session-change rebuild FAILED -- the window has no renderer; the "
+        "tick will keep trying and the loss path can still escalate");
+  } else {
+    LogWatchdog("renderer rebuilt after session change");
+    // The old sentinel may belong to the session's departed adapter.
+    device_probe_.Reset();
+    device_probe_.Create();
+  }
+}
+
 void FlutterWindow::OnFramePresented() {
   // The engine consumed the armed callback to get here, so the next probe is
   // free to arm a new one.
@@ -831,6 +867,15 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
             NoteLossHint(tfc::LossHint::kSessionChange,
                          static_cast<unsigned long>(wparam));
             Dispatch(WatchdogEvent::kDeviceLossHint);
+
+            // Console lock/unlock keeps the same adapter, so a probe is the
+            // right response there. A REMOTE connect or disconnect swaps it,
+            // and that is the case the probe is blind to.
+            if (wparam == WTS_REMOTE_CONNECT) {
+              RebuildForSessionChange("remote connect");
+            } else if (wparam == WTS_REMOTE_DISCONNECT) {
+              RebuildForSessionChange("remote disconnect");
+            }
           }
           break;
         default:
