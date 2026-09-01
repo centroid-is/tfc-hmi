@@ -69,6 +69,120 @@ import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 import 'fault_fixture.dart' show faultClientConfig, until;
 import 'frame_seam.dart';
 
+/// A page of [n] keys in the plant's own `AREAnn.DEVnn.SUBnn` shape.
+///
+/// **Why this is here and not in the file that first needed it.** The slow-link
+/// rows are a family — F19 carries the page a link has headroom for, F20 the
+/// same page on a link that cannot carry it, F21 the same page again across a
+/// recovery — and the whole point of the comparison is that it is the *same*
+/// page. Two builders, one per wave, would drift by a key or by a name shape
+/// within a plan, and the F19-versus-F20 contrast would quietly become a
+/// contrast between two pages as well as between two rates. 07-10 writes it;
+/// 07-11 imports it.
+///
+/// **Realistic width, because width is the payload.** 07-RESEARCH assumption A1
+/// puts a slim delta key at about 22 bytes on the wire, which is a number about
+/// *this* naming scheme: `ST101.CN01.MOT01.setpoint` is 25 characters, and
+/// `key0`…`key199` would be less than half of it. A page built out of short
+/// names would put the 200-key frame at well under the size the rate arithmetic
+/// in F19's doc is computed from, and the row would be measuring a link with
+/// twice the headroom it claims to have. It is also `resync_gate_test.dart:97-104`'s
+/// rule: a page should read like a page.
+///
+/// The scheme is two areas of twenty devices carrying five motors each, so 200
+/// keys are unique without repeating a segment pattern, and the areas are the
+/// plant's own (`ST101`, `ST201`; `ST301` is the third and this builder stops
+/// before inventing a fourth).
+List<String> plantPage(int n) {
+  if (n <= 0 || n > 300) {
+    throw ArgumentError('a page of $n keys is outside 1-300. The scheme below '
+        'lays 100 keys into each of the plant\'s areas and the plant has three '
+        '(ST101, ST201, ST301), so a larger page would name an area that does '
+        'not exist — a key the gateway classifies as a typo and never serves '
+        '(`session_handlers.dart:154-164`), which reads in a case as a page '
+        'that never fills');
+  }
+  return [
+    for (var i = 0; i < n; i++)
+      'ST${101 + (i ~/ 100) * 100}'
+      '.CN${(i % 100 ~/ 5 + 1).toString().padLeft(2, '0')}'
+      '.MOT${(i % 5 + 1).toString().padLeft(2, '0')}.setpoint',
+  ];
+}
+
+/// A plant that moves every key of a page on a period, and counts what it did.
+///
+/// The counter is the reason this is a class rather than a bare [Timer]. A
+/// slow-link row's first question is always "was the plant actually busy?" —
+/// a link throttled below the rate of nothing is not throttled, and a cadence
+/// measured on a quiet page is measuring the freshness follow-up rather than
+/// the page. [sweeps] and [writes] are what that arm reads, and [latest] is
+/// what a conflation arm compares the last delivered value against.
+final class PlantDriver {
+  PlantDriver._(this._plant, this.keys, this.period, this.from);
+
+  final FakeStateMan _plant;
+
+  /// The page being moved.
+  final List<String> keys;
+
+  /// How often every key on [keys] is given a new value.
+  final Duration period;
+
+  /// The value the first sweep writes.
+  final int from;
+
+  Timer? _timer;
+  int _sweeps = 0;
+
+  /// How many times the whole page has been moved.
+  int get sweeps => _sweeps;
+
+  /// How many key-writes that is — the number an "is the plant busy" arm bands.
+  int get writes => _sweeps * keys.length;
+
+  /// The value the last sweep wrote, or null before the first one.
+  ///
+  /// Monotonic by construction, so a case can assert that what a panel was
+  /// shown last is what the plant holds now without reading the plant twice
+  /// and racing itself.
+  int? get latest => _sweeps == 0 ? null : from + _sweeps - 1;
+
+  void _sweep() {
+    final value = from + _sweeps;
+    _sweeps++;
+    _plant.setValues({for (final key in keys) key: value});
+  }
+
+  /// Idempotent, so a case may stop the plant early and the teardown still
+  /// runs without knowing whether it did.
+  void cancel() {
+    _timer?.cancel();
+    _timer = null;
+  }
+}
+
+/// Starts moving every key of [keys] on [period], and stops at teardown.
+///
+/// **The first sweep is synchronous.** `Timer.periodic` fires after one period,
+/// so a driver started immediately before a measurement window would leave the
+/// first tick of that window carrying whatever the seed left behind — which for
+/// a 100 ms period and a 100 ms tick is a whole frame of the measurement, and
+/// for a case that samples the write count it is an off-by-one that reads as
+/// the plant running slow.
+PlantDriver drivePage(
+  FakeStateMan plant,
+  List<String> keys, {
+  Duration period = const Duration(milliseconds: 100),
+  int from = 1000,
+}) {
+  final driver = PlantDriver._(plant, keys, period, from);
+  driver._sweep();
+  driver._timer = Timer.periodic(period, (_) => driver._sweep());
+  addTearDown(driver.cancel);
+  return driver;
+}
+
 /// How many panels a herd holds unless a case says otherwise.
 ///
 /// **Twenty, and deliberately not fifty.** 07-RESEARCH §C.2: twenty real
@@ -198,6 +312,7 @@ final class GateFixture {
     this.gatewayComplaints,
     this._retired,
     this._config,
+    this._gatewayConfig,
   );
 
   /// The plant behind the gateway. Levers go straight here, never over the
@@ -248,6 +363,10 @@ final class GateFixture {
   final List<ConnectionClose> _retired;
 
   final ClientConfig _config;
+
+  /// What every gateway this fixture builds is configured with, replacement
+  /// included — see [GatewayConfig].
+  final GatewayConfig? _gatewayConfig;
 
   /// The one proxy the whole herd shares.
   ///
@@ -403,7 +522,8 @@ final class GateFixture {
 
     var retries = 0;
     while (true) {
-      final replacement = _buildGateway(served, port, complaints: gatewayComplaints);
+      final replacement = _buildGateway(served, port,
+          complaints: gatewayComplaints, config: _gatewayConfig);
       try {
         await replacement.start();
         _slot.server = replacement;
@@ -488,8 +608,39 @@ final class GateFixture {
   Set<String> get keys => _keys;
 }
 
+/// How a case says what gateway it wants, given the port the fixture pinned.
+///
+/// A builder rather than a bag of named knobs, because the knobs a slow-link
+/// row needs are not the ones a herd row needs and the list would only grow:
+/// F19 needs `tick: 100ms` at the band's edge, G5 needs a soft ceiling low
+/// enough that a page can be held above it, and 07-11's rows will want their
+/// own. A builder keeps the *whole* config visible at the case that depends on
+/// it, which is where a reader looks when a row's numbers stop adding up.
+typedef GatewayConfig = ServerConfig Function(int port);
+
+/// [config]'s answer for [port], or the fixture's default, checked.
+///
+/// The check is not ceremony. The port is pinned at the first bind and every
+/// replacement has to come back on it (see the library doc), so a builder that
+/// forgot to pass `port:` would bind a fresh kernel-chosen port on the first
+/// restart and every panel would spend the rest of the case dialling a port
+/// nobody is listening on — which reads as a client that cannot reconnect
+/// rather than as a fixture that moved the gateway.
+ServerConfig _configFor(GatewayConfig? config, int port) {
+  if (config == null) return ServerConfig(tick: ServerConfig.minTick, port: port);
+  final built = config(port);
+  if (built.port != port) {
+    throw ArgumentError('this fixture pinned port $port and the serverConfig '
+        'builder returned a config for port ${built.port}. The builder is '
+        'handed the port precisely so it can pass it through: a gateway that '
+        'came back on a different port would be behind nobody\'s proxy, and '
+        'the panels would read as unable to reconnect');
+  }
+  return built;
+}
+
 /// Builds a gateway on [port] against [plant], with this package's fault-leg
-/// settings.
+/// settings unless [config] names its own.
 ///
 /// One function so the first gateway and every replacement are built the same
 /// way. A replacement that differed from the original in any respect would make
@@ -498,10 +649,11 @@ RelayServer _buildGateway(
   FakeStateMan plant,
   int port, {
   required List<String> complaints,
+  GatewayConfig? config,
 }) =>
     RelayServer(
       api: plant,
-      config: ServerConfig(tick: ServerConfig.minTick, port: port),
+      config: _configFor(config, port),
       // Collected rather than printed, and collected rather than discarded.
       // `fault_fixture.dart:259-263` discards because every case there provokes
       // an error on purpose and a stack per provoked error trains everyone to
@@ -533,6 +685,11 @@ RelayServer _buildGateway(
 /// honest arrangement and it changes nothing else: all of them target the same
 /// gateway port, so the panels are still on one gateway.
 ///
+/// [serverConfig] names the gateway this case wants, and is applied to the
+/// replacement as well as to the first bind — see [GatewayConfig]. Absent, the
+/// gateway runs at `ServerConfig.minTick` with every ceiling at its default,
+/// which is what the herd rows were written against.
+///
 /// [waitForReady] leaves every panel subscribed and holding a value for every
 /// key before this returns. Off is for a case that wants to watch the
 /// establishment itself.
@@ -542,6 +699,7 @@ Future<GateFixture> gateFixture({
   void Function(FakeStateMan plant)? seed,
   bool proxyPerClient = false,
   ClientConfig? config,
+  GatewayConfig? serverConfig,
   bool waitForReady = true,
   Duration readyBudget = const Duration(seconds: 20),
 }) async {
@@ -562,7 +720,8 @@ Future<GateFixture> gateFixture({
   // Port 0: the kernel picks, and the number it picks is what every
   // replacement binds. See the library doc on why the port is fixed from the
   // first bind rather than chosen here.
-  final first = _buildGateway(served, 0, complaints: gatewayComplaints);
+  final first =
+      _buildGateway(served, 0, complaints: gatewayComplaints, config: serverConfig);
   await first.start();
   final slot = _GatewaySlot(first);
   final port = first.port;
@@ -589,7 +748,7 @@ Future<GateFixture> gateFixture({
   }
 
   final fixture = GateFixture._(served, slot, port, proxies, herd, keys,
-      gatewayComplaints, retired, clientConfig);
+      gatewayComplaints, retired, clientConfig, serverConfig);
 
   if (waitForReady) {
     await until(

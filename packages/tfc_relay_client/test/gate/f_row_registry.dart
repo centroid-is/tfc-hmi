@@ -394,12 +394,6 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     owner: '07-12',
     clause: 'the six TLS arms, the wss smoke row and the auth contrast',
   ),
-  'F19': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-10',
-    clause: 'the 200-key page at 10 Hz on 1 Mbit, p99 inter-frame interval, no '
-        'verdict fires',
-  ),
   'F20': Outstanding(
     kind: OutstandingKind.missing,
     owner: '07-11',
@@ -411,12 +405,6 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     owner: '07-11',
     clause: 'the recovery: cadence returns, staleness clears, and the burst '
         'measured rather than banded away',
-  ),
-  'G5': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-10',
-    clause: 'the paired boundary over a real socket, plus the text arm '
-        'protecting the server-side pair',
   ),
   'G6': Outstanding(
     kind: OutstandingKind.missing,
