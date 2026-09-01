@@ -393,18 +393,28 @@ final class RemoteStateMan implements StateManApi {
   /// Every transition of [viewIsStale], and only the transitions.
   Stream<bool> get viewFreshness => _freshness.stream;
 
-  /// Subscriptions whose plant-side source had stopped being re-evaluated as
-  /// of the last tick.
+  /// Subscriptions whose plant-side source is not being re-evaluated, judged
+  /// against this panel's clock **now** — not against the last frame to arrive.
   ///
   /// Distinct from [viewIsStale] on purpose, and the distinction is the whole
   /// of CLI-04: this set can be non-empty while the link is provably healthy.
   /// The gateway is fine, one page's tags are not, and the operator needs to
   /// be told which of those two it is looking at.
-  Set<String> get staleSubscriptions => _supervisor.watchdog.staleSubscriptions;
+  ///
+  /// **Live, because a saturated link keeps delivering old frames**
+  /// (07-RESEARCH §B.4): the last-tick verdict compares two fields of one
+  /// delayed frame, agrees with itself for ever, and renders a minute-behind
+  /// page as current. Converted with [clockOffset]; computed on read, no timer.
+  Set<String> get staleSubscriptions => _supervisor.watchdog
+      .staleSubscriptionsAt(DateTime.now().millisecondsSinceEpoch,
+          clockOffsetMs: clockOffset.offsetMs);
 
-  /// The same verdict for the one page a widget renders.
-  bool isSubscriptionStale(String sub) =>
-      _supervisor.watchdog.isSubscriptionStale(sub);
+  /// The same live verdict for the one page a widget renders.
+  bool isSubscriptionStale(String sub) => staleSubscriptions.contains(sub);
+
+  /// The last-tick verdict, for the cases pinning `sawTick`. Never rendered.
+  Set<String> get debugStaleSubscriptionsAtLastTick =>
+      _supervisor.watchdog.staleSubscriptions;
 
   /// How far this panel's clock sits from the gateway's, captured at the last
   /// handshake.

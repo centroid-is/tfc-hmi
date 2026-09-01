@@ -38,6 +38,13 @@ import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_stateman_contract/tfc_stateman_contract.dart' show within;
 import 'package:test/test.dart';
 
+// The socket companion below needs a real panel over a real gateway: the lie
+// this file is about lives in `RemoteStateMan`'s getter, not in the watchdog's
+// arithmetic, and no amount of driving the watchdog directly can reach it.
+import 'support/client_harness.dart' show relayFixture;
+import 'support/fault_fixture.dart' show until;
+import 'support/gate_bands.dart' show scenarioKey;
+
 /// The injected heartbeat period the client is configured to expect.
 ///
 /// Deliberately **not** the gateway's measured 50 ms fan-out cadence. Every
@@ -450,6 +457,104 @@ void main() {
       expect(watchdog.staleSubscriptions, isEmpty,
           reason: 'an id nobody is subscribed to any more kept raising a fault '
               'about a value no screen displays');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 07-RESEARCH §B.4, and 07-CONTEXT user ruling 1.
+  // -------------------------------------------------------------------------
+
+  group('the verdict a screen reads ages between ticks', () {
+    test('the last-tick verdict and the live verdict disagree once local time '
+        'has passed, and the live one is the honest one', () {
+      final watchdog =
+          FreshnessWatchdog(config: testConfig(), onViewFreshnessChanged: (_) {});
+      addTearDown(watchdog.dispose);
+      watchdog.learnedTickMs(period.inMilliseconds);
+
+      // One tick, in which the subscription was evaluated at that very
+      // instant, and then nothing. This is a saturated link exactly: the panel
+      // is holding a frame that agreed with itself when it was built, and no
+      // newer frame has arrived to disagree with it.
+      watchdog.sawTick(TickParams(serverTime: serverEpochMs, subs: const {
+        's1': SubTick(seq: 0, evaluatedAt: serverEpochMs),
+      }));
+
+      // The limit is the advertised cadence times the multiple, floored at the
+      // link deadline. Both halves are read below at an instant well past it.
+      final limitMs = period.inMilliseconds * 30;
+      final wellPast = serverEpochMs + limitMs * 2;
+
+      expect(watchdog.staleSubscriptions, isEmpty,
+          reason: 'the last-tick verdict is the arithmetic of one frame '
+              'against itself: `sawTick` compares `tick.serverTime` with the '
+              '`evaluatedAt` carried in the same frame, so a frame that is a '
+              'minute old is internally consistent and reports fresh. This '
+              'expectation is not a property anybody wants — it is the '
+              'measurement of the surface that must never be the one a screen '
+              'reads');
+      expect(
+          watchdog.staleSubscriptionsAt(wellPast, clockOffsetMs: 0),
+          equals(<String>{'s1'}),
+          reason: 'the live verdict ages the same subscription against the '
+              'caller\'s own instant, and ${limitMs * 2} ms after its last '
+              'evaluation it did not report it stale. That is the arithmetic '
+              'this whole surface exists for');
+    });
+
+    test('a panel whose frames have stopped reports its subscription stale', () async {
+      // **The RED this plan was written for** (07-RESEARCH §B.4). The panel is
+      // not disconnected in any way it can detect from a frame: it holds a
+      // snapshot the gateway really sent, and the frame it is holding agrees
+      // with itself. What has stopped is the arrival of newer ones.
+      //
+      // The starvation is a blackhole rather than a throttle because this is
+      // the *unit* companion to F20's clause 3: the socket-level row measures
+      // the same lie under a metered link over thirty seconds, and this one
+      // has to fail in under two so it runs on every commit.
+      final fixture = relayFixture(
+        withProxy: true,
+        clientConfig: ClientConfig(
+          controlDeadline: const Duration(seconds: 2),
+          writeDeadline: const Duration(seconds: 2),
+          // Short, so the whole case is about a second. The link deadline is
+          // the floor under the per-subscription limit, so lowering the
+          // multiple alone would not move it.
+          freshnessDeadline: const Duration(milliseconds: 600),
+          backoffBase: const Duration(milliseconds: 20),
+          backoffCap: const Duration(milliseconds: 200),
+          deadlineFloor: const Duration(milliseconds: 50),
+          subscriptionStalenessMultiple: 4,
+        ),
+      );
+      await fixture.ready;
+
+      final tap = fixture.client.subscribe(scenarioKey).listen((_) {});
+      addTearDown(tap.cancel);
+      fixture.served.setValues(const {scenarioKey: 7});
+      await until('the panel to be shown a value for $scenarioKey',
+          () => fixture.client.read(scenarioKey)?.value == 7,
+          budget: const Duration(seconds: 5));
+
+      // Nothing crosses the proxy in either direction from here. No close, no
+      // reset: the panel's socket stays open and readyState goes on saying so
+      // (CLAUDE.md's known-bugs list — `readyState` lies).
+      fixture.proxy.blackhole();
+
+      await until(
+          'the panel to report the subscription it has stopped hearing about '
+          'as stale',
+          () => fixture.client.staleSubscriptions.isNotEmpty,
+          budget: const Duration(seconds: 5));
+
+      expect(fixture.client.staleSubscriptions, isNotEmpty, // window-exempt: the until() immediately above completed on this same predicate, so this is the value of the set the window already established rather than a second bet on the deadline
+          reason: 'the panel reported every subscription current while no '
+              'frame had reached it for several deadlines. `staleSubscriptions` '
+              'delegated to the set `sawTick` stored, which is a comparison '
+              'between two fields of the same delayed frame and therefore '
+              'detects nothing — the panel one minute behind reads as live, '
+              'which is the product\'s one unforgivable failure arriving '
+              'through a door the link watchdog does not cover');
     });
   });
 }
