@@ -273,8 +273,12 @@ void main() {
         ..push('vacuum', permissive: false);
       await openPane(tester, fake, pair());
 
-      // PaneSection upper-cases its heading.
-      expect(find.text('LINE 2 PACKING'), findsWidgets);
+      // The set is ONE entry in the Sections list now, headed by its own
+      // name — not a second `PaneBodySection` repeating it.
+      expect(find.textContaining('Line 2 packing — one at a time'),
+          findsOneWidget);
+      expect(find.text('LINE 2 PACKING'), findsNothing,
+          reason: 'the separate choice section is what this collapse removed');
       // Filled, and dead: p_cmd_Start is a toggle, so a live button on the
       // running mode would stop the line it is reporting.
       expect(_enabled(tester, const Key('section-choice-0-0')), isFalse);
@@ -291,14 +295,23 @@ void main() {
         ..push('vacuum', permissive: false);
       await openPane(tester, fake, pair());
 
-      // The members' own rows keep Clean and Stop but lose Run: one place to
-      // pick a mode, not two, and not one guarded and one not.
-      expect(find.byKey(const Key('section-0-run')), findsNothing);
-      expect(find.byKey(const Key('section-1-run')), findsNothing);
-      expect(find.byKey(const Key('section-0-clean')), findsOneWidget);
-      expect(find.byKey(const Key('section-0-stop')), findsOneWidget);
-      expect(find.byKey(const Key('section-1-stop')), findsOneWidget);
-      // ...and the rows are drawn under the name of the choice they belong to.
+      // The pair is one entry: the members ARE the mode buttons, and Clean
+      // and Stop belong to the set. No per-member row survives, so there is
+      // no second place to start a section and no name written twice.
+      for (final k in const [
+        'section-0-run',
+        'section-1-run',
+        'section-0-clean',
+        'section-1-clean',
+        'section-0-stop',
+        'section-1-stop',
+      ]) {
+        expect(find.byKey(Key(k)), findsNothing, reason: '$k is collapsed');
+      }
+      expect(find.byKey(const Key('section-choice-0-0')), findsOneWidget);
+      expect(find.byKey(const Key('section-choice-0-1')), findsOneWidget);
+      expect(find.byKey(const Key('section-set-0-clean')), findsOneWidget);
+      expect(find.byKey(const Key('section-set-0-stop')), findsOneWidget);
       expect(find.textContaining('Line 2 packing — one at a time'),
           findsOneWidget);
     });
@@ -395,12 +408,21 @@ void main() {
       expect(fake.writes.single.value[kSectionCmdStart].asBool, isTrue);
     });
 
-    testWidgets('an unreadable member offers no choice at all', (tester) async {
+    testWidgets('an unreadable member falls back to the separate rows',
+        (tester) async {
+      // `reduceExclusiveSet` cannot say what the set is, so the pane does not
+      // pretend it is one thing — the same rule the face uses to decide
+      // whether to draw a seam. The rows come back, without `Run`, because no
+      // mode may be picked while a member's state is unknown.
       final fake = _FakeStateMan()..push('film');
       await openPane(tester, fake, pair(allowModeSwitch: true));
 
-      expect(_enabled(tester, const Key('section-choice-0-0')), isFalse);
-      expect(_enabled(tester, const Key('section-choice-0-1')), isFalse);
+      expect(find.byKey(const Key('section-choice-0-0')), findsNothing);
+      expect(find.byKey(const Key('section-choice-0-1')), findsNothing);
+      expect(find.byKey(const Key('section-0-stop')), findsOneWidget);
+      expect(find.byKey(const Key('section-1-stop')), findsOneWidget);
+      expect(find.byKey(const Key('section-0-run')), findsNothing);
+      expect(find.byKey(const Key('section-1-run')), findsNothing);
       expect(find.textContaining('One of these is not reading'), findsOneWidget);
     });
 
@@ -522,14 +544,28 @@ void main() {
           'packing alone'), findsOneWidget);
     });
 
-    testWidgets('Run all goes dead when only alternatives could start',
+    testWidgets('Run all is not drawn at all when it could never fire',
         (tester) async {
+      // Every section on this button is an alternative, and `Run all` never
+      // writes to one — so it is dead in every state, forever. It used to be
+      // drawn dead AND (once the reduced view agreed on Running) wearing the
+      // filled green of a live button.
       final fake = _FakeStateMan()
         ..push('film')
         ..push('vacuum');
       await openPane(tester, fake, pair());
-      expect(_enabled(tester, const Key('section-run')), isFalse,
-          reason: 'a live button that writes nothing is worse than a dead one');
+      expect(find.byKey(const Key('section-run')), findsNothing);
+      expect(find.byKey(const Key('section-clean')), findsOneWidget,
+          reason: 'cleaning is not exclusive — Clean all still reaches both');
+    });
+
+    testWidgets('a permanently green Run all is gone from the running pair too',
+        (tester) async {
+      final fake = _FakeStateMan()
+        ..push('film', enabled: true)
+        ..push('vacuum', permissive: false);
+      await openPane(tester, fake, pair());
+      expect(find.byKey(const Key('section-run')), findsNothing);
     });
 
     testWidgets('Clean all still fans out to alternatives', (tester) async {
@@ -724,14 +760,20 @@ void main() {
       expect(fake.writes, isEmpty);
     });
 
-    testWidgets('the choice explains that it will ask, before it is used',
-        (tester) async {
+    testWidgets('a healthy choice says nothing at all', (tester) async {
+      // The note that explained the hand-over was the only one that appeared
+      // when nothing was the matter — a line of text under every working pair
+      // on the plant, which is the noise this asset exists not to make. The
+      // confirmation dialog is where the hand-over is explained, at the
+      // moment it is about to happen.
       final fake = vacuumRunning();
       await openPane(tester, fake, pair(allowModeSwitch: true));
-      expect(
-          find.textContaining(
-              'Choosing the other mode stops Line 2 vacuum first'),
-          findsOneWidget);
+
+      expect(find.textContaining('Choosing the other mode'), findsNothing);
+      expect(find.textContaining('has the line'), findsNothing);
+      expect(find.textContaining('is not holding'), findsNothing);
+      // ...and the switch it would have described is live regardless.
+      expect(_enabled(tester, const Key('section-choice-0-0')), isTrue);
     });
 
     testWidgets('a switch away from a CLEANING mode stops it first too',

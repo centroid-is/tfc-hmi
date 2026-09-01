@@ -1767,34 +1767,35 @@ class SectionPane extends StatelessWidget {
   SectionMode _modeAt(int i) =>
       i < modes.length ? modes[i] : SectionMode.unknown;
 
-  /// The order the Sections list draws its rows in, with the members of each
-  /// exclusive set pulled together and the first of them carrying the name of
-  /// the choice.
+  /// What the Sections list draws, one entry per thing on the line.
   ///
-  /// A set stays where its first member was configured, so a page that does
+  /// A plain section is one entry ([set] null). An exclusive set is ALSO one
+  /// entry: the pair is one machine with a mode selector — the PLC allows
+  /// exactly one of them `q_xEnabled` and drops the other the scan its
+  /// permissive clears — so drawing it as two rows plus a separate choice
+  /// block said the same two names four times and pushed the group commands
+  /// below the fold.
+  ///
+  /// A set sits where its first member was configured, so a page that does
   /// not use exclusivity gets back exactly `0..refs.length` and this list is
   /// the one #387 drew.
-  List<({int index, String? heading})> _listOrder() {
+  List<({int index, ExclusiveSet? set})> _listEntries() {
     final setOf = <int, ExclusiveSet>{};
     for (final s in exclusiveSets) {
       for (final i in s.members) {
         setOf[i] = s;
       }
     }
-    final out = <({int index, String? heading})>[];
+    final out = <({int index, ExclusiveSet? set})>[];
     final done = <ExclusiveSet>{};
     for (var i = 0; i < refs.length; i++) {
       final set = setOf[i];
       if (set == null) {
-        out.add((index: i, heading: null));
+        out.add((index: i, set: null));
         continue;
       }
       if (!done.add(set)) continue;
-      var first = true;
-      for (final m in set.members) {
-        out.add((index: m, heading: first ? set.name : null));
-        first = false;
-      }
+      out.add((index: i, set: set));
     }
     return out;
   }
@@ -1832,6 +1833,15 @@ class SectionPane extends StatelessWidget {
                 : 'No for ${held.length} of ${refs.length}';
 
     final runnable = groupStartable(modes, exclusiveSets);
+    // `Run all` never writes to a member of an exclusive set, so on a button
+    // where every section IS one it can never fire — in any state, forever.
+    // Drawing it anyway gave the pane a permanently dead control, and (once
+    // the reduced view agreed on Running) a permanently dead control wearing
+    // the filled green of a live one. It is not drawn at all instead.
+    final canEverRunAll = [
+      for (var i = 0; i < refs.length; i++)
+        if (!inExclusiveSet(i, exclusiveSets)) i,
+    ].isNotEmpty;
     final cleanable = modes.any(canClean);
     final stoppable = modes.any(canStop);
 
@@ -1947,57 +1957,32 @@ class SectionPane extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  for (final entry in _listOrder().indexed) ...[
+                  for (final entry in _listEntries().indexed) ...[
                     // A hairline between members: without it three name /
                     // state / three-button blocks run together into one wall
                     // and the eye cannot tell which buttons belong to which
                     // section — the one thing this list exists to make
                     // obvious.
                     if (entry.$1 > 0) const Divider(height: 1),
-                    // Alternatives are drawn together under the name of the
-                    // choice they belong to, so the two rows read as one
-                    // decision instead of as two machines that happen to be
-                    // next to each other.
-                    if (entry.$2.heading != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8, bottom: 2),
-                        child: Text(
-                          '${entry.$2.heading} — one at a time',
-                          style: Theme.of(context)
-                              .textTheme
-                              .labelMedium
-                              ?.copyWith(color: states.grey),
-                        ),
+                    if (entry.$2.set case final set?)
+                      _ExclusiveSetRow(
+                        setIndex: exclusiveSets.indexOf(set),
+                        set: set,
+                        refs: refs,
+                        modes: modes,
+                        allowModeSwitch: allowModeSwitch,
+                        onModeSwitch: onModeSwitch,
+                        onSectionCommand: onSectionCommand,
+                      )
+                    else
+                      _SectionRow(
+                        index: entry.$2.index,
+                        name: refs[entry.$2.index].displayLabel,
+                        mode: _modeAt(entry.$2.index),
+                        onCommand: onSectionCommand,
                       ),
-                    _SectionRow(
-                      index: entry.$2.index,
-                      name: refs[entry.$2.index].displayLabel,
-                      mode: _modeAt(entry.$2.index),
-                      // One place to pick a mode, not two. A `Run` on an
-                      // alternative's own row is the unguarded half of the
-                      // decision the choice below makes properly, and having
-                      // both is how an operator learns that one of them
-                      // sometimes does nothing.
-                      showRun: !inExclusiveSet(entry.$2.index, exclusiveSets),
-                      onCommand: onSectionCommand,
-                    ),
                   ],
                 ],
-              ),
-            ),
-          // One block per declared choice, before the group commands. These
-          // are the decisions with only one right answer at a time; `Run all`
-          // below is the blunt instrument and belongs after them.
-          for (var s = 0; s < exclusiveSets.length; s++)
-            PaneBodySection.manual(
-              title: exclusiveSets[s].name,
-              child: _ExclusiveChoice(
-                setIndex: s,
-                set: exclusiveSets[s],
-                refs: refs,
-                modes: modes,
-                allowModeSwitch: allowModeSwitch,
-                onModeSwitch: onModeSwitch,
               ),
             ),
           PaneBodySection.manual(
@@ -2008,19 +1993,22 @@ class SectionPane extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Expanded(
-                      child: _ModeChoice(
-                        buttonKey: const Key('section-run'),
-                        label: single ? 'Run' : 'Run all',
-                        icon: Icons.play_arrow,
-                        color: states.green,
-                        active: !group.mixed &&
-                            group.agreed == SectionMode.running,
-                        onPressed:
-                            runnable ? () => onCommand(kSectionCmdStart) : null,
+                    if (canEverRunAll) ...[
+                      Expanded(
+                        child: _ModeChoice(
+                          buttonKey: const Key('section-run'),
+                          label: single ? 'Run' : 'Run all',
+                          icon: Icons.play_arrow,
+                          color: states.green,
+                          active: !group.mixed &&
+                              group.agreed == SectionMode.running,
+                          onPressed: runnable
+                              ? () => onCommand(kSectionCmdStart)
+                              : null,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
+                      const SizedBox(width: 8),
+                    ],
                     Expanded(
                       child: _ModeChoice(
                         buttonKey: const Key('section-clean'),
@@ -2039,8 +2027,9 @@ class SectionPane extends StatelessWidget {
                 // Said only when it is the answer to a question the operator
                 // has just asked: something in a choice could have started,
                 // and `Run all` deliberately did not start it.
-                if (exclusiveSets.any((s) =>
-                    s.members.any((i) => canStart(_modeAt(i))))) ...[
+                if (canEverRunAll &&
+                    exclusiveSets.any((s) =>
+                        s.members.any((i) => canStart(_modeAt(i))))) ...[
                   const SizedBox(height: 10),
                   _Note(
                     icon: Icons.rule,
@@ -2092,39 +2081,100 @@ String _joinNames(Iterable<String> names) {
   return '${list.sublist(0, list.length - 1).join(', ')} and ${list.last}';
 }
 
-/// One declared choice: the alternatives, and which of them has the line.
+/// The words that tell a set's members apart, with the run of leading words
+/// they all share dropped.
 ///
-/// Presented as a choice rather than as a row of independent on/off toggles
-/// because that is what it is — the PLC allows exactly one, so two switches
-/// would be asking the operator to work out for themselves that they are one
-/// decision. The mode that has the line is filled and inert (`p_cmd_Start` is
-/// a toggle: a live button there would stop it); the alternatives are live
-/// only when picking them would actually do something.
+/// "Line 2 film" and "Line 2 vacuum" become "Film" and "Vacuum". Inside one
+/// entry the shared half is already overhead — it is in the heading — and the
+/// four buttons on the row have about eighty pixels each on a pane, which is
+/// not enough for the full name: both members ellipsised to "Line …" and the
+/// operator could no longer tell which button was which. The full names are
+/// what the screen reader and the confirmation dialog still say.
 ///
-/// Full-width rows rather than a segmented strip: these carry the machine's
-/// own name, they are read on a wet touchscreen with no hover and no tooltip,
-/// and this is the one control on the pane that starts a line.
-class _ExclusiveChoice extends StatelessWidget {
+/// Falls back to the labels untouched whenever the trim would be a guess:
+/// nothing shared, or a member that is nothing BUT the shared part.
+List<String> shortMemberNames(List<String> labels) {
+  if (labels.length < 2) return labels;
+  final words = [for (final l in labels) l.trim().split(RegExp(r'\s+'))];
+  var shared = 0;
+  while (words.every((w) => w.length > shared + 1) &&
+      words.every((w) => w[shared].toLowerCase() == words[0][shared].toLowerCase())) {
+    shared++;
+  }
+  if (shared == 0) return labels;
+  final short = [
+    for (final w in words)
+      () {
+        final rest = w.sublist(shared).join(' ');
+        return rest.isEmpty
+            ? w.join(' ')
+            : rest[0].toUpperCase() + rest.substring(1);
+      }(),
+  ];
+  // A label that trimmed down to a stub is worse than a long one: "Line 2"
+  // beside "Line 2 vacuum" would leave a button reading "2". Keep the full
+  // names rather than ship a word nobody can act on.
+  if (short.any((n) => n.length < 3)) return labels;
+  return short;
+}
+
+/// One exclusive set, drawn as one entry in the Sections list.
+///
+/// The pair is one machine with a mode selector, and the PLC is what makes it
+/// one: `FB_Section` allows exactly one member `q_xEnabled`, and drops the
+/// other's outputs the scan its `i_xPermissive` clears. Two rows plus a
+/// separate choice block said each machine's name twice and each set's name
+/// twice, and pushed the group commands below the fold on the seven-section
+/// button this asset was built for.
+///
+/// So: one heading, one state, and the members as the mode buttons. `Clean`
+/// and `Stop` sit beside them and act on the whole set — neither is part of
+/// the exclusion (`p_cmd_Stop` is not gated at all, and cleaning never sets
+/// `q_xEnabled`, so both members may wash down at once).
+///
+/// The mode with the line is filled and inert: `p_cmd_Start` is a toggle, so
+/// a live button there would stop the line it is reporting. The alternatives
+/// are live only when picking one would actually do something.
+///
+/// When [reduceExclusiveSet] cannot say what the set is — a member nobody can
+/// read — this falls back to the individual rows, which is the same rule the
+/// face uses to decide whether to draw a seam. A set that collapsed to the
+/// half it can read would be claiming a state it cannot see.
+class _ExclusiveSetRow extends StatelessWidget {
   final int setIndex;
   final ExclusiveSet set;
   final List<SectionRef> refs;
   final List<SectionMode> modes;
   final bool allowModeSwitch;
   final Future<SectionSwitchOutcome> Function(int target)? onModeSwitch;
+  final Future<void> Function(int index, String field)? onSectionCommand;
 
-  const _ExclusiveChoice({
+  const _ExclusiveSetRow({
     required this.setIndex,
     required this.set,
     required this.refs,
     required this.modes,
     required this.allowModeSwitch,
     required this.onModeSwitch,
+    required this.onSectionCommand,
   });
 
   SectionMode _modeAt(int i) =>
       i < modes.length ? modes[i] : SectionMode.unknown;
 
   String _nameOf(int i) => i < refs.length ? refs[i].displayLabel : 'Section';
+
+  /// The button labels, trimmed to what tells the members apart. Keyed by ref
+  /// index so the row and the semantics can pick them out.
+  Map<int, String> get _shortNames {
+    final short =
+        shortMemberNames([for (final i in set.members) _nameOf(i)]);
+    return {
+      for (var n = 0; n < set.members.length; n++) set.members[n]: short[n],
+    };
+  }
+
+  String get _heading => '${set.name} — one at a time';
 
   /// The member that currently has the line, or null.
   int? get _active {
@@ -2208,44 +2258,107 @@ class _ExclusiveChoice extends StatelessWidget {
     }
   }
 
+  /// Fans one command across the set, guarded per member exactly as the
+  /// group's own buttons are.
+  VoidCallback? _setCommand(String field) {
+    final send = onSectionCommand;
+    if (send == null) return null;
+    final targets = [
+      for (final i in set.members)
+        if (canSend(field, _modeAt(i))) i,
+    ];
+    if (targets.isEmpty) return null;
+    return () {
+      for (final i in targets) {
+        send(i, field);
+      }
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final states = HmiStateColors.of(context);
-    final active = _active;
-    final unreadable =
-        set.members.any((i) => _modeAt(i) == SectionMode.unknown);
+    final reduced =
+        reduceExclusiveSet([for (final i in set.members) _modeAt(i)]);
 
-    // Whether a hand-over is possible but switched off — the thing to explain
-    // rather than leave as a dead button.
+    // Nobody can read one of them. Fall back to the rows, and say why there
+    // is no choice — switching would stop a section whose state is unknown.
+    if (reduced == null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 8, bottom: 2),
+            child: Text(
+              _heading,
+              style: theme.textTheme.labelMedium?.copyWith(color: states.grey),
+            ),
+          ),
+          for (final i in set.members)
+            _SectionRow(
+              index: i,
+              name: _nameOf(i),
+              mode: _modeAt(i),
+              // No mode may be picked here, so no `Run` either: it would be
+              // the unguarded half of a decision this pane has just refused
+              // to offer.
+              showRun: false,
+              onCommand: onSectionCommand,
+            ),
+          const SizedBox(height: 6),
+          _Note(
+            icon: Icons.help_outline,
+            color: states.grey,
+            text: 'One of these is not reading, so no choice is offered — '
+                'switching would stop a section nobody can see the state of.',
+          ),
+        ],
+      );
+    }
+
+    final active = _active;
+    // Whether a hand-over is possible but switched off, and whether anything
+    // could be picked at all — the two reasons a mode button is dead, and
+    // both of them have to be sayable or the button is dead for no visible
+    // reason.
     var handoverWithheld = false;
-    // Whether any alternative could actually be picked. Not the same as
-    // "something is not active": a member held by something OUTSIDE the set
-    // has no plan, and the notes below must not promise a switch that the
-    // button beside them refuses to make.
     var anyPickable = false;
-    final buttons = <Widget>[];
+    final shortNames = _shortNames;
+    final modeButtons = <Widget>[];
     for (final i in set.members) {
       final mode = _modeAt(i);
       final isActive = i == active;
-      final plan = isActive
-          ? null
-          : planModeSwitch(modes: modes, set: set, target: i);
+      final plan =
+          isActive ? null : planModeSwitch(modes: modes, set: set, target: i);
       final blocked = plan != null && plan.isHandover && !allowModeSwitch;
       if (blocked) handoverWithheld = true;
       if (plan != null && !blocked) anyPickable = true;
-      buttons.add(Padding(
-        padding: EdgeInsets.only(top: buttons.isEmpty ? 0 : 8),
-        child: _ModeChoice(
+      modeButtons.add(Expanded(
+        child: _MemberButton(
           buttonKey: Key('section-choice-$setIndex-$i'),
-          label: _nameOf(i),
+          // Short on the button, full in the semantics: the row has no space
+          // for "Line 2 vacuum" four times over, and a screen reader has no
+          // heading above it to borrow the rest from.
+          label: shortNames[i] ?? _nameOf(i),
+          semantic: isActive
+              ? '${_nameOf(i)}, has the line'
+              : 'Switch ${set.name} to ${_nameOf(i)}',
           icon: mode == SectionMode.cleaning
               ? Icons.water_drop_outlined
               : Icons.play_arrow,
-          color: sectionModeColor(context, mode),
-          active: isActive,
-          // No handler means nothing can be sent, and a button that looks live
-          // and does nothing is exactly what the per-row `Run` was taken away
-          // to avoid. Same guard the member rows use.
+          // Filled, the tint is the state it is IN (green auto, blue washing
+          // down). Outlined, it is a button that starts something, so it
+          // wears green like every other `Run` in the pane — tinting it with
+          // the member's own mode painted a live "Film" the grey of a stopped
+          // section, which on a compact outlined button is indistinguishable
+          // from disabled.
+          tint: isActive ? sectionModeColor(context, mode) : states.green,
+          // The mode with the line is filled, so which one it is survives the
+          // collapse from two rows to one. It is also inert — `p_cmd_Start`
+          // toggles, and a live button here would stop what it is reporting.
+          filled: isActive,
           onPressed:
               (isActive || plan == null || blocked || onModeSwitch == null)
                   ? null
@@ -2258,65 +2371,102 @@ class _ExclusiveChoice extends StatelessWidget {
     // (`i_xPermissive := NOT other.q_xEnabled`), so seeing it means the
     // interlock is not doing its job. The face cannot say it — two sections in
     // the same mode is agreement, and there is no seam to draw — so this is
-    // where it gets said, on the pane that claims they are alternatives.
-    final violated = set.members
-            .where((i) => _modeAt(i) == SectionMode.running)
-            .length >
-        1;
+    // where it gets said.
+    final violated =
+        set.members.where((i) => _modeAt(i) == SectionMode.running).length > 1;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        ...buttons,
-        if (violated) ...[
-          const SizedBox(height: 10),
-          _Note(
-            icon: Icons.warning_amber,
-            color: Theme.of(context).colorScheme.error,
-            text: 'Both of these are running. Only one is supposed to be able '
-                'to — the interlock in the PLC is not holding. Report it.',
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _heading,
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(fontWeight: FontWeight.w600),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                reduced.label,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: sectionModeColor(context, reduced),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
           ),
-        ] else if (unreadable) ...[
-          const SizedBox(height: 10),
-          _Note(
-            icon: Icons.help_outline,
-            color: states.grey,
-            text: 'One of these is not reading, so no choice is offered — '
-                'switching would stop a section nobody can see the state of.',
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              for (final b in modeButtons) ...[
+                b,
+                const SizedBox(width: 6),
+              ],
+              Expanded(
+                child: _MemberButton(
+                  buttonKey: Key('section-set-$setIndex-clean'),
+                  label: 'Clean',
+                  semantic: 'Clean ${set.name}',
+                  icon: Icons.water_drop_outlined,
+                  tint: states.blue,
+                  onPressed: _setCommand(kSectionCmdStartClean),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: _MemberButton(
+                  buttonKey: Key('section-set-$setIndex-stop'),
+                  label: 'Stop',
+                  semantic: 'Stop ${set.name}',
+                  icon: Icons.stop_circle_outlined,
+                  tint: theme.colorScheme.error,
+                  onPressed: _setCommand(kSectionCmdStop),
+                ),
+              ),
+            ],
           ),
-        ] else if (handoverWithheld && active != null) ...[
-          const SizedBox(height: 10),
-          _Note(
-            icon: Icons.lock_outline,
-            color: states.yellow,
-            text: '${_nameOf(active)} has the line. Stop it, then the other '
-                'mode can be started.',
-          ),
-        ] else if (active != null && allowModeSwitch && anyPickable) ...[
-          const SizedBox(height: 10),
-          _Note(
-            icon: Icons.swap_horiz,
-            color: states.grey,
-            text: 'Choosing the other mode stops ${_nameOf(active)} first, '
-                'and asks before it does.',
-          ),
-        ] else if (active != null && !anyPickable) ...[
-          const SizedBox(height: 10),
-          // Nothing here is pickable and the exclusion is not the reason: the
-          // permissive keys off `q_xEnabled` only, so an alternative held
-          // while this one merely CLEANS is held by something else. Saying so
-          // is the point — the buttons are dead either way, and the previous
-          // wording promised a switch that would not happen.
-          _Note(
-            icon: Icons.lock_outline,
-            color: states.yellow,
-            text: '${_nameOf(active)} has the line, but the other mode is not '
-                'free to take it either — something outside this choice is '
-                'holding it. Check its state above.',
-          ),
+          // At most one line, and only when something is dead or wrong. The
+          // note that used to explain the hand-over in the ordinary case was
+          // the only one that appeared when nothing was the matter, which is
+          // exactly the noise this asset is trying not to make.
+          if (violated) ...[
+            const SizedBox(height: 8),
+            _Note(
+              icon: Icons.warning_amber,
+              color: theme.colorScheme.error,
+              text: 'Both of these are running. Only one is supposed to be '
+                  'able to — the interlock in the PLC is not holding. '
+                  'Report it.',
+            ),
+          ] else if (handoverWithheld && active != null) ...[
+            const SizedBox(height: 8),
+            _Note(
+              icon: Icons.lock_outline,
+              color: states.yellow,
+              text: '${_nameOf(active)} has the line. Stop it, then the other '
+                  'mode can be started.',
+            ),
+          ] else if (active != null && !anyPickable) ...[
+            const SizedBox(height: 8),
+            // The exclusion is not what holds the alternative: the permissive
+            // keys off `q_xEnabled` only, so a member held while this one
+            // merely CLEANS is held by something else entirely.
+            _Note(
+              icon: Icons.lock_outline,
+              color: states.yellow,
+              text: '${_nameOf(active)} has the line, but the other mode is '
+                  'not free to take it either — something outside this choice '
+                  'is holding it.',
+            ),
+          ],
         ],
-      ],
+      ),
     );
   }
 }
@@ -2453,6 +2603,14 @@ class _MemberButton extends StatelessWidget {
   final Color tint;
   final VoidCallback? onPressed;
 
+  /// Paints the button in [tint] rather than outlining it — the mode of an
+  /// exclusive set that has the line. Kept on the same compact metrics as the
+  /// outlined ones so it sits in a row beside them without changing its
+  /// height, and it keeps the colour while disabled: a filled button that
+  /// faded to the theme's disabled grey would hide the very thing it is
+  /// there to say.
+  final bool filled;
+
   const _MemberButton({
     required this.buttonKey,
     required this.label,
@@ -2460,10 +2618,32 @@ class _MemberButton extends StatelessWidget {
     required this.icon,
     required this.tint,
     required this.onPressed,
+    this.filled = false,
   });
 
   @override
   Widget build(BuildContext context) {
+    if (filled) {
+      return FilledButton.icon(
+        key: buttonKey,
+        onPressed: onPressed,
+        icon: Icon(icon, size: 16),
+        label: Text(
+          label,
+          semanticsLabel: semantic,
+          overflow: TextOverflow.ellipsis,
+        ),
+        style: FilledButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+          visualDensity: VisualDensity.compact,
+          textStyle: Theme.of(context).textTheme.labelMedium,
+          backgroundColor: tint,
+          foregroundColor: HmiStateColors.of(context).onState,
+          disabledBackgroundColor: tint,
+          disabledForegroundColor: HmiStateColors.of(context).onState,
+        ),
+      );
+    }
     return OutlinedButton.icon(
       key: buttonKey,
       onPressed: onPressed,

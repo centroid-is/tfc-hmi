@@ -492,6 +492,75 @@ void main() {
         );
       });
 
+      testWidgets('the wet-area button: peers and pairs in one list',
+          (tester) async {
+        // `/boxes/wet-area` index 150, the button this whole feature exists
+        // for: three transport peers and two exclusive pairs. Five entries,
+        // one shape each — the pairs are single rows carrying their own mode
+        // buttons rather than two rows plus a separate choice section apiece,
+        // which is what pushed the group commands below the fold.
+        tester.view.physicalSize = const Size(1400, 1100);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
+
+        final fake = _FakeStateMan()
+          ..push('st101/t', enabled: true)
+          ..push('st201/film', enabled: true)
+          ..push('st201/vac', permissive: false)
+          ..push('st201/t', enabled: true)
+          ..push('st301/film')
+          ..push('st301/vac')
+          ..push('st301/t');
+
+        await tester.pumpWidget(ProviderScope(
+          overrides: [stateManProvider.overrideWith((_) async => fake)],
+          child: MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: SizedBox(
+                  width: 88,
+                  height: 88,
+                  child: SectionButton(
+                    config: SectionButtonConfig(
+                      allowModeSwitch: true,
+                      sections: [
+                        SectionRef(key: 'st101/t', label: 'Line 1 transport'),
+                        SectionRef(
+                            key: 'st201/film',
+                            label: 'Line 2 film',
+                            exclusiveGroup: 'Line 2 packing'),
+                        SectionRef(
+                            key: 'st201/vac',
+                            label: 'Line 2 vacuum',
+                            exclusiveGroup: 'Line 2 packing'),
+                        SectionRef(key: 'st201/t', label: 'Line 2 transport'),
+                        SectionRef(
+                            key: 'st301/film',
+                            label: 'Line 3 film',
+                            exclusiveGroup: 'Line 3 packing'),
+                        SectionRef(
+                            key: 'st301/vac',
+                            label: 'Line 3 vacuum',
+                            exclusiveGroup: 'Line 3 packing'),
+                        SectionRef(key: 'st301/t', label: 'Line 3 transport'),
+                      ],
+                    )..text = 'Before freezers',
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ));
+        await _settle(tester);
+        await tester.tap(find.byType(SectionButton));
+        await _settle(tester);
+
+        await expectLater(
+          find.byType(MaterialApp),
+          matchesGoldenFile('goldens/section_pane_wet_area.png'),
+        );
+      });
+
       testWidgets("can't start, with a configured reason", (tester) async {
         // The per-section sentence is the point of this golden: the asset
         // ships only the generic line, and the page author supplies what

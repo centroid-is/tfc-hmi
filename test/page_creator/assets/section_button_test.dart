@@ -604,6 +604,44 @@ void main() {
     });
   });
 
+  group('shortMemberNames — what tells a set\'s members apart', () {
+    // The four buttons on a set's row have about eighty pixels each. Full
+    // labels ellipsised to "Line …" twice over and the operator could not
+    // tell film from vacuum; inside one entry the shared half is already in
+    // the heading above them.
+    test('the words the members share are dropped', () {
+      expect(shortMemberNames(const ['Line 2 film', 'Line 2 vacuum']),
+          ['Film', 'Vacuum']);
+    });
+
+    test('nothing shared, nothing trimmed', () {
+      expect(shortMemberNames(const ['Film', 'Vacuum']), ['Film', 'Vacuum']);
+    });
+
+    test('the last word is never eaten, even when every word is shared', () {
+      // Two members labelled the same are indistinguishable however they are
+      // printed; what must not happen is a button with nothing on it.
+      final same = shortMemberNames(const ['Line 2 film', 'Line 2 film']);
+      expect(same, ['Film', 'Film']);
+      expect(same.every((n) => n.isNotEmpty), isTrue);
+    });
+
+    test('a trim that leaves a stub is refused', () {
+      // "2" is not a button an operator can act on.
+      expect(shortMemberNames(const ['Line 2', 'Line 2 vacuum']),
+          ['Line 2', 'Line 2 vacuum']);
+    });
+
+    test('matching is case-insensitive, the kept text is not rewritten', () {
+      expect(shortMemberNames(const ['ST201 Film wrap', 'st201 Vacuum seal']),
+          ['Film wrap', 'Vacuum seal']);
+    });
+
+    test('a lone label is left alone', () {
+      expect(shortMemberNames(const ['Line 2 film']), ['Line 2 film']);
+    });
+  });
+
   group('SectionRef.displayLabel', () {
     test('an explicit label wins', () {
       expect(SectionRef(key: 'a.b.c', label: 'ST101').displayLabel, 'ST101');
