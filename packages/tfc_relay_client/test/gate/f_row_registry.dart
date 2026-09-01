@@ -394,12 +394,6 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     owner: '07-12',
     clause: 'the six TLS arms, the wss smoke row and the auth contrast',
   ),
-  'F16': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-09',
-    clause: 'the Isolate.pause harness and the resume assertions, with a '
-        'per-platform capability probe',
-  ),
   'F17': Outstanding(
     kind: OutstandingKind.missing,
     owner: '07-09',
