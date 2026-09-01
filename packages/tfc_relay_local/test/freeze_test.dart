@@ -29,12 +29,12 @@
 ///     (`no_retry_test.dart:327-364`, `handler_table_test.dart:289-296`,
 ///     `teardown_test.dart:496-499` all learned this the same way).
 ///
-/// Four of the five counts are **zero today**, because on day one this package
-/// is one interface file. A case named "no timer outside the allow-list" that
+/// Several counts were **zero on day one**, because on day one this package was
+/// one interface file. A case named "no timer outside the allow-list" that
 /// passes over a tree with no timers in it is a case nobody should trust
-/// without its empty-directory sibling, and the case names below say so out
-/// loud rather than letting a future reader mistake an empty tree for a clean
-/// one.
+/// without its empty-directory sibling, so the ones that are still zero say so
+/// out loud in their names rather than letting a future reader mistake an
+/// empty tree for a clean one. 08-05 moved four of them off zero.
 @TestOn('vm')
 @Tags(['meta'])
 library;
@@ -58,19 +58,27 @@ final Directory testRoot = Directory('test');
 /// Files permitted to hold a `Timer.periodic(`, each naming the plan that
 /// earned the entry.
 ///
-/// **Empty on day one.** Three entries are anticipated and none of them is
-/// pre-approved — the plan that lands each one adds it here in the same
-/// commit, which is what makes a fourth timer a decision rather than a drift:
+/// **One entry, added by 08-05 in the same commit as the timer it names.**
+/// Nothing is pre-approved — the plan that lands each timer adds its entry
+/// here in the same commit, which is what makes the next one a decision rather
+/// than a drift:
 ///
-///  * 08-05's freshness sweep — listener-gated, interval derived from
-///    `staleAfter`. Only a clock can notice silence, so this one cannot be
-///    replaced by a deadline check on paths that already run.
-///  * 08-05's fan-in linger — a one-shot `Timer(linger, …)` per key at
-///    refcount zero, not a periodic; it lands as a named `_timer` field
-///    instead of an entry here.
+///  * 08-05's freshness sweep — **landed**, entry below.
+///  * 08-05's fan-in linger — **landed**, on [retainedTimerAllowList] rather
+///    than here, because it is a one-shot rather than a periodic. 08-03
+///    anticipated it as a bare `_timer` field with no entry anywhere; 08-05's
+///    house rules require every timer to arrive with an allow-list entry, and
+///    the second list is the reconciliation.
 ///  * 08-07's `runIterate` driver — one per OPC UA link, started on connect
-///    and stopped on disconnect.
-const Map<String, String> periodicTimerAllowList = <String, String>{};
+///    and stopped on disconnect. Still anticipated, not pre-approved.
+const Map<String, String> periodicTimerAllowList = <String, String>{
+  // 08-05, task 3. Listener-gated: started when the store gains its first
+  // watcher and stopped when it loses its last, so with nobody watching there
+  // is no timer at all. Interval is staleAfter ~/ 4 with a floor. It cannot be
+  // replaced by a deadline check on paths that already run — only a clock can
+  // notice silence, and the frozen-session failure emits nothing at all.
+  'freshness_sweep.dart': '08-05 — the listener-gated freshness sweep',
+};
 
 /// Files permitted to hold a **retained one-shot** `Timer(`, each naming the
 /// plan that earned the entry.
@@ -104,10 +112,11 @@ const Map<String, String> literalPortAllowList = <String, String>{};
 
 /// `Timer.periodic(` occurrences under `lib/src`.
 ///
-/// Moves when a plan on [periodicTimerAllowList] lands, and only then. A
-/// timer that appears without its allow-list entry is caught by the offender
-/// case rather than by this number, which is why both exist.
-const int declaredPeriodicTimers = 0;
+/// **One, landed by 08-05 task 3:** the freshness sweep. Moves when a plan on
+/// [periodicTimerAllowList] lands, and only then. A timer that appears without
+/// its allow-list entry is caught by the offender case rather than by this
+/// number, which is why both exist.
+const int declaredPeriodicTimers = 1;
 
 /// Retained one-shot `Timer(` occurrences under `lib/src`.
 ///
@@ -225,8 +234,7 @@ void main() {
   });
 
   group('freeze 1: timers are named', () {
-    test('no Timer.periodic outside the allow-list — which is empty today, so '
-        'this case rests on its empty-directory sibling', () {
+    test('no repeating or retained timer outside the two allow-lists', () {
       expect(timerOffenders(libSrc), isEmpty,
           reason: 'a repeating or retained timer exists in a file that no plan '
               'put on the allow-list. Add the entry in the same commit as the '
