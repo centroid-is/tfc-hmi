@@ -1,0 +1,41 @@
+# One suite at a time.
+#
+# package:test loads several suites at once by default, and on the VM they share
+# one process — so they share the file-descriptor table and the machine's idea
+# of how long a millisecond takes. tfc_relay_server says this already; here the
+# same argument is stronger in three ways.
+#
+# First, this package binds OPC UA listening sockets: every in-process `Server`
+# leg is a real port and a real accept loop, and two suites racing for ports on
+# one machine is a flake that reads as a bug in the code under test.
+#
+# Second, it drives `runIterate` — a BLOCKING FFI call — on a 10 ms timer. A
+# neighbour suite sharing that isolate's event loop does not get a slow test; it
+# gets a stalled one, and any deadline it was measuring is no longer a deadline.
+#
+# Third, this package's whole subject is freshness: staleness sweeps, link
+# deadlines and data-age assertions are measurements of a machine, and a machine
+# running four suites is a different machine.
+#
+# The cost is this package's own parallelism, and it is worth it.
+concurrency: 1
+
+# Declaring tags here is what makes `--tags` / `--exclude-tags` usable without
+# the "unknown tag" warning package:test prints for undeclared tags. Phase 2's
+# lesson: an undeclared tag does not select, it warns — so `--tags opcua` on a
+# misspelling runs everything and looks like it ran nothing.
+tags:
+  contract:
+    # The shared StateManApi contract suite from tfc_stateman_contract, run
+    # against LocalStateMan over real DeviceClients rather than in memory.
+  opcua:
+    # Legs that stand up an in-process open62541 `Server` and talk to it over a
+    # real socket. Wall-clock by design, and the only lane that needs a
+    # listening port.
+  faults:
+    # Upstream fault injection through the TcpProxy / FaultProxy kit. It works
+    # against opc.tcp unchanged, because the injection is at the TCP level and
+    # there is no TLS record layer in the way.
+  meta:
+    # Cases that test the surface itself: freeze tests, structural sweeps, and
+    # the arms that prove a check bites a deliberately broken implementation.
