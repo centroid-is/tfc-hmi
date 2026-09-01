@@ -16,6 +16,7 @@ import '../../widgets/hit_boundary.dart';
 import '../../widgets/memo_stream_builder.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
+import '../../widgets/panes/standard_dialog.dart';
 
 part 'section_button.g.dart';
 
@@ -295,6 +296,329 @@ bool canSend(String field, SectionMode mode) {
 }
 
 // ---------------------------------------------------------------------------
+// Mutually exclusive sections
+//
+// Two sections on this plant are not peers, they are alternatives. ST201 and
+// ST301 wire their two box-packing modes as mutual exclusion in MAIN:
+//
+//   section.boxPackingFilm  (i_xPermissive := NOT section.boxPackingVacuum.q_xEnabled);
+//   section.boxPackingVacuum(i_xPermissive := NOT section.boxPackingFilm.q_xEnabled);
+//
+// so exactly one of them can be in auto at a time, by construction. A button
+// driving both was therefore PERMANENTLY split, and a split that is always
+// there stops meaning "something is wrong" — it means "everything is normal",
+// which destroys the signal for every other button too.
+//
+// The HMI cannot infer this. The exclusion lives in ladder it never sees, and
+// `p_stat_xPermissive` reports only the result — an idle section with no
+// go-ahead looks identical whether its twin has the line or an upstream
+// interlock has failed. So it is declared in config, on the section itself:
+// [SectionRef.exclusiveGroup].
+//
+// Two facts about that ladder shape the code below, and both come from
+// `FB_Section` itself rather than from a guess:
+//
+//   * The permissive keys off `q_xEnabled` ONLY, so cleaning is NOT exclusive.
+//     Both modes may clean at once, and a section held off while its twin is
+//     merely cleaning is NOT explained by the exclusion.
+//   * Two members in auto at once is impossible while the interlock holds, so
+//     seeing it means the interlock is not doing its job. The pane says so;
+//     the face cannot, because two sections in the same mode is agreement and
+//     there is no seam to draw.
+// ---------------------------------------------------------------------------
+
+/// A declared set of sections that cannot run at the same time as each other.
+///
+/// [name] is the operator's word for the choice ("Line 2 packing"): it is the
+/// tag typed into the editor, and it titles the choice in the pane. [members]
+/// are indices into the button's usable sections.
+@immutable
+class ExclusiveSet {
+  final String name;
+  final List<int> members;
+
+  const ExclusiveSet({required this.name, required this.members});
+
+  @override
+  bool operator ==(Object other) =>
+      other is ExclusiveSet &&
+      other.name == name &&
+      _sameInts(other.members, members);
+
+  @override
+  int get hashCode => Object.hash(name, Object.hashAll(members));
+
+  @override
+  String toString() => 'ExclusiveSet($name, $members)';
+}
+
+bool _sameInts(List<int> a, List<int> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
+}
+
+/// The exclusive sets [refs] declares, in the order their first member is
+/// configured.
+///
+/// A tag on its own is not a set: one section has no alternative, so it is a
+/// plain peer and everything below leaves it alone. Tags are matched on their
+/// trimmed text, so a stray space typed into the editor does not silently
+/// split a pair into two singletons.
+List<ExclusiveSet> exclusiveSetsOf(List<SectionRef> refs) {
+  final order = <String>[];
+  final byTag = <String, List<int>>{};
+  for (var i = 0; i < refs.length; i++) {
+    final tag = refs[i].exclusiveGroup?.trim() ?? '';
+    if (tag.isEmpty) continue;
+    if (!byTag.containsKey(tag)) order.add(tag);
+    byTag.putIfAbsent(tag, () => <int>[]).add(i);
+  }
+  return [
+    for (final tag in order)
+      if (byTag[tag]!.length > 1)
+        ExclusiveSet(name: tag, members: List.unmodifiable(byTag[tag]!)),
+  ];
+}
+
+/// The one mode an exclusive set is in, or null when it has to be shown member
+/// by member after all.
+///
+/// Returning a mode is what stops a working interlock reading as disagreement.
+/// Returning null is the escape hatch: a member nobody can read leaves the
+/// set's state unknown, and a set that collapsed to the readable member's
+/// colour would be claiming to know it. Those members then flow through
+/// individually and the face splits, exactly as it did before exclusivity
+/// existed.
+///
+/// Otherwise: the mode that has the line, or `Stopped` when none has. A member
+/// held off while nothing in the set is running is NOT explained by the
+/// exclusion (the permissive keys off `q_xEnabled`, and nothing here has it),
+/// so that stays yellow — an unexplained hold is news.
+///
+/// Two members in auto at once cannot happen while the ladder holds, and if it
+/// is ever seen this still answers `Running`, because they ARE both running.
+/// There is no seam to draw for two sections in the same mode, so the place
+/// that reports a failed interlock is the pane, not the face.
+SectionMode? reduceExclusiveSet(List<SectionMode> members) {
+  if (members.length < 2) return null;
+  if (members.contains(SectionMode.unknown)) return null;
+
+  final active = [
+    for (final m in members)
+      if (m == SectionMode.running || m == SectionMode.cleaning) m,
+  ];
+  if (active.isNotEmpty) {
+    // Running outranks cleaning: a set with one mode in auto and the other
+    // washing down is carrying product, and that is what the face must say.
+    return active.reduce(
+        (a, b) => sectionActivityRank(a) >= sectionActivityRank(b) ? a : b);
+  }
+  return members.contains(SectionMode.blocked)
+      ? SectionMode.blocked
+      : SectionMode.stopped;
+}
+
+/// The modes the face compares, with every well-behaved exclusive set counted
+/// as the one thing it is.
+///
+/// Peers are passed straight through, so a button driving only peers gets back
+/// exactly what it gave — the non-exclusive case cannot change. Each set is
+/// emitted at the position of its first member so the result is stable, and a
+/// set that does not reduce contributes all of its members and therefore still
+/// splits the face.
+List<SectionMode> resolveFaceModes(
+  List<SectionMode> modes,
+  List<ExclusiveSet> sets,
+) {
+  if (sets.isEmpty) return modes;
+  final setOf = <int, ExclusiveSet>{};
+  for (final s in sets) {
+    for (final i in s.members) {
+      setOf[i] = s;
+    }
+  }
+  final out = <SectionMode>[];
+  final done = <ExclusiveSet>{};
+  for (var i = 0; i < modes.length; i++) {
+    final set = setOf[i];
+    if (set == null) {
+      out.add(modes[i]);
+      continue;
+    }
+    if (!done.add(set)) continue;
+    final members = [
+      for (final m in set.members)
+        if (m < modes.length) modes[m],
+    ];
+    final reduced = reduceExclusiveSet(members);
+    if (reduced != null) {
+      out.add(reduced);
+    } else {
+      out.addAll(members);
+    }
+  }
+  return out;
+}
+
+/// Whether the section at [index] is held off by an alternative that has the
+/// line — the ordinary, working case of the interlock.
+///
+/// Only auto counts, because auto is the only thing the ladder negates. A
+/// section held while its twin is merely cleaning is held by something else,
+/// and the pane must go on reporting that as an anomaly.
+bool heldByAlternative(
+  int index,
+  List<SectionMode> modes,
+  List<ExclusiveSet> sets,
+) {
+  if (index >= modes.length || modes[index] != SectionMode.blocked) {
+    return false;
+  }
+  for (final set in sets) {
+    if (!set.members.contains(index)) continue;
+    for (final other in set.members) {
+      if (other == index || other >= modes.length) continue;
+      if (modes[other] == SectionMode.running) return true;
+    }
+  }
+  return false;
+}
+
+/// Whether the section at [index] is one alternative of a declared set.
+bool inExclusiveSet(int index, List<ExclusiveSet> sets) =>
+    sets.any((s) => s.members.contains(index));
+
+/// Whether the group's `Run all` has anything to write.
+///
+/// It never starts an alternative: two `p_cmd_Start`s landing in one PLC scan
+/// both pass `AND i_xPermissive` (computed from the previous scan), so both
+/// modes latch on, and the scan after that each one's permissive reads FALSE
+/// and `FB_Section` drops BOTH. A group button that stopped the line it was
+/// pressed to start is worse than one that leaves the choice to the chooser.
+/// With no sets declared this is exactly `modes.any(canStart)`, which is what
+/// the pane asked before.
+bool groupStartable(List<SectionMode> modes, List<ExclusiveSet> sets) {
+  for (var i = 0; i < modes.length; i++) {
+    if (!canStart(modes[i])) continue;
+    if (inExclusiveSet(i, sets)) continue;
+    return true;
+  }
+  return false;
+}
+
+/// A mode switch, as the sequence of `p_cmd_*` writes it is made of.
+///
+/// There is no PLC command for "select this mode" — `ST_Section_HMI` offers
+/// `p_cmd_Start`, `p_cmd_Stop` and `p_cmd_StartClean`, and nothing else — so a
+/// switch is composed: stop whatever has the line, wait for the PLC to hand
+/// the go-ahead over, then start the chosen one. [stop] may be empty, which is
+/// the case where nothing has the line and this is a plain start.
+@immutable
+class SectionSwitchPlan {
+  /// Members that have to give the line up first, by ref index.
+  final List<int> stop;
+
+  /// The member to start once they have, by ref index.
+  final int start;
+
+  const SectionSwitchPlan({required this.stop, required this.start});
+
+  /// True when this is a genuine hand-over rather than a plain start — the
+  /// case that stops running machinery and therefore has to be confirmed.
+  bool get isHandover => stop.isNotEmpty;
+
+  @override
+  bool operator ==(Object other) =>
+      other is SectionSwitchPlan &&
+      other.start == start &&
+      _sameInts(other.stop, stop);
+
+  @override
+  int get hashCode => Object.hash(start, Object.hashAll(stop));
+
+  @override
+  String toString() => 'SectionSwitchPlan(stop: $stop, start: $start)';
+}
+
+/// How to put [target] in charge of its exclusive [set], or null when there is
+/// no honest way to.
+///
+/// Null every time the HMI would be guessing:
+///
+///   * [target] already has the line — there is nothing to do, and
+///     `p_cmd_Start` is a TOGGLE, so "doing it anyway" would stop it.
+///   * any member of the set is unreadable — a switch that stops a section
+///     nobody can see the state of is a switch made blind.
+///   * [target] is held off and no member of the set is running — the
+///     exclusion is not what holds it, so stopping its alternatives would
+///     stop the line and still not let it start.
+SectionSwitchPlan? planModeSwitch({
+  required List<SectionMode> modes,
+  required ExclusiveSet set,
+  required int target,
+}) {
+  if (!set.members.contains(target)) return null;
+  for (final i in set.members) {
+    if (i >= modes.length || modes[i] == SectionMode.unknown) return null;
+  }
+  final targetMode = modes[target];
+  if (targetMode == SectionMode.running || targetMode == SectionMode.cleaning) {
+    return null;
+  }
+  if (targetMode == SectionMode.blocked &&
+      !set.members.any((i) => i != target && modes[i] == SectionMode.running)) {
+    // Held by something outside the set. Stopping the alternatives would cost
+    // the line and buy nothing.
+    return null;
+  }
+  return SectionSwitchPlan(
+    stop: [
+      for (final i in set.members)
+        if (i != target &&
+            (modes[i] == SectionMode.running ||
+                modes[i] == SectionMode.cleaning))
+          i,
+    ],
+    start: target,
+  );
+}
+
+/// How far a mode switch got.
+///
+/// Every value except [done] leaves the line stopped rather than half
+/// switched, because stopped is the state this asset is allowed to reach
+/// without being sure — and the pane says which one happened rather than
+/// falling silent, since a hand-over that quietly did half its job is
+/// indistinguishable from machinery that refused to start.
+enum SectionSwitchOutcome {
+  /// The chosen mode was started.
+  done,
+
+  /// Nothing was written: the plan did not survive a second look, or the
+  /// hand-over is not enabled on this button.
+  notOffered,
+
+  /// The alternatives were stopped, and the PLC did not hand the go-ahead
+  /// over before the wait ran out, so nothing was started.
+  notHandedOver,
+
+  /// A write did not reach the PLC. Whatever had the line may still have it.
+  writeFailed,
+}
+
+/// How long the HMI waits for the PLC to hand the go-ahead over mid-switch.
+///
+/// The interlock is combinational — `i_xPermissive` is recomputed from the
+/// other section's `q_xEnabled` in the same MAIN, so it flips the scan after
+/// the stop lands. Seconds of margin covers the OPC UA round trip and a
+/// station under load; anything longer and an operator watching a stopped line
+/// has already reached for the buttons themselves.
+const Duration kSectionSwitchTimeout = Duration(seconds: 3);
+
+// ---------------------------------------------------------------------------
 // Asset config
 // ---------------------------------------------------------------------------
 
@@ -318,7 +642,32 @@ class SectionRef {
   /// a confident wrong instruction on a machine pane is worse than none.
   String? holdReason;
 
-  SectionRef({required this.key, this.label, this.holdReason});
+  /// Names a set of sections that are ALTERNATIVES rather than peers: only one
+  /// of them can run at a time, and the PLC is what enforces it.
+  ///
+  /// Declared rather than derived, because the HMI has no way to derive it.
+  /// The exclusion is a line of ST in `MAIN` (`i_xPermissive := NOT other.
+  /// q_xEnabled`) that never reaches the wire; all the HMI can read is
+  /// `p_stat_xPermissive`, which says a section may not start and not why.
+  ///
+  /// A tag on the section rather than a list of sets on the button, for two
+  /// reasons an editor cares about: it is one field on the row already being
+  /// edited, and deleting or reordering a section cannot leave a set pointing
+  /// at one that is gone. Sections sharing a tag are alternatives; a blank tag
+  /// is a plain peer, which is every section saved before this field existed.
+  ///
+  /// The text is the operator's name for the choice — it heads the choice in
+  /// the pane — so use a distinct one per line: `Line 2 packing`, not
+  /// `packing` on all four of ST201's and ST301's modes, which would declare
+  /// that starting film on line 2 holds off film on line 3.
+  String? exclusiveGroup;
+
+  SectionRef({
+    required this.key,
+    this.label,
+    this.holdReason,
+    this.exclusiveGroup,
+  });
 
   /// The name to show for this member.
   String get displayLabel {
@@ -384,9 +733,26 @@ class SectionButtonConfig extends BaseAsset {
   @JsonKey(name: 'show_name', defaultValue: true)
   bool showName = true;
 
-  SectionButtonConfig(
-      {List<SectionRef>? sections, this.label, this.showName = true})
-      : sections = sections ?? <SectionRef>[];
+  /// Whether the pane may hand the line from one alternative to the other in
+  /// one press — stop the mode that has it, wait for the PLC to hand the
+  /// go-ahead over, then start the chosen one.
+  ///
+  /// **Off by default, and deliberately.** It is the one control on this asset
+  /// that starts machinery, and it is composed of two commands rather than
+  /// asked of one, so it is opt-in per button: a page saved before it existed,
+  /// or by anyone who has not thought about it, gets the choice presented and
+  /// the hand-over withheld. With it off the chooser still offers a plain
+  /// start of an alternative that is already free — that is not a hand-over,
+  /// it is the `Run` this pane always had.
+  @JsonKey(name: 'allow_mode_switch', defaultValue: false)
+  bool allowModeSwitch = false;
+
+  SectionButtonConfig({
+    List<SectionRef>? sections,
+    this.label,
+    this.showName = true,
+    this.allowModeSwitch = false,
+  }) : sections = sections ?? <SectionRef>[];
 
   SectionButtonConfig.preview() : sections = <SectionRef>[] {
     size = const RelativeSize(width: 0.05, height: 0.05);
@@ -548,6 +914,30 @@ class _SectionButtonConfigEditorState
               onRemove: () => setState(() => sections.removeAt(i)),
               onChanged: () => setState(() {}),
             ),
+          // Only once a set actually exists. A switch offering to hand a line
+          // over on a button that drives nothing but peers is a question with
+          // no subject, and this one starts machinery — it should appear the
+          // moment it means something and not before.
+          if (exclusiveSetsOf(sections).isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Text(
+              'Choices: ${exclusiveSetsOf(sections).map((s) => s.name).join(', ')}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            SwitchListTile(
+              key: const Key('section-allow-mode-switch'),
+              contentPadding: EdgeInsets.zero,
+              value: widget.config.allowModeSwitch,
+              title: const Text('Allow switching between alternatives'),
+              subtitle: const Text(
+                'Lets one press stop the mode that has the line and start the '
+                'other, after a confirmation naming both. Off, the operator '
+                'stops one and starts the other themselves.',
+              ),
+              onChanged: (v) =>
+                  setState(() => widget.config.allowModeSwitch = v),
+            ),
+          ],
           const SizedBox(height: 16),
           SizeField(
             initialValue: widget.config.size,
@@ -631,6 +1021,24 @@ class _SectionRefEditor extends StatelessWidget {
                     'has the line. Stop it and this one is free."',
               ),
               onChanged: (v) => entry.holdReason = v,
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              key: Key('section-$index-exclusive'),
+              initialValue: entry.exclusiveGroup,
+              decoration: const InputDecoration(
+                labelText: 'Alternative to (choice name)',
+                helperMaxLines: 4,
+                helperText: 'Leave blank for a normal section. Give the same '
+                    'name to sections that CANNOT run at the same time as '
+                    'each other — the PLC allows only one — and the pane '
+                    'shows them as one choice under this name. One name per '
+                    'line, e.g. "Line 2 packing".',
+              ),
+              onChanged: (v) {
+                entry.exclusiveGroup = v;
+                onChanged();
+              },
             ),
           ],
         ),
@@ -732,16 +1140,26 @@ class _SectionButtonState extends ConsumerState<SectionButton> {
   /// stop the running ones — one press leaving the line exactly as it was,
   /// inverted. Sections that cannot take the command are skipped silently;
   /// the button was only offered because at least one could.
+  ///
+  /// `p_cmd_Start` is additionally never fanned out to a member of an
+  /// exclusive set — see [groupStartable]. Two starts arriving in one PLC
+  /// scan both pass `AND i_xPermissive`, which is computed from the previous
+  /// scan, so both modes latch on; the scan after that each one's permissive
+  /// reads FALSE and `FB_Section` drops BOTH. `Run all` would stop the line it
+  /// was pressed to start. Which alternative the operator wanted is not
+  /// something a group button can know, so it leaves them to the chooser.
   Future<void> _send(
     List<SectionRef> refs,
     List<DynamicValue?> values,
     String field,
   ) async {
+    final sets = exclusiveSetsOf(refs);
     final stateMan = await ref.read(stateManProvider.future);
     for (var i = 0; i < refs.length; i++) {
       final current = i < values.length ? values[i] : null;
       if (current == null) continue;
       if (!canSend(field, _modeOf(current))) continue;
+      if (field == kSectionCmdStart && inExclusiveSet(i, sets)) continue;
       // Copy-on-write of the whole struct with the one command bit set — the
       // same shape every structured-node write in this repo uses. The FB
       // clears the bit itself, so there is no release write to pair with this.
@@ -784,6 +1202,146 @@ class _SectionButtonState extends ConsumerState<SectionButton> {
     }
   }
 
+  /// Waits for the PLC to say the line has changed hands: everything in
+  /// [SectionSwitchPlan.stop] idle, and [target] `Stopped` — which is idle AND
+  /// permitted, exactly the condition `p_cmd_Start` needs to be obeyed.
+  ///
+  /// Returns the values it saw, or null if [kSectionSwitchTimeout] passes
+  /// first.
+  ///
+  /// Hand-rolled rather than `stream.firstWhere(...).timeout(...)`, which
+  /// deadlocks here: `firstWhere` completes its future inside
+  /// `subscription.cancel().whenComplete(...)`, and cancelling a subscription
+  /// to a ref-counted shared stream does not complete under `fake_async` —
+  /// the wait then always ran to the timeout and the switch never sent its
+  /// start. Same trap as awaiting a cancel anywhere else in this repo: the
+  /// completer is finished FIRST and the cancel is never awaited.
+  Future<List<DynamicValue?>?> _awaitHandover(
+    Stream<List<DynamicValue?>> stream,
+    SectionSwitchPlan plan,
+    int target,
+  ) async {
+    bool handedOver(List<DynamicValue?> vs) {
+      for (final i in plan.stop) {
+        final m = i < vs.length ? _modeOf(vs[i]) : SectionMode.unknown;
+        if (m != SectionMode.stopped && m != SectionMode.blocked) return false;
+      }
+      final t = target < vs.length ? _modeOf(vs[target]) : null;
+      return t == SectionMode.stopped;
+    }
+
+    final done = Completer<List<DynamicValue?>?>();
+    final sub = stream.listen(
+      (vs) {
+        if (!done.isCompleted && handedOver(vs)) done.complete(vs);
+      },
+      onError: (_) {
+        if (!done.isCompleted) done.complete(null);
+      },
+      onDone: () {
+        if (!done.isCompleted) done.complete(null);
+      },
+    );
+    final timer = Timer(kSectionSwitchTimeout, () {
+      if (!done.isCompleted) done.complete(null);
+    });
+    try {
+      return await done.future;
+    } finally {
+      timer.cancel();
+      unawaited(sub.cancel());
+    }
+  }
+
+  /// Hands the line from whatever holds it to [target], composed out of the
+  /// only three commands `ST_Section_HMI` has.
+  ///
+  /// Stop the alternatives, WAIT for the PLC to confirm it has handed the
+  /// go-ahead over, then start the chosen one. The wait is the whole point:
+  /// `FB_Section` gates both start commands behind `AND i_xPermissive`, so a
+  /// start fired before the interlock releases is not refused, not reported
+  /// and not queued — it is simply gone, and the operator is left looking at a
+  /// line that stopped and did not restart, with no idea a command was even
+  /// sent. Sending it late is the difference between a switch and a stop.
+  ///
+  /// Every failure stops short rather than pressing on, so the worst outcome
+  /// is a stopped line — which is the state this asset may reach without
+  /// being sure of anything.
+  Future<SectionSwitchOutcome> _switchMode(
+    List<SectionRef> refs,
+    List<DynamicValue?> values,
+    int target,
+  ) async {
+    final sets = exclusiveSetsOf(refs);
+    ExclusiveSet? set;
+    for (final s in sets) {
+      if (s.members.contains(target)) set = s;
+    }
+    if (set == null) return SectionSwitchOutcome.notOffered;
+
+    final modes = [for (final v in values) _modeOf(v)];
+    final plan = planModeSwitch(modes: modes, set: set, target: target);
+    if (plan == null) return SectionSwitchOutcome.notOffered;
+    // A hand-over starts machinery after stopping other machinery, so it is
+    // opt-in on the asset. A plain start — nothing to stop — is the `Run` this
+    // pane always had and is not gated by it.
+    if (plan.isHandover && !widget.config.allowModeSwitch) {
+      return SectionSwitchOutcome.notOffered;
+    }
+
+    final stateMan = await ref.read(stateManProvider.future);
+
+    Future<bool> write(int index, String field) async {
+      final current = index < values.length ? values[index] : null;
+      if (current == null) return false;
+      final next = DynamicValue.from(current);
+      next[field] = true;
+      try {
+        await stateMan.write(refs[index].key.trim(), next);
+        return true;
+      } catch (e, st) {
+        _log.e('section ${refs[index].key}: writing $field failed',
+            error: e, stackTrace: st);
+        return false;
+      }
+    }
+
+    for (final i in plan.stop) {
+      if (!await write(i, kSectionCmdStop)) {
+        return SectionSwitchOutcome.writeFailed;
+      }
+    }
+
+    var latest = values;
+    if (plan.isHandover) {
+      final stream = _combined;
+      if (stream == null) return SectionSwitchOutcome.notHandedOver;
+      final handed = await _awaitHandover(stream, plan, target);
+      if (handed == null) return SectionSwitchOutcome.notHandedOver;
+      latest = handed;
+    }
+
+    // Re-ask the guard against what the PLC says NOW, not against the snapshot
+    // this switch was planned from. `p_cmd_Start` toggles, and a section that
+    // came up in the meantime — a physical button, another station — must not
+    // be stopped by a command labelled Start.
+    final current = target < latest.length ? latest[target] : null;
+    if (current == null) return SectionSwitchOutcome.notHandedOver;
+    if (!canSend(kSectionCmdStart, _modeOf(current))) {
+      return SectionSwitchOutcome.notHandedOver;
+    }
+    final next = DynamicValue.from(current);
+    next[kSectionCmdStart] = true;
+    try {
+      await stateMan.write(refs[target].key.trim(), next);
+    } catch (e, st) {
+      _log.e('section ${refs[target].key}: writing $kSectionCmdStart failed',
+          error: e, stackTrace: st);
+      return SectionSwitchOutcome.writeFailed;
+    }
+    return SectionSwitchOutcome.done;
+  }
+
   void _showPane(BuildContext context) {
     final refs = _refs;
     if (refs.isEmpty) return;
@@ -807,8 +1365,11 @@ class _SectionButtonState extends ConsumerState<SectionButton> {
             refs: refs,
             values: values,
             modes: modes,
+            exclusiveSets: exclusiveSetsOf(refs),
+            allowModeSwitch: widget.config.allowModeSwitch,
             onCommand: (field) => _send(refs, values, field),
             onSectionCommand: (i, field) => _sendOne(refs, values, i, field),
+            onModeSwitch: (target) => _switchMode(refs, values, target),
           );
         },
       ),
@@ -849,7 +1410,16 @@ class _SectionButtonState extends ConsumerState<SectionButton> {
           );
         }
         final modes = [for (final v in snapshot.data!) _modeOf(v)];
-        return _face(context, SectionGroup(modes), interactive: true);
+        // Every well-behaved exclusive set counts as the one thing it is
+        // before the face asks whether its sections agree. Without this a
+        // button driving film and vacuum is split for as long as either mode
+        // runs — which is always — and a seam that is always there stops
+        // meaning "look at this" for every other button too.
+        return _face(
+          context,
+          SectionGroup(resolveFaceModes(modes, exclusiveSetsOf(refs))),
+          interactive: true,
+        );
       },
     );
   }
@@ -1154,6 +1724,21 @@ class SectionPane extends StatelessWidget {
   /// how a line gets stopped by accident.
   final Future<void> Function(int index, String field)? onSectionCommand;
 
+  /// Sets of sections that are alternatives rather than peers, as indices into
+  /// [refs]. Empty for every button that drives plain peers, which is what
+  /// keeps this pane identical to the one #387 shipped for those.
+  final List<ExclusiveSet> exclusiveSets;
+
+  /// Whether the choice may hand the line over in one press. See
+  /// [SectionButtonConfig.allowModeSwitch].
+  final bool allowModeSwitch;
+
+  /// Puts one alternative in charge of its set, by index into [refs].
+  ///
+  /// The pane asks the confirmation and reports the outcome; the sequencing —
+  /// stop, wait for the PLC, start — belongs to whoever owns the live values.
+  final Future<SectionSwitchOutcome> Function(int target)? onModeSwitch;
+
   const SectionPane({
     super.key,
     required this.title,
@@ -1162,6 +1747,9 @@ class SectionPane extends StatelessWidget {
     required this.onCommand,
     this.onSectionCommand,
     this.values = const [],
+    this.exclusiveSets = const [],
+    this.allowModeSwitch = false,
+    this.onModeSwitch,
   });
 
   static String _runningOrNot(bool? value) =>
@@ -1176,17 +1764,62 @@ class SectionPane extends StatelessWidget {
   SectionMode _modeAt(int i) =>
       i < modes.length ? modes[i] : SectionMode.unknown;
 
+  /// The order the Sections list draws its rows in, with the members of each
+  /// exclusive set pulled together and the first of them carrying the name of
+  /// the choice.
+  ///
+  /// A set stays where its first member was configured, so a page that does
+  /// not use exclusivity gets back exactly `0..refs.length` and this list is
+  /// the one #387 drew.
+  List<({int index, String? heading})> _listOrder() {
+    final setOf = <int, ExclusiveSet>{};
+    for (final s in exclusiveSets) {
+      for (final i in s.members) {
+        setOf[i] = s;
+      }
+    }
+    final out = <({int index, String? heading})>[];
+    final done = <ExclusiveSet>{};
+    for (var i = 0; i < refs.length; i++) {
+      final set = setOf[i];
+      if (set == null) {
+        out.add((index: i, heading: null));
+        continue;
+      }
+      if (!done.add(set)) continue;
+      var first = true;
+      for (final m in set.members) {
+        out.add((index: m, heading: first ? set.name : null));
+        first = false;
+      }
+    }
+    return out;
+  }
+
   @override
   Widget build(BuildContext context) {
     final states = HmiStateColors.of(context);
-    final group = SectionGroup(modes);
+    // Two views of the same sections. [raw] counts them — "2 of 7 running" is
+    // a count of sections and stays one. [group] is what the pane SAYS they
+    // are, and there every working exclusive set counts as the one thing it
+    // is, so the header chip and the State tile agree with the face on the
+    // page rather than saying `Mixed` at a plant that is behaving.
+    final raw = SectionGroup(modes);
+    final group = SectionGroup(resolveFaceModes(modes, exclusiveSets));
     final single = refs.length == 1;
 
+    // A section held off by the alternative that has the line is the interlock
+    // working, not an anomaly, and counting it here is what turned "Allowed to
+    // start" into a permanent `No for 2 of 7` — a row that is always red is a
+    // row nobody reads. Where it IS the answer is the choice below, which
+    // shows which mode has the line.
     final held = [
       for (var i = 0; i < refs.length; i++)
-        if (_modeAt(i) == SectionMode.blocked) i,
+        if (_modeAt(i) == SectionMode.blocked &&
+            !heldByAlternative(i, modes, exclusiveSets))
+          i,
     ];
-    final unreadable = group.count(SectionMode.unknown);
+    final unreadable = raw.count(SectionMode.unknown);
     final allowed = refs.isEmpty || unreadable == refs.length
         ? '—'
         : held.isEmpty
@@ -1195,7 +1828,7 @@ class SectionPane extends StatelessWidget {
                 ? 'No'
                 : 'No for ${held.length} of ${refs.length}';
 
-    final runnable = modes.any(canStart);
+    final runnable = groupStartable(modes, exclusiveSets);
     final cleanable = modes.any(canClean);
     final stoppable = modes.any(canStop);
 
@@ -1266,8 +1899,12 @@ class SectionPane extends StatelessWidget {
                 ] else
                   PaneDetailRow(
                     label: 'Running',
-                    value: '${group.movingCount} of ${refs.length}',
-                    valueColor: group.movingCount == 0
+                    // Counted over the sections themselves, not over the
+                    // reduced view: this row answers "how many are moving",
+                    // and an exclusive set with one mode running has one
+                    // section moving, not one unit in some state.
+                    value: '${raw.movingCount} of ${refs.length}',
+                    valueColor: raw.movingCount == 0
                         ? null
                         : sectionModeColor(context, group.busiest),
                   ),
@@ -1307,21 +1944,57 @@ class SectionPane extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  for (var i = 0; i < refs.length; i++) ...[
+                  for (final entry in _listOrder().indexed) ...[
                     // A hairline between members: without it three name /
                     // state / three-button blocks run together into one wall
                     // and the eye cannot tell which buttons belong to which
                     // section — the one thing this list exists to make
                     // obvious.
-                    if (i > 0) const Divider(height: 1),
+                    if (entry.$1 > 0) const Divider(height: 1),
+                    // Alternatives are drawn together under the name of the
+                    // choice they belong to, so the two rows read as one
+                    // decision instead of as two machines that happen to be
+                    // next to each other.
+                    if (entry.$2.heading != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8, bottom: 2),
+                        child: Text(
+                          '${entry.$2.heading} — one at a time',
+                          style: Theme.of(context)
+                              .textTheme
+                              .labelMedium
+                              ?.copyWith(color: states.grey),
+                        ),
+                      ),
                     _SectionRow(
-                      index: i,
-                      name: refs[i].displayLabel,
-                      mode: _modeAt(i),
+                      index: entry.$2.index,
+                      name: refs[entry.$2.index].displayLabel,
+                      mode: _modeAt(entry.$2.index),
+                      // One place to pick a mode, not two. A `Run` on an
+                      // alternative's own row is the unguarded half of the
+                      // decision the choice below makes properly, and having
+                      // both is how an operator learns that one of them
+                      // sometimes does nothing.
+                      showRun: !inExclusiveSet(entry.$2.index, exclusiveSets),
                       onCommand: onSectionCommand,
                     ),
                   ],
                 ],
+              ),
+            ),
+          // One block per declared choice, before the group commands. These
+          // are the decisions with only one right answer at a time; `Run all`
+          // below is the blunt instrument and belongs after them.
+          for (var s = 0; s < exclusiveSets.length; s++)
+            PaneBodySection.manual(
+              title: exclusiveSets[s].name,
+              child: _ExclusiveChoice(
+                setIndex: s,
+                set: exclusiveSets[s],
+                refs: refs,
+                modes: modes,
+                allowModeSwitch: allowModeSwitch,
+                onModeSwitch: onModeSwitch,
               ),
             ),
           PaneBodySection.manual(
@@ -1360,6 +2033,21 @@ class SectionPane extends StatelessWidget {
                     ),
                   ],
                 ),
+                // Said only when it is the answer to a question the operator
+                // has just asked: something in a choice could have started,
+                // and `Run all` deliberately did not start it.
+                if (exclusiveSets.any((s) =>
+                    s.members.any((i) => canStart(_modeAt(i))))) ...[
+                  const SizedBox(height: 10),
+                  _Note(
+                    icon: Icons.rule,
+                    color: states.grey,
+                    text: 'Run all leaves '
+                        '${_joinNames(exclusiveSets.map((s) => s.name))} '
+                        'alone — only one of each can run, and starting both '
+                        'at once would stop the line. Choose a mode above.',
+                  ),
+                ],
                 if (!runnable && !cleanable && held.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   // No cross-reference to the row above: it opens itself in
@@ -1393,6 +2081,219 @@ class SectionPane extends StatelessWidget {
   }
 }
 
+/// `a`, `a and b`, `a, b and c` — a list an operator reads as a sentence.
+String _joinNames(Iterable<String> names) {
+  final list = names.toList();
+  if (list.isEmpty) return '';
+  if (list.length == 1) return list.single;
+  return '${list.sublist(0, list.length - 1).join(', ')} and ${list.last}';
+}
+
+/// One declared choice: the alternatives, and which of them has the line.
+///
+/// Presented as a choice rather than as a row of independent on/off toggles
+/// because that is what it is — the PLC allows exactly one, so two switches
+/// would be asking the operator to work out for themselves that they are one
+/// decision. The mode that has the line is filled and inert (`p_cmd_Start` is
+/// a toggle: a live button there would stop it); the alternatives are live
+/// only when picking them would actually do something.
+///
+/// Full-width rows rather than a segmented strip: these carry the machine's
+/// own name, they are read on a wet touchscreen with no hover and no tooltip,
+/// and this is the one control on the pane that starts a line.
+class _ExclusiveChoice extends StatelessWidget {
+  final int setIndex;
+  final ExclusiveSet set;
+  final List<SectionRef> refs;
+  final List<SectionMode> modes;
+  final bool allowModeSwitch;
+  final Future<SectionSwitchOutcome> Function(int target)? onModeSwitch;
+
+  const _ExclusiveChoice({
+    required this.setIndex,
+    required this.set,
+    required this.refs,
+    required this.modes,
+    required this.allowModeSwitch,
+    required this.onModeSwitch,
+  });
+
+  SectionMode _modeAt(int i) =>
+      i < modes.length ? modes[i] : SectionMode.unknown;
+
+  String _nameOf(int i) => i < refs.length ? refs[i].displayLabel : 'Section';
+
+  /// The member that currently has the line, or null.
+  int? get _active {
+    for (final i in set.members) {
+      final m = _modeAt(i);
+      if (m == SectionMode.running || m == SectionMode.cleaning) return i;
+    }
+    return null;
+  }
+
+  Future<void> _pick(BuildContext context, int target) async {
+    final send = onModeSwitch;
+    if (send == null) return;
+    final plan = planModeSwitch(modes: modes, set: set, target: target);
+    if (plan == null) return;
+
+    if (plan.isHandover) {
+      // Explicit, and impossible to reach by a mis-tap: the press opens a
+      // question naming both machines, and the answer that starts something
+      // is a second, separate press on a button that is not focused.
+      final ok = await showConfirmDialog(
+        context: context,
+        title: 'Switch to ${_nameOf(target)}?',
+        message:
+            '${_joinNames(plan.stop.map(_nameOf))} will be stopped first. '
+            '${_nameOf(target)} starts as soon as the PLC hands the '
+            'go-ahead over — only one of these can run at a time.\n\n'
+            'If it does not, nothing is started and the line stays stopped.',
+        confirmLabel: 'Switch',
+        destructive: true,
+        icon: Icons.swap_horiz,
+      );
+      if (!ok) return;
+    }
+
+    final outcome = await send(target);
+    if (!context.mounted) return;
+    switch (outcome) {
+      case SectionSwitchOutcome.done:
+      case SectionSwitchOutcome.notOffered:
+        return;
+      case SectionSwitchOutcome.notHandedOver:
+        // The one outcome that must not pass quietly: the line is stopped and
+        // the mode the operator asked for is not running. A message that faded
+        // would leave them reading a stopped line as a machine that refused.
+        await showStandardDialog<void>(
+          context: context,
+          title: '${_nameOf(target)} did not start',
+          icon: Icons.warning_amber,
+          builder: (_) => Text(
+            '${_joinNames(plan.stop.map(_nameOf))} stopped, but the PLC did '
+            'not release ${_nameOf(target)} within '
+            '${kSectionSwitchTimeout.inSeconds} seconds, so no start was '
+            'sent.\n\nNothing in ${set.name} is running. Check what else is '
+            'holding ${_nameOf(target)}, then start it from here.',
+          ),
+          actionsBuilder: (ctx) => [
+            PaneAction.primary(
+              label: 'Close',
+              onPressed: () => Navigator.of(ctx).pop(),
+            ),
+          ],
+        );
+      case SectionSwitchOutcome.writeFailed:
+        await showStandardDialog<void>(
+          context: context,
+          title: 'The command did not reach the PLC',
+          icon: Icons.link_off,
+          builder: (_) => Text(
+            'Nothing in ${set.name} was changed that this screen can vouch '
+            'for. Check the connection, then read the states above before '
+            'trying again.',
+          ),
+          actionsBuilder: (ctx) => [
+            PaneAction.primary(
+              label: 'Close',
+              onPressed: () => Navigator.of(ctx).pop(),
+            ),
+          ],
+        );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final states = HmiStateColors.of(context);
+    final active = _active;
+    final unreadable =
+        set.members.any((i) => _modeAt(i) == SectionMode.unknown);
+
+    // Whether a hand-over is possible but switched off — the thing to explain
+    // rather than leave as a dead button.
+    var handoverWithheld = false;
+    final buttons = <Widget>[];
+    for (final i in set.members) {
+      final mode = _modeAt(i);
+      final isActive = i == active;
+      final plan = isActive
+          ? null
+          : planModeSwitch(modes: modes, set: set, target: i);
+      final blocked = plan != null && plan.isHandover && !allowModeSwitch;
+      if (blocked) handoverWithheld = true;
+      buttons.add(Padding(
+        padding: EdgeInsets.only(top: buttons.isEmpty ? 0 : 8),
+        child: _ModeChoice(
+          buttonKey: Key('section-choice-$setIndex-$i'),
+          label: _nameOf(i),
+          icon: mode == SectionMode.cleaning
+              ? Icons.water_drop_outlined
+              : Icons.play_arrow,
+          color: sectionModeColor(context, mode),
+          active: isActive,
+          onPressed: (isActive || plan == null || blocked)
+              ? null
+              : () => _pick(context, i),
+        ),
+      ));
+    }
+
+    // Both modes in auto at once cannot happen while the ladder holds
+    // (`i_xPermissive := NOT other.q_xEnabled`), so seeing it means the
+    // interlock is not doing its job. The face cannot say it — two sections in
+    // the same mode is agreement, and there is no seam to draw — so this is
+    // where it gets said, on the pane that claims they are alternatives.
+    final violated = set.members
+            .where((i) => _modeAt(i) == SectionMode.running)
+            .length >
+        1;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ...buttons,
+        if (violated) ...[
+          const SizedBox(height: 10),
+          _Note(
+            icon: Icons.warning_amber,
+            color: Theme.of(context).colorScheme.error,
+            text: 'Both of these are running. Only one is supposed to be able '
+                'to — the interlock in the PLC is not holding. Report it.',
+          ),
+        ] else if (unreadable) ...[
+          const SizedBox(height: 10),
+          _Note(
+            icon: Icons.help_outline,
+            color: states.grey,
+            text: 'One of these is not reading, so no choice is offered — '
+                'switching would stop a section nobody can see the state of.',
+          ),
+        ] else if (handoverWithheld && active != null) ...[
+          const SizedBox(height: 10),
+          _Note(
+            icon: Icons.lock_outline,
+            color: states.yellow,
+            text: '${_nameOf(active)} has the line. Stop it, then the other '
+                'mode can be started.',
+          ),
+        ] else if (active != null && allowModeSwitch) ...[
+          const SizedBox(height: 10),
+          _Note(
+            icon: Icons.swap_horiz,
+            color: states.grey,
+            text: 'Choosing the other mode stops ${_nameOf(active)} first, '
+                'and asks before it does.',
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 /// One member of a group, with its own three commands on its own row.
 ///
 /// The alternative was a picker that switched the whole pane between sections,
@@ -1416,11 +2317,19 @@ class _SectionRow extends StatelessWidget {
   final SectionMode mode;
   final Future<void> Function(int index, String field)? onCommand;
 
+  /// Off for one alternative of an exclusive set, whose mode is picked in the
+  /// choice instead. Two ways to start the same section, one guarded and one
+  /// not, is how an operator learns that a button sometimes does nothing.
+  /// Clean and Stop stay: neither is part of the choice, and cleaning is not
+  /// exclusive in the PLC at all.
+  final bool showRun;
+
   const _SectionRow({
     required this.index,
     required this.name,
     required this.mode,
     required this.onCommand,
+    this.showRun = true,
   });
 
   @override
@@ -1461,17 +2370,19 @@ class _SectionRow extends StatelessWidget {
           const SizedBox(height: 6),
           Row(
             children: [
-              Expanded(
-                child: _MemberButton(
-                  buttonKey: Key('section-$index-run'),
-                  label: 'Run',
-                  semantic: 'Run $name',
-                  icon: Icons.play_arrow,
-                  tint: HmiStateColors.of(context).green,
-                  onPressed: action(kSectionCmdStart),
+              if (showRun) ...[
+                Expanded(
+                  child: _MemberButton(
+                    buttonKey: Key('section-$index-run'),
+                    label: 'Run',
+                    semantic: 'Run $name',
+                    icon: Icons.play_arrow,
+                    tint: HmiStateColors.of(context).green,
+                    onPressed: action(kSectionCmdStart),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 6),
+                const SizedBox(width: 6),
+              ],
               Expanded(
                 child: _MemberButton(
                   buttonKey: Key('section-$index-clean'),

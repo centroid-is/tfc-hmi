@@ -10,6 +10,7 @@ SectionRef _$SectionRefFromJson(Map<String, dynamic> json) => SectionRef(
       key: json['key'] as String,
       label: json['label'] as String?,
       holdReason: json['holdReason'] as String?,
+      exclusiveGroup: json['exclusiveGroup'] as String?,
     );
 
 Map<String, dynamic> _$SectionRefToJson(SectionRef instance) =>
@@ -17,6 +18,7 @@ Map<String, dynamic> _$SectionRefToJson(SectionRef instance) =>
       'key': instance.key,
       'label': instance.label,
       'holdReason': instance.holdReason,
+      'exclusiveGroup': instance.exclusiveGroup,
     };
 
 SectionButtonConfig _$SectionButtonConfigFromJson(Map<String, dynamic> json) =>
@@ -27,6 +29,7 @@ SectionButtonConfig _$SectionButtonConfigFromJson(Map<String, dynamic> json) =>
           [],
       label: json['label'] as String?,
       showName: json['show_name'] as bool? ?? true,
+      allowModeSwitch: json['allow_mode_switch'] as bool? ?? false,
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -49,6 +52,7 @@ Map<String, dynamic> _$SectionButtonConfigToJson(
       'plcAssetKey': instance.plcAssetKey,
       'sections': instance.sections.map((e) => e.toJson()).toList(),
       'show_name': instance.showName,
+      'allow_mode_switch': instance.allowModeSwitch,
     };
 
 const _$TextPosEnumMap = {
