@@ -532,6 +532,81 @@ DraftKings, Ignition) and forced by Dart itself — `dart:io` WebSocket has no
   oversized frames; Grafana caps at 64 KiB) — oversized deltas become
   keyframes, oversized keyframes get chunked.
 
+### 5.1 Amendment, 2026-09-01 (Phase 7): the drain gate is not implementable on this transport
+
+The rule above stands as a design rule. The clause **"drained only when the
+previous sink write's future completes"** is *not implemented*, and on
+`dart:io` WebSockets it is *not implementable* — there is no
+egress-completion signal to gate a drain on. This paragraph exists so the
+next reader stops looking for the bug: there is no bug, there is a transport
+that does not offer the primitive.
+
+**Measured** (07-RESEARCH §B.3, `egress_gating_probe.dart`, macOS arm64, Dart
+3.11.5): 100 frames × 7 KiB — **700 KB** — pushed at a client behind a
+100 kbit/s token-bucket relay, a link that needs **57 seconds** to carry
+them.
+
+| Write path | Push returned in | Client had received | RSS growth |
+|---|---|---|---|
+| `sink.add` | **7 ms** | **0 of 100** | 2.9 MB |
+| `await sink.addStream(Stream.value(m))` | **5 ms** | **0 of 100** | 1.0 MB |
+
+Both paths return in single-digit milliseconds having delivered nothing.
+`WebSocket.addStream` completes when the source stream has been drained into
+the WebSocket's *own* outgoing controller, not when the kernel accepted the
+bytes — so the one hatch `tick_engine.dart:44-71` did not consider is closed,
+and **nobody should re-test it**. The other candidate named there,
+`ws.sink.done`, completes only on *close*, so it cannot pace anything either.
+There is no `bufferedAmount` and no `flush()` (flutter#103306).
+
+**Two queues, and the document above reads as though there were one.** "Queue
+stays bounded" is true of the conflating send map and false of the socket:
+
+- the **conflating map** is bounded by subscription size and it is asserted —
+  peak `pendingCount` **201** against a 200-key page under sustained
+  saturation (Phase 7, `slow_link_recovery_gate_test.dart`), which is
+  last-value-wins per (subscription, handle) holding exactly;
+- the **`dart:io` write buffer** behind it is unbounded and **cannot be
+  observed from this process at all**. Its size is only ever visible
+  indirectly, as what comes out afterwards: after 15 s of saturation,
+  unthrottling delivered **107 update frames and 376 kB in the first second**
+  against a steady state of 10.0 frames/s — a **10.7×** burst on a link that
+  had been carrying 12.5 kB/s. So the catalogue's parenthetical "the
+  conflating map means there is no backlog to flush" is false here, and it is
+  false for this reason.
+
+**What the product does instead**, and both halves are real:
+
+1. **Per-tick conflation.** `drain()` runs every tick and last-value-wins
+   within a tick is genuine — 12 update frames delivered against 35 plant
+   sweeps during a metered window. What it does *not* do is collapse anything
+   *between* ticks: each drained frame is handed to the socket the moment it
+   is built, so 115 of 116 sweeps eventually reached the panel. What
+   `ConflatingSendBuffer.poll` measures across ticks is therefore this
+   server's **production** for one client, not that client's backlog
+   (03-REVIEW WR-11) — a slow client is detected by the heartbeat deadline,
+   not by the buffer.
+2. **The client tells the operator.** Phase 7 wired
+   `FreshnessWatchdog.staleSubscriptionsAt` into `RemoteStateMan`'s rendered
+   surface, so a starved subscription is **rendered stale** against the local
+   clock rather than agreeing with a frame that is a minute old. That closes
+   the failure this gap would otherwise cause on a plant floor — a panel a
+   minute behind reading as live — without pretending the queue is bounded.
+
+**Where the real answer lives: a protocol-level acknowledgement.** The
+client's existing app heartbeat carries the highest `seq` it has applied per
+subscription, and the gateway gates the drain on it. That is the honest
+implementation of the clause above and it also gives Phase 8's
+`PIPE.effective_hz` and `pending_keys` a real source instead of a proxy
+measure. It is **a named follow-up, not scheduled** — it is a protocol
+addition and belongs to a phase that owns the protocol.
+
+Phase 7's deviations registry
+(`packages/tfc_relay_client/test/gate/f_row_registry.dart`) carries the four
+catalogue clauses this gap descopes — F20 "queue stays bounded", F20 "never
+an old queued one", F21 "no burst of backlogged frames on recovery" and F21's
+shortened saturation window — each with its number.
+
 ## 6. Wire format rules
 
 1. **JSON, UTF-8 bytes end to end.** Decode with `JsonUtf8Decoder` fused on
