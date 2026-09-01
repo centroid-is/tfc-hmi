@@ -26,5 +26,6 @@
 library;
 
 export 'src/key_router.dart';
+export 'src/local_state_man.dart';
 export 'src/upstream_link.dart';
 export 'src/value_shaping.dart';

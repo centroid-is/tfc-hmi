@@ -68,8 +68,10 @@ void main() {
 
     test('subscribe is a plain Stream whose first event is the CURRENT value',
         () async {
-      link.setValue(st101Key, 42);
-      await pumpUpstream();
+      // Through the composer's own ingest seam and not through the link: the
+      // fan-in that connects the two is task 2, and a task-1 case that reached
+      // for it would be asserting a mechanism that does not exist yet.
+      man.applyUpstreamBatch({st101Key: DynamicValue(value: 42)});
 
       final stream = man.subscribe(st101Key);
       expect(stream, isA<Stream<DynamicValue>>(),
