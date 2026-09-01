@@ -108,6 +108,35 @@ const int declaredUpstreamWriteSites = 0;
 /// The dev-dependency test kit that must never be reachable from `lib/`.
 const String contractKitPackage = 'tfc_stateman_contract';
 
+/// `StateManApi` members `LocalStateMan` has not written yet.
+///
+/// **This number must reach zero, and each unit of it has an owner.** 07-01's
+/// `gateOutstanding` doctrine, applied to a class rather than to a gate: a
+/// self-deleting list with an owner beats a red suite, because a phase whose
+/// own gate is red cannot tell a new failure from a known one.
+///
+///  * **3 owed by 08-06** — `write`, `writeStatus`, `holdToRun`. The write
+///    path is its own plan because the three-state outcome, the cmd minting
+///    and the no-retry seam are one subject.
+///  * **4 owed by 08-11** — `browse`, `timeseries`, `historyViews`,
+///    `preferences`. 08-11 sets `supportsDataServices: false` on the contract
+///    leg and decides which of the four the gateway answers at all; the three
+///    data services are Phase 10's to fill.
+///
+/// The plan that closes each member decrements this in the same commit. A
+/// member that quietly starts working without this number moving is a member
+/// nobody decided to ship.
+const int declaredUnimplementedMembers = 7;
+
+/// A forwarder is forbidden in the composer, by name.
+///
+/// `policy_state_man.dart:80-87`'s reason, which `cert_health_state_man.dart:
+/// 153-158` then repeats: a `noSuchMethod` forwarder silently absorbs a member
+/// added to `StateManApi` in a later phase — the new member works, unpoliced,
+/// and nothing says so. Explicit member-by-member implementation makes a new
+/// member a compile error and therefore a decision.
+const String forwarderSpelling = 'noSuchMethod';
+
 /// Retry shapes forbidden on an upstream write line.
 const List<String> retryShapes = <String>[
   'retry',
@@ -150,6 +179,8 @@ void main() {
       expect(unboundedUpstreamAwaits(empty), isEmpty);
       expect(upstreamWriteSites(empty), isEmpty);
       expect(retryShapedWrites(empty), isEmpty);
+      expect(unimplementedMemberSites(empty), isEmpty);
+      expect(mentionsOf(empty, forwarderSpelling), isEmpty);
       expect(literalPortLines(empty), isEmpty,
           reason: 'pointed at an empty directory a sweep that reports an '
               'occurrence is inventing rather than measuring, and nothing it '
@@ -232,6 +263,35 @@ void main() {
               'retry could hide. no_retry_test.dart pins the server\'s at '
               'exactly one call site for this reason; this is the same pin '
               'with tfc_relay_local/lib as the scope');
+    });
+  });
+
+  group('freeze 6: the composer owes what it says it owes', () {
+    test('the unimplemented-member count is the declared one', () {
+      expect(unimplementedMemberSites(libSrc),
+          hasLength(declaredUnimplementedMembers),
+          reason: 'every member left unwritten names the plan that owes it, '
+              'and the total is written down here so 08-06 and 08-11 can '
+              'decrement it rather than discover it. A member that starts '
+              'working without this number moving is a member nobody decided '
+              'to ship');
+    });
+
+    test('every unimplemented member names an owning plan', () {
+      final anonymous = unimplementedMemberSites(libSrc)
+          .where((site) => !RegExp(r'08-\d\d').hasMatch(site))
+          .toList();
+      expect(anonymous, isEmpty,
+          reason: 'an UnimplementedError with no plan id in it is a TODO, and '
+              'a TODO is a thing nobody owns');
+    });
+
+    test('no file under lib/ forwards with noSuchMethod', () {
+      expect(mentionsOf(libSrc, forwarderSpelling), isEmpty,
+          reason: 'policy_state_man.dart:80-87. A forwarder absorbs a member '
+              'added to StateManApi in a later phase: the new member works, '
+              'unpoliced, and nothing says so. Explicit delegation makes it a '
+              'compile error and therefore a decision');
     });
   });
 
@@ -371,6 +431,25 @@ List<String> retryShapedWrites(Directory directory) => upstreamWriteSites(
         directory)
     .where((site) => retryShapes.any((shape) => site.contains(shape)))
     .toList();
+
+/// Every line under [directory] that throws an [UnimplementedError].
+///
+/// Comments are skipped for the usual reason — a doc comment arguing about an
+/// unwritten member is not an unwritten member — and the line itself is kept
+/// so the "names its owner" case can read the plan id out of it.
+List<String> unimplementedMemberSites(Directory directory) {
+  final sites = <String>[];
+  for (final file in dartFilesIn(directory)) {
+    final lines = file.readAsLinesSync();
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      if (_isAnyComment(line)) continue;
+      if (!line.contains('UnimplementedError(')) continue;
+      sites.add('${file.path}:${i + 1}: ${line.trim()}');
+    }
+  }
+  return sites;
+}
 
 /// A four- or five-digit integer that is not part of a longer identifier.
 final RegExp _portLiteral = RegExp(r'\b\d{4,5}\b');
