@@ -345,6 +345,25 @@ jobs:
         dart analyze
         dart test
 
+    # 07-01's lane-budget arm is opt-in (measuring the gate lane means running
+    # it, which costs the lane's full runtime a second time on top of the step
+    # above); exactly one job watches the number, per its SUMMARY. The gate
+    # cases themselves run on all three platforms inside the client step —
+    # `dart test` discovers test/gate like any other directory. This step
+    # measures, it does not select.
+    #
+    # The arm has two anti-recursion guards and needs both: it clears
+    # GATE_LANE_BUDGET in the child it spawns, and the child excludes the
+    # `meta` tag this file carries. Renaming that tag turns this one job into
+    # an unbounded recursion of `dart test` processes rather than into a
+    # failing assertion (gate_manifest_test.dart:957-1016).
+    - name: Gate-lane wall-clock budget
+      if: runner.os == 'Linux'
+      working-directory: packages/tfc_relay_client
+      env:
+        GATE_LANE_BUDGET: "1"
+      run: dart test test/gate/gate_manifest_test.dart
+
   tfc-dart-test:
     strategy:
       fail-fast: false
