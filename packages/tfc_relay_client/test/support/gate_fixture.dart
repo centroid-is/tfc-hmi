@@ -197,6 +197,7 @@ final class GateFixture {
     this._keys,
     this.gatewayComplaints,
     this._retired,
+    this._config,
   );
 
   /// The plant behind the gateway. Levers go straight here, never over the
@@ -245,6 +246,8 @@ final class GateFixture {
   /// the one object that cannot have seen it. Captured at restart time and
   /// prepended to the live ledger by [evictions].
   final List<ConnectionClose> _retired;
+
+  final ClientConfig _config;
 
   /// The one proxy the whole herd shares.
   ///
@@ -314,6 +317,45 @@ final class GateFixture {
           if (evictionCodes.contains(close.serverCloseCode)) close,
       ];
 
+  /// Panels the gateway threw off **for being slow** — `backpressureOverrun`.
+  ///
+  /// The one eviction a slow-link row is actually about. It is asked for
+  /// separately from [evictions] because of the finding recorded in
+  /// 07-08-SUMMARY and in [heartbeatReaps]: on this build every panel is
+  /// reaped periodically for reasons that have nothing to do with the fault
+  /// under test, so a row that asserted `evictions` empty over a window longer
+  /// than the heartbeat deadline would be red about the background rather than
+  /// about its own injection.
+  List<ConnectionClose> get evictedForBackpressure => [
+        for (final close in [..._retired, ...server.closeLedger])
+          if (close.serverCloseCode == CloseCodes.backpressureOverrun) close,
+      ];
+
+  /// Panels the gateway reaped for silence — `heartbeatTimeout`.
+  ///
+  /// **Measured, and on this build it is not zero for a healthy panel.** There
+  /// is no periodic client-to-gateway heartbeat: `RelaySession`'s `_lastSeen`
+  /// advances only on inbound *application* frames (`relay_session.dart:151-156`)
+  /// and `RemoteStateMan` sends nothing on a timer — only `hello`, `subscribe`,
+  /// writes and `holdTick`. A panel that is doing what every panel in the plant
+  /// does, watching a page and never writing to it, is therefore silent from
+  /// the gateway's point of view and is closed with 4003 one
+  /// `heartbeatDeadline` after its handshake, every time.
+  ///
+  /// Measured on an idle single-panel fixture: sessions 1, 0, 1, 1, 1 and
+  /// evictions 0, 1, 1, 1, 2 at three-second intervals over fifteen seconds —
+  /// a reap and a redial about every six seconds, for ever. It is invisible
+  /// from outside because the panel reconnects immediately; what it costs is a
+  /// full page resync per cycle per panel.
+  ///
+  /// Exposed rather than hidden so a row can print it, and so the next wave has
+  /// a number rather than a suspicion. See 07-08-SUMMARY: this is a Rule 4
+  /// finding, not something this plan fixed.
+  List<ConnectionClose> get heartbeatReaps => [
+        for (final close in [..._retired, ...server.closeLedger])
+          if (close.serverCloseCode == CloseCodes.heartbeatTimeout) close,
+      ];
+
   /// Every panel's observed close, in herd order.
   List<ObservedClose> get observedCloses =>
       [for (final one in clients) one.observedClose];
@@ -375,6 +417,31 @@ final class GateFixture {
         await Future<void>.delayed(Duration(milliseconds: 50 * retries));
       }
     }
+  }
+
+  /// Builds one more panel on a link that is already running, and appends it
+  /// to [clients].
+  ///
+  /// **This is G2's whole injection and it has to happen while the link is
+  /// bad.** The row is about a panel that joins a plant whose link is already
+  /// throttled and flapping, so the panel cannot be one the fixture stood up
+  /// during the quiet period and then woke — it has to dial for the first time
+  /// into the conditions the case has already established. It is built by
+  /// exactly the same code path as the herd (see `_buildPanel`), so nothing
+  /// about it is a second kind of client.
+  ///
+  /// It does **not** wait for readiness: measuring how long that takes is the
+  /// row's content, and a fixture that waited would have spent the measurement
+  /// before handing the panel back.
+  GateClient joinLate({FaultProxy? through, Set<String>? keys}) {
+    final one = _buildPanel(
+      index: clients.length,
+      proxy: through ?? proxy,
+      config: _config,
+      keys: keys ?? _keys,
+    );
+    clients.add(one);
+    return one;
   }
 
   /// Waits until every panel in the herd reads [expected] for [key].
@@ -506,35 +573,16 @@ Future<GateFixture> gateFixture({
 
   final herd = <GateClient>[];
   for (var i = 0; i < n; i++) {
-    final proxy = proxyPerClient ? proxies[i] : proxies.single;
-    final seam = FrameSeam(connectTimeout: clientConfig.connectTimeout);
-    late final GateClient one;
-    final client = RemoteStateMan(
-      uri: Uri.parse('ws://127.0.0.1:${proxy.port}'),
+    herd.add(_buildPanel(
+      index: i,
+      proxy: proxyPerClient ? proxies[i] : proxies.single,
       config: clientConfig,
       keys: keys,
-      // The seam's dial, with the attempt kept so the panel can be asked what
-      // close it observed. `FrameSeam` does not retain it — it has no reason
-      // to, and giving it one would put a second lifetime in a file five other
-      // waves already depend on.
-      dial: (uri) async {
-        final attempt = await seam.dial(uri);
-        one._last = attempt;
-        return attempt;
-      },
-    );
-    one = GateClient._(i, client, seam, proxy);
-    herd.add(one);
-    addTearDown(client.dispose);
-    // Registered after the dispose, so it runs *before* it: a subscription
-    // still open while the panel tears its supervisor down is the shape that
-    // delivers a transition into a closed recorder.
-    final states = client.linkStates.listen(one.states.add);
-    addTearDown(states.cancel);
+    ));
   }
 
-  final fixture = GateFixture._(
-      served, slot, port, proxies, herd, keys, gatewayComplaints, retired);
+  final fixture = GateFixture._(served, slot, port, proxies, herd, keys,
+      gatewayComplaints, retired, clientConfig);
 
   if (waitForReady) {
     await until(
@@ -547,6 +595,45 @@ Future<GateFixture> gateFixture({
     );
   }
   return fixture;
+}
+
+/// One panel: its seam, its client, its recorder, and the three teardowns they
+/// need registered in the right order.
+///
+/// Extracted so [gateFixture] and [GateFixture.joinLate] build a panel the same
+/// way. A late joiner that differed from the herd in any respect would make
+/// G2's "a client subscribing while the link is bad" a claim about the second
+/// construction path rather than about the client.
+GateClient _buildPanel({
+  required int index,
+  required FaultProxy proxy,
+  required ClientConfig config,
+  required Set<String> keys,
+}) {
+  final seam = FrameSeam(connectTimeout: config.connectTimeout);
+  late final GateClient one;
+  final client = RemoteStateMan(
+    uri: Uri.parse('ws://127.0.0.1:${proxy.port}'),
+    config: config,
+    keys: keys,
+    // The seam's dial, with the attempt kept so the panel can be asked what
+    // close it observed. `FrameSeam` does not retain it — it has no reason to,
+    // and giving it one would put a second lifetime in a file five other waves
+    // already depend on.
+    dial: (uri) async {
+      final attempt = await seam.dial(uri);
+      one._last = attempt;
+      return attempt;
+    },
+  );
+  one = GateClient._(index, client, seam, proxy);
+  addTearDown(client.dispose);
+  // Registered after the dispose, so it runs *before* it: a subscription still
+  // open while the panel tears its supervisor down is the shape that delivers a
+  // transition into a closed recorder.
+  final states = client.linkStates.listen(one.states.add);
+  addTearDown(states.cancel);
+  return one;
 }
 
 /// Long enough for the kernel to have caught up with a close before a

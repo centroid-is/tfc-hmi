@@ -371,12 +371,6 @@ const List<GateRow> gateRows = <GateRow>[
 /// clauses are not all asserted yet. A partial entry for a row with no case is
 /// a missing entry wearing the wrong label, and the manifest says so.
 const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
-  'F12': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-08',
-    clause: 'the isolation clause — one throttled client, the other\'s cadence '
-        'band unchanged',
-  ),
   'F13': Outstanding(
     kind: OutstandingKind.partial,
     owner: '07-11',
@@ -429,12 +423,6 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     owner: '07-11',
     clause: 'the recovery: cadence returns, staleness clears, and the burst '
         'measured rather than banded away',
-  ),
-  'G2': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-08',
-    clause: 'the late joiner reaching a complete view over a throttled, '
-        'flapping link',
   ),
   'G5': Outstanding(
     kind: OutstandingKind.missing,

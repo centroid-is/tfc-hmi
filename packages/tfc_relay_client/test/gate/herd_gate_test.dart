@@ -55,8 +55,11 @@
 @Tags(['gate', 'faults'])
 library;
 
+import 'dart:async';
+
 import 'package:test/test.dart';
 import 'package:tfc_stateman_contract/faults.dart';
+import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../support/fault_fixture.dart';
@@ -155,6 +158,83 @@ const Duration _establish = Duration(seconds: 1);
 /// a ceiling is structurally blind to it. That mutation is caught by the
 /// attempt bound below, which is why both arms are here.
 final Duration _fairnessBand = _backoffCap + _establish;
+
+/// How wide the pages the slow-link rows drive are.
+///
+/// Sixty keys at the tick rate is about 54 kB/s of telemetry, which is four
+/// times F12's 10 kB/s throttle and four times G2's 12.5 kB/s. The page has to
+/// exceed the link by a clear multiple or the throttle is not the bottleneck
+/// and the row measures an unthrottled link with a lever armed on it.
+const int _busyPage = 60;
+
+/// How long every rate in this file is measured over.
+///
+/// **Three and a half seconds, and it is a floor rather than a preference.**
+/// `DelayLine`'s token bucket banks up to one second of burst
+/// (`delay_line.dart:620-670`), so a window shorter than about two seconds
+/// measures the bank rather than the rate, and the proxy's own doc sets three
+/// seconds as the minimum with a band of one twentieth. Three and a half is
+/// that minimum with the measurement's own scheduling slop on top. Both rows
+/// here use it, which is why it is one constant.
+const Duration _rateWindow = Duration(milliseconds: 3500);
+
+/// F12's throttle, from the catalogue's own injection: `throttle(10KB/s)`.
+const int _f12Throttle = 10 * 1000;
+
+/// G2's throttle, from its own row: 100 kbit/s, which is 12500 bytes.
+const int _g2Throttle = 100 * 1000 ~/ 8;
+
+/// The flap G2 runs the link at while the late joiner arrives.
+///
+/// **The up half has to be longer than a snapshot.** G2's page is small
+/// (`_g2Page`) precisely so its snapshot fits: at 12.5 kB/s a twelve-key
+/// snapshot is roughly a hundred milliseconds of wire time, and a 200 ms up
+/// window — F3's flap — would cut the handshake more often than not and the
+/// row would be measuring whether a dial can complete rather than whether a
+/// snapshot beats a backlog. A second and a half up against 300 ms down is a
+/// link that is genuinely flapping and on which a snapshot is genuinely
+/// possible, which is the condition the row describes.
+const Duration _g2FlapUp = Duration(milliseconds: 1500);
+const Duration _g2FlapDown = Duration(milliseconds: 300);
+
+/// The page G2's late joiner asks for.
+const int _g2Page = 12;
+
+/// How long the late joiner has to reach a complete view.
+///
+/// Generous on purpose: the row's claim is that the snapshot is **not
+/// starved**, not that it is fast. Eight seconds covers a dial that lands in a
+/// down half, the backoff that follows it, a second dial, and a snapshot
+/// metered at 12.5 kB/s — five flap cycles' worth. What it does not cover is a
+/// snapshot queued behind a telemetry backlog on a link this slow, which is
+/// what the row forbids and what would take tens of seconds.
+const Duration _g2Budget = Duration(seconds: 8);
+
+/// Drives every key on [keys] to a fresh value on every tick, until cancelled.
+///
+/// The plant has to be genuinely busy for a throttle to bite: a quiet page
+/// produces the `badStale` follow-up and then nothing, and a link throttled
+/// below the rate of nothing is not throttled. The counter makes each value
+/// distinct so a case can tell the latest from a queued one.
+Timer _drivePlant(FakeStateMan plant, List<String> keys) {
+  var n = 0;
+  return Timer.periodic(const Duration(milliseconds: 50), (_) {
+    n++;
+    plant.setValues({for (final key in keys) key: 1000 + n});
+  });
+}
+
+/// Frames per second arriving at [panel] over [window].
+///
+/// Counted off the seam, which is the panel's own inbound stream after the
+/// lens — the closest thing to "what the operator's screen is being fed" this
+/// package can read without asking the client to report on itself.
+Future<double> _cadence(GateClient panel, Duration window) async {
+  final before = panel.seam.inbound.length;
+  await Future<void>.delayed(window);
+  final frames = panel.seam.inbound.length - before;
+  return frames * 1000 / window.inMilliseconds;
+}
 
 /// How many attempts a schedule that is **never reset** fits into [window].
 ///
@@ -556,5 +636,261 @@ void main() {
               'authenticated ones. A reaper that also took the panel would be '
               'reaping on the wrong predicate');
     }, timeout: const Timeout(Duration(seconds: 60)));
+  });
+
+  group('F12 — one slow panel', () {
+    test('F12: one throttled panel does not slow anybody else', () async {
+      final keys = _pageKeys(_busyPage);
+      // One proxy per panel: `throttleBytesPerSec` reaches every pair its proxy
+      // carries, so two panels behind one proxy cannot be throttled
+      // separately. See `gateFixture`'s `proxyPerClient` doc — a case that
+      // believed it had throttled one of two panels sharing a proxy would have
+      // throttled both and then asserted that neither was affected.
+      final fixture = await gateFixture(
+        clients: 2,
+        proxyPerClient: true,
+        keys: keys.toSet(),
+        seed: (plant) =>
+            plant.setValues({for (final key in keys) key: _beforeRestart}),
+      );
+      final slow = fixture.clients[0];
+      final fast = fixture.clients[1];
+
+      final driver = _drivePlant(fixture.served, keys);
+      addTearDown(driver.cancel);
+
+      // Recorders on one key, so the values each panel was actually shown can
+      // be compared against the values the plant actually produced. A reading
+      // taken afterwards cannot tell conflation from a queue — both end up at
+      // the latest value, and the difference is entirely in what happened on
+      // the way there.
+      final slowSaw = <num>[];
+      final plantSaw = <num>[];
+      // Nulls are dropped rather than recorded. A resync blanks the page
+      // before it refills it (`resync_engine.dart:108-116`, and G4 observed
+      // the `[1300, null, 1500]` trace end to end), so a null on this stream is
+      // "the panel is between establishments", not a value the operator was
+      // shown. Counting it would make the ordering assertion below fail on a
+      // reconnect rather than on a queue.
+      final slowTap = slow.client.subscribe(keys.first).listen((value) {
+        final seen = value.value;
+        if (seen is num) slowSaw.add(seen);
+      });
+      addTearDown(slowTap.cancel);
+      final plantTap = fixture.served.subscribe(keys.first).listen((value) {
+        final seen = value.value;
+        if (seen is num) plantSaw.add(seen);
+      });
+      addTearDown(plantTap.cancel);
+
+      final fastBefore = await _cadence(fast, _rateWindow);
+      final slowBefore = await _cadence(slow, _rateWindow);
+
+      slow.proxy.throttleBytesPerSec = _f12Throttle;
+      final slowFrom = slowSaw.length;
+      final plantFrom = plantSaw.length;
+
+      final fastAfter = await _cadence(fast, _rateWindow);
+      final slowAfter = await _cadence(slow, _rateWindow);
+
+      final slowDuring = slowSaw.sublist(slowFrom);
+      final plantDuring = plantSaw.sublist(plantFrom);
+
+      final drift = (fastAfter - fastBefore).abs() / fastBefore;
+      print('F12: over ${_rateWindow.inMilliseconds} ms windows — the '
+          'unthrottled panel ran at ${fastBefore.toStringAsFixed(1)} frames/s '
+          'before the throttle and ${fastAfter.toStringAsFixed(1)} after '
+          '(${(drift * 100).toStringAsFixed(1)}% drift); the throttled panel '
+          'went ${slowBefore.toStringAsFixed(1)} -> '
+          '${slowAfter.toStringAsFixed(1)} frames/s at '
+          '$_f12Throttle bytes/s');
+
+      // ANTI-VACUITY: the throttle actually bit. Without this the isolation
+      // clause below is asserted about a link nobody shaped, which passes on
+      // an unthrottled pair of panels and means nothing at all.
+      expect(slowAfter, lessThan(slowBefore / 2),
+          reason: 'the throttled panel was receiving '
+              '${slowBefore.toStringAsFixed(1)} frames/s before the lever and '
+              '${slowAfter.toStringAsFixed(1)} after it, which is not the '
+              'collapse a $_f12Throttle bytes/s meter should impose on a '
+              '${keys.length}-key page at the tick rate. The lever did not '
+              'bite, so the isolation assertion below is measuring two healthy '
+              'links');
+
+      // THE ROW'S CLAUSE: other clients unaffected. A band, never an equality
+      // — the unthrottled panel's cadence is a real measurement over a real
+      // socket and it moves a few percent between any two windows.
+      expect(drift, lessThan(0.25),
+          reason: 'the unthrottled panel went from '
+              '${fastBefore.toStringAsFixed(1)} to '
+              '${fastAfter.toStringAsFixed(1)} frames/s — '
+              '${(drift * 100).toStringAsFixed(1)}% — when its *neighbour* was '
+              'throttled. Nothing was done to this panel\'s link. Shared-fate '
+              'degradation is exactly what the per-client conflating map '
+              'exists to prevent (T-07-27), and one slow panel dragging the '
+              'plant\'s cadence down for everybody is the failure an operator '
+              'would report as "the whole system got slow"');
+
+      // BOUNDED VIA CONFLATION, from the panel's side. The gateway's own half
+      // of this clause is `backpressure_test.dart:327-393`. What a panel can
+      // see is the difference between a conflating map and a queue, and it is
+      // entirely in what happens on the way: a queue delivers **every** value
+      // the plant produced, late; a conflating map delivers **fewer**, each of
+      // them the latest at the moment it went out. Both end at the same
+      // number, which is why a reading taken afterwards cannot tell them apart
+      // and this is asserted off a recorder.
+      print('F12: over the throttled window the plant produced '
+          '${plantDuring.length} values for ${keys.first} and the throttled '
+          'panel was shown ${slowDuring.length} of them, ending at '
+          '${slowDuring.isEmpty ? 'nothing' : slowDuring.last} against a '
+          'plant at ${plantDuring.isEmpty ? 'nothing' : plantDuring.last}');
+
+      expect(slowDuring, isNotEmpty,
+          reason: 'the throttled panel was shown no values at all during the '
+              'window. Conflation is not starvation — a panel under the '
+              'ceiling keeps being served, more slowly');
+      expect(slowDuring.length, lessThan(plantDuring.length),
+          reason: 'the plant produced ${plantDuring.length} values and the '
+              'throttled panel was shown ${slowDuring.length} of them. A panel '
+              'shown every value the plant produced, over a link that cannot '
+              'carry them, is being served out of a queue — which is the '
+              'unbounded-buffer failure §7.6\'s conflating map exists to '
+              'prevent');
+      expect(slowDuring, orderedEquals(slowDuring.toList()..sort()),
+          reason: 'the values the throttled panel was shown are not in '
+              'ascending order: $slowDuring. The plant only ever counts up, so '
+              'a value that arrived after a larger one is an old queued value '
+              'being delivered late — never an old queued one is the clause, '
+              'and this is the only place it can be seen');
+      // CONFLATION IS NOT EVICTION. Asked as "was anybody thrown off *for
+      // being slow*" rather than "was anybody thrown off", because on this
+      // build the answer to the second question is yes for reasons that have
+      // nothing to do with this row — see `heartbeatReaps` and 07-08-SUMMARY's
+      // finding. This case is fourteen seconds long and the heartbeat deadline
+      // is six, so the background reaping is printed and the row asserts the
+      // eviction it is actually about.
+      print('F12: ${fixture.evictedForBackpressure.length} panels thrown off '
+          'for being slow; ${fixture.heartbeatReaps.length} background '
+          'heartbeat reaps over the case (see 07-08-SUMMARY: no client sends a '
+          'periodic heartbeat, so every panel is reaped once a deadline)');
+      expect(fixture.evictedForBackpressure, isEmpty,
+          reason: 'the gateway threw a panel off for being slow: '
+              '${fixture.evictedForBackpressure}. Conflation is not eviction: '
+              'a panel under the ceiling is served the latest value, never '
+              'disconnected. This is the two-tier boundary G5 pairs from the '
+              'other side, and 4004 firing on a throttled-but-conflating panel '
+              'is the gateway punishing a slow link for being slow');
+
+      // ISOLATION, again and structurally: whatever the background is doing,
+      // it is doing it equally to both panels. A throttle that caused its own
+      // panel to be thrown off more often than its neighbour would show here
+      // even if the cadence band somehow did not.
+      final reconnects = [for (final one in fixture.clients) one.attempts];
+      expect((reconnects[0] - reconnects[1]).abs(), lessThanOrEqualTo(1),
+          reason: 'the throttled panel reconnected ${reconnects[0]} times and '
+              'the unthrottled one ${reconnects[1]}. Only one of them had a '
+              'lever pulled on it, so a difference beyond one is the throttle '
+              'costing its own panel sessions — shared-fate degradation '
+              'measured from the other end');
+    }, timeout: const Timeout(Duration(seconds: 90)));
+  });
+
+  group('G2 — joining a link that is already bad', () {
+    test('G2: a panel that joins while the link is bad still gets its page',
+        () async {
+      final keys = _pageKeys(_busyPage);
+      final joinerKeys = _pageKeys(_g2Page).toSet();
+      final fixture = await gateFixture(
+        clients: 1,
+        keys: keys.toSet(),
+        seed: (plant) =>
+            plant.setValues({for (final key in keys) key: _beforeRestart}),
+      );
+      final resident = fixture.clients.single;
+
+      final driver = _drivePlant(fixture.served, keys);
+      addTearDown(driver.cancel);
+
+      final residentBefore = await _cadence(resident, _rateWindow);
+
+      // Throttle and flap together. The carried trap (Phase 2 handoff, STATE):
+      // a latency-waited chunk does not re-check blackhole and the flap's down
+      // half bites the *next* chunk, so a chunk already in flight when the flap
+      // fires is delivered. Nothing here asserts that an in-flight chunk
+      // vanishes; what is asserted is what arrives and when.
+      fixture.proxy.throttleBytesPerSec = _g2Throttle;
+      fixture.proxy.flap(_g2FlapUp, _g2FlapDown);
+      addTearDown(() => fixture.proxy.flap(_g2FlapUp, _g2FlapDown,
+          enabled: false));
+
+      final residentDuring = await _cadence(resident, _rateWindow);
+
+      // ANTI-VACUITY: the telemetry genuinely is backlogged. Without this, G2
+      // passes on an idle link — a snapshot arriving promptly over a link with
+      // nothing on it proves nothing about a priority lane.
+      expect(residentDuring, lessThan(residentBefore / 2),
+          reason: 'the resident panel was receiving '
+              '${residentBefore.toStringAsFixed(1)} frames/s on a clean link '
+              'and ${residentDuring.toStringAsFixed(1)} on one throttled to '
+              '$_g2Throttle bytes/s and flapping. The link is therefore not '
+              'under load, and a snapshot that arrives promptly across it '
+              'beats no backlog at all — which is the vacuous pass this row is '
+              'one measurement away from');
+
+      final joined = Stopwatch()..start();
+      final joiner = fixture.joinLate(keys: joinerKeys);
+      await until(
+        'the late joiner to reach a complete view of its page',
+        () => joinerKeys.every((key) =>
+            joiner.client.read(key)?.value ==
+            fixture.served.read(key)?.value),
+        budget: _g2Budget,
+      );
+      joined.stop();
+
+      print('G2: the resident panel went ${residentBefore.toStringAsFixed(1)} '
+          '-> ${residentDuring.toStringAsFixed(1)} frames/s under '
+          '$_g2Throttle bytes/s and a '
+          '${_g2FlapUp.inMilliseconds}/${_g2FlapDown.inMilliseconds} ms flap; '
+          'the late joiner reached a complete ${joinerKeys.length}-key view '
+          '${joined.elapsedMilliseconds} ms after it dialled, against a '
+          '${_g2Budget.inMilliseconds} ms budget');
+
+      // COMPLETE, not merely ready. `isReady` is reached before a snapshot
+      // lands, so a case that waited on it would be timing the handshake and
+      // calling it the page.
+      for (final key in joinerKeys) {
+        expect(joiner.client.read(key)?.value,
+            fixture.served.read(key)?.value,
+            reason: 'the late joiner is holding '
+                '${joiner.client.read(key)?.value} for $key against a plant at '
+                '${fixture.served.read(key)?.value}. The row\'s claim is a '
+                '*complete* view, and one key short of the page is a panel '
+                'showing an operator a blank where a number should be');
+      }
+
+      expect(joined.elapsed, lessThan(_g2Budget),
+          reason: 'the late joiner took ${joined.elapsedMilliseconds} ms to '
+              'reach a complete view against a ${_g2Budget.inMilliseconds} ms '
+              'budget. The subscribe answer rides the priority lane and the '
+              'telemetry it is competing with conflates, so a snapshot that '
+              'cannot get out inside this budget is a snapshot being starved '
+              'by the backlog');
+
+      // As in F12: the question is whether anybody was thrown off *for the
+      // condition this row injects*, not whether anybody was thrown off. A
+      // flapping link cuts sockets by definition, and the background heartbeat
+      // reaping is this build's own (07-08-SUMMARY).
+      print('G2: ${fixture.evictedForBackpressure.length} panels thrown off '
+          'for being slow, ${fixture.heartbeatReaps.length} background '
+          'heartbeat reaps');
+      expect(fixture.evictedForBackpressure, isEmpty,
+          reason: 'the gateway threw a panel off for being slow while the link '
+              'was throttled and flapping: ${fixture.evictedForBackpressure}. '
+              'A bad link is the condition this row establishes, not '
+              'misbehaviour by the panels on it — and a late joiner that '
+              'reached its page only to be evicted for the link it joined over '
+              'has not reached anything');
+    }, timeout: const Timeout(Duration(seconds: 120)));
   });
 }
