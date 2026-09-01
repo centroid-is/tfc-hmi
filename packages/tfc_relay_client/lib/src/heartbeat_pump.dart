@@ -1,0 +1,239 @@
+/// The app heartbeat: the one periodic frame this client owes the gateway.
+///
+/// **Why it exists.** The gateway's reaper closes any session that has gone
+/// longer than its `heartbeatDeadline` without an inbound *application* frame
+/// (`relay_session.dart`'s `_lastSeen`, `tick_engine.dart`'s `reap`). A panel
+/// that is only watching a page — which is what every panel in the plant does,
+/// all shift — sends nothing after its handshake. Before this file existed the
+/// consequence was measured on an idle single-panel fixture: **three reaps and
+/// three redials in twenty-one seconds**, each one a full page resync, on every
+/// panel in the factory, invisible from outside because the panel comes
+/// straight back (07-08-SUMMARY deviation 3; `deferred-items.md` carries the
+/// mechanism).
+///
+/// The design ruled on this at inception and CLAUDE.md still carries the
+/// sentence: *"no browser ping frames — **server pings + app heartbeat**"*.
+/// WebSocket ping/pong is not available to us as liveness — it is a
+/// socket-level keepalive that `shelf` owns, a pong is not an application
+/// frame, and Flutter web cannot send one at all. So the heartbeat is an
+/// ordinary `ping` request, at the application layer, from here.
+///
+/// **Why a separate file, and the pin that goes with it.**
+/// `no_retry_test.dart` pins `remote_state_man.dart` at zero `Timer(` — the
+/// write path must schedule nothing of its own, because the only thing there
+/// is to schedule about an unanswered write is sending it again. That pin is
+/// not loosened. The heartbeat lives here instead, behind a **named carve-out**
+/// in the same file: this file may hold exactly one `Timer.periodic(`, and its
+/// send site may name `Methods.ping` and nothing else. A pump that could send
+/// anything else would be a second, unbookkept way for a frame to reach the
+/// plant, which is precisely what the write-path pins exist to forbid.
+///
+/// **Listener-gated, and that phrase is load-bearing here.** The timer exists
+/// only while the link is `ready`: it is created on entry and cancelled on
+/// exit, so an idle client, a disconnected client and a disposed client all
+/// hold zero timers. A pump that ran unconditionally would keep a process alive
+/// and would fail unrelated widget tests the moment this client reaches
+/// Flutter — the discipline STATE.md records as "timers must be listener-gated".
+///
+/// **A gate, never a buffer, and never a `try`/`catch` for the gate.** This is
+/// `HoldToRunController`'s discipline (05-07), restated because the failure it
+/// prevents is the same one: `sendRequest` on a closed peer throws
+/// `StateError` synchronously and `failure_taxonomy.dart` deliberately rethrows
+/// unrecognised `StateError`s, so a `catch` around the send would swallow a
+/// real defect in this process along with the condition it meant to ignore.
+/// Every send is preceded by an explicit readiness check and an explicit
+/// null-peer check. A beat that cannot go out is **dropped**, never stored: a
+/// queued heartbeat is a lie about a moment that has passed, and `_WsSink.add`
+/// buffers without bound and reports nothing (flutter#103306).
+library;
+
+import 'dart:async';
+
+import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
+
+import 'client_config.dart';
+import 'deadline.dart';
+
+/// Beats a `ping` at the gateway for as long as the link is ready.
+final class HeartbeatPump {
+  HeartbeatPump({
+    required this.config,
+    required bool Function() isReady,
+    required CurrentPeer peer,
+    int Function()? now,
+  })  : _isReady = isReady,
+        _peer = peer,
+        _now = now ?? (() => DateTime.now().millisecondsSinceEpoch) {
+    _lastOutboundMs = _now();
+  }
+
+  /// The heartbeat floor and the deadline used on the ping itself.
+  final ClientConfig config;
+
+  /// Whether a frame issued right now would go straight out.
+  ///
+  /// Consulted at every beat rather than captured at [start], because the beat
+  /// happens on a timer and the link may have gone in between. This is the
+  /// gate, and it is the reason [start]/[stop] alone are not sufficient.
+  final bool Function() _isReady;
+
+  /// Where the current connection's peer lives, read at the moment of the
+  /// call — `deadline.dart`'s seam, so a reconnect landing mid-beat cannot
+  /// retarget the ping at the replacement socket.
+  final CurrentPeer _peer;
+
+  final int Function() _now;
+
+  /// The one timer. Not `late`, not a list: the type is the design, and
+  /// `FreshnessWatchdog._deadline` says the same thing for the same reason.
+  Timer? _beat;
+
+  bool _disposed = false;
+
+  /// The gateway's advertised patience, or null until a `hello` has answered.
+  int? _deadlineMs;
+
+  /// When this client last put a frame on the wire, in [_now]'s clock.
+  late int _lastOutboundMs;
+
+  var _pings = 0;
+
+  /// 0 while the link is anything but ready and after [dispose], 1 while it is
+  /// ready — never more, whatever else the client is doing.
+  ///
+  /// The suite asserts this number because the count *is* the design: one
+  /// periodic timer, owned here, gone the instant the link is.
+  int get debugTimerCount => _beat == null ? 0 : 1;
+
+  /// How many heartbeats reached the wire.
+  ///
+  /// Counted **after** the gate, so it measures beats the link actually
+  /// carried rather than beats something asked for — `debugHoldTicksSent`'s
+  /// rule, for the same reason.
+  int get debugHeartbeatsSent => _pings;
+
+  /// The deadline this pump learned from the gateway, or null if it has been
+  /// told nothing usable.
+  int? get debugLearnedDeadlineMs => _deadlineMs;
+
+  /// Records the deadline the gateway advertised at `hello`.
+  ///
+  /// Takes the already-parsed value rather than the raw capabilities map:
+  /// `HelloResult.heartbeatDeadlineMs` owns the tolerance rule (finite,
+  /// positive, truncated), so a garbage advertisement arrives here as null and
+  /// there is exactly one place that decides what garbage is.
+  ///
+  /// Applied to the running timer immediately. A gateway that came back from a
+  /// restart with a different deadline would otherwise be beaten at the
+  /// retired gateway's cadence until the next disconnect, which is the window
+  /// in which the panel is reaped for the difference.
+  void learnedDeadlineMs(int? advertised) {
+    if (_deadlineMs == advertised) return;
+    _deadlineMs = advertised;
+    if (_beat != null) _arm();
+  }
+
+  /// How often this pump beats, given what the gateway has told it.
+  ///
+  /// **A third of the deadline, floored.** Three is OPC UA's ratio and the one
+  /// `ServerConfig.heartbeatDeadline`'s own doc names ("6 s is OPC UA's 3x
+  /// LifetimeCount ratio over a 2 s app heartbeat"), so the two ends already
+  /// agreed on it before either had a pump. What a third buys is that **two
+  /// consecutive beats may be lost** — to a GC pause, a Wi-Fi retransmit, a
+  /// scheduler stall — before the panel is at risk. A half would tolerate none
+  /// of that and a tenth would be nine wasted frames per deadline per panel.
+  ///
+  /// Against a gateway that advertises nothing, the floor is the whole answer:
+  /// beating at [ClientConfig.heartbeatFloor] is conservative — it is faster
+  /// than any deadline a sane gateway would set — and the alternative, not
+  /// beating at all, is the defect this class exists to fix.
+  Duration get period {
+    final learned = _deadlineMs;
+    final derived =
+        learned == null ? Duration.zero : Duration(milliseconds: learned ~/ 3);
+    return derived > config.heartbeatFloor ? derived : config.heartbeatFloor;
+  }
+
+  /// Starts beating. Called on entry to `ready`, and idempotent.
+  ///
+  /// Idempotent because the alternative is a second timer, and two timers on
+  /// this path is two heartbeats per period for ever — the count pin in
+  /// `no_retry_test.dart` exists to make that a red rather than a slow leak.
+  void start() {
+    if (_disposed || _beat != null) return;
+    // The link has just come up, which means a `hello` and a `subscribe` have
+    // just crossed it. Those are inbound frames at the gateway and they have
+    // already moved its deadline, so the first beat belongs one period from
+    // now rather than immediately.
+    _lastOutboundMs = _now();
+    _arm();
+  }
+
+  /// Stops beating. Called on leaving `ready`, on dispose, and idempotent.
+  void stop() {
+    _beat?.cancel();
+    _beat = null;
+  }
+
+  /// Stops beating for good. Idempotent, and nothing restarts after it.
+  void dispose() {
+    _disposed = true;
+    stop();
+  }
+
+  /// Records that something else this client sent has just gone out.
+  ///
+  /// **So a busy panel sends no heartbeats at all.** The gateway's deadline is
+  /// moved by *any* inbound application frame, so a `subscribe`, a write, a
+  /// `writeStatus` sweep or a hold tick is already a heartbeat as far as the
+  /// reaper is concerned. An operator jogging a machine sends ten deadman
+  /// ticks a second; adding a ping on top of that would be pure cost. The beat
+  /// below skips whenever the wire has carried anything within one period,
+  /// which makes this a *silence* timer rather than a metronome — the same
+  /// question the reaper is asking, asked from this end.
+  void noteOutbound() => _lastOutboundMs = _now();
+
+  void _arm() {
+    _beat?.cancel();
+    // The one Timer.periodic in this package's lib/, and the named carve-out
+    // in no_retry_test.dart's pin. It schedules a liveness frame and it can
+    // schedule nothing else: see this library's doc.
+    _beat = Timer.periodic(period, (_) => _sendBeat());
+  }
+
+  /// One beat, or nothing at all.
+  ///
+  /// Reads as a sequence of gates on purpose, and each one is a different
+  /// reason not to send rather than a defensive nicety:
+  ///
+  ///  * disposed — the panel is closing and there is no link left;
+  ///  * not ready — the barrier is shut, and a frame offered to a socket that
+  ///    is not there is buffered without bound and silently lost;
+  ///  * no peer — `callWithDeadline` throws `LinkDown` **synchronously** for a
+  ///    null peer, and catching that would be using an exception as a gate;
+  ///  * recent traffic — see [noteOutbound]; the gateway is already satisfied.
+  void _sendBeat() {
+    if (_disposed) return;
+    if (!_isReady()) return;
+    if (_now() - _lastOutboundMs < period.inMilliseconds) return;
+    final peer = _peer();
+    if (peer == null) return;
+
+    _lastOutboundMs = _now();
+    _pings++;
+    // Fire and forget, and it cannot wedge: `callWithDeadline` times the call
+    // out on its own, and the answer is discarded because the *request* was
+    // the point. A ping the gateway answers late still moved its deadline when
+    // it arrived, and nothing here has a decision to make about the reply.
+    //
+    // Errors are discarded rather than caught around the gate — a distinction
+    // this library's doc argues. The peer was live when it was read one line
+    // above; if it died between then and the write, that is the reconnect's
+    // business and not a fault this pump can act on.
+    unawaited(callWithDeadline(
+      () => peer,
+      Methods.ping,
+      deadline: config.controlDeadline,
+    ).then((_) {}, onError: (Object _) {}));
+  }
+}

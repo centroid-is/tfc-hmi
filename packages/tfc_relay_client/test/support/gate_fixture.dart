@@ -319,13 +319,18 @@ final class GateFixture {
 
   /// Panels the gateway threw off **for being slow** — `backpressureOverrun`.
   ///
-  /// The one eviction a slow-link row is actually about. It is asked for
-  /// separately from [evictions] because of the finding recorded in
-  /// 07-08-SUMMARY and in [heartbeatReaps]: on this build every panel is
-  /// reaped periodically for reasons that have nothing to do with the fault
-  /// under test, so a row that asserted `evictions` empty over a window longer
-  /// than the heartbeat deadline would be red about the background rather than
-  /// about its own injection.
+  /// The one eviction a slow-link row is actually about, and since 07-08b it
+  /// is a *narrowing* rather than a workaround.
+  ///
+  /// It was introduced because of 07-08's finding: with no client heartbeat,
+  /// every panel was reaped once a deadline for reasons that had nothing to do
+  /// with the fault under test, so a row that asserted `evictions` empty over
+  /// a long window was red about the background. **07-08b built the pump and
+  /// that is no longer true** — F12 asserts `evictions` empty outright again.
+  /// What this getter is still for is saying *which* eviction a row is about:
+  /// "was anybody thrown off for being slow" is the question a backpressure
+  /// row wants, and it stays the more precise one even now that the general
+  /// question has a right answer.
   List<ConnectionClose> get evictedForBackpressure => [
         for (final close in [..._retired, ...server.closeLedger])
           if (close.serverCloseCode == CloseCodes.backpressureOverrun) close,
@@ -333,24 +338,26 @@ final class GateFixture {
 
   /// Panels the gateway reaped for silence — `heartbeatTimeout`.
   ///
-  /// **Measured, and on this build it is not zero for a healthy panel.** There
-  /// is no periodic client-to-gateway heartbeat: `RelaySession`'s `_lastSeen`
-  /// advances only on inbound *application* frames (`relay_session.dart:151-156`)
-  /// and `RemoteStateMan` sends nothing on a timer — only `hello`, `subscribe`,
-  /// writes and `holdTick`. A panel that is doing what every panel in the plant
-  /// does, watching a page and never writing to it, is therefore silent from
-  /// the gateway's point of view and is closed with 4003 one
-  /// `heartbeatDeadline` after its handshake, every time.
+  /// **This is now an assertable zero for a healthy panel, and it was not when
+  /// it was written.** 07-08 measured the defect through this getter: with no
+  /// periodic client-to-gateway frame, `RelaySession`'s `_lastSeen` advanced
+  /// only on inbound *application* frames and `RemoteStateMan` sent none on a
+  /// timer, so a panel watching a page was closed with 4003 one
+  /// `heartbeatDeadline` after its handshake, every time — sessions 1, 0, 1,
+  /// 1, 1 and evictions 0, 1, 1, 1, 2 at three-second intervals, a reap and a
+  /// redial about every six seconds for ever, at a full page resync per cycle
+  /// per panel.
   ///
-  /// Measured on an idle single-panel fixture: sessions 1, 0, 1, 1, 1 and
-  /// evictions 0, 1, 1, 1, 2 at three-second intervals over fifteen seconds —
-  /// a reap and a redial about every six seconds, for ever. It is invisible
-  /// from outside because the panel reconnects immediately; what it costs is a
-  /// full page resync per cycle per panel.
+  /// **07-08b built `HeartbeatPump`** (client lib) and taught the gateway to
+  /// advertise `heartbeatDeadlineMs` at `hello`, so the panel beats a `ping`
+  /// at a third of that deadline while its link is ready. The same idle window
+  /// now reads zero reaps and zero redials —
+  /// `herd_gate_test.dart`'s idle-liveness case is that measurement inverted
+  /// and it is the row that would go red if the pump ever stopped.
   ///
-  /// Exposed rather than hidden so a row can print it, and so the next wave has
-  /// a number rather than a suspicion. See 07-08-SUMMARY: this is a Rule 4
-  /// finding, not something this plan fixed.
+  /// So a row **may** assert this empty, and F12 and G2 both do: it is the
+  /// cheapest available regression arm on the pump, on the two links in this
+  /// suite where getting a frame out is hardest.
   List<ConnectionClose> get heartbeatReaps => [
         for (final close in [..._retired, ...server.closeLedger])
           if (close.serverCloseCode == CloseCodes.heartbeatTimeout) close,

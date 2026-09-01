@@ -101,6 +101,44 @@ final class SessionResume {
       {'id': id, 'epoch': epoch, if (lastSeq.isNotEmpty) 'lastSeq': lastSeq};
 }
 
+/// The keys the gateway may put in [HelloResult.capabilities].
+///
+/// **Named here so both ends spell them once.** `capabilities` is an open map
+/// on purpose (04-RESEARCH A4) — every key is additive and no deployed client
+/// has to know about it — but "open" is not the same as "anonymous". A string
+/// literal typed out on the gateway and again on the panel is a key that a
+/// typo silently disables: the client reads `null`, falls back on its default,
+/// and nothing anywhere reports that the negotiation did not happen. Both keys
+/// below are read by exactly one caller each and the constant is what makes
+/// that a compile-time fact rather than a grep.
+///
+/// Adding a key here is not a protocol version bump. Decoders ignore unknown
+/// keys and encoders omit absent optionals (see the library doc), so a gateway
+/// that predates a key and a panel that ignores one are both still correct.
+abstract final class HelloCapabilities {
+  /// The gateway's fan-out cadence in milliseconds — how often it re-evaluates
+  /// a subscription. Read by `FreshnessWatchdog` for the *per-subscription*
+  /// staleness limit and by nothing else (04-REVIEW WR-06).
+  static const String tickMs = 'tickMs';
+
+  /// How long the gateway lets a session go silent before its reaper closes it
+  /// with `4003 heartbeatTimeout`, in milliseconds.
+  ///
+  /// **This is the panel's own survival number.** Nothing the gateway sends
+  /// keeps a session alive; only inbound application frames do
+  /// (`relay_session.dart`'s `_lastSeen`). A panel that is merely watching a
+  /// page sends nothing at all, so without an app heartbeat it is reaped one
+  /// deadline after its handshake, for ever, at the cost of a full page resync
+  /// per cycle — measured on this build in 07-08-SUMMARY deviation 3 before
+  /// the pump existed.
+  ///
+  /// The panel derives its heartbeat period from this rather than carrying a
+  /// constant, for the same reason [tickMs] exists: a client number that has
+  /// to match a server config nobody diffs is a mismatch that surfaces a year
+  /// later, and here it surfaces as every screen in the factory redialling.
+  static const String heartbeatDeadlineMs = 'heartbeatDeadlineMs';
+}
+
 final class HelloResult {
   final String protocol;
   final PeerInfo server;
@@ -147,6 +185,29 @@ final class HelloResult {
         'session': {'id': sessionId, 'epoch': epoch, 'resumed': resumed},
         'clock': {'serverTime': serverTime},
       };
+
+  /// [HelloCapabilities.heartbeatDeadlineMs], or null when this gateway
+  /// advertised nothing usable.
+  ///
+  /// **A reader rather than a field, because the source is an open map.**
+  /// Whatever is under the key came off a wire: it may be a string, a negative
+  /// number, or `1e999` decoded to `Infinity` (`sanitize.dart` defuses the
+  /// last of those on the value path, not inside a capabilities map). Each of
+  /// those has to mean "this gateway told me nothing", so the caller falls
+  /// back on its own configured floor instead of dividing garbage by three and
+  /// either spinning at 0 ms or never beating at all.
+  ///
+  /// The tolerance rule is `FreshnessWatchdog.learnedTickMs`'s, restated
+  /// rather than shared because that class lives in the client package and
+  /// this one may not depend on it: finite, positive, and truncated to an int
+  /// so a gateway written in a language with one number type can send 6000.0.
+  int? get heartbeatDeadlineMs =>
+      _positiveInt(capabilities[HelloCapabilities.heartbeatDeadlineMs]);
+
+  static int? _positiveInt(Object? advertised) =>
+      advertised is num && advertised.isFinite && advertised > 0
+          ? advertised.toInt()
+          : null;
 }
 
 final class SubscribeParams {

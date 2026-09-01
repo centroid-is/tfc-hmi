@@ -71,6 +71,7 @@ import 'connection_supervisor.dart';
 import 'deadline.dart';
 import 'failure_taxonomy.dart';
 import 'freshness_watchdog.dart';
+import 'heartbeat_pump.dart';
 import 'readiness_barrier.dart';
 import 'subscription_state.dart';
 import 'ws_transport.dart';
@@ -148,6 +149,20 @@ final class RemoteStateMan implements StateManApi {
       }
     }
 
+    // The app heartbeat, built here beside the watchdog because the two are
+    // the same lifetime and opposite directions: the watchdog judges the
+    // gateway's silence, the pump prevents ours. Unlike the watchdog it is
+    // **owned here rather than handed over** — the supervisor is given it only
+    // so the `hello` handler can teach it the gateway's deadline, and this
+    // class starts it, stops it and disposes it, next to every other thing
+    // that follows `LinkState`. Its closures read `_supervisor`, which is
+    // assigned on the next statement; nothing calls them before then.
+    _heartbeat = HeartbeatPump(
+      config: config,
+      isReady: () => _supervisor.state == LinkState.ready,
+      peer: () => _supervisor.peer,
+    );
+
     // Built here and handed over: `ConnectionSupervisor.dispose` disposes the
     // watchdog and the barrier it was given, so these must not be shared with a
     // second supervisor (04-07 handoff). This client owns exactly one.
@@ -170,6 +185,7 @@ final class RemoteStateMan implements StateManApi {
       ),
       subscriptions: _subscriptions,
       storeFor: _storeFor,
+      heartbeat: _heartbeat,
       client: client,
       onStatus: onStatus,
       onBye: onBye,
@@ -278,6 +294,10 @@ final class RemoteStateMan implements StateManApi {
   late final ConnectionSupervisor _supervisor;
   late final StreamSubscription<LinkState> _transitions;
 
+  /// The app heartbeat. Started on entry to `ready`, stopped on leaving it and
+  /// on [dispose] — see [_onLinkState].
+  late final HeartbeatPump _heartbeat;
+
   var _disposed = false;
 
   /// Commands still in flight, for the case that has to prove the set was not
@@ -340,6 +360,24 @@ final class RemoteStateMan implements StateManApi {
   /// actually matters — no timer outlives the thing it belongs to — and a
   /// panel with ten calls out legitimately holds twelve.
   int get debugTimerCount => _supervisor.debugTimerCount;
+
+  /// The heartbeat's own timer: 1 while the link is ready, 0 otherwise.
+  ///
+  /// **Counted separately rather than folded into [debugTimerCount]**, and the
+  /// separation is the point. That number is a ceiling on the *reconnect*
+  /// machinery — the watchdog's deadline and a pending dial — and every case
+  /// that asserts it is asserting something about a link that is coming and
+  /// going. Adding a term to it that is 1 exactly when the link is up would
+  /// make every one of those assertions read differently on either side of a
+  /// reconnect, for a timer that has nothing to do with reconnecting.
+  int get debugHeartbeatTimerCount => _heartbeat.debugTimerCount;
+
+  /// How many heartbeats this panel has put on the wire.
+  ///
+  /// The anti-vacuity observable for a liveness case: "nobody threw the panel
+  /// off" is also true of a panel nothing was measuring, and this is how a
+  /// case says the silence it held was filled by the pump rather than by luck.
+  int get debugHeartbeatsSent => _heartbeat.debugHeartbeatsSent;
 
   // ------------------------------------------------------------ freshness
 
@@ -834,6 +872,11 @@ final class RemoteStateMan implements StateManApi {
     peer.sendNotification(
         Methods.holdTick, HoldTickParams(key: key, counter: counter).toJson());
     _holdTicksSent++;
+    // A deadman tick is an inbound application frame at the gateway, so it
+    // moves the reaper's deadline exactly as a ping would. An operator holding
+    // a jog button sends ten a second; a heartbeat on top of that would be
+    // pure cost on the one path where the panel is busiest.
+    _heartbeat.noteOutbound();
   }
 
   /// Ends every live hold, without waiting for the release writes.
@@ -1028,6 +1071,13 @@ final class RemoteStateMan implements StateManApi {
     await _freshness.close();
     await preferences.dispose();
 
+    // Before the supervisor, and before the transition subscription that would
+    // otherwise be the only thing stopping it: a pump still armed while the
+    // supervisor is torn down would fire once into a peer that is going away,
+    // and a timer that outlives the object that owns it is the leak class
+    // `teardown_test.dart` exists for.
+    _heartbeat.dispose();
+
     await _transitions.cancel();
     await _supervisor.dispose();
 
@@ -1106,6 +1156,13 @@ final class RemoteStateMan implements StateManApi {
     }
     _refuseIfDisposed(method);
     onSend?.call();
+    // Every request this client makes funnels through here, so this one line
+    // is enough to make the heartbeat a *silence* timer rather than a
+    // metronome: a panel that is reading, writing or re-querying has already
+    // moved the gateway's deadline and needs no ping on top. Placed after the
+    // barrier, so it records a frame that is genuinely going out rather than
+    // one parked waiting for a link.
+    _heartbeat.noteOutbound();
     // The budget again rather than what is left of it. A link that arrived at
     // the last millisecond of the wait has earned the whole round-trip window;
     // a truncated one would expire against a perfectly healthy gateway and
@@ -1154,6 +1211,18 @@ final class RemoteStateMan implements StateManApi {
     // nothing.
     if (_wasReady && !isReady) _releaseHolds(HoldEnded.disconnect);
     _wasReady = isReady;
+
+    // The heartbeat's whole lifetime, in two lines and in one place. It beats
+    // only while the link is ready — a pump that ran through `connecting` and
+    // `down` would be scheduling frames for a socket that is not there, which
+    // `heartbeat_pump.dart`'s doc calls a queue and this project forbids. Both
+    // calls are idempotent, so a repeated transition costs nothing and cannot
+    // leave a second timer behind.
+    if (isReady) {
+      _heartbeat.start();
+    } else {
+      _heartbeat.stop();
+    }
 
     // Entry to `ready` and nowhere else: `resyncing` means the socket answered
     // the phone, and a re-query issued then races the snapshot it is competing

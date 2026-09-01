@@ -58,6 +58,12 @@ library;
 import 'dart:async';
 
 import 'package:test/test.dart';
+// The gateway's own config, for one number only: the heartbeat deadline the
+// idle-liveness case has to outlast. Read rather than restated, because a
+// window fitted to a literal stops spanning the deadline the moment somebody
+// changes the default and nothing says so. `flap_gate_test.dart:97` sets the
+// precedent for reaching into the server package from a gate case.
+import 'package:tfc_relay_server/src/server_config.dart';
 import 'package:tfc_stateman_contract/faults.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -158,6 +164,24 @@ const Duration _establish = Duration(seconds: 1);
 /// a ceiling is structurally blind to it. That mutation is caught by the
 /// attempt bound below, which is why both arms are here.
 final Duration _fairnessBand = _backoffCap + _establish;
+
+/// How long the idle-liveness case leaves a healthy panel alone.
+///
+/// **Twenty seconds, because six is the number being disproved.** The
+/// gateway's default `heartbeatDeadline` is 6 s, so a window of one deadline
+/// would be a coin toss and a window of two would catch a single reap. Twenty
+/// spans three of them: on the build this case was written against it produced
+/// three reaps and three redials, and after the pump it produces none. Longer
+/// buys nothing the third cycle has not already shown, and the gate lane pays
+/// for every second of it.
+const Duration _idleSilence = Duration(seconds: 21);
+
+/// How often the idle window is sampled.
+///
+/// Three seconds, which is 07-08-SUMMARY deviation 3's own sampling interval —
+/// half a deadline, so no reap-and-redial cycle can fit between two samples and
+/// leave the ledger looking quiet.
+const Duration _idleSample = Duration(seconds: 3);
 
 /// How wide the pages the slow-link rows drive are.
 ///
@@ -638,6 +662,125 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 60)));
   });
 
+  group('the idle panel, and the reaper that used to take it', () {
+    test('a panel that only watches a page is never thrown off for silence',
+        () async {
+      final keys = _pageKeys(1).toSet();
+      final fixture = await gateFixture(
+        clients: 1,
+        keys: keys,
+        seed: (plant) =>
+            plant.setValues({for (final key in keys) key: _beforeRestart}),
+      );
+      final panel = fixture.clients.single;
+
+      // ANTI-VACUITY, first half: the window has to be longer than the
+      // gateway's own patience or the case proves nothing. A run that finished
+      // inside one deadline would be green on the build that reaps every
+      // healthy panel, which is the build this case was written against.
+      final deadline = ServerConfig().heartbeatDeadline;
+      expect(_idleSilence, greaterThan(deadline * 2),
+          reason: 'the silence this case holds ($_idleSilence) does not span '
+              'two of the gateway\'s heartbeat deadlines ($deadline), so a '
+              'reaper that takes every panel once a deadline could go '
+              'unobserved and the row would be green about nothing');
+
+      // The baseline is taken *after* readiness, so the establishment's own
+      // dial and its transitions are not counted as churn. Everything below is
+      // a delta against this instant.
+      final attemptsAtRest = panel.attempts;
+      final dialsAtRest = panel.seam.dials;
+      final statesAtRest = panel.states.length;
+
+      // Sampled rather than settled, and the shape is 07-08-SUMMARY deviation
+      // 3's own measurement inverted: that one printed sessions 1, 0, 1, 1, 1
+      // and evictions 0, 1, 1, 1, 2 at three-second intervals. A single read
+      // after twenty seconds would show one reap where there were three, and
+      // the table is what makes a failure here diagnosable instead of merely
+      // red.
+      final ledger = <String>[];
+      final samples = _idleSilence.inMilliseconds ~/ _idleSample.inMilliseconds;
+      for (var i = 1; i <= samples; i++) {
+        await Future<void>.delayed(_idleSample);
+        ledger.add('t=${i * _idleSample.inSeconds}s  '
+            'sessions=${fixture.sessionCount}  '
+            'reaps=${fixture.heartbeatReaps.length}  '
+            'attempts=${panel.attempts - attemptsAtRest}  '
+            'dials=${panel.seam.dials - dialsAtRest}');
+      }
+      final table = ledger.join('\n  ');
+      final beats = panel.client.debugHeartbeatsSent;
+      print('idle liveness: one panel, subscribed, silent for '
+          '${_idleSilence.inSeconds} s; the pump sent $beats heartbeats '
+          'against a ${deadline.inMilliseconds} ms deadline\n  $table');
+
+      // ANTI-VACUITY, second half, and the arm that matters most: every
+      // assertion below is a statement that *nothing happened*, and nothing
+      // happening is also what a fixture that never connected looks like. The
+      // band is arithmetic — one beat per third of a deadline over the window
+      // — with generous slack, because this is a liveness claim and not a
+      // cadence measurement. Both ends are load-bearing: too few and the pump
+      // is not running, too many and it is beating faster than its own floor.
+      final expectedBeats = _idleSilence.inMilliseconds ~/ (deadline ~/ 3).inMilliseconds;
+      expect(beats, greaterThanOrEqualTo(expectedBeats ~/ 2),
+          reason: 'the panel sent $beats heartbeats in '
+              '${_idleSilence.inSeconds} idle seconds, against roughly '
+              '$expectedBeats expected at a third of the gateway\'s '
+              '$deadline deadline. Everything below asserts that nothing '
+              'happened, and on a panel that is not beating "nothing '
+              'happened" is exactly what a broken pump looks like right up '
+              'until the first reap');
+      expect(beats, lessThanOrEqualTo(expectedBeats * 2),
+          reason: 'the panel sent $beats heartbeats where about '
+              '$expectedBeats were due. A pump beating well above its derived '
+              'period is a panel spending the gateway\'s tick budget on '
+              'liveness frames, multiplied by every screen in the factory');
+
+      // THE ROW. Three ways of asking the same question, because each of them
+      // is the one a different regression would move.
+      expect(fixture.heartbeatReaps, isEmpty,
+          reason: 'the gateway reaped a healthy, subscribed panel for silence '
+              '${fixture.heartbeatReaps.length} times in '
+              '${_idleSilence.inSeconds} seconds:\n  $table\n\n'
+              'Every panel in the plant watches a page and writes nothing, so '
+              'this is every panel, for ever, at a full page resync per cycle '
+              '— and it is invisible from outside because the panel comes '
+              'straight back. The client owes the gateway a periodic frame: '
+              'that is what HeartbeatPump is for, and what CLAUDE.md means by '
+              '"server pings + app heartbeat"');
+      expect(fixture.evictions, isEmpty,
+          reason: 'the gateway threw the panel off for some reason of its own '
+              'over an idle window: ${fixture.evictions}. Nothing was '
+              'injected, nothing was throttled and nothing was written — a '
+              'close here is the gateway deciding against a client that is '
+              'behaving perfectly');
+      expect(panel.attempts, attemptsAtRest,
+          reason: 'the panel redialled ${panel.attempts - attemptsAtRest} '
+              'times while doing nothing but watching a page:\n  $table\n\n'
+              'A redial is a resync, and a resync is the whole page arriving '
+              'again — on this link that is invisible, and on a plant LAN '
+              'carrying every screen in the factory it is the load the '
+              'heartbeat exists to prevent');
+      expect(panel.seam.dials, dialsAtRest,
+          reason: 'the panel opened ${panel.seam.dials - dialsAtRest} new '
+              'sockets over an idle window. `attempts` counts intent and this '
+              'counts sockets that actually came up; a regression that moved '
+              'one and not the other would be worth looking at closely');
+      expect(panel.states.skip(statesAtRest), isEmpty,
+          reason: 'the link left `ready` and came back '
+              '${panel.states.skip(statesAtRest)} while nothing was happening '
+              'to it. The operator sees this as the connection indicator '
+              'flickering on a healthy plant, which teaches them to ignore it');
+
+      expect(fixture.gatewayComplaints, isEmpty,
+          reason: 'the gateway logged errors over an idle window: '
+              '${fixture.gatewayComplaints}');
+      expect(panel.client.complaints, isEmpty,
+          reason: 'the panel complained over an idle window: '
+              '${panel.client.complaints}');
+    }, timeout: const Timeout(Duration(seconds: 90)));
+  });
+
   group('F12 — one slow panel', () {
     test('F12: one throttled panel does not slow anybody else', () async {
       final keys = _pageKeys(_busyPage);
@@ -762,17 +905,26 @@ void main() {
               'a value that arrived after a larger one is an old queued value '
               'being delivered late — never an old queued one is the clause, '
               'and this is the only place it can be seen');
-      // CONFLATION IS NOT EVICTION. Asked as "was anybody thrown off *for
-      // being slow*" rather than "was anybody thrown off", because on this
-      // build the answer to the second question is yes for reasons that have
-      // nothing to do with this row — see `heartbeatReaps` and 07-08-SUMMARY's
-      // finding. This case is fourteen seconds long and the heartbeat deadline
-      // is six, so the background reaping is printed and the row asserts the
-      // eviction it is actually about.
+      // CONFLATION IS NOT EVICTION, and since 07-08b the row asks it **both
+      // ways**. When 07-08 wrote this clause it could only ask "was anybody
+      // thrown off *for being slow*", because the answer to "was anybody
+      // thrown off" was yes for a reason that had nothing to do with this row:
+      // no client sent a periodic heartbeat, so every panel was reaped once
+      // every six seconds and a fourteen-second case saw two of them
+      // (07-08-SUMMARY deviation 3). 07-08b built the pump, so the general
+      // question is answerable again and the general clause is restored.
+      //
+      // Both arms stay, and they fail differently. `evictedForBackpressure` is
+      // the row's own clause — 4004 on a throttled-but-conflating panel — and
+      // it is the one that would still be here if the heartbeat were ever
+      // removed. `heartbeatReaps` is now a **regression arm on the pump**, on
+      // the one case in the suite where it is hardest: a fourteen-second
+      // window on a link metered to ten kilobytes a second, where a heartbeat
+      // that queued behind telemetry would arrive late and the reaper would
+      // take a panel that is doing everything right.
       print('F12: ${fixture.evictedForBackpressure.length} panels thrown off '
-          'for being slow; ${fixture.heartbeatReaps.length} background '
-          'heartbeat reaps over the case (see 07-08-SUMMARY: no client sends a '
-          'periodic heartbeat, so every panel is reaped once a deadline)');
+          'for being slow, ${fixture.heartbeatReaps.length} reaped for '
+          'silence, ${fixture.evictions.length} evicted in total');
       expect(fixture.evictedForBackpressure, isEmpty,
           reason: 'the gateway threw a panel off for being slow: '
               '${fixture.evictedForBackpressure}. Conflation is not eviction: '
@@ -780,6 +932,19 @@ void main() {
               'disconnected. This is the two-tier boundary G5 pairs from the '
               'other side, and 4004 firing on a throttled-but-conflating panel '
               'is the gateway punishing a slow link for being slow');
+      expect(fixture.heartbeatReaps, isEmpty,
+          reason: 'the gateway reaped ${fixture.heartbeatReaps.length} panels '
+              'for silence over this window. The throttled panel\'s link is '
+              'metered to $_f12Throttle bytes/s while a ${keys.length}-key '
+              'page pours down it, which is the hardest place in this suite '
+              'for a heartbeat to get out — and it is also the place where '
+              'being reaped hurts most, because the panel then has to resync '
+              'the whole page across the same throttle');
+      expect(fixture.evictions, isEmpty,
+          reason: 'the gateway threw ${fixture.evictions.length} panels off '
+              'over this case: ${fixture.evictions}. Nothing here should cost '
+              'anybody their session — one link is slow and the other is '
+              'untouched');
 
       // ISOLATION, again and structurally: whatever the background is doing,
       // it is doing it equally to both panels. A throttle that caused its own
@@ -877,13 +1042,30 @@ void main() {
               'cannot get out inside this budget is a snapshot being starved '
               'by the backlog');
 
-      // As in F12: the question is whether anybody was thrown off *for the
-      // condition this row injects*, not whether anybody was thrown off. A
-      // flapping link cuts sockets by definition, and the background heartbeat
-      // reaping is this build's own (07-08-SUMMARY).
+      // As in F12: the row's own question is whether anybody was thrown off
+      // *for the condition this row injects*. What is different since 07-08b
+      // is that the second question — was anybody reaped for silence — has a
+      // right answer again, so it is asked rather than merely printed.
+      //
+      // **`evictions` as a whole is deliberately not asserted here, and F12
+      // does assert it.** A flapping link resets every pair it carries
+      // (`fault_proxy.dart`'s `_dropForFlap`), so sockets die by design in
+      // this case; what must not happen is the *gateway* choosing to end a
+      // session. `heartbeatReaps` is that question in the form this row can
+      // ask it: no session here lives longer than the 1500 ms up-half, so a
+      // reap would mean the deadline is being missed on a link that is only
+      // briefly up — which is the panel losing a race it should not be in.
       print('G2: ${fixture.evictedForBackpressure.length} panels thrown off '
-          'for being slow, ${fixture.heartbeatReaps.length} background '
-          'heartbeat reaps');
+          'for being slow, ${fixture.heartbeatReaps.length} reaped for '
+          'silence');
+      expect(fixture.heartbeatReaps, isEmpty,
+          reason: 'the gateway reaped ${fixture.heartbeatReaps.length} panels '
+              'for silence over a flapping, throttled link. Every session in '
+              'this case is younger than the flap\'s up-half and far younger '
+              'than the heartbeat deadline, so a reap here is not the panel '
+              'being quiet — it is the gateway holding a session across a '
+              'reset it should have noticed, or a heartbeat that cannot get '
+              'out at $_g2Throttle bytes/s');
       expect(fixture.evictedForBackpressure, isEmpty,
           reason: 'the gateway threw a panel off for being slow while the link '
               'was throttled and flapping: ${fixture.evictedForBackpressure}. '

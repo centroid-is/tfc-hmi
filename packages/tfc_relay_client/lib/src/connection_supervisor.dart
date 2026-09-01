@@ -72,6 +72,7 @@ import 'client_sub_apis.dart' show DataServiceMethods;
 import 'clock_offset.dart';
 import 'deadline.dart';
 import 'freshness_watchdog.dart';
+import 'heartbeat_pump.dart';
 import 'readiness_barrier.dart';
 import 'resync_engine.dart';
 import 'subscription_state.dart';
@@ -128,6 +129,7 @@ final class ConnectionSupervisor {
     required this.watchdog,
     required this.subscriptions,
     required this.storeFor,
+    this.heartbeat,
     this.client = const PeerInfo('tfc_relay_client', '0.1.0'),
     void Function(StatusParams status)? onStatus,
     void Function(String reason)? onBye,
@@ -165,6 +167,19 @@ final class ConnectionSupervisor {
 
   /// The link deadline, fed by every inbound frame of any kind.
   final FreshnessWatchdog watchdog;
+
+  /// The app heartbeat, or null when nobody wired one.
+  ///
+  /// **Taught here and owned elsewhere**, which is the one asymmetry in this
+  /// class and it is deliberate. `hello` is the only place the gateway's
+  /// deadline crosses the wire, so this is the only place that can teach it —
+  /// but the pump's *lifetime* follows `LinkState`, which `RemoteStateMan`
+  /// already watches, and giving this class a second thing to start and stop
+  /// in every one of its exit paths is how one of them gets forgotten. So:
+  /// this supervisor tells the pump what it learned, and never starts, stops
+  /// or disposes it. Null in every harness that builds a supervisor by hand,
+  /// and a null pump simply learns nothing.
+  final HeartbeatPump? heartbeat;
 
   /// The pages this panel is showing. Owned by the caller: this class
   /// re-establishes them, it does not decide which exist.
@@ -459,7 +474,14 @@ final class ConnectionSupervisor {
       // The gateway's fan-out cadence, for the per-subscription staleness
       // limit and nothing else (04-REVIEW WR-06). The *link* deadline stays
       // configured and independent, as 04-CONTEXT rules.
-      watchdog.learnedTickMs(hello.capabilities['tickMs']);
+      watchdog.learnedTickMs(hello.capabilities[HelloCapabilities.tickMs]);
+      // The other capability, and the one the panel's own survival depends on:
+      // how long this gateway lets a session go silent before its reaper
+      // closes it. Learned on every hello, so a replacement gateway
+      // configured differently is followed rather than beaten at the retired
+      // one's cadence. `HelloResult` owns the tolerance rule, so a gateway
+      // that advertises nothing usable leaves the pump on its own floor.
+      heartbeat?.learnedDeadlineMs(hello.heartbeatDeadlineMs);
       _clockOffset = ClockOffset.fromHello(
         hello.serverTime,
         _now(),

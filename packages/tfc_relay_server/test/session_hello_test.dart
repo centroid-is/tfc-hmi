@@ -277,6 +277,75 @@ void main() {
             'that nobody diffs against the server');
   });
 
+  test('the advertised deadline is the config\'s own', () async {
+    // **A non-default deadline, deliberately** — the same argument the tick
+    // case above makes. A capability that happened to equal the default would
+    // pass against a hard-coded literal, and a literal is exactly the failure
+    // this key exists to prevent: the panel derives its heartbeat period from
+    // this number, so a gateway configured for four seconds while advertising
+    // six would have every panel beating at two seconds against a four-second
+    // reaper — healthy panels thrown off with 4003, once a deadline, for ever
+    // (07-08-SUMMARY deviation 3 is what that looks like from the other end).
+    //
+    // 4 s rather than 6: still under the 20 s `pingInterval` the constructor
+    // insists on, and different from the default in a way arithmetic can see.
+    const configured = Duration(seconds: 4);
+    final link = _link(config: ServerConfig(heartbeatDeadline: configured));
+    addTearDown(link.dispose);
+
+    final raw = await within(
+        link.client.sendRequest(Methods.hello, _hello()), 'the hello result');
+    final result = HelloResult.fromJson((raw as Map).cast());
+
+    expect(result.heartbeatDeadlineMs, configured.inMilliseconds,
+        reason: 'the handshake is the only place a panel can learn how long '
+            'this gateway lets it stay silent. Anything else is a constant on '
+            'the client that nobody diffs against the server config, and the '
+            'cost of the two disagreeing is every screen in the plant '
+            'reconnecting and resyncing on a fixed cycle');
+    expect(result.capabilities[HelloCapabilities.heartbeatDeadlineMs],
+        configured.inMilliseconds,
+        reason: 'it rides in the open capabilities map beside tickMs, under '
+            'the key the protocol package names — a gateway that spelled it '
+            'itself would be the second spelling, and the first typo in it is '
+            'silent on both ends');
+    expect(result.capabilities[HelloCapabilities.tickMs], isNotNull,
+        reason: 'the new key is additive: the cadence a four-phase-old client '
+            'already reads must still be there beside it');
+  });
+
+  test('an inbound ping keeps a session from being reaped', () async {
+    // **The other half of the heartbeat, and the half that is easy to assume.**
+    // The panel's pump is worth nothing if a `ping` is not evidence of life to
+    // the gateway. `_lastSeen` is advanced by a `map` over the inbound frame
+    // stream (`relay_session.dart`), so it is every application frame and not
+    // a list of methods — but "so it is" is exactly the kind of sentence that
+    // stops being true during a refactor that moves the touch into a handler
+    // wrapper, and nothing else in the suite would notice.
+    final link = _link();
+    addTearDown(link.dispose);
+
+    await within(
+        link.client.sendRequest(Methods.hello, _hello()), 'the hello');
+
+    // Long enough that the reading below cannot be the handshake's own touch
+    // rounded to the same millisecond, and short enough to cost nothing.
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    final silentBeforePing = link.session.silentForMs();
+    expect(silentBeforePing, greaterThan(0),
+        reason: 'the clock has to have moved since the handshake, or the '
+            'assertion below is comparing a number with itself and would pass '
+            'against a session whose deadline nothing can move');
+
+    await within(link.client.sendRequest(Methods.ping), 'a ping');
+
+    expect(link.session.silentForMs(), lessThan(silentBeforePing),
+        reason: 'a ping did not move this session\'s heartbeat deadline, so '
+            'the client\'s pump is beating into a gateway that is not '
+            'listening — every panel in the plant would still be reaped once '
+            'a deadline and the pump would be pure cost');
+  });
+
   test('the handler table is exactly the nine names a client may call, plus '
       'the one it announces', () async {
     final link = _link();
