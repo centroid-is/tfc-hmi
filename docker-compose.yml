@@ -107,8 +107,24 @@ services:
   flutter:
     image: ghcr.io/centroid-is/centroid-hmi:latest
     container_name: flutter
+    # The host's render group, needed to open the /dev/dri/renderD128 mounted
+    # under devices: below. Station-specific GID, from the same .env as
+    # DOCKER_GID:
+    #
+    #   echo "RENDER_GID=$(stat -c %g /dev/dri/renderD128)" >> .env
+    #
+    # Wrong value costs you the GPU *silently*. Mesa cannot open the node, falls
+    # back to the llvmpipe software rasteriser, and burns ~12 threads at most of
+    # a core each — with nothing logged anywhere. Verify with:
+    #
+    #   docker exec flutter sh -c 'test -w /dev/dri/renderD128 && echo ok'
+    #
+    # The 992 that used to be here matched no group on any station, nor in the
+    # image, so every station provisioned from this file has been rendering in
+    # software. Measured when fixed on 2026-09-01: 150% -> 25% CPU on one
+    # station, 112% -> 36% on the other.
     group_add:
-      - 992
+      - "${RENDER_GID:-105}"
     volumes:
       - ./wayland-socket/user:/run/user
       - ./local-share:/home/centroid/.local/share/ # shared preferences
