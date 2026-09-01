@@ -48,6 +48,7 @@ library;
 import 'dart:async';
 import 'dart:isolate';
 
+import 'package:test/test.dart' show addTearDown;
 import 'package:tfc_relay_client/src/remote_state_man.dart';
 
 import 'fault_fixture.dart' show faultClientConfig;
@@ -86,6 +87,14 @@ const Duration defaultPanelTick = Duration(milliseconds: 20);
 /// command inside a second rather than a case that dies on package:test's own
 /// thirty-second timeout with no clue in the report.
 const Duration defaultAskBudget = Duration(seconds: 5);
+
+/// How long [SuspendedPanel.spawn] waits for the panel to report `up`.
+///
+/// Generous — spawning an isolate, dialling a gateway and taking a snapshot on
+/// a loaded three-platform runner is not a fast thing — because this is not a
+/// measurement, it is the difference between a named failure and a suite
+/// timeout that names nothing.
+const Duration _upBudget = Duration(seconds: 10);
 
 /// A `RemoteStateMan` living in its own isolate, which this object can stop.
 final class SuspendedPanel {
@@ -133,6 +142,18 @@ final class SuspendedPanel {
   /// [watch] is the one key whose value rides every report. One key and not the
   /// page, because a report is pushed fifty times a second and the row's
   /// question is about a single value being stale.
+  ///
+  /// **Fails rather than hangs, the same way [ask] does** (07-REVIEW WR-08).
+  /// A panel isolate that throws before sending its `up` message — a bad URI, a
+  /// config that fails validation, a missing native asset — used to leave
+  /// `up.future` uncompleted for ever with `errorsAreFatal: false` swallowing
+  /// the error, so the case hung until the suite-level timeout with no
+  /// diagnostic at all. There is an error port now, and a bound on the wait.
+  ///
+  /// The teardown is registered here rather than left to the caller for the
+  /// same class of reason: both existing callers remember `addTearDown(panel
+  /// .shutdown)`, and the third that forgets leaks a live isolate holding a
+  /// socket the gateway is still writing to.
   static Future<SuspendedPanel> spawn({
     Uri? uri,
     Set<String> keys = const <String>{},
@@ -140,6 +161,10 @@ final class SuspendedPanel {
     Duration tick = defaultPanelTick,
   }) async {
     final fromPanel = ReceivePort();
+    // Registered before anything can throw: a spawn that fails partway leaves
+    // no `panel` to hang the teardown off, and an open ReceivePort keeps the
+    // test isolate alive after the suite is done.
+    addTearDown(fromPanel.close);
     final up = Completer<SendPort>();
     late final SuspendedPanel panel;
 
@@ -163,6 +188,17 @@ final class SuspendedPanel {
       }
     });
 
+    // Where an isolate that dies before it can report goes. Without it
+    // `errorsAreFatal: false` swallows the error and the handshake below waits
+    // for a message nobody is left to send.
+    final errors = ReceivePort();
+    errors.listen((Object? error) {
+      if (!up.isCompleted) {
+        up.completeError(StateError('the panel isolate died before it came '
+            'up: $error'));
+      }
+    });
+
     final isolate = await Isolate.spawn(
       panelIsolate,
       <String, Object?>{
@@ -177,9 +213,22 @@ final class SuspendedPanel {
       // command protocol instead of taking the suite down with it.
       debugName: 'suspend-harness-panel',
       errorsAreFatal: false,
+      onError: errors.sendPort,
+    );
+    addTearDown(errors.close);
+
+    final commands = await up.future.timeout(
+      _upBudget,
+      onTimeout: () => throw TimeoutException(
+          'the panel isolate never reported "up" within '
+          '${_upBudget.inSeconds} s. It is either wedged in its own '
+          'construction or it died without reporting — and a case that waits '
+          'on this for ever fails as a suite timeout naming nothing',
+          _upBudget),
     );
 
-    panel = SuspendedPanel._(isolate, fromPanel, await up.future, tick);
+    panel = SuspendedPanel._(isolate, fromPanel, commands, tick);
+    addTearDown(panel.shutdown);
     return panel;
   }
 
