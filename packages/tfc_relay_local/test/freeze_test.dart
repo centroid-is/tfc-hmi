@@ -134,20 +134,30 @@ const int declaredRetainedTimers = 1;
 ///    which is why `readFresh` is written as a one-key `readMany` rather than
 ///    as a second call site that could lose its deadline independently.
 ///
-/// It moves again when 08-06's write path and 08-07's adapters land, and it
-/// moves **by a number somebody wrote down** — every one of those call sites
-/// has to carry a `deadline` argument or a `.timeout(`, and the offender case
-/// is what enforces that. `state_man.dart:1868` is one line of the shape this
-/// pins: `await client.awaitConnect()` inside a read, with no deadline, leaving
-/// the caller pending forever against a disconnected PLC (T-08-10).
-const int declaredUpstreamAwaitSites = 2;
+/// And, since 08-06:
+///
+///  * `LocalStateMan._crossIntoThePlant` — the one place an upstream *write*
+///    is awaited, which the engage write, every hold tick and the release
+///    write all funnel through, so the deadline cannot go missing on one of
+///    them and stay present on the others.
+///
+/// It moves again when 08-07's adapters land, and it moves **by a number
+/// somebody wrote down** — every one of those call sites has to carry a
+/// `deadline` argument or a `.timeout(`, and the offender case is what
+/// enforces that. `state_man.dart:1868` is one line of the shape this pins:
+/// `await client.awaitConnect()` inside a read, with no deadline, leaving the
+/// caller pending forever against a disconnected PLC (T-08-10).
+const int declaredUpstreamAwaitSites = 3;
 
 /// Lines under `lib/` that call `.write(` on an upstream.
 ///
-/// The `no_retry_test.dart:182-293` seam shape, scoped to this package. Zero
-/// today; 08-06 makes it one. It must never become "one per protocol with a
-/// wrapper around them" — the wrapper is where a retry goes.
-const int declaredUpstreamWriteSites = 0;
+/// The `no_retry_test.dart:182-293` seam shape, scoped to this package.
+///
+/// **One, landed by 08-06:** `LocalStateMan._crossIntoThePlant`. It must never
+/// become "one per protocol with a wrapper around them" — the wrapper is where
+/// a retry goes. Anyone adding a second site trips this pin rather than a code
+/// review, which is the whole reason the number is written down (T-08-22).
+const int declaredUpstreamWriteSites = 1;
 
 /// The dev-dependency test kit that must never be reachable from `lib/`.
 const String contractKitPackage = 'tfc_stateman_contract';
@@ -159,9 +169,8 @@ const String contractKitPackage = 'tfc_stateman_contract';
 /// self-deleting list with an owner beats a red suite, because a phase whose
 /// own gate is red cannot tell a new failure from a known one.
 ///
-///  * **3 owed by 08-06** — `write`, `writeStatus`, `holdToRun`. The write
-///    path is its own plan because the three-state outcome, the cmd minting
-///    and the no-retry seam are one subject.
+///  * **1 still owed by 08-06** — `holdToRun`, landing in this plan's task 3.
+///    `write` and `writeStatus` are written; the count came down with them.
 ///  * **4 owed by 08-11** — `browse`, `timeseries`, `historyViews`,
 ///    `preferences`. 08-11 sets `supportsDataServices: false` on the contract
 ///    leg and decides which of the four the gateway answers at all; the three
@@ -170,7 +179,7 @@ const String contractKitPackage = 'tfc_stateman_contract';
 /// The plan that closes each member decrements this in the same commit. A
 /// member that quietly starts working without this number moving is a member
 /// nobody decided to ship.
-const int declaredUnimplementedMembers = 7;
+const int declaredUnimplementedMembers = 5;
 
 /// A forwarder is forbidden in the composer, by name.
 ///
@@ -289,8 +298,9 @@ void main() {
               'than prevented (T-08-10)');
     });
 
-    test('the upstream call-site count is the declared one — two since 08-05, '
-        'so this case now counts something as well as being non-vacuous', () {
+    test('the upstream call-site count is the declared one — three since '
+        '08-06, so this case counts something as well as being non-vacuous',
+        () {
       expect(upstreamAwaitSites(libRoot), hasLength(declaredUpstreamAwaitSites),
           reason: 'a new upstream call site should be a deliberate edit to '
               'this number, so that the person adding it reads the rule '
@@ -308,8 +318,8 @@ void main() {
               '— and on a hold-to-run engage it is a jog nobody is holding');
     });
 
-    test('the upstream write call-site count is the declared one — zero today, '
-        'so the empty-directory arm is what carries this', () {
+    test('the upstream write call-site count is the declared one — ONE since '
+        '08-06, and it stays one', () {
       expect(upstreamWriteSites(libRoot), hasLength(declaredUpstreamWriteSites),
           reason: 'the gateway\'s crossing into the plant is the one place a '
               'retry could hide. no_retry_test.dart pins the server\'s at '
