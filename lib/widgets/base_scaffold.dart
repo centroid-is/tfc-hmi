@@ -107,6 +107,10 @@ class BaseScaffold extends ConsumerStatefulWidget {
 /// time would otherwise sit flush against the window edge.
 const double _clockWidth = 116;
 
+/// Breathing room either side of the app-bar access action, so the back arrow,
+/// the sign-in control and the clock are not flush against one another.
+const double kAccessStatusActionGap = 8;
+
 class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
   // Static, not per-build: `Logger()` constructs a filter, a printer and an
   // output every time (~4.3us), and this rebuilds on every navigation-alarm
@@ -312,6 +316,7 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
     // controls, and it is deliberate.
     final appBarLeftMargin = 48.0 +
         (accessElevated ? kAccessStatusActionMaxWidth : 48.0) +
+        (kAccessStatusActionGap * 2) +
         _clockWidth;
     const appBarRightMargin = 280.0;
 
@@ -378,7 +383,18 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                           // orange, when somebody is. Between the back arrow
                           // and the clock, so identity reads with the
                           // navigation controls rather than beside the logo.
-                          const AccessStatusAction(),
+                          //
+                          // The padding is what separates three controls that
+                          // would otherwise sit flush against each other and
+                          // the screen edge; the clock carries the same 8px
+                          // inside its own SizedBox. kAccessStatusActionGap
+                          // is counted into appBarLeftMargin above, so the
+                          // centre banner keeps clear of it.
+                          const Padding(
+                            padding: EdgeInsets.symmetric(
+                                horizontal: kAccessStatusActionGap),
+                            child: AccessStatusAction(),
+                          ),
                           SizedBox(
                             width: _clockWidth,
                             child: Padding(
