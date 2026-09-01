@@ -371,45 +371,10 @@ const List<GateRow> gateRows = <GateRow>[
 /// clauses are not all asserted yet. A partial entry for a row with no case is
 /// a missing entry wearing the wrong label, and the manifest says so.
 const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
-  'F13': Outstanding(
-    kind: OutstandingKind.partial,
-    owner: '07-11',
-    clause: 'the *age* half of "staleness age (rule 4) reflects real delay". '
-        '07-05 uprated the case to the catalogue\'s 500 ms ± 200 ms and added '
-        'the operator-visible clause it could assert — that no staleness or '
-        'link transition occurs at all across a slow window, judged over '
-        'collected transitions and corroborated by a provoked one. What it '
-        'could not assert is an age *number*, because the client publishes '
-        'none: viewIsStale and staleSubscriptions are a boolean and a set, and '
-        'DynamicValue.sourceTime is null on this path (measured). The only '
-        'per-subscription age in the client is FreshnessWatchdog._evaluatedAt, '
-        'kept in the gateway\'s clock and exposed solely as the verdict '
-        'derived from it (freshness_watchdog.dart:217). 07-11 wires the '
-        'staleness surface (07-CONTEXT ruling 1); when it carries an age, this '
-        'row asserts that the age tracks the injected delay. No getter was '
-        'invented here to make the clause look asserted',
-  ),
   'F15': Outstanding(
     kind: OutstandingKind.missing,
     owner: '07-12',
     clause: 'the six TLS arms, the wss smoke row and the auth contrast',
-  ),
-  'F20': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-11',
-    clause: 'the four assertable clauses plus the honesty arm on the newly '
-        'wired staleness surface; two clauses stay in gateDeviations',
-  ),
-  'F21': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-11',
-    clause: 'the recovery: cadence returns, staleness clears, and the burst '
-        'measured rather than banded away',
-  ),
-  'G6': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-11',
-    clause: 'recovery with no backlog flush, asserted honestly',
   ),
 };
 
@@ -533,6 +498,74 @@ const List<Deviation> gateDeviations = <Deviation>[
         'a fifteen-second budget. killOnce injects the same observable (the '
         'link dies with the write upstream) deterministically.',
     followUp: 'none — accepted',
+  ),
+  Deviation(
+    row: 'F20',
+    clause: 'never an old queued one',
+    reason: 'measured in 07-11, and it is the same missing egress gate seen '
+        'from the value side. The conflating map collapses changes within one '
+        'tick and F20 measures that — 12 update frames delivered against the '
+        '35 sweeps the plant made during the metered window. It does not '
+        'collapse anything *between* ticks: each drained frame is committed to '
+        'dart:io\'s outgoing buffer the moment it is built, so 115 of 116 '
+        'sweeps eventually reached the panel once the meter cleared. What F20 '
+        'asserts instead is what is true — the delivered sequence is strictly '
+        'increasing, delivery during saturation is sparse, and the panel '
+        'settles on the plant\'s current value. A claim that the between-tick '
+        'queue was discarded would need the §7.6 drain gate, which is the '
+        'clause descoped above.',
+    followUp: 'post-milestone',
+  ),
+  Deviation(
+    row: 'F21',
+    clause: 'no burst of backlogged frames on recovery',
+    reason: 'measured false in 07-11, at the honest band, and the band was not '
+        'widened. The assertion was written first at half again the steady '
+        'state and went red: **107 update frames and 376 kB in the first '
+        'second** after the meter cleared, against a steady state of 10.0/s — '
+        'a ratio of 10.7x, after 15 s of saturation. The catalogue\'s '
+        'parenthetical reason ("the conflating map means there is no backlog '
+        'to flush") does not hold on this transport: the map is bounded and '
+        'measured at 201 entries, but it is drained into dart:io\'s outgoing '
+        'buffer every tick whether or not the socket can carry the result, so '
+        'the backlog is real and invisible to the process. What F21 does '
+        'assert is that the flush arrives **in order**, that the panel '
+        'converges on the current value inside one second, that the cadence '
+        'returns to 10.0/s and that the staleness clears. 07-CONTEXT user '
+        'ruling 1 descopes the egress-gated drain that would prevent the '
+        'burst.',
+    followUp: 'post-milestone',
+  ),
+  Deviation(
+    row: 'F21',
+    clause: '`throttle(100 kbit/s)` 60 s, then unthrottle',
+    reason: 'the default lane saturates for 15 s, not 60. The mechanism the '
+        'recovery arm is about is the backlog, and it accumulates at '
+        '(production − link) = about 22.6 kB/s on this page, so 15 s is '
+        'roughly 340 kB committed — measured at 376 kB of flush, two orders of '
+        'magnitude more than one frame and far more than enough for the burst '
+        'to be visible. Sixty seconds would add 45 s to an eight-minute lane '
+        'to make the same number four times bigger. Declared rather than '
+        'quietly applied, per 07-CONTEXT user ruling 2\'s pattern.',
+    followUp: 'none — accepted',
+  ),
+  Deviation(
+    row: 'F13',
+    clause: 'staleness age (rule 4) reflects real delay',
+    reason: 'the *age* half, reassigned to 07-11 by 07-05 on the expectation '
+        'that wiring the staleness surface would give the client an age to '
+        'assert against. It did not: 07-CONTEXT ruling 1 wires the live '
+        '**verdict** (staleSubscriptionsAt returns a Set<String>), and the '
+        'only per-subscription age in the client remains '
+        'FreshnessWatchdog._evaluatedAt, kept in the gateway\'s clock and '
+        'exposed solely as the verdict derived from it. Publishing an age '
+        'would be a new member on a surface api_surface_test pins at 49, and '
+        'inventing one to make the clause look asserted is the failure this '
+        'registry exists to prevent. F13 asserts the operator-visible half '
+        '07-05 landed — no false disconnect and no staleness across a '
+        '500 ms ± 200 ms window, corroborated by a provoked transition; the '
+        'age number is a surface decision, not a gate row.',
+    followUp: 'post-milestone',
   ),
   Deviation(
     row: 'F10',
