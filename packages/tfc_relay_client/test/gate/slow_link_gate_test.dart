@@ -665,7 +665,20 @@ void main() {
       // tick fans out to and the reaper sweeps. Sampled at 2 ms, a fiftieth of
       // a tick, so a removal deferred by so much as one turn of the event loop
       // lands in this list.
+      //
+      // **The same sampler latches what the panel's socket observed, and that
+      // is not a nicety.** `GateClient.observedClose` reads the *most recent*
+      // connect attempt, so a close code lives on it only until the redial that
+      // follows returns — about one backoff draw, forty milliseconds at this
+      // config. A wait that polls it every ten milliseconds can therefore miss
+      // the close entirely, and this arm then waits out another whole peak
+      // window and evicts the panel a second time; measured inside a full-suite
+      // run, three evictions and thirty-eight ticks before a poll happened to
+      // land on one. So the close is latched at 2 ms into a set, and what the
+      // arm *waits* on is the gateway's ledger, which is a record rather than
+      // a reading and cannot be overwritten by a reconnect.
       final zombies = <String>[];
+      final seenCodes = <int>{};
       final watch = Timer.periodic(const Duration(milliseconds: 2), (_) {
         for (final session in fixture.server.sessions.sessions) {
           final code = session.sentCloseCode;
@@ -674,6 +687,8 @@ void main() {
                 'registry at tick ${engine.ticks}');
           }
         }
+        final observed = panel.observedClose.closeCode;
+        if (observed != null) seenCodes.add(observed);
       });
       addTearDown(watch.cancel);
 
@@ -702,7 +717,7 @@ void main() {
       );
       quiet.cancel();
       final quietTicks = engine.ticks - quietFrom;
-      final closeAfterQuiet = panel.observedClose;
+      final closesAfterQuiet = Set.of(seenCodes);
 
       // The last value has to be allowed to cross the socket: the plant stopped
       // between two ticks, so the newest value is at most one tick from having
@@ -717,8 +732,8 @@ void main() {
           'against a ceiling of $_ceiling; the plant swept ${quiet.sweeps} '
           'times and the panel was shown ${delivered.length} values, ending at '
           '${delivered.last} against a plant at ${quiet.latest}; the panel '
-          'observed ${closeAfterQuiet.closeCode ?? 'no close'} and the gateway '
-          'holds ${fixture.sessionCount} sessions');
+          'observed ${closesAfterQuiet.isEmpty ? 'no close' : closesAfterQuiet} '
+          'and the gateway holds ${fixture.sessionCount} sessions');
 
       expect(quietTicks, greaterThanOrEqualTo(_quietTicks),
           reason: 'the gateway turned $quietTicks ticks while production was '
@@ -726,14 +741,16 @@ void main() {
               'names. The clause is counted in ticks because the ceiling is '
               'judged once per tick, and an arm that ran short would be '
               'asserting that a shorter run does not evict');
-      expect(closeAfterQuiet.closeCode, isNull,
-          reason: 'the panel was thrown off with '
-              '${closeAfterQuiet.closeCode} while producing one changed handle '
-              'a tick against a ceiling of $_ceiling. That is conflation being '
-              'confused for eviction, and it is the failure an operator meets '
-              'as a panel dropping off the wall on a healthy line — a window '
-              'that accumulated without a recovery signal would evict every '
-              'panel in the plant eventually');
+      expect(closesAfterQuiet, isEmpty,
+          reason: 'the panel\'s socket observed $closesAfterQuiet while '
+              'producing one changed handle a tick against a ceiling of '
+              '$_ceiling. That is conflation being confused for eviction, and '
+              'it is the failure an operator meets as a panel dropping off the '
+              'wall on a healthy line — a window that accumulated without a '
+              'recovery signal would evict every panel in the plant '
+              'eventually. Latched at 2 ms across all $quietTicks ticks rather '
+              'than read once at the end, so a close-and-redial inside the arm '
+              'cannot heal itself before anybody looks');
       expect(fixture.sessionCount, 1,
           reason: 'the gateway holds ${fixture.sessionCount} sessions after '
               '$quietTicks ticks under the ceiling, against the one panel this '
@@ -768,48 +785,66 @@ void main() {
       // which is what makes this a boundary rather than two scenarios.
       final busy = drivePage(fixture.served, keys, period: _tick, from: 100000);
       final busyFrom = engine.ticks;
-      await until('the panel to observe the gateway giving up on it',
-          () => panel.observedClose.closeCode != null,
+      final held = Stopwatch()..start();
+      // **Waited on the gateway's ledger and not on the panel's reading.** The
+      // ledger is appended once per released connection and is never rewritten;
+      // the panel's `observedClose` is the current attempt's, and the redial
+      // that follows an eviction erases it in about one backoff draw. See the
+      // sampler above for the measurement that made this necessary.
+      await until('the gateway to record that it gave up on the panel',
+          () => fixture.evictedForBackpressure.isNotEmpty,
           budget: _evictionBudget);
+      held.stop();
       // Stopped the instant the verdict lands: left running, the panel redials
       // into the same production rate and is evicted again every window for the
       // rest of the case, which is an eviction storm in the teardown rather
       // than evidence.
       busy.cancel();
       final firedAfter = engine.ticks - busyFrom;
-      final closed = panel.observedClose;
       final windowTicks = _peakWindow.inMilliseconds ~/ _tick.inMilliseconds;
+      final decided = fixture.evictedForBackpressure;
+
+      // The panel's own view of the same event, which crosses a socket and so
+      // lands a few milliseconds after the gateway's. A window, never an
+      // instant.
+      await until('the panel\'s own socket to observe the close the gateway '
+          'has already recorded', () => seenCodes.isNotEmpty, budget: recovery);
+      final reason = panel.observedClose.closeReason;
 
       print('G5 above the ceiling: $_g5Page changed handles a tick against a '
-          'ceiling of $_ceiling; the verdict fired $firedAfter ticks later '
-          '(a ${_peakWindow.inMilliseconds} ms window is $windowTicks ticks), '
-          'the panel observed ${closed.closeCode} "${closed.closeReason}", the '
-          'gateway\'s ledger reads ${fixture.evictedForBackpressure}, and it '
-          'holds ${fixture.sessionCount} sessions');
+          'ceiling of $_ceiling; the verdict fired after '
+          '${held.elapsedMilliseconds} ms and $firedAfter ticks (the window is '
+          '${_peakWindow.inMilliseconds} ms, which is $windowTicks ticks at '
+          'this pacing), the panel observed $seenCodes "$reason", the '
+          'gateway\'s ledger reads $decided, and it holds '
+          '${fixture.sessionCount} sessions');
 
-      expect(closed.closeCode, CloseCodes.backpressureOverrun,
-          reason: 'the panel observed close code ${closed.closeCode} rather '
-              'than ${CloseCodes.backpressureOverrun}. A panel that is thrown '
-              'off has to be told which ceiling it hit: a bare 1006 is '
+      expect(seenCodes, {CloseCodes.backpressureOverrun},
+          reason: 'the panel\'s socket observed $seenCodes across this whole '
+              'case rather than exactly '
+              '{${CloseCodes.backpressureOverrun}}. A panel that is thrown off '
+              'has to be told which ceiling it hit: a bare 1006 is '
               'indistinguishable from a crashed gateway, and a panel that '
-              'cannot tell those apart reconnects into the same wall for ever');
-      expect(closed.closeReason, contains('unable to keep up'),
-          reason: 'the close reason was "${closed.closeReason}". This arm is '
-              'about the **soft** ceiling — the sustained-peak verdict, judged '
-              'over a window — and the hard `maxPending` limit carries a '
-              'different sentence. A 4004 arriving for the wrong reason would '
-              'let this pair pass on a gateway whose peak verdict is dead, '
-              'which is precisely the state 03-REVIEW WR-02 found it in');
-      expect(closed.closeReason, contains('$_ceiling'),
-          reason: 'the reason names no ceiling: "${closed.closeReason}". An '
-              'operator reading it should learn which limit was hit without '
-              'reading the gateway\'s source');
-      expect(fixture.evictedForBackpressure, hasLength(1),
-          reason: 'the gateway\'s own ledger records '
-              '${fixture.evictedForBackpressure} backpressure evictions. The '
-              'panel\'s socket and the gateway\'s ledger are two independent '
-              'observations of one decision, and a 4004 the gateway did not '
-              'record deciding is a close that came from somewhere else');
+              'cannot tell those apart reconnects into the same wall for ever. '
+              'The set is every code latched at 2 ms since the fixture came '
+              'up, so a 1006 during the quiet arm would still be in it');
+      expect(reason, contains('unable to keep up'),
+          reason: 'the close reason was "$reason". This arm is about the '
+              '**soft** ceiling — the sustained-peak verdict, judged over a '
+              'window — and the hard `maxPending` limit carries a different '
+              'sentence. A 4004 arriving for the wrong reason would let this '
+              'pair pass on a gateway whose peak verdict is dead, which is '
+              'precisely the state 03-REVIEW WR-02 found it in');
+      expect(reason, contains('$_ceiling'),
+          reason: 'the reason names no ceiling: "$reason". An operator reading '
+              'it should learn which limit was hit without reading the '
+              'gateway\'s source');
+      expect(decided, hasLength(1),
+          reason: 'the gateway\'s own ledger records $decided backpressure '
+              'evictions. The panel\'s socket and the gateway\'s ledger are '
+              'two independent observations of one decision, and a 4004 the '
+              'gateway did not record deciding is a close that came from '
+              'somewhere else');
       expect(zombies, isEmpty,
           reason: 'these sessions were still in the gateway\'s registry after '
               'their close code had been set: $zombies. The eviction is a '
@@ -820,18 +855,29 @@ void main() {
               'The same-tick property is asserted exactly, with hand-driven '
               'ticks, at backpressure_test.dart:99-190; what is sampled here '
               'is the half a client-side case can see');
-      expect(firedAfter, greaterThanOrEqualTo(windowTicks),
-          reason: 'the verdict fired $firedAfter ticks after production went '
-              'above the ceiling, and a ${_peakWindow.inMilliseconds} ms '
-              'window is $windowTicks ticks. An eviction that fires sooner '
-              'than its own window is an instant verdict wearing a window\'s '
-              'name, and it would throw a panel off for one busy tick — which '
-              'is every panel, on every resync');
-      expect(firedAfter,
-          lessThan(_evictionBudget.inMilliseconds ~/ _tick.inMilliseconds),
-          reason: 'the verdict took $firedAfter ticks to fire against a window '
-              'of $windowTicks. A window that keeps sliding is a ceiling '
-              'nobody ever hits');
+      // **The window is judged in wall clock, and the tick count is printed
+      // rather than asserted.** `poll` fires when `nowMs - _peakSinceMs >
+      // peakWindowMs`, which is milliseconds; how many ticks that takes depends
+      // on whether the runner let the engine's `Timer.periodic` keep to its
+      // period. Under a loaded full-suite run this file measured the same
+      // verdict at 12 ticks and at 38, so a bound counted in ticks would be a
+      // bound on the runner. Wall clock is what the mechanism uses and it is
+      // what the arm reads.
+      expect(held.elapsed, greaterThanOrEqualTo(_peakWindow),
+          reason: 'the verdict fired ${held.elapsedMilliseconds} ms after '
+              'production went above the ceiling, against a '
+              '${_peakWindow.inMilliseconds} ms window ($firedAfter ticks '
+              'turned). An eviction that fires sooner than its own window is '
+              'an instant verdict wearing a window\'s name, and it would throw '
+              'a panel off for one busy tick — which is every panel, on every '
+              'resync');
+      expect(held.elapsed, lessThan(_peakWindow * 4),
+          reason: 'the verdict took ${held.elapsedMilliseconds} ms to fire '
+              'against a ${_peakWindow.inMilliseconds} ms window. Three whole '
+              'windows of slack covers the tick the peak is first noticed on, '
+              'the tick it is acted on, and a runner that is late for both; '
+              'beyond that the window is sliding rather than expiring, and a '
+              'window that keeps sliding is a ceiling nobody ever hits');
     }, timeout: const Timeout(Duration(seconds: 120)));
   });
 }
