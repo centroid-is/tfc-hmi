@@ -69,6 +69,15 @@ jobs:
           git -C /opt/flutter-elinux-347 checkout 4d63880dfaba6e30530b88f2344e0a7b870228b2
           echo "/opt/flutter-elinux-347/bin" >> "$GITHUB_PATH"
 
+      # Cheap and fast, and the only part of the eLinux video plugin that can
+      # be tested without an embedder and a camera.
+      - name: Test the eLinux video output plugin
+        working-directory: packages/media_kit_video_elinux
+        run: |
+          cmake -S elinux/test -B build/test -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build/test
+          ctest --test-dir build/test --output-on-failure
+
       - name: Setup elinux platform
         working-directory: centroid-hmi
         run: flutter-elinux create --platforms=elinux .
@@ -201,6 +210,15 @@ jobs:
           git -C /opt/flutter-elinux-347 checkout 4d63880dfaba6e30530b88f2344e0a7b870228b2
           echo "/opt/flutter-elinux-347/bin" >> "$GITHUB_PATH"
 
+      # Cheap and fast, and the only part of the eLinux video plugin that can
+      # be tested without an embedder and a camera.
+      - name: Test the eLinux video output plugin
+        working-directory: packages/media_kit_video_elinux
+        run: |
+          cmake -S elinux/test -B build/test -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build/test
+          ctest --test-dir build/test --output-on-failure
+
       - name: Setup elinux platform
         working-directory: centroid-hmi
         run: flutter-elinux create --platforms=elinux .
@@ -307,6 +325,15 @@ jobs:
           test -n "$SHA" || (echo "Empty SHA"; exit 1)
           echo "SHA: $SHA"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      # Cheap and fast, and the only part of the eLinux video plugin that can
+      # be tested without an embedder and a camera.
+      - name: Test the eLinux video output plugin
+        working-directory: packages/media_kit_video_elinux
+        run: |
+          cmake -S elinux/test -B build/test -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build/test
+          ctest --test-dir build/test --output-on-failure
 
       - name: Setup elinux platform
         working-directory: centroid-hmi

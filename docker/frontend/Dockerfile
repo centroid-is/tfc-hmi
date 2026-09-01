@@ -79,8 +79,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     libsecret-1-0 \
     sqlite3 \
+    libmpv2 \
     curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# libmpv2 is what plays the RTSP camera asset. package:media_kit loads it by
+# name at runtime (media_kit_libs_linux bundles nothing on Linux — it expects
+# the distro's), so without it every camera tile fails MediaKit.
+# ensureInitialized and the app logs "one or more required dependencies could
+# not be located". It brings the ffmpeg libraries with it, which is most of
+# this image's size; the video output that consumes its frames is
+# packages/media_kit_video_elinux.
 
 # Hacks for amplify secure storage
 RUN ln -s /usr/lib/x86_64-linux-gnu/libgio-2.0.so.0 /usr/lib/x86_64-linux-gnu/libgio-2.0.so

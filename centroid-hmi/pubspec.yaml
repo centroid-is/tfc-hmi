@@ -57,6 +57,11 @@ dependencies:
   path_provider: ^2.1.5
   centroidx_upgrader:
     path: ../packages/centroidx_upgrader
+  # Video output for package:media_kit on the flutter-elinux stations, where
+  # upstream's GTK plugin cannot be registered. No Dart API — depending on it
+  # is what puts the native half into the eLinux build.
+  media_kit_video_elinux:
+    path: ../packages/media_kit_video_elinux
   marionette_flutter: ^0.4.0
 
 dev_dependencies:

@@ -1,0 +1,21 @@
+name: media_kit_video_elinux
+description: >-
+  eLinux (flutter-elinux) implementation of the native video output channel
+  package:media_kit_video talks to. Upstream ships a GTK plugin, which the
+  eLinux embedder cannot register.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.5.1
+  flutter: ">=3.7.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      elinux:
+        pluginClass: MediaKitVideoElinuxPlugin

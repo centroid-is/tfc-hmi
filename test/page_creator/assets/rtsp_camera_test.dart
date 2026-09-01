@@ -113,6 +113,32 @@ void main() {
       expect(find.byType(Tooltip), findsOneWidget);
     });
 
+    testWidgets(
+        'a backend whose video output never comes up shows the placeholder',
+        (tester) async {
+      // The eLinux/ivi failure mode: libmpv loads, so the player constructs,
+      // but nothing can render its frames. The tile must say so rather than
+      // spin on "connecting" forever behind a black box.
+      late _FakePlayback playback;
+      RtspCameraView.debugPlaybackFactory = (config) {
+        playback = _FakePlayback(config);
+        return playback;
+      };
+      await tester
+          .pumpWidget(_hostView(RtspCameraConfig(url: 'rtsp://cam/1')));
+      expect(find.byKey(const Key('fake-video')), findsOneWidget);
+
+      playback.statusNotifier.value = RtspCameraStatus.unavailable;
+      await tester.pump();
+      expect(find.byKey(const Key('fake-video')), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(find.byIcon(Icons.videocam_off_outlined), findsOneWidget);
+      expect(
+        find.byTooltip('Video playback is not available on this platform'),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('url change disposes the old playback and opens a new one',
         (tester) async {
       final created = <_FakePlayback>[];

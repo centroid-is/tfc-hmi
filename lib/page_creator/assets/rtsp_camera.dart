@@ -2,10 +2,13 @@
 ///
 /// Playback is media_kit (libmpv), which is what actually plays RTSP on the
 /// desktop platforms (macOS/Windows/Linux — Linux needs the distro's libmpv
-/// package at runtime). Platforms without the native pieces — the
-/// flutter-elinux stations, `flutter test` — get a "playback unavailable"
-/// placeholder instead of a crash: the player is only constructed inside a
-/// try/catch, never at import time.
+/// package at runtime) and, through package:media_kit_video_elinux, on the
+/// flutter-elinux stations. Platforms without the native pieces — the
+/// ivi-homescreen stations, `flutter test` — get a "playback unavailable"
+/// placeholder instead of a crash. libmpv missing shows up when the player is
+/// constructed, which happens inside a try/catch and never at import time; a
+/// missing video output only shows up later, asynchronously, and lands on the
+/// same placeholder via [RtspCameraStatus.unavailable].
 ///
 /// A dropped stream retries on its own every [RtspCameraView.retryDelay]; an
 /// operator should never have to touch a camera tile to bring it back.
@@ -76,7 +79,10 @@ class RtspCameraConfig extends BaseAsset {
       _RtspCameraConfigEditor(config: this);
 }
 
-enum RtspCameraStatus { connecting, live, noSignal }
+/// [unavailable] is a property of the platform, not of the camera: the video
+/// output could not be created at all, so no amount of retrying will produce a
+/// picture. Everything else is a property of the stream.
+enum RtspCameraStatus { connecting, live, noSignal, unavailable }
 
 /// What [RtspCameraView] needs from a video backend, so tests (and platforms
 /// where libmpv cannot load) never touch media_kit.
@@ -249,6 +255,11 @@ class _RtspCameraViewState extends State<RtspCameraView> {
     super.dispose();
   }
 
+  Widget _unavailablePlaceholder() => Tooltip(
+        message: 'Video playback is not available on this platform',
+        child: _Glyph(icon: Icons.videocam_off_outlined),
+      );
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -257,31 +268,36 @@ class _RtspCameraViewState extends State<RtspCameraView> {
     if (widget.config.url.isEmpty) {
       content = _Glyph(icon: Icons.videocam_outlined);
     } else if (_unavailable || playback == null) {
-      content = Tooltip(
-        message: 'Video playback is not available on this platform',
-        child: _Glyph(icon: Icons.videocam_off_outlined),
-      );
+      content = _unavailablePlaceholder();
     } else {
       content = ValueListenableBuilder<RtspCameraStatus>(
         valueListenable: playback.status,
-        builder: (context, status, _) => Stack(
-          fit: StackFit.expand,
-          children: [
-            playback.buildVideo(context, widget.config.fit),
-            if (status == RtspCameraStatus.connecting)
-              const Center(
-                child: SizedBox(
-                  width: 24,
-                  height: 24,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+        builder: (context, status, _) {
+          // Same placeholder as a player that never constructed: from the
+          // operator's side there is no difference between libmpv missing and
+          // its frames having nowhere to go.
+          if (status == RtspCameraStatus.unavailable) {
+            return _unavailablePlaceholder();
+          }
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              playback.buildVideo(context, widget.config.fit),
+              if (status == RtspCameraStatus.connecting)
+                const Center(
+                  child: SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
                 ),
-              ),
-            if (status == RtspCameraStatus.noSignal)
-              _Glyph(icon: Icons.videocam_off_outlined, caption: 'No signal'),
-            if (status == RtspCameraStatus.live)
-              Positioned(left: 6, bottom: 6, child: _LiveBadge()),
-          ],
-        ),
+              if (status == RtspCameraStatus.noSignal)
+                _Glyph(icon: Icons.videocam_off_outlined, caption: 'No signal'),
+              if (status == RtspCameraStatus.live)
+                Positioned(left: 6, bottom: 6, child: _LiveBadge()),
+            ],
+          );
+        },
       );
     }
     return Container(
@@ -387,11 +403,21 @@ class _MediaKitPlayback implements RtspCameraPlayback {
   Timer? _retryTimer;
   Timer? _watchdog;
   bool _disposed = false;
+  bool _videoUnavailable = false;
 
   _MediaKitPlayback(RtspCameraConfig config)
       : _url = config.url,
         _player = _construct() {
     _controller = VideoController(_player);
+    // The native video output is created asynchronously, so a platform that
+    // has libmpv but no way to render its frames (ivi-homescreen; an eLinux
+    // build without package:media_kit_video_elinux) fails here rather than in
+    // _construct. Nothing else listens to this future: without the handler the
+    // failure is an unhandled async error and the tile spins forever.
+    unawaited(_controller.platform.future.then<void>(
+      (_) {},
+      onError: (Object _) => _markVideoUnavailable(),
+    ));
     if (config.muted) {
       unawaited(_player.setVolume(0).catchError((_) {}));
     }
@@ -449,8 +475,24 @@ class _MediaKitPlayback implements RtspCameraPlayback {
   /// it asks for. A stream that came back on its own cancels its own retry —
   /// restarting a tile that is painting pictures is what made a healthy camera
   /// blank every 5 s.
+  /// A permanent condition of the platform: stop the watchdog and the retry,
+  /// they cannot fix a missing video output.
+  void _markVideoUnavailable() {
+    if (_disposed || _videoUnavailable) return;
+    _videoUnavailable = true;
+    _watchdog?.cancel();
+    _watchdog = null;
+    _publish();
+  }
+
   void _publish() {
     if (_disposed) return;
+    if (_videoUnavailable) {
+      _status.value = RtspCameraStatus.unavailable;
+      _retryTimer?.cancel();
+      _retryTimer = null;
+      return;
+    }
     _status.value = _liveness.status;
     if (_liveness.retryPending) {
       if (_retryTimer == null) {
@@ -502,6 +544,11 @@ class _RtspCameraConfigEditor extends StatefulWidget {
 
 class _RtspCameraConfigEditorState extends State<_RtspCameraConfigEditor> {
   RtspCameraConfig get config => widget.config;
+
+  Widget _unavailablePlaceholder() => Tooltip(
+        message: 'Video playback is not available on this platform',
+        child: _Glyph(icon: Icons.videocam_off_outlined),
+      );
 
   @override
   Widget build(BuildContext context) {
