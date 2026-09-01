@@ -12,10 +12,19 @@ import 'package:tfc_dart/core/state_man.dart';
 /// It records every create and every *completed* delete so a test can assert
 /// on how many monitored items the server is actually holding.
 class LeakCountingClientApi implements ClientApi {
-  LeakCountingClientApi({this.deleteDelay = const Duration(milliseconds: 400)});
+  LeakCountingClientApi({
+    this.deleteDelay = const Duration(milliseconds: 400),
+    this.streamError,
+  });
 
   /// How long the server takes to acknowledge a monitored-item delete.
   final Duration deleteDelay;
+
+  /// When set, the monitored item reports this error instead of staying
+  /// silent — a server that answers "no" rather than one that is merely slow.
+  /// The two are the whole point of the split in `_monitor`'s timeout: an
+  /// answered error is a subscription worth rebuilding, silence is not.
+  final Object? streamError;
 
   int creates = 0;
   int deletes = 0;
@@ -52,6 +61,7 @@ class LeakCountingClientApi implements ClientApi {
       onListen: () {
         creates++;
         if (live > peakLive) peakLive = live;
+        if (streamError != null) controller.addError(streamError!);
       },
       onCancel: () async {
         // The real delete is a round trip to the PLC, not instantaneous.
@@ -59,8 +69,8 @@ class LeakCountingClientApi implements ClientApi {
         deletes++;
       },
     );
-    // Never emits: reproduces a node the server accepts but never reports,
-    // which is what drives _monitor's 5s first-value timeout.
+    // Never emits a value: reproduces a node the server accepts but never
+    // reports, which is what drives _monitor's 8s first-value timeout.
     return controller.stream;
   }
 
@@ -109,7 +119,7 @@ void main() {
             (stream) => stream.listen((_) {}, onError: (_) {}),
             onError: (_) {}));
 
-        // Long enough for several first-value timeouts (5s each) plus the
+        // Long enough for several first-value timeouts (8s each) plus the
         // 1s delay between them.
         await Future<void>.delayed(const Duration(seconds: 20));
 
@@ -147,26 +157,89 @@ void main() {
     });
 
     test(
-      'a permanently failing key backs off instead of hammering',
+      'a key the server answers with an error backs off instead of hammering',
       () async {
-        // The flat 1s retry meant a 5s first-value timeout + 1s delay = one
-        // fresh subscribe every ~6s, per key, forever. Across ~140 failing
-        // keys that saturated the isolate and froze the UI -- the clock in
-        // the HMI stopped painting. With the ladder the same key costs three
-        // attempts in the first 40s and then settles towards one per 10 min.
+        // The flat 1s retry meant a first-value timeout + 1s delay = one
+        // fresh subscribe every few seconds, per key, forever. Across ~140
+        // failing keys that saturated the isolate and froze the UI -- the
+        // clock in the HMI stopped painting. With the ladder the same key
+        // costs three attempts in the first 40s and then settles towards one
+        // per 10 min.
+        //
+        // The fixture reports an error rather than staying silent: since a
+        // silent server no longer re-subscribes at all (see the test below),
+        // an answered error is the case that still walks the ladder.
+        final erroring =
+            LeakCountingClientApi(streamError: 'BadDeviceFailure');
+        final sm = await StateMan.create(
+          config: StateManConfig(opcua: []),
+          keyMappings: KeyMappings(nodes: {
+            'silent.node': KeyMappingEntry(
+              opcuaNode: OpcUANodeConfig(namespace: 4, identifier: 'Silent')
+                ..serverAlias = 'plc',
+            ),
+          }),
+        );
+        sm.clients
+            .add(ClientWrapper(erroring, OpcUAConfig()..serverAlias = 'plc'));
+
+        unawaited(sm.subscribe('silent.node').then(
+            (stream) => stream.listen((_) {}, onError: (_) {}),
+            onError: (_) {}));
+        await Future<void>.delayed(const Duration(seconds: 40));
+
+        print('attempts in 40s: ${erroring.creates}');
+        expect(erroring.creates, lessThanOrEqualTo(4),
+            reason: '${erroring.creates} subscribe attempts in 40s -- that is '
+                'the flat retry interval back again, which froze the UI');
+        expect(erroring.creates, greaterThanOrEqualTo(2),
+            reason: 'it must still retry; a server that answers with an error '
+                'has a subscription worth rebuilding');
+
+        await sm.close().timeout(const Duration(seconds: 5), onTimeout: () {});
+      },
+      timeout: const Timeout(Duration(seconds: 90)),
+    );
+
+    test(
+      'a silent server keeps its subscription instead of re-subscribing',
+      () async {
+        // The regression this pairs with: a first-value timeout used to throw,
+        // and the throw re-subscribed. Re-subscribing cancels and recreates
+        // the monitored items, so under the startup flood the retry churn
+        // landed hardest on the servers that were already slowest to answer --
+        // the subscription that would have delivered the value was torn down
+        // before the value could arrive.
+        //
+        // Silence now costs exactly one monitored item. The value lands on the
+        // stream whenever the server gets round to it.
         unawaited(stateMan.subscribe('silent.node').then(
             (stream) => stream.listen((_) {}, onError: (_) {}),
             onError: (_) {}));
         await Future<void>.delayed(const Duration(seconds: 40));
 
-        print('attempts in 40s: ${fake.creates}');
-        expect(fake.creates, lessThanOrEqualTo(4),
-            reason: '${fake.creates} subscribe attempts in 40s -- that is the '
-                'flat retry interval back again, which is what froze the UI');
-        expect(fake.creates, greaterThanOrEqualTo(2),
-            reason: 'it must still retry; a transient failure has to recover');
+        print('attempts in 40s against a silent server: ${fake.creates}');
+        expect(fake.creates, 1,
+            reason: '${fake.creates} subscribe attempts for a server that is '
+                'merely slow -- each one tears down the monitored item that '
+                'was about to deliver, which is the starvation loop itself');
       },
       timeout: const Timeout(Duration(seconds: 90)),
+    );
+
+    test(
+      'a silent key still completes its subscribe() instead of hanging',
+      () async {
+        // Before, _monitor only returned once a first value arrived, so a
+        // caller awaiting subscribe() on a slow key waited forever while the
+        // retry loop churned underneath it. The timeout now falls through, so
+        // the caller gets its stream and simply sees no value yet.
+        final stream = await stateMan
+            .subscribe('silent.node')
+            .timeout(const Duration(seconds: 20));
+        stream.listen((_) {}, onError: (_) {});
+      },
+      timeout: const Timeout(Duration(seconds: 60)),
     );
 
     test(
