@@ -27,6 +27,28 @@
 // asks that one instead. A TDR, a driver restart or an adapter reset takes
 // every device on the adapter with it, so the sentinel sees the same event.
 //
+// "We cannot ask ANGLE's device" was tested on 2026-08-31 and holds. The route
+// that ought to work is EGL_EXT_device_query: eglQueryDisplayAttribEXT on the
+// engine's EGLDisplay for EGL_DEVICE_EXT, then eglQueryDeviceAttribEXT for
+// EGL_D3D11_DEVICE_ANGLE, which is exactly what the embedder does internally
+// for FlutterDesktopEngineGetGraphicsAdapter. It cannot be done from the
+// runner, for a reason worth writing down so nobody spends another evening on
+// it: flutter_windows.dll STATICALLY LINKS its own ANGLE. It contains the
+// string "eglGetPlatformDisplayEXT" but imports neither libEGL.dll nor
+// libGLESv2.dll, and exports no EGL entry point. The libEGL.dll that is loaded
+// in the process belongs to a plugin (media_kit), and it is a separate ANGLE
+// with a separate display cache -- so every eglGetPlatformDisplayEXT the
+// runner makes returns a fresh, uninitialised display and every query on it
+// fails with EGL_NOT_INITIALIZED (0x3001). That was measured for ten
+// attribute lists, including the two the engine's own .rdata contains. There
+// is no reachable handle on ANGLE's device short of forking the engine.
+//
+// The consequence for detection: an adapter-wide loss is directly observable
+// through the sentinel and is declared the moment it happens. A loss confined
+// to ANGLE's device -- the RDP session/desktop swap, which is the case that
+// produced "reason: S_OK / the adapter is healthy" -- is NOT directly
+// observable, and for that class the frame probe is still the only detector.
+//
 // That gives the single most useful bit in the whole diagnosis:
 //
 //   * sentinel removed  -> the adapter itself went down. The reason code names
@@ -101,6 +123,40 @@ enum class LossHint {
 
 const char* DescribeHint(LossHint hint);
 
+// How the loss came to be known. This is the field the 2026-08-31 incident was
+// missing: "no frames for ten seconds" and "the device says it is removed" are
+// different qualities of evidence, and a report that does not say which one it
+// acted on cannot be second-guessed later.
+enum class LossCause {
+  // Inferred: probes went unanswered for missed_probes_before_recovery ticks.
+  // The original and weakest test -- it cannot tell a dead renderer from a
+  // watchdog that is not being ticked.
+  kNoFramesPresented,
+  // Observed: the render device reports itself removed, asked directly. Only
+  // reachable for adapter-wide losses -- see the note above on why ANGLE's own
+  // device cannot be queried from the runner.
+  kContextLost,
+  // Observed: the host could not get a message through to the platform thread
+  // at all, so nothing running on it -- including the engine -- can be
+  // presumed alive.
+  kPlatformThreadWedged,
+};
+
+const char* DescribeLossCause(LossCause cause);
+
+// Why an exit happened in a run configured to recover in place. Without this
+// the log shows a process configured to restart quietly ending instead.
+enum class LossEscalation {
+  kNone,
+  // More distinct loss episodes inside the window than the guard allows:
+  // in-place recovery works but does not hold.
+  kRepeatedLosses,
+  // Consecutive in-place recoveries that never produced a frame.
+  kRecoveryExhausted,
+};
+
+const char* DescribeEscalation(LossEscalation escalation);
+
 // "WTS_REMOTE_DISCONNECT (4)" for the codes WM_WTSSESSION_CHANGE carries.
 // Returns |out| for codes with no name, so |out| must outlive the result.
 const char* DescribeSessionChange(unsigned long code, char* out,
@@ -113,10 +169,23 @@ std::string FormatDuration(unsigned long long ms);
 // Everything the report is built from. The Win32 side fills this in; nothing
 // here knows how any of it was obtained.
 struct LossEvidence {
+  // How the loss was established. See LossCause.
+  LossCause cause = LossCause::kNoFramesPresented;
+
+  // Set when a run configured to recover in place is exiting anyway.
+  LossEscalation escalation = LossEscalation::kNone;
+
   // False when the sentinel device could not be created at startup, which
   // makes |device_removed_reason| meaningless rather than reassuring.
   bool sentinel_available = false;
   std::uint32_t device_removed_reason = kDxgiOk;
+
+  // Distinct loss episodes counted inside the loop guard's window, including
+  // this one, and the ceiling it is measured against.
+  int losses_in_window = 0;
+  int max_losses_in_window = 0;
+  // Consecutive in-place recoveries attempted so far in this episode.
+  int recovery_attempts = 0;
 
   LossHint last_hint = LossHint::kNone;
   // Only meaningful when |last_hint| is not kNone.

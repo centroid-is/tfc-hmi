@@ -19,8 +19,18 @@ find_package(Threads REQUIRED)
 add_executable(gpu_watchdog_test
   "gpu_watchdog_test.cpp"
   "../gpu_watchdog.cpp"
+  # For ParseLossAction: the default policy is now part of what the watchdog
+  # tests assert, and the parser that resolves CENTROID_GPU_ON_LOSS lives next
+  # to the report rather than next to the state machine.
+  "../gpu_diagnosis.cpp"
 )
 target_include_directories(gpu_watchdog_test PRIVATE "..")
+
+add_executable(log_throttle_test
+  "log_throttle_test.cpp"
+  "../log_throttle.cpp"
+)
+target_include_directories(log_throttle_test PRIVATE "..")
 
 add_executable(log_rotation_test
   "log_rotation_test.cpp"
@@ -54,7 +64,8 @@ add_executable(path_utils_test
 target_include_directories(path_utils_test PRIVATE "..")
 
 foreach(target gpu_watchdog_test gpu_diagnosis_test log_rotation_test
-               output_target_test crash_record_test path_utils_test)
+               log_throttle_test output_target_test crash_record_test
+               path_utils_test)
   if(MSVC)
     target_compile_options(${target} PRIVATE /W4)
   else()
@@ -64,6 +75,7 @@ endforeach()
 
 add_test(NAME gpu_watchdog COMMAND gpu_watchdog_test)
 add_test(NAME log_rotation COMMAND log_rotation_test)
+add_test(NAME log_throttle COMMAND log_throttle_test)
 add_test(NAME output_target COMMAND output_target_test)
 add_test(NAME crash_record COMMAND crash_record_test)
 add_test(NAME path_utils COMMAND path_utils_test)

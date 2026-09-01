@@ -289,4 +289,122 @@ TEST(every_action_describes_itself) {
   }
 }
 
+// --- What the report says about how it knows -------------------------------
+//
+// Added after the 2026-08-31 freeze, where the report that DID get written on
+// an earlier occurrence said "reason: S_OK / the adapter is healthy" and was
+// read as reassuring. It was accurate and it was about the wrong device.
+
+TEST(the_report_says_how_the_loss_was_established) {
+  LossEvidence evidence = HungEvidence();
+  evidence.cause = tfc::LossCause::kContextLost;
+
+  const std::string report = tfc::FormatLossReport(evidence);
+
+  CHECK(Contains(report, "detected by:"));
+  CHECK(Contains(report, "asked directly"));
+}
+
+TEST(an_inferred_loss_is_labelled_as_the_weaker_finding) {
+  // "No frames for ten seconds" is also what a watchdog nobody is ticking
+  // looks like. A report that does not say so invites the next reader to make
+  // the same mistake the last three made.
+  LossEvidence evidence = HungEvidence();
+  evidence.cause = tfc::LossCause::kNoFramesPresented;
+
+  const std::string report = tfc::FormatLossReport(evidence);
+
+  CHECK(Contains(report, "INFERENCE"));
+}
+
+TEST(a_healthy_sentinel_on_an_inferred_loss_is_not_read_as_reassurance) {
+  // The exact shape of the 2026-08-31 incident: the adapter is fine, and the
+  // renderer is dead anyway, because what died was ANGLE's own device -- which
+  // the runner cannot reach (see the note in gpu_diagnosis.h). The report has
+  // to carry both facts, or a reader finds "the adapter is healthy" and stops.
+  LossEvidence evidence = HungEvidence();
+  evidence.sentinel_available = true;
+  evidence.device_removed_reason = tfc::kDxgiOk;
+  evidence.cause = tfc::LossCause::kNoFramesPresented;
+
+  const std::string report = tfc::FormatLossReport(evidence);
+
+  CHECK(Contains(report, "S_OK"));
+  CHECK(Contains(report, "the adapter is healthy"));
+  // ...and, in the same block, that the finding it rests on is the weak one.
+  CHECK(Contains(report, "INFERENCE"));
+}
+
+TEST(an_escalated_exit_says_which_guard_fired) {
+  LossEvidence evidence = HungEvidence();
+  evidence.escalation = tfc::LossEscalation::kRepeatedLosses;
+
+  const std::string report = tfc::FormatLossReport(evidence);
+
+  CHECK(Contains(report, "escalated"));
+}
+
+TEST(an_unescalated_report_carries_no_escalation_line) {
+  LossEvidence evidence = HungEvidence();
+  evidence.escalation = tfc::LossEscalation::kNone;
+
+  CHECK(!Contains(tfc::FormatLossReport(evidence), "escalated  :"));
+}
+
+TEST(the_report_counts_the_episode_against_the_loop_guard) {
+  LossEvidence evidence = HungEvidence();
+  evidence.losses_in_window = 2;
+  evidence.max_losses_in_window = 3;
+  evidence.recovery_attempts = 1;
+
+  const std::string report = tfc::FormatLossReport(evidence);
+
+  CHECK(Contains(report, "history    :"));
+  CHECK(Contains(report, "2"));
+  CHECK(Contains(report, "3"));
+}
+
+TEST(every_line_of_the_report_still_carries_the_gpu_loss_prefix) {
+  // run-hmi.ps1 -Report greps for the literal "[gpu-loss]" to tell a freeze
+  // the watchdog explained from one it slept through. A line without the
+  // prefix is a line that tool cannot see.
+  LossEvidence evidence = HungEvidence();
+  evidence.cause = tfc::LossCause::kContextLost;
+  evidence.escalation = tfc::LossEscalation::kRecoveryExhausted;
+
+  const std::string report = tfc::FormatLossReport(evidence);
+
+  size_t start = 0;
+  int lines = 0;
+  while (start < report.size()) {
+    const size_t end = report.find('\n', start);
+    const std::string line = report.substr(
+        start, end == std::string::npos ? std::string::npos : end - start);
+    if (!line.empty()) {
+      CHECK(line.rfind("[gpu-loss] ", 0) == 0);
+      lines++;
+    }
+    if (end == std::string::npos) {
+      break;
+    }
+    start = end + 1;
+  }
+  CHECK(lines > 8);
+}
+
+TEST(every_cause_and_escalation_has_something_to_say) {
+  const tfc::LossCause causes[] = {tfc::LossCause::kNoFramesPresented,
+                                   tfc::LossCause::kContextLost,
+                                   tfc::LossCause::kPlatformThreadWedged};
+  for (tfc::LossCause cause : causes) {
+    CHECK(std::string(tfc::DescribeLossCause(cause)).size() > 0);
+  }
+  const tfc::LossEscalation escalations[] = {
+      tfc::LossEscalation::kNone, tfc::LossEscalation::kRepeatedLosses,
+      tfc::LossEscalation::kRecoveryExhausted};
+  for (tfc::LossEscalation escalation : escalations) {
+    CHECK(std::string(tfc::DescribeEscalation(escalation)).size() > 0);
+  }
+}
+
 int main() { return tfc_test::RunAll(); }
