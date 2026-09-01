@@ -903,6 +903,37 @@ const Map<String, Color> boxErectorBpmColors = {
 /// levels inside the status struct; a plain numeric key needs no pick.
 bool boxErectorBpmTrendAvailable(CollectEntry? collect) => collect != null;
 
+/// The y axis every cartons-per-minute plot is drawn on.
+///
+/// Extracted rather than spelled inline so the two decisions it encodes have
+/// somewhere to be asserted: the axis labels are painted onto the chart canvas,
+/// not into `Text` widgets, so a widget test cannot read them back and a golden
+/// is the only other witness.
+///
+/// `min: 0` — this is a rate, and a chart that rescales its baseline turns a
+/// small dip into an apparent stoppage.
+///
+/// `decimals: 0` — cartons come out one at a time, so "12.8 cartons/min" on a
+/// gridline is a precision the machine does not have, and in the compact tile
+/// those two extra characters are the widest thing in the left gutter. Only the
+/// LABELS are rounded; the trace still carries its fractional value, and so does
+/// the tooltip.
+///
+/// NOT `integersOnly`, which is the other way to ask for this and is wrong here.
+/// That one moves the GRIDLINES onto whole numbers, and our y ticks are spread
+/// evenly across the data range rather than snapped to round numbers — so the
+/// 15-minute preview, short enough to get only two of them, had a rounded step
+/// wider than the range itself and dropped its top label. The axis came back
+/// reading `0` and nothing else.
+///
+/// [compact] drops the unit, because the pane tile's header names the chart and
+/// the preview has no width to spend on repeating it.
+GraphAxisConfig boxErectorBpmYAxis({required bool compact}) => GraphAxisConfig(
+      unit: compact ? '' : 'Cartons/min',
+      min: 0,
+      decimals: 0,
+    );
+
 /// The box erector's throughput over time, off the collector's stored rows.
 ///
 /// Numeric rather than the sensor trend's boolean axis: this is a rate, so the
@@ -988,9 +1019,7 @@ class BoxErectorBpmGraph extends ConsumerWidget {
         final graphConfig = GraphConfig(
           type: GraphType.timeseries,
           xAxis: GraphAxisConfig(unit: compact ? '' : 'Time'),
-          // Floor pinned at zero: this is a rate, and a chart that rescales its
-          // baseline turns a small dip into an apparent stoppage.
-          yAxis: GraphAxisConfig(unit: compact ? '' : 'Cartons/min', min: 0),
+          yAxis: boxErectorBpmYAxis(compact: compact),
           // A fixed [xRange] wins over the rolling span — see the field.
           xSpan: xRange == null ? xSpan : null,
           xRange: xRange,

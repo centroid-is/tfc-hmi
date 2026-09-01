@@ -35,6 +35,24 @@ class GraphAxisConfig {
   @JsonKey(defaultValue: false)
   final bool integersOnly;
 
+  /// Decimal places for the tick LABELS, independent of where the ticks fall.
+  ///
+  /// Distinct from [integersOnly], which asks the tick engine for whole-numbered
+  /// gridlines and is free to answer with fewer of them: our y ticks are evenly
+  /// spaced across the data range (`simpleLinear`), so on a short plot the range
+  /// is divided into as few as two, and rounding THOSE to integers can leave a
+  /// step wider than the range itself — the top label then disappears entirely
+  /// rather than being rounded. This rounds the printed text and moves nothing.
+  ///
+  /// Null keeps the default: whole values print bare, fractional ones to one
+  /// place.
+  ///
+  /// Rounding can collide: an axis spanning less than one unit at `decimals: 0`
+  /// prints the same text at top and bottom. Worth accepting where the quantity
+  /// genuinely has no fractional meaning — that span only happens when the
+  /// thing being counted has all but stopped.
+  final int? decimals;
+
   const GraphAxisConfig({
     this.title,
     required this.unit,
@@ -42,6 +60,7 @@ class GraphAxisConfig {
     this.max,
     this.boolean = false,
     this.integersOnly = false,
+    this.decimals,
   });
 
   factory GraphAxisConfig.fromJson(Map<String, dynamic> json) =>
@@ -359,7 +378,8 @@ class Graph {
         .scaleYContinuous(
           min: config.yAxis.min,
           max: config.yAxis.max,
-          labels: (v) => _numLabel(v, config.yAxis.unit, config.yAxis.boolean),
+          labels: (v) => _numLabel(v, config.yAxis.unit, config.yAxis.boolean,
+              config.yAxis.decimals),
           tickConfig: cs.TickConfig(
               simpleLinear: true,
               integersOnly: config.yAxis.integersOnly,
@@ -419,7 +439,10 @@ class Graph {
             min: config.yAxis2?.min,
             max: config.yAxis2?.max,
             labels: (v) => _numLabel(
-                v, config.yAxis2?.unit ?? '', config.yAxis2?.boolean ?? false),
+                v,
+                config.yAxis2?.unit ?? '',
+                config.yAxis2?.boolean ?? false,
+                config.yAxis2?.decimals),
             tickConfig: cs.TickConfig(
                 simpleLinear: true,
                 integersOnly: config.yAxis2?.integersOnly ?? false,
@@ -618,7 +641,7 @@ class Graph {
     redraw();
   }
 
-  static String _numLabel(num v, String unit, bool boolean) {
+  static String _numLabel(num v, String unit, bool boolean, [int? decimals]) {
     if (boolean) {
       return v == 0.0
           ? 'False'
@@ -626,8 +649,11 @@ class Graph {
               ? 'True'
               : '';
     }
-    final text =
-        (v == v.roundToDouble()) ? v.toInt().toString() : v.toStringAsFixed(1);
+    final text = decimals != null
+        ? v.toStringAsFixed(decimals)
+        : (v == v.roundToDouble())
+            ? v.toInt().toString()
+            : v.toStringAsFixed(1);
     return unit.isEmpty ? text : '$text $unit';
   }
 

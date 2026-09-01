@@ -14,6 +14,7 @@ GraphAxisConfig _$GraphAxisConfigFromJson(Map<String, dynamic> json) =>
       max: (json['max'] as num?)?.toDouble(),
       boolean: json['boolean'] as bool? ?? false,
       integersOnly: json['integersOnly'] as bool? ?? false,
+      decimals: (json['decimals'] as num?)?.toInt(),
     );
 
 Map<String, dynamic> _$GraphAxisConfigToJson(GraphAxisConfig instance) =>
@@ -24,6 +25,7 @@ Map<String, dynamic> _$GraphAxisConfigToJson(GraphAxisConfig instance) =>
       'max': instance.max,
       'boolean': instance.boolean,
       'integersOnly': instance.integersOnly,
+      'decimals': instance.decimals,
     };
 
 GraphConfig _$GraphConfigFromJson(Map<String, dynamic> json) => GraphConfig(
