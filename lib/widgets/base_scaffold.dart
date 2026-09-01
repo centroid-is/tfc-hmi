@@ -95,13 +95,13 @@ class BaseScaffold extends ConsumerStatefulWidget {
 
 /// Width reserved for the app-bar clock.
 ///
-/// roboto-mono advances 0.6em, so the widest line -- the 26pt time, 8 chars at
-/// 15.6px -- is ~125px, and the 18pt `dd-MM-yyyy` is 10 * 10.8 = 108px. 140 of
-/// text plus an 8px gutter on each side makes 156, which is also the centred
-/// alarm banner's left inset: one fixed number rather than two that can drift
-/// apart. The gutter matters on a top-level page, where there is no back arrow
-/// and the time would otherwise sit flush against the window edge.
-const double _clockWidth = 156;
+/// roboto-mono advances 0.6em, so the widest line -- the 14pt `dd-MM-yyyy`, 10
+/// chars at 8.4px -- is 84px, and the 20pt time is 8 * 12 = 96px. 100 of text
+/// plus an 8px gutter on each side makes 116, which is also the centred alarm
+/// banner's left inset: one fixed number rather than two that can drift apart.
+/// The gutter matters on a top-level page, where there is no back arrow and the
+/// time would otherwise sit flush against the window edge.
+const double _clockWidth = 116;
 
 class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
   // Static, not per-build: `Logger()` constructs a filter, a printer and an
@@ -155,11 +155,12 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
 
   /// The date over the time, on the left of the bar.
   ///
-  /// Two lines rather than one, so the 14pt single line this replaces becomes
-  /// an 18pt date over a 26pt time -- readable from across the packing hall
-  /// within the same 56px toolbar. Explicit sizes rather than text-theme ones
-  /// for that reason: the clock wants to be as large as the bar allows, not as
-  /// large as body copy.
+  /// Two lines rather than one: a 14pt date over a 20pt time. The time is what
+  /// an operator reads from across the packing hall, so it is the half that
+  /// grows over the 14pt single line this replaces; the date stays where it was
+  /// rather than the pair dominating the 56px toolbar. Explicit sizes rather
+  /// than text-theme ones for that reason: the clock is sized against the bar,
+  /// not against body copy.
   ///
   /// It also no longer shares a slot with the alarm banner. The clock used to
   /// be the banner's `else` branch, so an active alarm took the time away.
@@ -189,14 +190,14 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                 maxLines: 1,
                 softWrap: false,
                 style:
-                    textTheme.titleMedium?.copyWith(fontSize: 18, height: 1.1),
+                    textTheme.titleMedium?.copyWith(fontSize: 14, height: 1.1),
               ),
               Text(
                 formatTimeOfDay(currentTime),
                 maxLines: 1,
                 softWrap: false,
                 style: textTheme.titleLarge?.copyWith(
-                    fontSize: 26, height: 1.1, fontWeight: FontWeight.w600),
+                    fontSize: 20, height: 1.1, fontWeight: FontWeight.w600),
               ),
             ],
           ),
