@@ -2576,12 +2576,20 @@ class StateMan {
         // BadDeviceFailure) or simply stayed silent. "Timed out" alone does
         // not distinguish those, and they have different causes.
         await firstEmission.future.timeout(
-          const Duration(seconds: 5),
+          const Duration(seconds: 8),
           onTimeout: () {
+            // Do NOT throw/re-subscribe on a
+            // first-value timeout. Re-subscribing cancels + recreates the
+            // monitored items; doing that across hundreds of keys under the
+            // startup flood churns the worker/server and STARVES the
+            // heavily-loaded servers (lines 1/3) so their initial values never
+            // settle. Keep the existing subscription instead -- the value
+            // arrives on the stream once the flood clears, and the key comes
+            // online then. Only a hard stream error (below) triggers a retry.
             final last = _subscriptions[key]?._lastRawError;
-            throw TimeoutException(
-                'no first value for "$key" within 5s '
-                '(last raw stream error: ${last ?? "none -- server silent"})');
+            logger.w('[$alias] $key: no first value within 8s '
+                '(last raw stream error: ${last ?? "none -- server silent"}); '
+                'keeping subscription, awaiting value');
           },
         );
         logger.i('[$alias] Subscribed $key (replaced previous: $hadPrevious)');
