@@ -50,7 +50,12 @@ const Duration generousDeadline = Duration(seconds: 5);
 /// The [UpstreamLinkDriver] side of [link], or a failure saying what is
 /// missing.
 UpstreamLinkDriver driverOf(UpstreamLink link) {
-  if (link is UpstreamLinkDriver) return link;
+  // An explicit cast, not a promotion, for `harnessOf`'s reason
+  // (`harness.dart:139-143`): `UpstreamLinkDriver` is not a subtype of
+  // `UpstreamLink`, and Dart promotes only towards subtypes. The `is` test is
+  // what makes the cast safe, and what turns the failure into the message
+  // below instead of a `_CastError`.
+  if (link is UpstreamLinkDriver) return link as UpstreamLinkDriver;
   fail('${link.runtimeType} does not implement UpstreamLinkDriver, so no case '
       'in this group can make a value arrive for it or make its link drop. An '
       'UpstreamLink under test must expose the test-only control surface '
