@@ -228,6 +228,21 @@ final class ConnectionSupervisor {
   LinkState _state = LinkState.down;
   rpc.Peer? _peer;
   ClockOffset _clockOffset = ClockOffset.none;
+
+  /// Elapsed time, for the one thing in this class that measures an interval
+  /// rather than naming an instant.
+  ///
+  /// A `Stopwatch` and not [_now], which is the wall clock `ClockOffset` needs
+  /// and which steps when NTP corrects it. A rate limit measured on a clock
+  /// that can step backwards is a rate limit that suppresses for ever after
+  /// one correction (the WR-03 shape, in a third file).
+  final Stopwatch _elapsed = Stopwatch()..start();
+
+  /// When each subscription was last rebuilt because a tick advertised a
+  /// sequence ahead of it, in [_elapsed]'s clock, and which of them this
+  /// connection has already complained about. Cleared on the way down.
+  final Map<String, int> _tickResyncAtMs = <String, int>{};
+  final Set<String> _tickResyncComplained = <String>{};
   Timer? _retry;
   bool _stopped = false;
   String? _stopReason;
@@ -674,6 +689,18 @@ final class ConnectionSupervisor {
   /// subscription half: nothing below it schedules anything or asks for the
   /// stream to be rebuilt. This asks for exactly that, so it lives here, where
   /// the peer, the schedule and `_resync` already are.
+  /// **Damped, and recorded.** [ResyncEngine._resubscribe]'s `_inFlight` map
+  /// coalesces resyncs that *overlap*; it does not coalesce sequential ones.
+  /// So any condition in which the gateway's advertised sequence stays ahead
+  /// of what its own `subscribe` answer returns — a seq-bookkeeping bug, a
+  /// misbehaving or hostile peer — was one full-page resubscribe per tick,
+  /// indefinitely, at 10 Hz, against the one process serving every screen in
+  /// the plant: the F9/G3 resync-storm hazard reached through this detector
+  /// (07-REVIEW WR-02). One rebuild per subscription per
+  /// [ClientConfig.freshnessDeadline] bounds it, and the first suppression
+  /// says so on the surface `RemoteStateMan.complaints` publishes. On a
+  /// healthy link this bookkeeping is never touched: G1c and G1d prove the
+  /// comparison costs zero rebuilds when the two ends agree.
   Future<void> _tick(rpc.Parameters params) async {
     final tick = TickParams.fromJson(_asJson(sanitize(params.asMap).value));
     watchdog.sawTick(tick);
@@ -684,6 +711,27 @@ final class ConnectionSupervisor {
       // snapshot has not landed.
       final lastSeq = subscriptions[entry.key]?.lastSeq;
       if (lastSeq == null || entry.value.seq <= lastSeq) continue;
+
+      final sinceLast = _elapsed.elapsedMilliseconds;
+      final rebuiltAt = _tickResyncAtMs[entry.key];
+      if (rebuiltAt != null &&
+          sinceLast - rebuiltAt < config.freshnessDeadline.inMilliseconds) {
+        // Once per subscription per connection, not once per suppressed tick:
+        // a line at the tick cadence is the unbounded list WR-07 is about,
+        // and every one of them would say the same thing.
+        if (_tickResyncComplained.add(entry.key)) {
+          _resync.complaints.add('"${entry.key}" was rebuilt on a '
+              'tick-sequence mismatch and the mismatch survived the rebuild: '
+              'the gateway advertises sequence ${entry.value.seq} and this '
+              'client holds $lastSeq after re-establishing from its snapshot. '
+              'Further rebuilds on this subscription are suppressed to one '
+              'per ${config.freshnessDeadline.inMilliseconds} ms while it '
+              'lasts. The disagreement is at the gateway; this end cannot '
+              'rebuild its way out of it.');
+        }
+        continue;
+      }
+      _tickResyncAtMs[entry.key] = sinceLast;
       await _resync.onResync(entry.key);
     }
   }
@@ -837,6 +885,14 @@ final class ConnectionSupervisor {
   void _enter(LinkState next) {
     if (_disposed || _state == next) return;
     _state = next;
+    if (next == LinkState.down) {
+      // A genuine reconnect starts fresh: the next connection's first
+      // divergent tick earns a rebuild and, if it survives one, its own
+      // complaint. Carrying the suppression across would let a page that
+      // recovered be refused the rebuild it needs.
+      _tickResyncAtMs.clear();
+      _tickResyncComplained.clear();
+    }
     if (next == LinkState.ready) {
       barrier.open();
       // **Here and nowhere else.** See the library doc: a link earns its

@@ -742,6 +742,53 @@ void main() {
               'next genuine frame reads as a gap and asks again');
     });
 
+    test('a gateway whose advertised sequence never comes down is damped, and '
+        'said out loud', () async {
+      // **07-REVIEW WR-02.** `ResyncEngine._resubscribe`'s `_inFlight` map
+      // coalesces resyncs that *overlap*; it does not coalesce sequential
+      // ones. Any condition in which the gateway's advertised sequence stays
+      // ahead of what its own `subscribe` answer returns — a seq-bookkeeping
+      // bug, a misbehaving or hostile peer — is one full-page resubscribe per
+      // tick, indefinitely, at 10 Hz, against the one process serving every
+      // screen in the plant. That is the F9/G3 resync-storm hazard reached
+      // through this detector.
+      //
+      // And it was invisible: the unannounced-handle branch beside it appends
+      // to `complaints`, this one appended nothing, so the client's only
+      // diagnostic surface stayed empty while the panel rebuilt itself twenty
+      // times a second.
+      final gateway = await _SequencedGateway.start();
+      final panel = await _connected(gateway);
+
+      // The gateway's `subscribe` answers `_snapshotSeq` for ever, so the
+      // rebuild never catches the number the tick advertises. Twenty ticks at
+      // the measured fan-out cadence.
+      for (var i = 0; i < 20; i++) {
+        gateway.tick(_snapshotSeq + 5);
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+      }
+      await Future<void>.delayed(_settle);
+
+      expect(gateway.subscribes, lessThan(4),
+          reason: 'twenty divergent ticks cost ${gateway.subscribes - 1} full '
+              'page rebuilds. A gateway that disagrees with itself must cost '
+              'this client a bounded number of rebuilds, not one per tick for '
+              'as long as the disagreement lasts');
+
+      final damping = panel.supervisor.resync.complaints
+          .where((line) => line.contains('sequence'))
+          .toList();
+      expect(damping, hasLength(1),
+          reason: 'the client recorded $damping about a page it rebuilt and '
+              'then declined to keep rebuilding. Exactly one: silence sends '
+              'whoever is debugging this to the wrong end of the link, and a '
+              'line per suppressed tick is the unbounded list WR-07 is about');
+      expect(damping.single, contains('${_snapshotSeq + 5}'),
+          reason: 'the complaint has to carry the sequence the gateway '
+              'advertises, or it names a disagreement without saying what the '
+              'disagreement is');
+    });
+
     test('a tick advertising the sequence the client has applied costs none',
         () async {
       final gateway = await _SequencedGateway.start();
