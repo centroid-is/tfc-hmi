@@ -60,11 +60,18 @@ final class HeartbeatPump {
     required this.config,
     required bool Function() isReady,
     required CurrentPeer peer,
-    int Function()? now,
+    int Function()? elapsed,
   })  : _isReady = isReady,
         _peer = peer,
-        _now = now ?? (() => DateTime.now().millisecondsSinceEpoch) {
+        _now = elapsed ?? _elapsedClock() {
     _lastOutboundMs = _now();
+  }
+
+  /// A fresh monotonic clock. Only differences are ever read from it, so where
+  /// it starts does not matter.
+  static int Function() _elapsedClock() {
+    final elapsed = Stopwatch()..start();
+    return () => elapsed.elapsedMilliseconds;
   }
 
   /// The heartbeat floor and the deadline used on the ping itself.
@@ -82,6 +89,17 @@ final class HeartbeatPump {
   /// retarget the ping at the replacement socket.
   final CurrentPeer _peer;
 
+  /// Elapsed milliseconds from a clock that cannot be stepped.
+  ///
+  /// **A cadence is an elapsed-time question** (07-REVIEW WR-03), so it is
+  /// asked of a `Stopwatch` and not of `DateTime.now()`. NTP correcting a fast
+  /// RTC steps the wall clock backwards — the panel with a dead CMOS battery
+  /// `clock_offset.dart:19-21` describes — and every difference measured
+  /// across the step comes out negative, which the skip rule below reads as
+  /// "the wire has carried something recently". The pump then sends nothing
+  /// until real time catches up past the pre-step value, the gateway sees
+  /// silence, and the panel is reaped for the difference. The same class of
+  /// thing `FreshnessWatchdog.serverNowMs` is about, one file over.
   final int Function() _now;
 
   /// The one timer. Not `late`, not a list: the type is the design, and
@@ -212,10 +230,18 @@ final class HeartbeatPump {
   ///  * no peer — `callWithDeadline` throws `LinkDown` **synchronously** for a
   ///    null peer, and catching that would be using an exception as a gate;
   ///  * recent traffic — see [noteOutbound]; the gateway is already satisfied.
+  ///
+  /// The traffic gate is written as an unsigned window rather than a bare
+  /// `< period`: a *negative* elapsed reading is not "traffic within the
+  /// period", it is a clock that moved, and the safe answer to a clock that
+  /// moved is to beat. [_now] is monotonic by default so the branch is unused
+  /// in production, but the seam is injectable and a seam that can be handed a
+  /// wall clock will be.
   void _sendBeat() {
     if (_disposed) return;
     if (!_isReady()) return;
-    if (_now() - _lastOutboundMs < period.inMilliseconds) return;
+    final sinceOutbound = _now() - _lastOutboundMs;
+    if (sinceOutbound >= 0 && sinceOutbound < period.inMilliseconds) return;
     final peer = _peer();
     if (peer == null) return;
 
@@ -230,10 +256,19 @@ final class HeartbeatPump {
     // this library's doc argues. The peer was live when it was read one line
     // above; if it died between then and the write, that is the reconnect's
     // business and not a fault this pump can act on.
-    unawaited(callWithDeadline(
-      () => peer,
-      Methods.ping,
-      deadline: config.controlDeadline,
-    ).then((_) {}, onError: (Object _) {}));
+    //
+    // `Future.sync` and not a bare call (07-REVIEW IN-03): `callWithDeadline`
+    // is deliberately not `async` (`deadline.dart:76-82`) and `sendRequest`
+    // throws `StateError` **synchronously** on a closed peer, so a throw on
+    // this line would escape into the `Timer.periodic` callback as an
+    // unhandled zone error rather than a dropped beat. Not reachable today —
+    // `_retirePeer` nulls `_peer` before `_enter(down)` in one synchronous
+    // statement sequence, so the null check above covers the whole window —
+    // but the invariant that makes it unreachable lives in another file.
+    unawaited(Future.sync(() => callWithDeadline(
+          () => peer,
+          Methods.ping,
+          deadline: config.controlDeadline,
+        )).then((_) {}, onError: (Object _) {}));
   }
 }

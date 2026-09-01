@@ -103,6 +103,17 @@ final class _ScriptedPeer {
   Future<void> dispose() => peer.close();
 }
 
+/// A real elapsed clock with an offset a case can move under the pump's feet.
+///
+/// Reads a `Stopwatch` — so time genuinely passes while the case waits — and
+/// adds [stepMs], which is how a case reproduces a clock that jumps without
+/// waiting out the jump.
+final class _SteppableClock {
+  final Stopwatch _elapsed = Stopwatch()..start();
+  int stepMs = 0;
+  int read() => _elapsed.elapsedMilliseconds + stepMs;
+}
+
 /// A pump wired to a scripted peer, with both switches a case needs to flip.
 final class _Rig {
   _Rig({
@@ -111,6 +122,7 @@ final class _Rig {
     bool answer = true,
     Duration floor = _floor,
     int? deadlineMs,
+    int Function()? elapsed,
   }) : scripted = _ScriptedPeer(answer: answer) {
     isReady = ready;
     hasPeer = withPeer;
@@ -118,6 +130,7 @@ final class _Rig {
       config: _config(floor: floor),
       isReady: () => isReady,
       peer: () => hasPeer ? scripted.peer : null,
+      elapsed: elapsed,
     );
     if (deadlineMs != null) pump.learnedDeadlineMs(deadlineMs);
     addTearDown(pump.dispose);
@@ -390,6 +403,38 @@ void main() {
               'that was briefly busy is silent for ever afterwards — which is '
               'the reaping this whole file is about, reached by a different '
               'road');
+    });
+
+    test('a clock that steps backwards does not silence the pump', () async {
+      // **07-REVIEW WR-03.** A cadence is an elapsed-time question and this
+      // pump was asking it of `DateTime.now()`. NTP correcting a fast RTC —
+      // the fish-factory panel with a dead CMOS battery `clock_offset.dart`
+      // describes — steps the wall clock backwards, and every subsequent
+      // `_now() - _lastOutboundMs` is negative and reads as "traffic within
+      // the period". The pump then sends nothing until real time catches up
+      // past the pre-step value; the gateway sees silence, reaps at 4003, and
+      // the panel pays a full page resync — the exact defect this file exists
+      // to prevent, reached through the clock instead of through the timer.
+      final clock = _SteppableClock();
+      final rig = _Rig(elapsed: clock.read);
+      rig.pump.start();
+
+      await Future<void>.delayed(_severalBeats);
+      final beforeStep = rig.pump.debugHeartbeatsSent;
+      expect(beforeStep, greaterThan(0),
+          reason: 'the pump sent nothing before the step, so the step below '
+              'would be measuring a pump that was never beating');
+
+      // The correction. Ten seconds is a modest one for a panel that has been
+      // running on an uncorrected crystal since the last power cut.
+      clock.stepMs -= 10_000;
+
+      await Future<void>.delayed(_severalBeats);
+      expect(rig.pump.debugHeartbeatsSent, greaterThan(beforeStep),
+          reason: 'the pump has sent nothing since the clock stepped back ten '
+              'seconds. It will send nothing for ten more seconds of real '
+              'time, which is longer than any deadline a gateway would set, '
+              'so the panel is reaped for a silence its own clock invented');
     });
   });
 
