@@ -49,6 +49,38 @@
 /// kernel has just confirmed is free rather than a number this file guessed
 /// and another process might own. See [GateFixture.restartGateway] for the
 /// rebind and its retry.
+///
+/// **TLS is opt-in, it reuses 06-07's support rather than a second one of its
+/// own, and what it changes is the dial rather than the proxy.** Pass a
+/// [FaultTls] — `fault_fixture.dart`'s own record type, imported, not
+/// re-declared — and every gateway this fixture binds serves `wss` from the
+/// mounted chain, every panel dials `wss://127.0.0.1:<proxy port>` pinning the
+/// mounted root, and the proxy is untouched. It does not have to change:
+/// `FaultProxy` is a loopback *byte* relay (`fault_proxy.dart:141-190`) that
+/// forwards through a `DelayLine` and never inspects a frame, so it shapes
+/// ciphertext without knowing that is what it is doing. The default is off, so
+/// every existing herd and slow-link case is byte-identical.
+///
+/// **Why this parameter exists at all when `faultFixture` already had one.**
+/// 06-07 built the wss leg on the *one-panel* fixture, and that is still where
+/// every single-panel TLS case belongs — `tls_gate_test.dart`'s F15 arms use it
+/// directly. What that shape does not extend to is N panels on one gateway and
+/// a `serverConfig` builder, which is what a full-page smoke row over `wss` and
+/// an auth-refusal contrast need. So the *mount type, the client config helper
+/// and the pinning discipline are shared* and only the N-panel wiring is here.
+/// Two ways to mint a certificate in one package would be how the next reader
+/// picks the wrong one; two ways to stand up a herd would be worse.
+///
+/// **A TLS leg has no [FrameSeam], by construction** — the same rule
+/// `fault_fixture.dart` states and for the same reason. The seam is installed by
+/// passing `dial:` to `RemoteStateMan`, and a fixture that passes `dial:`
+/// bypasses the panel's own pinned `HttpClient`, which is the thing a TLS leg
+/// exists to exercise. So [GateClient.seam] throws on a TLS panel rather than
+/// handing back a lens nobody installed, and [GateClient.observedClose] reports
+/// nothing for the same reason: it is read off the attempt the `dial:` wrapper
+/// kept. [GateClient.attempts] is unaffected — it counts `LinkState.connecting`
+/// transitions off the panel's own stream — and it is the dial counter a TLS
+/// case wants anyway (see its doc).
 library;
 
 import 'dart:async';
@@ -66,7 +98,10 @@ import 'package:tfc_relay_server/tfc_relay_server.dart';
 import 'package:tfc_stateman_contract/faults.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 
-import 'fault_fixture.dart' show faultClientConfig, until;
+// `FaultTls` is imported rather than re-declared: one record type for the
+// mount means a case can hand the same paths to either fixture, and a second
+// declaration would be the first place the two legs drifted.
+import 'fault_fixture.dart' show FaultTls, faultClientConfig, until;
 import 'frame_seam.dart';
 
 /// A page of [n] keys in the plant's own `AREAnn.DEVnn.SUBnn` shape.
@@ -243,13 +278,15 @@ final class _GatewaySlot {
 
 /// One panel of the herd: its client, its lens, its proxy, and what it saw.
 final class GateClient {
-  GateClient._(this.index, this.client, this.seam, this.proxy);
+  GateClient._(this.index, this.client, this._seam, this.proxy);
 
   /// Its position in the herd, for the messages a herd case has to print.
   final int index;
 
   /// The implementation under test.
   final RemoteStateMan client;
+
+  final FrameSeam? _seam;
 
   /// The lens on this panel's inbound frames.
   ///
@@ -258,7 +295,24 @@ final class GateClient {
   /// it is currently serving (`frame_seam.dart:96-99`), so a seam shared by two
   /// panels would count both panels' dials as one number and would deliver an
   /// injection to whichever of them dialled last.
-  final FrameSeam seam;
+  ///
+  /// **Throws on a TLS panel**, the way `FaultFixture.seam` does and for the
+  /// identical reason: a wss leg installs no `dial:` override, because that
+  /// override is exactly what would bypass the panel's own pinned `HttpClient`.
+  /// Handing back an empty seam would turn every `inbound` reading and every
+  /// `dials` count into a vacuous pass on the one leg where the dial is the
+  /// subject.
+  FrameSeam get seam {
+    final seam = _seam;
+    if (seam == null) {
+      throw StateError('panel $index is on a TLS leg and has no frame seam: a '
+          'wss panel dials through its own pinned client, which is exactly '
+          'what a `dial:` override would bypass. Count dials with `attempts` '
+          '(LinkState.connecting transitions, which is the better counter on '
+          'any leg where the handshake fails), or reach for the proxy');
+    }
+    return seam;
+  }
 
   /// The fault proxy this panel dials through.
   ///
@@ -281,6 +335,13 @@ final class GateClient {
   /// measurement is a delta across a window, so that does not matter — but a
   /// case asserting on the absolute count of the first establishment would be
   /// wrong, and this is where it would go wrong.
+  ///
+  /// **On a TLS leg this is the only dial counter there is**, and it is also
+  /// the only correct one. There is no seam at all (see [seam]), and even if
+  /// there were, a handshake that never completes leaves `seam.dials` at zero
+  /// for ever: it increments after `ws.ready` resolves. A row about a panel
+  /// hammering a gateway whose certificate it refuses is a row about attempts
+  /// that produce no socket, so the counter has to be upstream of the socket.
   final List<LinkState> states = <LinkState>[];
 
   /// How many times this panel has entered [LinkState.connecting].
@@ -288,7 +349,8 @@ final class GateClient {
       states.where((state) => state == LinkState.connecting).length;
 
   /// The close this panel's socket has observed, both fields null while it is
-  /// open.
+  /// open — and null for ever on a TLS leg, which installs no `dial:` wrapper
+  /// to keep the attempt (see the library doc).
   ///
   /// Read off the most recent attempt the dial produced, which is the only
   /// close worth asserting on for a close the gateway initiated
@@ -313,6 +375,7 @@ final class GateFixture {
     this._retired,
     this._config,
     this._gatewayConfig,
+    this._tls,
   );
 
   /// The plant behind the gateway. Levers go straight here, never over the
@@ -367,6 +430,17 @@ final class GateFixture {
   /// What every gateway this fixture builds is configured with, replacement
   /// included — see [GatewayConfig].
   final GatewayConfig? _gatewayConfig;
+
+  /// The certificate material every gateway this fixture builds serves from,
+  /// and the root every panel pins. Null on a plaintext leg.
+  ///
+  /// Held so [restartGateway] re-binds `wss` rather than dropping to plaintext
+  /// under panels that are still pinning — which would read as a gateway that
+  /// never came back, rather than as a fixture that changed protocol.
+  final FaultTls? _tls;
+
+  /// Whether this fixture's panels dial `wss`.
+  bool get isTls => _tls != null;
 
   /// The one proxy the whole herd shares.
   ///
@@ -523,7 +597,7 @@ final class GateFixture {
     var retries = 0;
     while (true) {
       final replacement = _buildGateway(served, port,
-          complaints: gatewayComplaints, config: _gatewayConfig);
+          complaints: gatewayComplaints, config: _gatewayConfig, tls: _tls);
       try {
         await replacement.start();
         _slot.server = replacement;
@@ -566,6 +640,7 @@ final class GateFixture {
       proxy: through ?? proxy,
       config: _config,
       keys: keys ?? _keys,
+      tls: _tls,
     );
     clients.add(one);
     return one;
@@ -626,8 +701,18 @@ typedef GatewayConfig = ServerConfig Function(int port);
 /// restart and every panel would spend the rest of the case dialling a port
 /// nobody is listening on — which reads as a client that cannot reconnect
 /// rather than as a fixture that moved the gateway.
-ServerConfig _configFor(GatewayConfig? config, int port) {
-  if (config == null) return ServerConfig(tick: ServerConfig.minTick, port: port);
+ServerConfig _configFor(GatewayConfig? config, int port, FaultTls? tls) {
+  if (config == null) {
+    return ServerConfig(
+      tick: ServerConfig.minTick,
+      port: port,
+      // Null on a plaintext leg, which is the default every other case in this
+      // directory depends on.
+      tls: tls == null
+          ? null
+          : TlsConfig(chainPath: tls.chainPath, keyPath: tls.keyPath),
+    );
+  }
   final built = config(port);
   if (built.port != port) {
     throw ArgumentError('this fixture pinned port $port and the serverConfig '
@@ -635,6 +720,16 @@ ServerConfig _configFor(GatewayConfig? config, int port) {
         'handed the port precisely so it can pass it through: a gateway that '
         'came back on a different port would be behind nobody\'s proxy, and '
         'the panels would read as unable to reconnect');
+  }
+  if (tls != null && built.tls == null) {
+    throw ArgumentError('this fixture was given a TLS mount and a serverConfig '
+        'builder that returned no TlsConfig, so the gateway would listen in '
+        'plaintext while every panel dialled wss and was refused — a whole '
+        'case red for a reason that is in neither the case nor the gateway. A '
+        'builder that wants the mount passes '
+        'TlsConfig(chainPath: tls.chainPath, keyPath: tls.keyPath) through '
+        'itself; the fixture cannot splice it in without silently overriding '
+        'whatever else the builder decided');
   }
   return built;
 }
@@ -650,10 +745,11 @@ RelayServer _buildGateway(
   int port, {
   required List<String> complaints,
   GatewayConfig? config,
+  FaultTls? tls,
 }) =>
     RelayServer(
       api: plant,
-      config: _configFor(config, port),
+      config: _configFor(config, port, tls),
       // Collected rather than printed, and collected rather than discarded.
       // `fault_fixture.dart:259-263` discards because every case there provokes
       // an error on purpose and a stack per provoked error trains everyone to
@@ -692,7 +788,12 @@ RelayServer _buildGateway(
 ///
 /// [waitForReady] leaves every panel subscribed and holding a value for every
 /// key before this returns. Off is for a case that wants to watch the
-/// establishment itself.
+/// establishment itself — and it is mandatory for a leg whose handshake is
+/// meant to fail, which would otherwise burn [readyBudget] before the case
+/// began.
+///
+/// [tls] switches the whole fixture to wss — see the library doc for what that
+/// changes and, more importantly, for what it does not.
 Future<GateFixture> gateFixture({
   int? clients,
   Set<String> keys = const <String>{},
@@ -702,13 +803,25 @@ Future<GateFixture> gateFixture({
   GatewayConfig? serverConfig,
   bool waitForReady = true,
   Duration readyBudget = const Duration(seconds: 20),
+  FaultTls? tls,
 }) async {
   final n = clients ?? herdSize;
   if (n <= 0) {
     throw ArgumentError('a herd of $n panels is not a herd; pass a positive '
         'count or leave it to default to $defaultHerdSize');
   }
-  final clientConfig = config ?? faultClientConfig();
+  final clientConfig = config ??
+      faultClientConfig(
+        tls: tls == null ? null : ClientTlsConfig(rootCertPath: tls.rootPath),
+      );
+  if (tls != null && clientConfig.tls == null) {
+    throw ArgumentError('this fixture was given a TLS mount and a `config:` '
+        'carrying no ClientTlsConfig, so every panel would dial wss with the '
+        'machine\'s own trust store and be refused by its own gateway — which '
+        'is a green anti-vacuity arm and a red everything else. Build the '
+        'config with faultClientConfig(tls: ...), or with ClientTlsConfig('
+        'rootCertPath: tls.rootPath) if the case also needs a token');
+  }
 
   final served = FakeStateMan();
   addTearDown(served.dispose);
@@ -720,8 +833,8 @@ Future<GateFixture> gateFixture({
   // Port 0: the kernel picks, and the number it picks is what every
   // replacement binds. See the library doc on why the port is fixed from the
   // first bind rather than chosen here.
-  final first =
-      _buildGateway(served, 0, complaints: gatewayComplaints, config: serverConfig);
+  final first = _buildGateway(served, 0,
+      complaints: gatewayComplaints, config: serverConfig, tls: tls);
   await first.start();
   final slot = _GatewaySlot(first);
   final port = first.port;
@@ -744,11 +857,12 @@ Future<GateFixture> gateFixture({
       proxy: proxyPerClient ? proxies[i] : proxies.single,
       config: clientConfig,
       keys: keys,
+      tls: tls,
     ));
   }
 
   final fixture = GateFixture._(served, slot, port, proxies, herd, keys,
-      gatewayComplaints, retired, clientConfig, serverConfig);
+      gatewayComplaints, retired, clientConfig, serverConfig, tls);
 
   if (waitForReady) {
     await until(
@@ -775,22 +889,30 @@ GateClient _buildPanel({
   required FaultProxy proxy,
   required ClientConfig config,
   required Set<String> keys,
+  FaultTls? tls,
 }) {
-  final seam = FrameSeam(connectTimeout: config.connectTimeout);
+  // No seam on a TLS leg, and no `dial:` either: the panel's own dial is what
+  // carries the pinned client, and an override would test this file instead.
+  // `fault_fixture.dart:276-285` states the same rule for the one-panel leg.
+  final seam =
+      tls == null ? FrameSeam(connectTimeout: config.connectTimeout) : null;
   late final GateClient one;
   final client = RemoteStateMan(
-    uri: Uri.parse('ws://127.0.0.1:${proxy.port}'),
+    uri: Uri.parse(
+        '${tls == null ? 'ws' : 'wss'}://127.0.0.1:${proxy.port}'),
     config: config,
     keys: keys,
     // The seam's dial, with the attempt kept so the panel can be asked what
     // close it observed. `FrameSeam` does not retain it — it has no reason to,
     // and giving it one would put a second lifetime in a file five other waves
     // already depend on.
-    dial: (uri) async {
-      final attempt = await seam.dial(uri);
-      one._last = attempt;
-      return attempt;
-    },
+    dial: seam == null
+        ? null
+        : (uri) async {
+            final attempt = await seam.dial(uri);
+            one._last = attempt;
+            return attempt;
+          },
   );
   one = GateClient._(index, client, seam, proxy);
   addTearDown(client.dispose);
