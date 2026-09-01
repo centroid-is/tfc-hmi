@@ -217,9 +217,11 @@ void main() {
       });
     }
 
-    owes('write', '08-06', () => man.write(st101Key, 1));
-    owes('writeStatus', '08-06', () => man.writeStatus(const ['cmd']));
-    owes('holdToRun', '08-06', () => man.holdToRun(st101Key));
+    // 08-06's three entries — `write`, `writeStatus`, `holdToRun` — came off
+    // this ledger in the commits that closed them, which is the ledger being
+    // self-deleting rather than merely honest. Their behaviour is
+    // `write_test.dart`'s and `hold_test.dart`'s subject now. Four left, all
+    // 08-11's and Phase 10's.
     owes('browse', '08-11', () => man.browse);
     owes('timeseries', '08-11', () => man.timeseries);
     owes('historyViews', '08-11', () => man.historyViews);

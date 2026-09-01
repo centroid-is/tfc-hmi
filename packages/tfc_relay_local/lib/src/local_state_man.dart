@@ -47,9 +47,16 @@
 /// and a compile error is a decision. `freeze_test.dart` pins the spelling out
 /// of `lib/` so the shortcut cannot be taken later either.
 ///
+/// ## The write path is here, and there is one of it
+///
+/// `write` is 08-06's and so is the single line that crosses into a plant
+/// ([_crossIntoThePlant]). Three states, no throw to report an outcome, no
+/// retry anywhere, and readback as the only confirmation — the badge on a
+/// value says "sent", and only an upstream sample says "confirmed".
+///
 /// ## What this plan does not implement yet
 ///
-/// `write`, `writeStatus` and `holdToRun` are 08-06's; `browse`, `timeseries`,
+/// `holdToRun` is 08-06 task 3's; `browse`, `timeseries`,
 /// `historyViews` and `preferences` are 08-11's and Phase 10's. Each throws an
 /// `UnimplementedError` naming the plan that owes it, and the count is a
 /// declared constant in `freeze_test.dart` that must reach zero. This is
@@ -67,6 +74,7 @@ import 'freshness_sweep.dart';
 import 'ingest.dart';
 import 'key_router.dart';
 import 'upstream_link.dart';
+import 'write_translation.dart';
 
 /// The `StateManApi` the gateway serves every session from.
 final class LocalStateMan implements StateManApi {
@@ -77,9 +85,13 @@ final class LocalStateMan implements StateManApi {
     this.linger = Duration.zero,
     this.readDeadline = const Duration(seconds: 5),
     this.connectDeadline = const Duration(seconds: 10),
+    this.writeDeadline = const Duration(seconds: 5),
+    this.writeOutcomeTtl = const Duration(minutes: 10),
+    this.maxWriteOutcomes = 4096,
     DateTime Function()? now,
   })  : links = List<UpstreamLink>.unmodifiable(links),
         _now = now ?? DateTime.now {
+    _startedMs = _now().millisecondsSinceEpoch;
     // Allocation only. Nothing here opens a socket, starts a clock or spawns a
     // loop — see the library doc on why `StateMan._`'s constructor is the shape
     // being replaced.
@@ -140,6 +152,28 @@ final class LocalStateMan implements StateManApi {
 
   /// The bound on opening one link.
   final Duration connectDeadline;
+
+  /// The bound on one write round trip.
+  ///
+  /// Separate from [readDeadline] because the two failures cost different
+  /// things: a read that gives up leaves a value visibly stale, and a write
+  /// that gives up leaves an outcome nobody knows — which is the answer an
+  /// operator has to go and check a tag over.
+  final Duration writeDeadline;
+
+  /// How long the plant-side outcome log vouches for a cmd.
+  ///
+  /// Past this, `writeStatus` answers `WriteUnknown(outcome_expired)` rather
+  /// than `WriteNotReceived`: an outcome this source has forgotten is not an
+  /// outcome that never happened, and `not_received` is the one answer that
+  /// tells an operator a re-send is safe.
+  final Duration writeOutcomeTtl;
+
+  /// How many settled outcomes the log holds before the oldest is dropped.
+  ///
+  /// A gateway runs for months; an unbounded map of every write it has ever
+  /// settled is a leak with an audit trail's name on it.
+  final int maxWriteOutcomes;
 
   /// Injectable clock. The freshness verdict is arithmetic on this, so a case
   /// can move the gateway forward in time instead of sleeping.
@@ -208,6 +242,12 @@ final class LocalStateMan implements StateManApi {
   @override
   Future<void> dispose() async {
     if (_disposed) return;
+    // BEFORE the flag, because the zero is written through the ordinary write
+    // path and that path refuses a disposed source. A hold must not outlive
+    // its source: a disposed gateway that left a counter frozen at its last
+    // value is a machine nobody is holding that the PLC still thinks somebody
+    // is, for as long as its deadman window lasts.
+    await _releaseHolds(HoldEnded.disposed);
     _disposed = true;
     await _fanIn.dispose();
     _sweep.dispose();
@@ -454,26 +494,417 @@ final class LocalStateMan implements StateManApi {
     _store.applyBatch(values);
   }
 
-  // ----------------------------------------------------------- not this plan
+  // -------------------------------------------------------------- write path
 
+  /// Writes [value] to [key] and reports which of the three things happened.
+  ///
+  /// **It never throws to report an outcome.** The two throws below are
+  /// programmer errors, and they are the same two the reference implementation
+  /// keeps (`fake_state_man.dart:645-670`): writing through a disposed source,
+  /// and re-using a command id. A throw that meant "the write failed" would
+  /// collapse "the PLC may have applied this" into "this definitely did not
+  /// happen", which is the anti-pattern `WriteResult` exists to make
+  /// unrepresentable.
+  ///
+  /// Three refusals are established **before** the plant is touched, and each
+  /// is a `WriteRejected` rather than a `WriteUnknown` for the same reason:
+  /// nothing was sent, so there is nothing to be unsure about.
+  ///
+  ///  * a key the router will not route (including a `PIPE.` name — the
+  ///    gateway's own namespace is produced, never written into by a client);
+  ///  * an `expect` that does not match the last known value;
+  ///  * a value the wire cannot represent (a cycle, or a depth past 64).
+  ///
+  /// The **idempotency window** — same cmd plus same key/value answered from
+  /// the log, Stripe's semantic — is deliberately not here. It attaches at one
+  /// named line in `value_handlers.write`, one layer up, because it is a
+  /// property of the *wire*: two frames carrying one operator action. This
+  /// source stays strict, and the gateway maps the throw below to
+  /// `WriteUnknown(gateway_lost_track)`.
   @override
   Future<WriteResult> write(String key, Object? value,
-          {Object? expect, String? cmd}) =>
-      throw UnimplementedError('08-06 owes LocalStateMan.write — the '
-          'three-state outcome, the cmd the operator minted, the readback that '
-          'is the only confirmation, and the no-retry seam are one subject and '
-          'one plan');
+      {Object? expect, String? cmd}) async {
+    if (_disposed) {
+      throw StateError('write($key) on a disposed source: the store and the '
+          'upstream links are both gone, so no outcome reported here could be '
+          'true. This is a lifecycle bug in the caller, not a write outcome.');
+    }
+    final id = cmd ?? newUlid(nowMs: _now().millisecondsSinceEpoch);
+    if (!_mintedCmds.add(id)) {
+      throw ArgumentError.value(
+          id,
+          'cmd',
+          'this source has already seen the command id "$id". One id is one '
+              'operator action: a second write under it would be a second '
+              'actuation reported under the first one\'s outcome, which is '
+              'the failure the id exists to make impossible');
+    }
+    final outcome =
+        await _settle(key: key, value: value, expect: expect, cmd: id);
+    if (outcome is WriteApplied) {
+      // Staged only on applied, and only here: a write that was refused or
+      // lost has nothing in flight to badge.
+      _markWritePending(key);
+    }
+    _recordOutcome(outcome);
+    return outcome;
+  }
 
-  @override
-  Future<List<WriteResult>> writeStatus(List<String> cmds) =>
-      throw UnimplementedError('08-06 owes LocalStateMan.writeStatus — the '
-          'reconnect re-query is the other half of the write path and cannot '
-          'be answered before there is an outcome log to answer from');
+  /// Everything one write does between the id and the answer.
+  Future<WriteResult> _settle({
+    required String key,
+    required Object? value,
+    required Object? expect,
+    required String cmd,
+  }) async {
+    final at = _now().millisecondsSinceEpoch;
+    final route = router.route(key);
+    switch (route) {
+      case RefusedRoute():
+        return WriteRejected(
+            cmd, WriteReason('unroutable_key', message: route.message),
+            at: at);
+      case PipeKeyRoute():
+        return WriteRejected(
+            cmd,
+            WriteReason('unroutable_key',
+                message: 'the key "$key" is in the gateway\'s own namespace, '
+                    'which is produced here and never written into from a '
+                    'session',
+                status: 'Bad_NotWritable'),
+            at: at);
+      case ClaimedRoute(link: final link, ref: final ref):
+        // Compare-and-set, as far as this side can honestly offer it: the
+        // comparison is against the last value the gateway heard, which is a
+        // guard and not an atomic CAS — a protocol that can do better should
+        // do it in its adapter. Refusing on a mismatch is the point; an
+        // `expect` that was silently ignored would be worse than none at all,
+        // because the caller believes it is guarded.
+        if (expect != null) {
+          final cached = _store.peek(key);
+          if (cached == null || !jsonEquals(cached.value, expect)) {
+            return WriteRejected(
+                cmd,
+                WriteReason('expect_mismatch',
+                    message: 'the value this gateway last heard for "$key" is '
+                        'not the one the caller compared against, so the '
+                        'write was not sent'),
+                at: at);
+          }
+        }
+        final DynamicValue payload;
+        try {
+          payload = DynamicValue(value: value);
+        } catch (error) {
+          // `sanitize` throws on a cycle or a depth past 64 (08-RESEARCH §H).
+          // A throw here would read to the operator as "the write failed for a
+          // reason nobody knows"; this is definitively no effect.
+          return WriteRejected(
+              cmd,
+              WriteReason('unrepresentable_value',
+                  message: redactUpstreamError(error.toString())),
+              at: at);
+        }
+        return _crossIntoThePlant(link: link, ref: ref, value: payload, cmd: cmd);
+    }
+  }
 
+  /// **The one place in this package that asks a plant to move something.**
+  ///
+  /// Every write funnels through here — the operator's, a hold engage, every
+  /// hold tick, the release — so there is exactly one line to read to know
+  /// what the gateway does to a PLC, and exactly one place a deadline could go
+  /// missing. `freeze_test.dart`'s freeze 4 pins the count at one and freeze 3
+  /// pins that it is bounded; anyone adding a second site trips a named pin
+  /// rather than a code review (T-08-22, `no_retry_test.dart:182-293`'s shape).
+  ///
+  /// There is no retry here and there is nowhere to put one: this method makes
+  /// one call and returns what came back. A lost answer is `WriteUnknown` and
+  /// what happens next is an operator's decision, never this code's.
+  Future<WriteResult> _crossIntoThePlant({
+    required UpstreamLink link,
+    required UpstreamRef ref,
+    required DynamicValue value,
+    required String cmd,
+  }) async {
+    try {
+      return await link.write(ref, value, cmd: cmd, deadline: writeDeadline);
+    } catch (error) {
+      // `UpstreamLink.write` is contracted never to throw, so this is a bug in
+      // an adapter rather than news about a plant — and the honest report of a
+      // bug on the write path is still "nobody knows", because the request may
+      // already have been on the wire when it happened. STATE.md's mapping.
+      return WriteUnknown(
+          cmd,
+          WriteReason('gateway_lost_track',
+              message: redactUpstreamError(error.toString())));
+    }
+  }
+
+  /// Re-asks what became of [cmds], positionally.
+  ///
+  /// The four-piece positive-evidence rule, mirrored from
+  /// `fake_state_man.dart:715-740` rather than loosened, with two answers the
+  /// reference has no need for because a fake lives for one test and a gateway
+  /// runs for months: [writeOutcomeTtl] expiry and cap eviction. Both answer
+  /// **unknown**, never `not_received`.
+  ///
+  /// ### This log answers about the PLANT, and the server's answers about the WIRE
+  ///
+  /// `tfc_relay_server`'s `WriteOutcomeLog` is one per `RelayServer` and
+  /// survives session churn; it knows whether a *frame* arrived. This one
+  /// knows whether a *plant* was asked. They are deliberately not merged: a
+  /// gateway restart resets this one and not that one, and pretending
+  /// otherwise would let a `writeStatus` claim knowledge of a write that never
+  /// reached a PLC.
   @override
-  Future<HoldHandle> holdToRun(String key) =>
-      throw UnimplementedError('08-06 owes LocalStateMan.holdToRun — a hold '
-          'engage is a write with a deadman counter on top of it');
+  Future<List<WriteResult>> writeStatus(List<String> cmds) async {
+    _pruneWriteOutcomes();
+    return alignWriteStatusAnswers(
+      cmds,
+      <WriteResult>[for (final cmd in cmds) _statusOf(cmd)],
+    );
+  }
+
+  WriteResult _statusOf(String cmd) {
+    final held = _outcomes[cmd];
+    if (held != null) return held.result;
+
+    final mintedAt = _ulidMs(cmd);
+    if (mintedAt == null) {
+      return WriteUnknown(
+          cmd,
+          const WriteReason('unrecognized_cmd',
+              message: 'this is not an id this source could have issued an '
+                  'outcome for, so nothing about it can be ruled out'));
+    }
+    final nowMs = _now().millisecondsSinceEpoch;
+    if (mintedAt < _startedMs || mintedAt > nowMs) {
+      return WriteUnknown(
+          cmd,
+          const WriteReason('outcome_unwitnessed',
+              message: 'this command was minted outside the window this '
+                  'source can vouch for with its own clock — before it '
+                  'started recording, or ahead of it. Read the value back '
+                  'before acting'));
+    }
+    if (nowMs - mintedAt > writeOutcomeTtl.inMilliseconds) {
+      return WriteUnknown(
+          cmd,
+          const WriteReason('outcome_expired',
+              message: 'this command is older than the window this gateway '
+                  'keeps outcomes for. Read the value back before acting'));
+    }
+    if (mintedAt <= _forgottenBeforeMs) {
+      // The log was full and dropped its oldest entries. A command from that
+      // era WAS received and may well have moved the machine, so the one
+      // answer it must never get is `not_received` — the log has to remember
+      // that it forgot. Conservative at the edges by construction: a command
+      // minted in the same millisecond as an evicted one is answered unknown
+      // too, which costs a readback and saves an unasked-for actuation.
+      return WriteUnknown(
+          cmd,
+          const WriteReason('outcome_forgotten',
+              message: 'this gateway settled and then dropped outcomes from '
+                  'around this command\'s time, so it cannot say this one was '
+                  'never received. Read the value back before acting'));
+    }
+    return WriteNotReceived(cmd);
+  }
+
+  /// Settled outcomes, oldest first — a `LinkedHashMap` by insertion, which is
+  /// what makes "drop the oldest" one line rather than a sort.
+  final Map<String, _LoggedOutcome> _outcomes = <String, _LoggedOutcome>{};
+
+  /// Every id this source has seen, so a re-use is caught while the first
+  /// write is still in flight — not only after it settles.
+  final Set<String> _mintedCmds = <String>{};
+
+  /// The instant this source started recording. Evidence, not decoration: a
+  /// command minted before it is one this source could never have heard about.
+  late final int _startedMs;
+
+  /// The mint-time of the newest outcome the cap has evicted. See [_statusOf].
+  int _forgottenBeforeMs = 0;
+
+  /// How many settled outcomes the log is holding.
+  int get writeOutcomeCount => _outcomes.length;
+
+  /// Keys carrying the in-flight badge right now.
+  ///
+  /// Derived from the store rather than kept alongside it, so it cannot drift:
+  /// the badge is on the value or it is not, and the freshness sweep taking it
+  /// off is not something this class has to be told about.
+  Set<String> get writePendingKeys => <String>{
+        for (final key in _store.keys)
+          if (_store.peek(key)?.quality == Quality.goodWritePending) key,
+      };
+
+  void _recordOutcome(WriteResult result) {
+    _pruneWriteOutcomes();
+    _outcomes[result.cmd] =
+        (result: result, at: _now().millisecondsSinceEpoch);
+    while (_outcomes.length > maxWriteOutcomes) {
+      final oldest = _outcomes.keys.first;
+      _forgottenBeforeMs =
+          [_forgottenBeforeMs, _ulidMs(oldest) ?? 0].reduce((a, b) => a > b ? a : b);
+      _outcomes.remove(oldest);
+    }
+  }
+
+  /// Drops outcomes past [writeOutcomeTtl].
+  ///
+  /// It does **not** move [_forgottenBeforeMs]: an expiry is answerable on the
+  /// command's own age (`outcome_expired`), so there is no need for a
+  /// watermark that would then swallow younger commands as well.
+  void _pruneWriteOutcomes() {
+    if (_outcomes.isEmpty) return;
+    final cutoff = _now().millisecondsSinceEpoch - writeOutcomeTtl.inMilliseconds;
+    _outcomes.removeWhere((_, entry) => entry.at < cutoff);
+  }
+
+  /// Puts the in-flight badge on [key]'s current value.
+  ///
+  /// The band guard and its reason are `fake_state_man.dart:936-938`'s:
+  /// `goodWritePending` is a **good**-band code, so stamping it onto a stale or
+  /// comm-faulted value would make a write a way of making a dead tag look
+  /// alive. Applied through [_degrade] and never through [applyUpstreamBatch],
+  /// because a write starting is not news from upstream — resetting the
+  /// freshness clock here would let a page keep itself looking current by
+  /// writing to itself.
+  ///
+  /// Nothing takes the badge off deliberately. The next upstream sample
+  /// overwrites it (readback is the only confirmation) and, if none comes, the
+  /// freshness sweep overtakes it with `badStale` — which is the operator-
+  /// visible difference between "sent" and "confirmed".
+  void _markWritePending(String key) {
+    final cached = _store.peek(key);
+    if (cached == null) return;
+    if (cached.quality.band > Quality.goodWritePending.band) return;
+    _degrade(<String, DynamicValue>{
+      key: cached.copyWith(quality: Quality.goodWritePending),
+    });
+  }
+
+  /// Crockford base32, the alphabet `newUlid` encodes with.
+  static const String _ulidAlphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+  /// The millisecond a ULID was minted at, or null when [cmd] is not one.
+  ///
+  /// A deliberate copy of `fake_state_man.dart:744-756`, which is itself a
+  /// copy of `value_handlers.dart:479-488`, and the reason is the same in both
+  /// places: the evidence rule has to be identical across the three
+  /// implementations, and sharing twelve lines of decode would cost the
+  /// independence that makes the contract suite worth running.
+  static int? _ulidMs(String cmd) {
+    if (cmd.length != 26) return null;
+    var ms = 0;
+    for (var i = 0; i < 10; i++) {
+      final digit = _ulidAlphabet.indexOf(cmd[i]);
+      if (digit < 0) return null;
+      ms = (ms << 5) | digit;
+    }
+    return ms;
+  }
+
+  /// Engages a hold-to-run deadman on [key] and hands back the live hold.
+  ///
+  /// **The deadman is an ordinary tag written through the ordinary path.** The
+  /// engage is [write] and so is the release, which is what makes a hold
+  /// interlockable like any other command and what puts its outcome in the
+  /// same log `writeStatus` answers from. There is exactly one key and it is
+  /// the one passed in.
+  ///
+  /// [HoldHandle] is constructed, never subclassed, and no member is added to
+  /// `StateManApi` — the surface is pinned at 49 (`api_surface_test.dart:
+  /// 213-224`) and the two-callback design exists precisely so one class
+  /// serves the fake, the harness, the gateway and the client. `tick()` is not
+  /// on the interface and must never be put there: a method there is something
+  /// any connected client may invoke against any key, and a bare `tick(key, n)`
+  /// is a write primitive with no engage in front of it.
+  ///
+  /// The counter is minted **here** and a tick's value never comes from a
+  /// caller (`value_handlers.dart:628-654` discards the wire's `n` for the same
+  /// reason): the liveness an operator's finger is supposed to provide must not
+  /// be something a peer can assert.
+  @override
+  Future<HoldHandle> holdToRun(String key) async {
+    final engagement = await write(key, 1);
+    final hold = HoldHandle(
+      key: key,
+      engagement: engagement,
+      onTick: (counter) => _feedDeadman(key, counter),
+      onRelease: (counter) => write(key, counter),
+    );
+    if (hold.isHeld) {
+      _liveHolds.add(hold);
+      // The handle completes `onReleased` exactly once, however the hold ends,
+      // so this is the one place the set is pruned.
+      unawaited(hold.onReleased.then((_) => _liveHolds.remove(hold)));
+    }
+    return hold;
+  }
+
+  /// Every hold this source is currently feeding, so [dispose] can end them.
+  final Set<HoldHandle> _liveHolds = <HoldHandle>{};
+
+  /// One tick: the gateway's counter, onto the plant, with nobody waiting.
+  ///
+  /// Fire-and-forget by design — safety comes from the counter *stopping*, so
+  /// giving a tick an outcome would invite somebody to await it, and awaiting
+  /// liveness is how a stalled socket becomes a queue
+  /// (`hold_handle.dart:127-133`). A lost tick costs nothing a re-tick 100 ms
+  /// later does not fix, so it neither ends the hold nor throws.
+  ///
+  /// **Ticks are deliberately not recorded in the outcome log.** The engage and
+  /// the release are commands somebody may ask `writeStatus` about; a tick is
+  /// liveness. At 10 Hz a two-minute hold is 1,200 of them, and recording them
+  /// would evict the operator's real outcomes out of a bounded log inside
+  /// seconds — which is the log answering "I forgot" about the writes that
+  /// mattered so that it could remember the ones that did not.
+  void _feedDeadman(String key, int counter) {
+    if (_disposed) return;
+    final route = router.route(key);
+    // Not a ClaimedRoute means the engage cannot have applied, so there is no
+    // live hold to feed. Checked rather than asserted: a route can stop being
+    // claimed under a hold (a disabled alias, a keymapping reload), and the
+    // right answer to that is to stop feeding, not to throw into a timer.
+    if (route is! ClaimedRoute) return;
+    final sent = _crossIntoThePlant(
+      link: route.link,
+      ref: route.ref,
+      value: DynamicValue(value: counter),
+      cmd: newUlid(nowMs: _now().millisecondsSinceEpoch),
+    );
+    // `unawaited` attaches NO error handler (project memory), and an
+    // unhandled error out of a tick would take down the isolate the whole
+    // gateway runs on. `state_man.dart:2369` is the shape, discipline
+    // included.
+    unawaited(sent.catchError((Object error) => WriteUnknown(
+        'tick',
+        WriteReason('gateway_lost_track',
+            message: redactUpstreamError(error.toString())))));
+  }
+
+  /// Ends every live hold, writing the zero, before anything is torn down.
+  ///
+  /// Awaited, and safely: every upstream write is bounded by its required
+  /// deadline (`upstream_link.dart`), so there is nothing here that can hang
+  /// and therefore no `.timeout(` on this path — a dispose that gave up half
+  /// way would leave the thing it was disposing in a state nobody owns.
+  Future<void> _releaseHolds(HoldEnded reason) async {
+    if (_liveHolds.isEmpty) return;
+    final holds = List<HoldHandle>.of(_liveHolds);
+    _liveHolds.clear();
+    for (final hold in holds) {
+      // `release` is idempotent, so a disconnect racing an operator's finger
+      // cannot put two zeros on the wire. The outcome is informational: the
+      // machine stopped when the counter stopped.
+      await hold.release(reason: reason).then((_) {}, onError: (Object _) {});
+    }
+  }
+
+  // ----------------------------------------------------------- not this plan
 
   @override
   BrowseApi get browse =>
@@ -651,6 +1082,14 @@ final class _WatchedKey implements ValueListenable<DynamicValue> {
     if (_count == 0) _detach();
   }
 }
+
+/// One settled write outcome plus the instant this gateway settled it.
+///
+/// The settle instant is what the TTL prunes on; the command's own mint time
+/// (decoded out of the ULID) is what the evidence rule reasons about. They are
+/// different facts and conflating them would let a command minted on a panel
+/// with a fast clock buy itself a longer window.
+typedef _LoggedOutcome = ({WriteResult result, int at});
 
 /// One key's answer plus whether it came from the wire, so [LocalStateMan.readMany]
 /// can apply exactly the ones that did as a single batch.
