@@ -225,6 +225,241 @@ void main() {
     owes('historyViews', '08-11', () => man.historyViews);
     owes('preferences', '08-11', () => man.preferences);
   });
+
+  _faninGroup();
+}
+
+/// The fan-in: SRV-07 measured as a delta, released at zero.
+///
+/// **Every assertion here is on the DELTA of
+/// [UpstreamLink.upstreamSubscriptionsCreated], never on a literal count of
+/// monitored items and never on a balance.** One logical OPC UA key is *four*
+/// monitored items — `monitor()` requests DataType, Value, Description and
+/// DisplayName (`packages/tfc_dart/lib/core/state_man.dart:848-861`) — so the
+/// absolute number never equals the number of keys and no case should expect it
+/// to. And there is deliberately **no delete counter**: the binding's `onCancel`
+/// is a block body that discards the inner future, so a cancel completes
+/// locally the moment it is requested and never when the server acknowledges
+/// the delete. A counter fed from that would read healthy during exactly the
+/// leak it was added to catch, which is why a balance assertion is untestable
+/// by construction here.
+///
+/// So: do not add a delete counter to make the arithmetic tidier. The release
+/// is observed through [LocalStateMan.openUpstreamSubscriptions] — a fact about
+/// this gateway's own bookkeeping — and the *creates* are observed through the
+/// link's delta. Those are two independent witnesses, which is the point.
+void _faninGroup() {
+  group('the fan-in costs the PLC one subscription per key, released at zero',
+      () {
+    late LocalStateMan man;
+    late FakeUpstreamLink link;
+
+    setUp(() async {
+      final built = buildOneLink();
+      man = built.man;
+      link = built.link;
+      await man.start();
+      addTearDown(man.dispose);
+    });
+
+    test('five client subscriptions to one key cost ONE upstream subscription',
+        () async {
+      final before = link.upstreamSubscriptionsCreated;
+      final subs = <StreamSubscription<DynamicValue>>[
+        for (var i = 0; i < 5; i++) man.subscribe(st101Key).listen((_) {}),
+      ];
+      addTearDown(() async {
+        for (final sub in subs) {
+          await sub.cancel();
+        }
+      });
+      await pumpUpstream();
+
+      expect(link.upstreamSubscriptionsCreated - before, 1,
+          reason: 'thirty panels on one key is one monitored item on the PLC. '
+              'A delta, because the absolute count is four per logical key');
+      expect(man.listenerCount(st101Key), 5);
+    });
+
+    test('cancelling four of the five changes nothing upstream; the fifth '
+        'releases immediately at linger zero', () async {
+      final before = link.upstreamSubscriptionsCreated;
+      final subs = <StreamSubscription<DynamicValue>>[
+        for (var i = 0; i < 5; i++) man.subscribe(st101Key).listen((_) {}),
+      ];
+      await pumpUpstream();
+
+      for (var i = 0; i < 4; i++) {
+        await subs[i].cancel();
+      }
+      expect(link.upstreamSubscriptionsCreated - before, 1);
+      expect(man.openUpstreamSubscriptions, 1);
+      expect(man.listenerCount(st101Key), 1);
+
+      await subs[4].cancel();
+      expect(man.openUpstreamSubscriptions, 0,
+          reason: 'SRV-07: released when the LAST subscriber unsubscribes. The '
+              'incumbent releases on a ten-minute idle timer instead '
+              '(state_man.dart:2674-2676), so a page close keeps costing the '
+              'PLC a monitored item for ten minutes');
+      expect(man.listenerCount(st101Key), 0);
+    });
+
+    test('re-subscribing after a completed release creates a SECOND upstream '
+        'subscription — the delta is 2, which is what proves the first 1 was '
+        'measured and not assumed', () async {
+      final before = link.upstreamSubscriptionsCreated;
+
+      var sub = man.subscribe(st101Key).listen((_) {});
+      await pumpUpstream();
+      await sub.cancel();
+      expect(man.openUpstreamSubscriptions, 0);
+
+      sub = man.subscribe(st101Key).listen((_) {});
+      await pumpUpstream();
+      addTearDown(sub.cancel);
+
+      expect(link.upstreamSubscriptionsCreated - before, 2,
+          reason: 'a fan-in that never released would report 1 here, and a '
+              'fan-in that never fanned in would report 6 in the case above. '
+              'Only both numbers together say the mechanism works');
+    });
+
+    test('a cancelled subscriber stops receiving values; the others keep '
+        'receiving', () async {
+      final first = <Object?>[];
+      final second = <Object?>[];
+      final subA = man.subscribe(st101Key).listen((v) => first.add(v.value));
+      final subB = man.subscribe(st101Key).listen((v) => second.add(v.value));
+      await pumpUpstream();
+
+      link.setValue(st101Key, 1);
+      await pumpUpstream();
+      await subA.cancel();
+      addTearDown(subB.cancel);
+
+      link.setValue(st101Key, 2);
+      await pumpUpstream();
+
+      expect(first.last, 1, reason: 'a cancelled subscription is cancelled');
+      expect(second.last, 2,
+          reason: 'and the shared upstream subscription is still feeding the '
+              'ones that remain — a release triggered by the wrong refcount '
+              'would take this one dark too');
+    });
+
+    test('an upstream stream that ENDS marks the key badCommFault and leaves '
+        'the node alive', () async {
+      final sub = man.subscribe(st101Key).listen((_) {});
+      await pumpUpstream();
+      man.applyUpstreamBatch({st101Key: DynamicValue(value: 9)});
+
+      // An upstream that went away ends the streams it was feeding.
+      await link.dispose();
+      await pumpUpstream();
+
+      expect(man.read(st101Key)!.quality, Quality.badCommFault);
+      expect(man.read(st101Key)!.value, 9,
+          reason: 'the number is preserved. The news is that it can no longer '
+              'be trusted, not that it never existed');
+
+      final seen = <Object?>[];
+      var done = false;
+      final again = man
+          .subscribe(st101Key)
+          .listen((v) => seen.add(v.value), onDone: () => done = true);
+      await pumpUpstream();
+      addTearDown(again.cancel);
+      addTearDown(sub.cancel);
+
+      expect(seen.first, 9);
+      expect(done, isFalse,
+          reason: 'AutoDisposingStream closes its subject when the raw stream '
+              'ends (state_man.dart:2691) and then hands the next listener the '
+              'replay buffer followed by done — which to a widget is '
+              'indistinguishable from a key that simply stopped updating. '
+              'ValueStore has no equivalent and must not grow one');
+    });
+
+    test('a listener attached through listen() refcounts too, and taking the '
+        'handle alone costs the PLC nothing', () async {
+      final before = link.upstreamSubscriptionsCreated;
+      final handle = man.listen(st101Key);
+      expect(man.openUpstreamSubscriptions, 0,
+          reason: 'listen() returns a handle. Taking one must not cost a '
+              'monitored item, or a diagnostics page that enumerates keys '
+              'would subscribe the whole plant');
+
+      void noop() {}
+      handle.addListener(noop);
+      await pumpUpstream();
+      expect(link.upstreamSubscriptionsCreated - before, 1,
+          reason: 'removeListener reaching zero is the ONLY observable release '
+              'point on the listen() path — there is no unlisten on the '
+              'interface — so that is where the refcount has to live');
+      expect(man.listenerCount(st101Key), 1);
+
+      handle.removeListener(noop);
+      expect(man.openUpstreamSubscriptions, 0);
+    });
+  });
+
+  group('the linger is a knob, and its timer never evicts a live entry', () {
+    const linger = Duration(milliseconds: 40);
+
+    test('the release waits the linger out', () async {
+      final built = buildOneLink(linger: linger);
+      final man = built.man;
+      await man.start();
+      addTearDown(man.dispose);
+
+      final sub = man.subscribe(st101Key).listen((_) {});
+      await pumpUpstream();
+      await sub.cancel();
+
+      expect(man.openUpstreamSubscriptions, 1,
+          reason: 'still open, because the operator may be flipping between '
+              'two pages that share this key');
+      expect(man.liveLingerTimers, 1);
+
+      await Future<void>.delayed(linger * 3);
+      expect(man.openUpstreamSubscriptions, 0);
+      expect(man.liveLingerTimers, 0);
+    });
+
+    test('a subscribe INSIDE the linger window cancels the timer and reuses '
+        'the live subscription', () async {
+      final built = buildOneLink(linger: linger);
+      final man = built.man;
+      final link = built.link;
+      await man.start();
+      addTearDown(man.dispose);
+
+      final before = link.upstreamSubscriptionsCreated;
+      final first = man.subscribe(st101Key).listen((_) {});
+      await pumpUpstream();
+      await first.cancel();
+      expect(man.liveLingerTimers, 1);
+
+      final second = man.subscribe(st101Key).listen((_) {});
+      await pumpUpstream();
+      addTearDown(second.cancel);
+
+      expect(man.liveLingerTimers, 0,
+          reason: 'the armed timer is cancelled by the new subscribe. The '
+              'shipped implementation names the opposite bug in its own '
+              'comment (state_man.dart:2736-2739): the timer removes BY KEY, '
+              'so one surviving into the next subscription evicts the live '
+              'entry that replaced it');
+
+      await Future<void>.delayed(linger * 3);
+      expect(man.openUpstreamSubscriptions, 1,
+          reason: 'and the reused subscription is still there after the '
+              'window the cancelled timer would have fired in');
+      expect(link.upstreamSubscriptionsCreated - before, 1,
+          reason: 'reused, not re-created — that is what the linger is for');
+    });
+  });
 }
 
 /// Lets the microtask queue drain, which is all an in-memory upstream needs.

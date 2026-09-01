@@ -72,6 +72,28 @@ final Directory testRoot = Directory('test');
 ///    and stopped on disconnect.
 const Map<String, String> periodicTimerAllowList = <String, String>{};
 
+/// Files permitted to hold a **retained one-shot** `Timer(`, each naming the
+/// plan that earned the entry.
+///
+/// A second list rather than a second meaning on the first, because the two
+/// hazards are different: a `Timer.periodic` runs forever and a retained
+/// `Timer(` runs once but can outlive the thing it was scheduled about. The
+/// naming rule (`Timer(` must appear on a line that also names a `_timer`
+/// field, so it is reachable and cancellable) is necessary and was never
+/// sufficient — it says a timer *can* be cancelled, not that anybody decided
+/// it should exist. 08-05's house rules require both of this plan's timers to
+/// be allow-listed in the same commit that creates them; 08-03 anticipated the
+/// linger as a `_timer` field rather than an entry here, and this is the
+/// reconciliation: it is both.
+const Map<String, String> retainedTimerAllowList = <String, String>{
+  // 08-05, task 2. ONE-SHOT, not a periodic: armed per key when its refcount
+  // reaches zero and cancelled by any new subscribe for that key, which is the
+  // guard against the bug the incumbent documents at state_man.dart:2736-2739
+  // (a timer that removes by key and evicts the live entry that replaced it).
+  // Defaults to Duration.zero, in which case no timer is created at all.
+  'fanin.dart': '08-05 — the fan-in linger, one-shot per key at refcount zero',
+};
+
 /// Test files permitted to hold a literal port number, each naming why.
 ///
 /// **Empty, and it should stay that way.** Two worktrees must be able to run
@@ -86,6 +108,12 @@ const Map<String, String> literalPortAllowList = <String, String>{};
 /// timer that appears without its allow-list entry is caught by the offender
 /// case rather than by this number, which is why both exist.
 const int declaredPeriodicTimers = 0;
+
+/// Retained one-shot `Timer(` occurrences under `lib/src`.
+///
+/// **One, landed by 08-05 task 2:** the fan-in linger. It moves when a plan on
+/// [retainedTimerAllowList] lands, and only then.
+const int declaredRetainedTimers = 1;
 
 /// Lines under `lib/` that await an upstream `connect`/`read`/`write`.
 ///
@@ -181,6 +209,7 @@ void main() {
       expect(dartFilesIn(empty), isEmpty);
       expect(timerOffenders(empty), isEmpty);
       expect(periodicTimerCount(empty), 0);
+      expect(retainedTimerCount(empty), 0);
       expect(mentionsOf(empty, contractKitPackage), isEmpty);
       expect(upstreamAwaitSites(empty), isEmpty);
       expect(unboundedUpstreamAwaits(empty), isEmpty);
@@ -203,6 +232,14 @@ void main() {
               'put on the allow-list. Add the entry in the same commit as the '
               'timer, naming the plan, or the fourth one is a drift nobody '
               'decided on');
+    });
+
+    test('the retained one-shot timer count is the declared one', () {
+      expect(retainedTimerCount(libSrc), declaredRetainedTimers,
+          reason: 'a one-shot timer that outlives what it was scheduled about '
+              'is the incumbent\'s documented bug (state_man.dart:2736-2739). '
+              'Each one is a named field in an allow-listed file, and the '
+              'total is written down so a second one is a decision');
     });
 
     test('the repeating-timer count is the declared one', () {
@@ -364,9 +401,15 @@ List<String> timerOffenders(Directory directory) {
       // cannot outlive the turn it was scheduled in and it holds nothing open
       // (`teardown_test.dart:519-522`). A constructed `Timer(...)` can do
       // both, so it has to be reachable through a named field to be
-      // cancellable.
-      if (line.contains('Timer(') && !line.contains('_timer')) {
-        offenders.add('${file.path}:${i + 1}: $line');
+      // cancellable — AND its file has to be one a plan put on the retained
+      // list. The naming rule alone says a timer can be cancelled, not that
+      // anybody decided it should exist.
+      if (line.contains('Timer(')) {
+        if (!line.contains('_timer')) {
+          offenders.add('${file.path}:${i + 1}: $line');
+        } else if (!retainedTimerAllowList.containsKey(name)) {
+          offenders.add('${file.path}:${i + 1}: $line');
+        }
       }
     }
   }
@@ -380,6 +423,18 @@ int periodicTimerCount(Directory directory) {
     for (final line in file.readAsLinesSync()) {
       if (_isDocComment(line)) continue;
       if (line.contains('Timer.periodic(')) count++;
+    }
+  }
+  return count;
+}
+
+/// How many retained one-shot `Timer(` occurrences live under [directory].
+int retainedTimerCount(Directory directory) {
+  var count = 0;
+  for (final file in dartFilesIn(directory)) {
+    for (final line in file.readAsLinesSync()) {
+      if (_isDocComment(line)) continue;
+      if (line.contains('Timer(')) count++;
     }
   }
   return count;
