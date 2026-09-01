@@ -268,6 +268,16 @@ const _supportingCases = <String, String>{
           'as a second F1 arm would report the catalogue as covering a scenario '
           'twice while the property it actually establishes (the fixture) is in '
           'no row at all.',
+  'a refused credential stops the loop while a refused certificate does not':
+      'the auth-versus-TLS contrast (07-12 task 3). Both sides of one '
+          'supervisor branch in one comparison: a -32003 refusal reaches '
+          '_stop and the dial count freezes at one, a certificate refusal '
+          'reaches _down and it keeps climbing. That is ROADMAP criterion 4\'s '
+          'second clause, and the catalogue has no row for a credential the '
+          'gateway refuses — so numbering it would invent a row rather than '
+          'gate one. F15d asserts the certificate half against a computed '
+          'bound on its own; what only this case can say is that the two '
+          'faults take opposite branches.',
 };
 
 void main() {
