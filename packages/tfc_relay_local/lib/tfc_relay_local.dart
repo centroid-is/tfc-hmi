@@ -27,3 +27,4 @@ library;
 
 export 'src/key_router.dart';
 export 'src/upstream_link.dart';
+export 'src/value_shaping.dart';
