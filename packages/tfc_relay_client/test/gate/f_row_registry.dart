@@ -371,25 +371,6 @@ const List<GateRow> gateRows = <GateRow>[
 /// clauses are not all asserted yet. A partial entry for a row with no case is
 /// a missing entry wearing the wrong label, and the manifest says so.
 const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
-  'F3': Outstanding(
-    kind: OutstandingKind.partial,
-    owner: '07-06',
-    clause: 'the generation-counter half of the row. 07-04 built the case and '
-        'then measured that its own lever cannot reach the mechanism: under '
-        'flap(200ms, 200ms) the socket dies, so the peer is retired and no '
-        'frame from the abandoned establishment ever arrives. Probes on both '
-        'guards in resync_engine.onUpdate fired 0 times across a ten-second '
-        'flap and 2 times in resync_test.dart, and the case stayed green with '
-        'both guards deleted. The hazard the counter exists for is a '
-        'same-socket re-establish — which is G4, owned by 07-06 — so that row '
-        'is where this clause gets asserted over a real socket',
-  ),
-  'F9': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-06',
-    clause: 'the multi-key page through the proxy, and the clause no test has '
-        'anywhere: no key left with the pre-first-drop value',
-  ),
   'F10': Outstanding(
     kind: OutstandingKind.missing,
     owner: '07-08',
@@ -472,18 +453,6 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     owner: '07-08',
     clause: 'the late joiner reaching a complete view over a throttled, '
         'flapping link',
-  ),
-  'G3': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-06',
-    clause: 'resyncs coalesced and counted server-side, with the ??=-to-= '
-        'sabotage',
-  ),
-  'G4': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-06',
-    clause: 'the anti-vacuity arm proving the generation check, not the '
-        'sequence check, rejects the old frame',
   ),
   'G5': Outstanding(
     kind: OutstandingKind.missing,

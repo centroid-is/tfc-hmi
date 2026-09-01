@@ -27,8 +27,19 @@
 /// a **same-socket** re-establish, where a server-announced resync or a
 /// gap-triggered resubscribe rebuilds one page while the session stays put
 /// (04-REVIEW CR-04, and the reason the epoch cannot do the job). That is row
-/// G4, and `gateOutstanding` carries F3 as a **partial** owned by 07-06 with
-/// this measurement in it.
+/// G4, and F3 carried a **partial** entry owned by 07-06 with this measurement
+/// in it until that row landed.
+///
+/// **It has landed** (07-06). `G4` in `stale_frame_gate_test.dart` drives a
+/// same-socket re-establish over a real socket and re-injects a frame from the
+/// previous generation whose *sequence the sequence check would have accepted*,
+/// so the generation guard is the only thing that can reject it. Deleting the
+/// guard reddens G4 — the page publishes the old value, then blanks, then comes
+/// back — while F18a and F18b both stay green, which is the comparison that
+/// says the guard is uniquely G4's. So the row's second clause is asserted over
+/// a real socket by the pair: F3 for the establishments that never complete,
+/// G4 for the one shape in which a frame from a retired establishment can
+/// actually be delivered. F3's partial entry was deleted in that commit.
 ///
 /// What F3 does prove over a real socket, and what nothing else in the tree
 /// does: an establishment that is genuinely cut between its socket and its
