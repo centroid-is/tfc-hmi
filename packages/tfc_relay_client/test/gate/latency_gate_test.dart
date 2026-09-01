@@ -37,12 +37,21 @@
 @Tags(['gate', 'faults'])
 library;
 
+import 'dart:async';
+
 import 'package:test/test.dart';
 import 'package:tfc_relay_client/src/connection_supervisor.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import '../support/fault_fixture.dart';
 import '../support/gate_bands.dart';
+
+/// How often the per-subscription verdict is read across the settle window.
+///
+/// Fast enough that a verdict flickering for a tick or two is caught — the
+/// gateway's measured fan-out is 50 ms and the client re-judges on every one
+/// of those — and slow enough that the sampler is not the load.
+const Duration _staleSamplePeriod = Duration(milliseconds: 20);
 
 void main() {
   group('F13 — a link that is merely slow', () {
@@ -67,6 +76,17 @@ void main() {
       final states = <LinkState>[];
       final watchingStates = fixture.client.linkStates.listen(states.add);
       addTearDown(watchingStates.cancel);
+
+      // The per-subscription verdict is not a transition stream, so it cannot
+      // be recorded the way the two above are — it is sampled instead, which
+      // is what turns "it is empty" into "it stayed empty across the window"
+      // (07-REVIEW WR-05). The sampler is attached here, with them, for the
+      // same reason they are: the clause is that nothing happens from now on.
+      final staleSamples = <Set<String>>[];
+      final samplingStale = Timer.periodic(
+          _staleSamplePeriod, (_) => staleSamples.add(
+              fixture.client.staleSubscriptions));
+      addTearDown(samplingStale.cancel);
 
       // Live: it reaches the connection that is already open, which is the
       // only shape "the link degrades while the panel is connected" comes in.
@@ -117,10 +137,37 @@ void main() {
               'time(s) on a link whose every answer arrived inside its '
               'deadline. A half-second link is slow, not gone, and greying the '
               'page here is how an operator learns to ignore grey');
-      expect(fixture.client.staleSubscriptions, isEmpty, // window-exempt: the settle delay above completed and the transition list collected across it was just asserted empty, so this is a consistency check between the set and the stream that fed it rather than a bet on a timer
-          reason: 'the page was reported stale as a set while the transition '
-              'stream said it never went stale — the two surfaces disagree, '
-              'and a widget reading either one shows a different plant');
+      // The per-subscription verdict, over the same window rather than at the
+      // instant the window closed.
+      //
+      // **This used to be an exemption, and the exemption was wrong** — the
+      // first one in the tree that was (07-REVIEW WR-05). It claimed the
+      // freshness transition list asserted two lines above established the
+      // state being read. It does not: `viewFreshness` is the **link-level**
+      // verdict and `staleSubscriptions` is the **per-subscription** one, and
+      // `freshness_watchdog.dart` and this file's own header both say the two
+      // are deliberately independent — the set can be non-empty while the link
+      // is provably healthy, which is the whole of CLI-04. So the completed
+      // event the marker named could not establish the state it was
+      // suppressing an arm about, and a forty-character floor cannot detect a
+      // reason that is long, fluent and false.
+      samplingStale.cancel();
+      expect(staleSamples.where((stale) => stale.isNotEmpty), isEmpty,
+          reason: 'the page was reported stale by the per-subscription verdict '
+              '${staleSamples.where((s) => s.isNotEmpty).length} time(s) '
+              'across ${f13Settle.inMilliseconds} ms in which the link '
+              'answered every request inside its deadline. A half-second link '
+              'is slow, not gone, and a widget reading this surface shows a '
+              'grey page while the one reading viewFreshness shows a live one');
+      expect(staleSamples.length,
+          greaterThan(f13Settle.inMilliseconds ~/
+              _staleSamplePeriod.inMilliseconds ~/ 2),
+          reason: 'the sampler took ${staleSamples.length} readings over '
+              '${f13Settle.inMilliseconds} ms at one per '
+              '${_staleSamplePeriod.inMilliseconds} ms, less than half what it '
+              'should have. "Every sample was empty" is a claim about the '
+              'samples, and too few of them makes the arm above vacuous — the '
+              'same anti-vacuity the flap row states for its own sampler');
 
       // **Anti-vacuity, and why it has to be a positive control rather than an
       // `isNotEmpty`.** Both recorders are *transition* streams, so a correct
