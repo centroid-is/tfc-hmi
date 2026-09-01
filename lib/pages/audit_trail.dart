@@ -127,6 +127,11 @@ const Key kAuditTrailEmptyKey = ValueKey<String>('audit-trail-empty');
 /// The list itself, present only when there is at least one action to draw.
 const Key kAuditTrailListKey = ValueKey<String>('audit-trail-list');
 
+/// The sticky column header above the list. Present only when there are rows:
+/// an empty result shows [kAuditTrailEmptyKey] and a heading over nothing would
+/// be furniture.
+const Key kAuditTrailHeaderKey = ValueKey<String>('audit-trail-header');
+
 /// The waiting frame. Its own key so 05-08's goldens can assert which state
 /// they captured before capturing it.
 const Key kAuditTrailLoadingKey = ValueKey<String>('audit-trail-loading');
@@ -393,8 +398,10 @@ class AuditTrailBodyState extends ConsumerState<AuditTrailBody> {
         ),
         if (actions.isEmpty)
           Expanded(child: _empty(context))
-        else
+        else ...[
+          _header(context),
           Expanded(child: _list(actions)),
+        ],
         if (actions.isNotEmpty && tail.reachedLimit) ...[
           _limitNote(context),
           _loadMoreButton(pending ? null : tail.oldestAt),
@@ -483,6 +490,58 @@ class AuditTrailBodyState extends ConsumerState<AuditTrailBody> {
   /// would clip it. `history_table_pane.dart`'s `itemExtent: 32.0` is the right
   /// shape for a table of fixed rows and the wrong one here.
   ///
+  /// The column header, above the scroll view rather than inside it.
+  ///
+  /// Sticky by construction: it is a sibling of the `Expanded` list in the same
+  /// `Column`, so the rows scroll under it and it cannot scroll away. Putting it
+  /// in the `ListView` as index 0 would have scrolled it off, which is exactly
+  /// what a header is for avoiding.
+  ///
+  /// The widths are the row's own constants -- [kAuditTimeColumnWidth],
+  /// [kAuditWhoColumnWidth], the flex 3 / flex 2 split and [kAuditColumnGap] --
+  /// so the header cannot drift out of alignment with the rows it names.
+  ///
+  /// No label over the trailing origin chip: that column is the chip's own
+  /// width rather than a fixed one, and a heading that does not line up is
+  /// worse than none. No label over the mark either -- it is a 4px colour bar,
+  /// and the legend for it belongs beside the filters, not here.
+  Widget _header(BuildContext context) {
+    final theme = Theme.of(context);
+    final style = theme.textTheme.labelSmall?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+      fontWeight: FontWeight.w600,
+    );
+    Widget cell(String label) => Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: style,
+        );
+
+    return Container(
+      key: kAuditTrailHeaderKey,
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: theme.dividerColor),
+        ),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      child: Row(
+        children: [
+          const SizedBox(width: kAuditMarkWidth),
+          const SizedBox(width: kAuditColumnGap),
+          SizedBox(width: kAuditTimeColumnWidth, child: cell('Time')),
+          const SizedBox(width: kAuditColumnGap),
+          SizedBox(width: kAuditWhoColumnWidth, child: cell('Who')),
+          const SizedBox(width: kAuditColumnGap),
+          Expanded(flex: 3, child: cell('Item')),
+          const SizedBox(width: kAuditColumnGap),
+          Expanded(flex: 2, child: cell('Change')),
+        ],
+      ),
+    );
+  }
+
   /// `ListView.builder` is what keeps a 500-action result from building 500
   /// tiles in one frame (T-05-64).
   Widget _list(List<AuditAction> actions) => ListView.builder(
