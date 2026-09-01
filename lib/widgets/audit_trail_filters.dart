@@ -92,6 +92,10 @@ const String kAuditTrailRefreshTooltip = 'Refresh';
 /// reaches, because both are the point of the control.
 const String kAuditTrailPrefixHint = 'Search all keys, e.g. CN04';
 
+/// Wide enough for [kAuditTrailPrefixHint] and for a fully qualified key --
+/// the two things this field has to be able to show.
+const double kAuditTrailPrefixFieldWidth = 360;
+
 /// The three outcome segments, in the order they render.
 const String kAuditTrailOutcomeAnyLabel = 'All';
 const String kAuditTrailOutcomeAllowedLabel = 'Allowed';
@@ -724,8 +728,16 @@ class _AuditTrailFilterBarState extends State<AuditTrailFilterBar> {
               // A `TextField` has no intrinsic width and a `Wrap` child is
               // free to be as wide as the bar, so the field is bounded here
               // rather than allowed to claim the whole first line.
+              //
+              // 240 was too narrow for either thing this field holds: the hint
+              // (`kAuditTrailPrefixHint`, 26 characters) ellipsised, and the
+              // keys people actually search for are longer still --
+              // `ST201.MV01.p_par_SealTime` is 25. A search box that cannot
+              // show its own placeholder, let alone what you typed, reads as
+              // broken. `Wrap` still folds the bar onto another line when the
+              // window cannot take the extra width.
               SizedBox(
-                width: 240,
+                width: kAuditTrailPrefixFieldWidth,
                 child: AuditPrefixField(
                   key: kAuditTrailPrefixFieldKey,
                   filters: filters,
