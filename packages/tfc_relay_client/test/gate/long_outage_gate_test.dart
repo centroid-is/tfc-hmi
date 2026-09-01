@@ -78,6 +78,17 @@
 /// `teardown_test.dart`'s checkpoint doctrine. `grep -c currentRss` on this
 /// file is 0, in both arms.
 ///
+/// **The soak arm earned its keep on the first run: ten minutes crosses a
+/// safety boundary that thirty seconds does not.** `ServerConfig
+/// .writeOutcomeTtl` is 60 s, and outside it the gateway may not answer
+/// `not_received` — it cannot tell "never arrived" from "arrived, and
+/// forgotten". So the unresolved command settles in `F17a` and deliberately
+/// does **not** in `F17b`, where the answer is unknown again and the entry
+/// stays. Both are bounded at one entry, which is the clause; which of the two
+/// happens is asserted against the arithmetic rather than allowed to vary, and
+/// [_outcomeTtl] is read off the gateway's own config so the branch cannot
+/// drift away from the number it is about.
+///
 /// **Why the descriptor clause is a supporting arm and not part of F17.**
 /// `openSocketCount` cannot answer on Windows, so an arm that measures
 /// descriptors has to skip there; a skip on F17 itself would make the row read
@@ -156,6 +167,19 @@ const Duration _recoveryBudget = Duration(seconds: 15);
 /// owns the timeout itself (`connect_failure_gate_test.dart`); nothing here
 /// asserts anything about its value.
 const Duration _dialCeiling = Duration(seconds: 2);
+
+/// How long the gateway remembers what became of a write.
+///
+/// **Read off `ServerConfig` and never restated, because this is the one number
+/// the two arms of this row disagree across.** Inside it, `writeStatus` may
+/// answer `not_received` — positive evidence that a re-send is safe — and the
+/// panel's unresolved command settles. Outside it the gateway cannot tell
+/// "never arrived" from "arrived, and forgotten" (`write_outcome_log.dart:15-
+/// 29`), so it answers unknown again and the command stays unresolved, which is
+/// the design: forgetting is not evidence that it never happened. `F17a`'s
+/// thirty seconds is inside; `F17b`'s ten minutes is not, and the soak arm
+/// found that boundary rather than being written around it.
+final Duration _outcomeTtl = ServerConfig().writeOutcomeTtl;
 
 /// The key the panels watch, and the key the writes go to.
 ///
@@ -307,12 +331,24 @@ Future<void> _longOutage(Duration outage) async {
   );
   recovery.stop();
 
-  // The re-query is asynchronous with the resync, so it gets its own window.
+  // The re-query is asynchronous with the resync, so it gets its own window —
+  // and the wait is on the *answer* arriving rather than on the set draining,
+  // because whether an answer settles anything depends on how long the outage
+  // was. See [_outcomeTtl].
   await until(
-    'the recovered panel to establish what became of its unresolved write',
-    () => dark.client.debugUnresolvedCmds.isEmpty,
+    'the recovered panel to ask the gateway what became of its unresolved '
+        'write',
+    () => dark.client.debugWriteStatusAnswers.isNotEmpty,
     budget: _recoveryBudget,
   );
+  final insideTtl = outage < _outcomeTtl;
+  if (insideTtl) {
+    await until(
+      'the answer to settle the command it was about',
+      () => dark.client.debugUnresolvedCmds.isEmpty,
+      budget: _recoveryBudget,
+    );
+  }
 
   final reaps = fixture.heartbeatReaps;
   print('F17: ${outage.inSeconds} s of blackhole on one of two panels.\n  '
@@ -372,6 +408,29 @@ Future<void> _longOutage(Duration outage) async {
           'reconnect is the moment a queue would drain and a retry would fire, '
           'and this client does neither: it asks writeStatus what became of '
           'the command, it does not send the command again');
+  expect(dark.client.debugUnresolvedCmds.length, lessThanOrEqualTo(1),
+      reason: 'the panel came out of the outage holding '
+          '${dark.client.debugUnresolvedCmds.length} unresolved commands. One '
+          'write was dispatched into the silence, so one is the ceiling '
+          'whatever the gateway answered — a larger number is the recovery '
+          'itself growing the set it exists to drain');
+  expect(dark.client.debugUnresolvedCmds.isEmpty, insideTtl,
+      reason: 'the outage was ${outage.inSeconds} s against a gateway that '
+          'remembers a write outcome for ${_outcomeTtl.inSeconds} s, and the '
+          'panel came back holding ${dark.client.debugUnresolvedCmds} with '
+          'answers ${dark.client.debugWriteStatusAnswers.map((a) => a.runtimeType).toList()}.\n\n'
+          'These two must agree, and this is the one assertion in the row that '
+          'reads differently in its two arms. Inside the window the gateway '
+          'can say `not_received` — positive evidence that a re-send is safe — '
+          'and the command settles. Outside it the gateway cannot tell "never '
+          'arrived" from "arrived, and forgotten" (`write_outcome_log.dart:15-'
+          '29`), so it answers unknown again and the command **stays** '
+          'unresolved, for ever if need be: forgetting is not evidence that it '
+          'never happened. That is bounded — one entry, asserted just above — '
+          'and it is the design, not a leak. A green here in the other '
+          'direction would mean either that a ten-minute-old command was '
+          'settled on evidence the gateway does not have, or that a '
+          'thirty-second-old one was abandoned unanswered');
   expect(dark.client.debugWriteStatusQueries, isNotEmpty,
       reason: 'the panel recovered with an unresolved command and never asked '
           'the gateway what became of it. "Never re-sent" is only half the '
@@ -568,6 +627,22 @@ void main() {
   });
 
   group('the row\'s own arithmetic', () {
+    test('the two arms sit on opposite sides of the write-outcome window', () {
+      expect(_outage, lessThan(_outcomeTtl),
+          reason: 'the default outage ($_outage) is longer than the gateway\'s '
+              'write-outcome memory ($_outcomeTtl), so `F17a` would take the '
+              'soak arm\'s branch and the row would stop asserting that a '
+              'reconnecting panel can be told what became of the button its '
+              'operator pressed — which is the whole of the writeStatus '
+              'recovery story');
+      expect(_soakOutage, greaterThan(_outcomeTtl),
+          reason: 'the soak outage ($_soakOutage) is inside the gateway\'s '
+              'write-outcome memory ($_outcomeTtl), so both arms would assert '
+              'the same branch and the `insideTtl` clause in `_longOutage` '
+              'would never be exercised in its false form. If the TTL grows '
+              'past ten minutes, that clause is asserting a constant');
+    });
+
     test('the default outage spans several heartbeat deadlines', () {
       final deadline = ServerConfig().heartbeatDeadline;
       expect(_outage, greaterThan(deadline * 3),
