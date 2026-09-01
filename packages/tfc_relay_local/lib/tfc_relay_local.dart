@@ -25,4 +25,5 @@
 /// interface each of them invented separately.
 library;
 
+export 'src/key_router.dart';
 export 'src/upstream_link.dart';

@@ -13,6 +13,7 @@
 @TestOn('vm')
 library;
 
+import 'package:tfc_dart/core/state_man.dart' show KeyMappings;
 import 'package:test/test.dart';
 import 'package:tfc_relay_local/tfc_relay_local.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
@@ -315,9 +316,15 @@ void main() {
 
       final router = KeyRouter(
         links: [
-          UpstreamLinkBinding(FakeUpstreamLink(alias: st101Alias),
+          // Explicit key sets, and this is not decoration: a fake built with
+          // an empty one claims EVERYTHING, so a null-alias fake declared
+          // ahead of the weigher would claim the weigher's key and this case
+          // would be measuring declaration order rather than the ambiguity.
+          UpstreamLinkBinding(
+              FakeUpstreamLink(alias: st101Alias, keys: [liveOpcUaKey]),
               serverAlias: null),
-          UpstreamLinkBinding(FakeUpstreamLink(alias: st201Alias),
+          UpstreamLinkBinding(
+              FakeUpstreamLink(alias: st201Alias, keys: [liveOpcUaKey]),
               serverAlias: null),
           UpstreamLinkBinding(weigher, serverAlias: weigherAlias),
         ],
