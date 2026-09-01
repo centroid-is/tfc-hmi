@@ -404,6 +404,77 @@ void main() {
       expect(find.textContaining('One of these is not reading'), findsOneWidget);
     });
 
+    testWidgets('a twin held while this one only CLEANS says what is really '
+        'holding it', (tester) async {
+      // `i_xPermissive := NOT other.q_xEnabled`, and cleaning does not set
+      // `q_xEnabled` — so a vacuum held while film merely washes down is held
+      // by something OUTSIDE this choice. `planModeSwitch` refuses (stopping
+      // the cleaning would cost that and still not release the vacuum), so
+      // the button is dead and the note beside it has to say why. Promising
+      // "choosing the other mode stops the film first" next to a button that
+      // will not do it is the dead-button problem this asset exists to avoid.
+      final fake = _FakeStateMan()
+        ..push('film', cleaning: true)
+        ..push('vacuum', permissive: false);
+      await openPane(tester, fake, pair(allowModeSwitch: true));
+
+      expect(_enabled(tester, const Key('section-choice-0-1')), isFalse);
+      expect(
+          find.textContaining('something outside this choice is holding it'),
+          findsOneWidget);
+      expect(find.textContaining('Choosing the other mode stops'), findsNothing,
+          reason: 'the switch it offers is exactly the one that is refused');
+    });
+
+    testWidgets('the same is said with switching off — it is not the opt-in '
+        'that is holding it', (tester) async {
+      final fake = _FakeStateMan()
+        ..push('film', cleaning: true)
+        ..push('vacuum', permissive: false);
+      await openPane(tester, fake, pair());
+
+      expect(_enabled(tester, const Key('section-choice-0-1')), isFalse);
+      expect(
+          find.textContaining('something outside this choice is holding it'),
+          findsOneWidget);
+      expect(find.textContaining('Stop it, then the other mode'), findsNothing,
+          reason: 'stopping the film would not release the vacuum');
+    });
+
+    testWidgets('a pane with no switch handler offers no live choice',
+        (tester) async {
+      // A pane pumped without `onModeSwitch` can send nothing. The member
+      // rows already go dead without their handler; the choice must too,
+      // rather than look pressable and swallow the press — the per-row `Run`
+      // was taken away from these sections for exactly that reason.
+      useTallSurface(tester);
+      await tester.pumpWidget(wrap(SectionPane(
+        title: 'Box packing',
+        refs: [
+          SectionRef(
+              key: 'film',
+              label: 'Line 2 film',
+              exclusiveGroup: 'Line 2 packing'),
+          SectionRef(
+              key: 'vacuum',
+              label: 'Line 2 vacuum',
+              exclusiveGroup: 'Line 2 packing'),
+        ],
+        modes: const [SectionMode.stopped, SectionMode.stopped],
+        exclusiveSets: const [
+          ExclusiveSet(name: 'Line 2 packing', members: [0, 1]),
+        ],
+        allowModeSwitch: true,
+        onCommand: (_) async {},
+      )));
+      await _settle(tester);
+
+      // Both are free to start, so the plan is there and only the missing
+      // handler makes them dead.
+      expect(_enabled(tester, const Key('section-choice-0-0')), isFalse);
+      expect(_enabled(tester, const Key('section-choice-0-1')), isFalse);
+    });
+
     testWidgets('a button with no alternatives grows no choice section',
         (tester) async {
       final fake = _FakeStateMan()

@@ -111,6 +111,72 @@ void main() {
       );
     });
 
+    testWidgets('an exclusive pair beside the same two as peers',
+        (tester) async {
+      // The claim the whole feature rests on, and the only way to check it is
+      // to look. Same two sections, same states — film in auto, vacuum held
+      // off by the interlock — three times over:
+      //
+      //   1. declared as alternatives: ONE solid green disc, because the pair
+      //      is one machine with a mode selector and the mode has the line.
+      //   2. declared as peers (no tag): the diagonal split this asset has
+      //      always drawn, which is what index 150 wore permanently.
+      //   3. declared as alternatives but with the twin unreadable: still
+      //      split, still wearing the `!` — a set that collapsed to the half
+      //      it can read would be claiming a state it cannot see.
+      final fake = _FakeStateMan()
+        ..push('film', enabled: true)
+        ..push('vacuum', permissive: false);
+      // `gone` is deliberately never pushed — that is the unreadable member.
+
+      SectionButtonConfig cfg(List<SectionRef> refs) =>
+          SectionButtonConfig(sections: refs);
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [stateManProvider.overrideWith((_) async => fake)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final config in [
+                    cfg([
+                      SectionRef(key: 'film', exclusiveGroup: 'Line 2 packing'),
+                      SectionRef(
+                          key: 'vacuum', exclusiveGroup: 'Line 2 packing'),
+                    ]),
+                    cfg([
+                      SectionRef(key: 'film'),
+                      SectionRef(key: 'vacuum'),
+                    ]),
+                    cfg([
+                      SectionRef(key: 'film', exclusiveGroup: 'Line 2 packing'),
+                      SectionRef(key: 'gone', exclusiveGroup: 'Line 2 packing'),
+                    ]),
+                  ])
+                    Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: SizedBox(
+                        width: 88,
+                        height: 88,
+                        child: SectionButton(config: config),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ));
+      await _settle(tester);
+
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/section_button_exclusive_face.png'),
+      );
+    });
+
     testWidgets('resting beside held down', (tester) async {
       // The disc now comes from `ButtonPainter`, the painter behind every
       // other button on a mimic — so it has the drop shadow, and under a
@@ -367,6 +433,62 @@ void main() {
         await expectLater(
           find.byType(MaterialApp),
           matchesGoldenFile('goldens/section_pane_group_held.png'),
+        );
+      });
+
+      testWidgets('a choice between two alternatives', (tester) async {
+        // The block this feature adds, and there is no substitute for looking
+        // at it: the two members drawn together under the name of the choice
+        // and stripped of their own `Run`, the mode with the line filled and
+        // inert, the alternative live because the hand-over is switched on,
+        // and — the point of the whole exercise — `Allowed to start` reading
+        // `Yes` rather than the permanent `No for 1 of 2` the interlock used
+        // to produce.
+        tester.view.physicalSize = const Size(1400, 1100);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
+
+        final fake = _FakeStateMan()
+          ..push('st201/film', enabled: true)
+          ..push('st201/vacuum', permissive: false);
+
+        await tester.pumpWidget(ProviderScope(
+          overrides: [stateManProvider.overrideWith((_) async => fake)],
+          child: MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: SizedBox(
+                  width: 88,
+                  height: 88,
+                  child: SectionButton(
+                    config: SectionButtonConfig(
+                      allowModeSwitch: true,
+                      sections: [
+                        SectionRef(
+                          key: 'st201/film',
+                          label: 'Line 2 film',
+                          exclusiveGroup: 'Line 2 packing',
+                        ),
+                        SectionRef(
+                          key: 'st201/vacuum',
+                          label: 'Line 2 vacuum',
+                          exclusiveGroup: 'Line 2 packing',
+                        ),
+                      ],
+                    )..text = 'Box packing',
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ));
+        await _settle(tester);
+        await tester.tap(find.byType(SectionButton));
+        await _settle(tester);
+
+        await expectLater(
+          find.byType(MaterialApp),
+          matchesGoldenFile('goldens/section_pane_exclusive_choice.png'),
         );
       });
 

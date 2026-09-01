@@ -1249,7 +1249,10 @@ class _SectionButtonState extends ConsumerState<SectionButton> {
       return await done.future;
     } finally {
       timer.cancel();
-      unawaited(sub.cancel());
+      // Fire-and-forget, but with a handler: `unawaited` attaches none, and a
+      // cancel that throws on a torn-down shared stream would surface as an
+      // unhandled async error in a test or the log rather than here.
+      unawaited(sub.cancel().catchError((Object _) {}));
     }
   }
 
@@ -2215,6 +2218,11 @@ class _ExclusiveChoice extends StatelessWidget {
     // Whether a hand-over is possible but switched off — the thing to explain
     // rather than leave as a dead button.
     var handoverWithheld = false;
+    // Whether any alternative could actually be picked. Not the same as
+    // "something is not active": a member held by something OUTSIDE the set
+    // has no plan, and the notes below must not promise a switch that the
+    // button beside them refuses to make.
+    var anyPickable = false;
     final buttons = <Widget>[];
     for (final i in set.members) {
       final mode = _modeAt(i);
@@ -2224,6 +2232,7 @@ class _ExclusiveChoice extends StatelessWidget {
           : planModeSwitch(modes: modes, set: set, target: i);
       final blocked = plan != null && plan.isHandover && !allowModeSwitch;
       if (blocked) handoverWithheld = true;
+      if (plan != null && !blocked) anyPickable = true;
       buttons.add(Padding(
         padding: EdgeInsets.only(top: buttons.isEmpty ? 0 : 8),
         child: _ModeChoice(
@@ -2234,9 +2243,13 @@ class _ExclusiveChoice extends StatelessWidget {
               : Icons.play_arrow,
           color: sectionModeColor(context, mode),
           active: isActive,
-          onPressed: (isActive || plan == null || blocked)
-              ? null
-              : () => _pick(context, i),
+          // No handler means nothing can be sent, and a button that looks live
+          // and does nothing is exactly what the per-row `Run` was taken away
+          // to avoid. Same guard the member rows use.
+          onPressed:
+              (isActive || plan == null || blocked || onModeSwitch == null)
+                  ? null
+                  : () => _pick(context, i),
         ),
       ));
     }
@@ -2280,13 +2293,27 @@ class _ExclusiveChoice extends StatelessWidget {
             text: '${_nameOf(active)} has the line. Stop it, then the other '
                 'mode can be started.',
           ),
-        ] else if (active != null && allowModeSwitch) ...[
+        ] else if (active != null && allowModeSwitch && anyPickable) ...[
           const SizedBox(height: 10),
           _Note(
             icon: Icons.swap_horiz,
             color: states.grey,
             text: 'Choosing the other mode stops ${_nameOf(active)} first, '
                 'and asks before it does.',
+          ),
+        ] else if (active != null && !anyPickable) ...[
+          const SizedBox(height: 10),
+          // Nothing here is pickable and the exclusion is not the reason: the
+          // permissive keys off `q_xEnabled` only, so an alternative held
+          // while this one merely CLEANS is held by something else. Saying so
+          // is the point — the buttons are dead either way, and the previous
+          // wording promised a switch that would not happen.
+          _Note(
+            icon: Icons.lock_outline,
+            color: states.yellow,
+            text: '${_nameOf(active)} has the line, but the other mode is not '
+                'free to take it either — something outside this choice is '
+                'holding it. Check its state above.',
           ),
         ],
       ],
