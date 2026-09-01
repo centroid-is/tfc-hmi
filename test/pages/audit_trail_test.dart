@@ -842,6 +842,40 @@ void main() {
       );
     });
 
+    testWidgets('the column header stays put while the rows scroll under it',
+        (tester) async {
+      final store = _pagingStore();
+      await _pumpBody(tester, store: store);
+
+      expect(find.byKey(kAuditTrailHeaderKey), findsOneWidget);
+      final headerBefore = tester.getTopLeft(find.byKey(kAuditTrailHeaderKey));
+
+      await tester.drag(find.byKey(kAuditTrailListKey), const Offset(0, -400));
+      await tester.pump();
+      expect(
+        _listOffset(tester),
+        greaterThan(0),
+        reason: 'a test that never scrolled could not tell a sticky header '
+            'from one that simply had not moved yet',
+      );
+
+      expect(
+        tester.getTopLeft(find.byKey(kAuditTrailHeaderKey)),
+        headerBefore,
+        reason: 'the header is a sibling of the list, not its first row, so '
+            'scrolling the rows cannot carry it off the top',
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(kAuditTrailListKey),
+          matching: find.byKey(kAuditTrailHeaderKey),
+        ),
+        findsNothing,
+        reason: 'inside the ListView it would scroll away — which is the one '
+            'thing a column header must not do',
+      );
+    });
+
     testWidgets('a short second page ends the sequence', (tester) async {
       final store = _pagingStore();
       await _pumpBody(tester, store: store);
