@@ -753,4 +753,81 @@ void main() {
               'resync per tick against the one process serving all of them');
     });
   });
+
+  // 07-07, G1 arm B. The sequence is intact and the cache is not, which is why
+  // the tick comparison above cannot see this one: the frame is in sequence,
+  // the surviving changes are applied, and the number the tick advertises is
+  // the number the client holds.
+  group('an update naming a handle nobody announced', () {
+    test('applies the rest of the batch, complains once, and resubscribes '
+        'once', () async {
+      final gateway = await _SequencedGateway.start();
+      final panel = await _connected(gateway);
+
+      // A recorder, not a reading: the recovery this arm asks for blanks the
+      // cache and re-fills it from a snapshot, so a value applied before it
+      // is gone by the time the arm could read it. 07-06's G4 lesson, and the
+      // "the rest of the batch is still applied" clause needs it.
+      final applied = <Object?>[];
+      final node = panel.store.node(_pageKey);
+      void record() => applied.add(node.cached?.value);
+      node.addListener(record);
+      addTearDown(() => node.removeListener(record));
+
+      // What the rebuild will deliver, distinct from both the baseline and the
+      // legitimate change, so the three states are three numbers.
+      gateway.snapshotValue = 2000;
+      gateway.update(_snapshotSeq + 1, {_pageHandle: 1300, 99: 'stranger'});
+
+      await _until('the recovery the unannounced handle asked for',
+          () => gateway.subscribes == 2);
+      await Future<void>.delayed(_settle);
+
+      expect(applied, contains(1300),
+          reason: 'the batch named one handle this session announced and one '
+              'it did not, and the announced one never reached the cache: '
+              '$applied. Dropping the whole frame makes a partial frame worse '
+              '— the store is the only thing that can judge the sequence');
+      expect(panel.store.peek(_pageKey)?.value, 2000,
+          reason: 'the page did not end up holding the snapshot the rebuild '
+              'answered with, so the resync healed nothing');
+      expect(
+          panel.supervisor.resync.complaints
+              .where((line) => line.contains('99'))
+              .length,
+          1,
+          reason: 'the client recorded '
+              '${panel.supervisor.resync.complaints} for one unannounced '
+              'handle. The complaint is diagnostic and somebody reads it, so '
+              'the resync is in addition to it and never instead of it');
+      expect(gateway.subscribes, 2,
+          reason: 'one batch naming one stranger cost '
+              '${gateway.subscribes - 1} rebuilds');
+    });
+
+    test('costs one resubscribe however many handles in it were strangers',
+        () async {
+      final gateway = await _SequencedGateway.start();
+      final panel = await _connected(gateway);
+
+      gateway.update(_snapshotSeq + 1, {
+        _pageHandle: 1300,
+        for (var handle = 90; handle < 95; handle++) handle: 'stranger',
+      });
+
+      await _until('the recovery the unannounced handles asked for',
+          () => gateway.subscribes == 2);
+      await Future<void>.delayed(_settle);
+
+      expect(panel.supervisor.resync.complaints, hasLength(5),
+          reason: 'five unannounced handles must still cost five complaints: '
+              'the diagnostic is per key, because that is what tells an '
+              'integrator which tag is misconfigured');
+      expect(gateway.subscribes, 2,
+          reason: 'five strangers in one batch cost '
+              '${gateway.subscribes - 1} rebuilds. A resync is per '
+              'subscription and one batch is one event, however many keys in '
+              'it the client could not file');
+    });
+  });
 }

@@ -536,19 +536,49 @@ final class ConnectionSupervisor {
     return decodeSubscribeResult(raw);
   }
 
-  /// An update frame: handles resolved to keys, then the sequence verdict.
+  /// An update frame: handles resolved to keys, then the sequence verdict —
+  /// and a rebuild of the page if any handle in it was a stranger.
+  ///
+  /// **A skipped key is a diverged cache behind an intact sequence** (07-07,
+  /// 07-RESEARCH-PUBSUB §A.4 item 2). The surviving changes are applied and the
+  /// sequence advances, so nothing downstream can tell that anything was lost:
+  /// the gap check has no gap to find and the tick advertises exactly the
+  /// number this client holds. Until 07-07 the complaint below was the whole of
+  /// the response, and a complaint is a thing somebody reads tomorrow, not a
+  /// thing that heals the page tonight. Under a quiet plant the gateway will
+  /// never re-send the value it believes it delivered, so the mimic keeps a
+  /// number the plant has moved on from for as long as the shift lasts.
+  ///
+  /// **After the batch, never before.** Resyncing first and then applying a
+  /// frame from the establishment the resync retired is the poisoning chain
+  /// `resync_engine.dart` documents — the old frame takes the baseline and the
+  /// genuine one at that sequence is discarded as a replay, which walks the
+  /// mimic backwards. And the surviving changes are applied rather than dropped
+  /// because dropping them makes a partial frame worse: the store is the only
+  /// thing entitled to judge the sequence.
+  ///
+  /// **One batch, one resync.** The flag is set, not the call: a frame naming
+  /// five strangers is one event and costs one rebuild, and it goes through the
+  /// same coalesced [ResyncEngine.onResync] everything else does.
+  ///
+  /// **Not left to Phase 8's keyframes**, which is the alternative the survey
+  /// names. They are opt-in and default off, so a deployment that never turned
+  /// them on would never detect this at all — and this is the client that has
+  /// to be right on the panel nobody configured.
   Future<void> _update(rpc.Parameters params) async {
     watchdog.sawFrame(InboundFrame.update);
     final update = UpdateParams.fromJson(_asJson(sanitize(params.asMap).value));
     final state = subscriptions[update.sub];
     if (state == null) return;
 
+    var sawUnknownHandle = false;
     final changes = <String, DynamicValue>{};
     for (final entry in update.changes.entries) {
       final key = state.handles[entry.key];
       if (key == null) {
         // Never filed under a guess: a value on a mimic under a label the
         // gateway never agreed to is worse than a value missing from it.
+        sawUnknownHandle = true;
         _resync.complaints.add('update for "${update.sub}" named handle '
             '${entry.key}, which this session never announced');
         continue;
@@ -557,6 +587,7 @@ final class ConnectionSupervisor {
     }
     await _resync.onUpdate(update.sub,
         seq: update.seq, changes: changes, generation: update.generation);
+    if (sawUnknownHandle) await _resync.onResync(update.sub);
   }
 
   /// A tick: the link is alive, every subscription is re-judged against the
