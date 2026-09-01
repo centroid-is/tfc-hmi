@@ -211,11 +211,11 @@ jobs:
 
       - name: Build for eLinux
         working-directory: centroid-hmi
-        # Same TFC_CHAT/TFC_KNOWLEDGE opt-out as elinux-build above: every
+        # Same CENTROIDX_CHAT/CENTROIDX_KNOWLEDGE opt-out as elinux-build above: every
         # published image excludes the AI chat and knowledge features
         # (lib/core/feature_flags.dart). `latest-release` is what stations
         # pull, so it must not differ from `stable` in what it ships.
-        run: flutter-elinux build elinux --release --dart-define=TFC_CHAT=false --dart-define=TFC_KNOWLEDGE=false
+        run: flutter-elinux build elinux --release --dart-define=CENTROIDX_CHAT=false --dart-define=CENTROIDX_KNOWLEDGE=false
 
       - name: Move build artifacts
         working-directory: centroid-hmi
@@ -318,11 +318,11 @@ jobs:
 
       - name: Build for eLinux
         working-directory: centroid-hmi
-        # Same TFC_CHAT/TFC_KNOWLEDGE opt-out as the release build: a profile
+        # Same CENTROIDX_CHAT/CENTROIDX_KNOWLEDGE opt-out as the release build: a profile
         # image is a station image with the VM Service left in, so it has to
         # contain the same features, or a profile taken on a station measures
         # code that `latest-release` never runs.
-        run: flutter-elinux build elinux --profile --dart-define=TFC_CHAT=false --dart-define=TFC_KNOWLEDGE=false
+        run: flutter-elinux build elinux --profile --dart-define=CENTROIDX_CHAT=false --dart-define=CENTROIDX_KNOWLEDGE=false
 
       - name: Move build artifacts
         working-directory: centroid-hmi

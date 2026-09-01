@@ -1,4 +1,4 @@
-/// Guards the `TFC_CHAT`/`TFC_KNOWLEDGE` opt-out on every shipping build.
+/// Guards the `CENTROIDX_CHAT`/`CENTROIDX_KNOWLEDGE` opt-out on every shipping build.
 ///
 /// The flags in `lib/core/feature_flags.dart` default to **on** so development
 /// builds and this test suite exercise the AI chat and the knowledge features.
@@ -82,8 +82,8 @@ void main() {
 
     final missing = invocations
         .where((i) =>
-            !i.text.contains('TFC_CHAT=false') ||
-            !i.text.contains('TFC_KNOWLEDGE=false'))
+            !i.text.contains('CENTROIDX_CHAT=false') ||
+            !i.text.contains('CENTROIDX_KNOWLEDGE=false'))
         .toList();
 
     expect(
@@ -91,7 +91,7 @@ void main() {
       isEmpty,
       reason: 'these builds ship with the experimental chat bubble and/or '
           'knowledge base compiled in — add '
-          '`--dart-define=TFC_CHAT=false --dart-define=TFC_KNOWLEDGE=false`:\n'
+          '`--dart-define=CENTROIDX_CHAT=false --dart-define=CENTROIDX_KNOWLEDGE=false`:\n'
           '${missing.join('\n')}',
     );
   });
@@ -101,8 +101,8 @@ void main() {
     // The guard above is only meaningful while the defines are opt-out; if the
     // defaults ever flip to false, that test passes vacuously for the wrong
     // reason and this one says so.
-    expect(source, contains("bool.fromEnvironment('TFC_CHAT'"));
-    expect(source, contains("bool.fromEnvironment('TFC_KNOWLEDGE'"));
+    expect(source, contains("bool.fromEnvironment('CENTROIDX_CHAT'"));
+    expect(source, contains("bool.fromEnvironment('CENTROIDX_KNOWLEDGE'"));
     expect(source.contains('defaultValue: false'), isFalse,
         reason: 'a flag now defaults off — revisit '
             'shipped_feature_flags_test.dart, which assumes opt-out');
