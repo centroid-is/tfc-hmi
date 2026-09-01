@@ -217,8 +217,11 @@ void main() {
       });
     }
 
-    owes('write', '08-06', () => man.write(st101Key, 1));
-    owes('writeStatus', '08-06', () => man.writeStatus(const ['cmd']));
+    // `write` and `writeStatus` were owed by 08-06 and are now written, so
+    // their entries came off this ledger in the same commit that closed them —
+    // which is the ledger being self-deleting rather than merely honest. Their
+    // behaviour is `write_test.dart`'s subject now; `holdToRun` leaves in
+    // 08-06's task 3.
     owes('holdToRun', '08-06', () => man.holdToRun(st101Key));
     owes('browse', '08-11', () => man.browse);
     owes('timeseries', '08-11', () => man.timeseries);

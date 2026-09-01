@@ -336,6 +336,36 @@ WriteResult _fromText({
   );
 }
 
+/// Forces `writeStatus`'s positional promise: element *i* answers `cmds[i]`.
+///
+/// A mismatched entry is substituted **in place** as
+/// `WriteUnknown(misaligned_result)` and everything after it keeps its own
+/// answer. It is never shifted, and the difference is not cosmetic: a shifted
+/// list tells an operator about a different machine, confidently and in the
+/// right shape. A short list is padded the same way rather than truncating the
+/// question.
+///
+/// Written as a pure function over both lists so the guard is testable with a
+/// deliberately misaligned input — a defence that can only be exercised
+/// through the thing it defends is a defence nobody has seen work.
+List<WriteResult> alignWriteStatusAnswers(
+  List<String> cmds,
+  List<WriteResult> answers,
+) =>
+    <WriteResult>[
+      for (var i = 0; i < cmds.length; i++)
+        if (i < answers.length && answers[i].cmd == cmds[i])
+          answers[i]
+        else
+          WriteUnknown(
+            cmds[i],
+            const WriteReason('misaligned_result',
+                message: 'the answer in this position was for a different '
+                    'command, so this one\'s outcome is not established. Read '
+                    'the value back before acting'),
+          ),
+    ];
+
 /// The array-element ruling: refuse a compare-and-set-less element write.
 ///
 /// Returns the refusal, or **null** when the write may proceed.
