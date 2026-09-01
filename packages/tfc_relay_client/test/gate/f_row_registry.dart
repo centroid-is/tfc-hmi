@@ -406,12 +406,6 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     clause: 'the recovery: cadence returns, staleness clears, and the burst '
         'measured rather than banded away',
   ),
-  'G5': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-10',
-    clause: 'the paired boundary over a real socket, plus the text arm '
-        'protecting the server-side pair',
-  ),
   'G6': Outstanding(
     kind: OutstandingKind.missing,
     owner: '07-11',

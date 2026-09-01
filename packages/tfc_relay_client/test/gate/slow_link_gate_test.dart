@@ -55,11 +55,13 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_relay_server/src/server_config.dart';
 
+import '../support/fault_fixture.dart' show until;
 import '../support/gate_bands.dart';
 import '../support/gate_fixture.dart';
 
@@ -154,6 +156,91 @@ final Duration _p99Ceiling = _tick * 2 + slack;
 
 /// The value the page is seeded with before the gateway starts.
 const int _seed = 1000;
+
+// ---------------------------------------------------------------------------
+// G5.
+// ---------------------------------------------------------------------------
+
+/// How wide G5's page is.
+///
+/// Small, and its only job is to be comfortably above [_ceiling] when every key
+/// moves and comfortably below it when one does. Twenty-four changed handles a
+/// tick against a ceiling of four is six times over, which is a production rate
+/// nobody can mistake for jitter; one changed handle a tick is a quarter of the
+/// ceiling, with room for the heartbeat's own priority entry beside it.
+///
+/// It is deliberately **not** [_page]. F19's page is wide because the row is
+/// about bytes on a link; G5's threshold is counted in *handles* and a 200-key
+/// page would clear a four-handle ceiling on the first tick of the quiet arm
+/// too, which is the one thing the pair needs to be able to tell apart.
+const int _g5Page = 24;
+
+/// The soft ceiling both of G5's arms are judged against.
+///
+/// **One number for both arms, and that is what makes them a pair.** The
+/// eviction arm and the never-evicted arm differ in the plant's production rate
+/// and in nothing else: same gateway, same page, same ceiling, same window. A
+/// change that moved the boundary would move one arm across it and redden
+/// exactly one half, which is the failure signature the survey asked for
+/// (07-RESEARCH-PUBSUB §D.1 row G5) and which two separately-configured cases
+/// could not produce.
+const int _ceiling = 4;
+
+/// How long production may sit above [_ceiling] before the session is closed.
+///
+/// A second, which is ten ticks — long enough that a single tick above the
+/// ceiling cannot evict anybody (the establishment's own resync is one such
+/// tick and the quiet arm has to survive it), short enough that the eviction
+/// arm costs about a second of lane. The default is ten seconds and a gate row
+/// paying that ten times over buys nothing.
+const Duration _peakWindow = Duration(seconds: 1);
+
+/// How many ticks the never-evicted arm holds production under the ceiling.
+///
+/// **The catalogue's own forty**, and it is counted in ticks rather than
+/// waited out in milliseconds: the clause is "held just under it for 40 ticks",
+/// the ceiling is judged once per tick, and a wall-clock sleep on a loaded
+/// runner can cover thirty-eight of them. At [_tick] this is 4 s, which also
+/// clears this file's 3.5 s floor for anything calling itself a rate.
+const int _quietTicks = 40;
+
+/// How long the eviction arm may wait for the verdict it provokes.
+///
+/// Generous against [_peakWindow]: the window is what decides, and the budget
+/// only has to be longer than one window plus a tick plus the close crossing a
+/// loopback socket.
+const Duration _evictionBudget = Duration(seconds: 15);
+
+/// The server-side pair this row depends on, and cannot import.
+///
+/// **Read as text, and the reason is a language rule rather than a preference.**
+/// Another package's `test/` directory is not addressable by any `package:`
+/// URI — only `lib/` is — so there is no import that would let this file name
+/// those two cases. The in-tree answer to exactly this is the read-the-source
+/// -as-text arm with an `existsSync` guard: `no_retry_test.dart:401-410` and
+/// `client_config_test.dart:483-490` both do it, and the guard is the load
+/// bearing half. A file that moved would otherwise make every "is it still
+/// there" check below pass on an empty string.
+const String _serverPairPath =
+    '../tfc_relay_server/test/backpressure_test.dart';
+
+/// The two engine-driven arms that must not be deleted alone.
+///
+/// `backpressure_test.dart:275-326`. They are the pair 03-REVIEW WR-02 landed
+/// after discovering that the three arms above them construct a
+/// `ConflatingSendBuffer` by hand and call `poll`/`drain` themselves — so they
+/// would pass unchanged whether the engine drained every tick or never, and the
+/// soft verdict was dead in production while STATE.md recorded it as "pinned in
+/// a named test". These two are driven through `tickOnce` on the pacing the
+/// server actually uses.
+///
+/// Substrings rather than whole names, so a group being re-worded does not
+/// redden this arm; distinctive enough that renaming either *case* does, which
+/// is the mutation this exists to catch.
+const List<String> _engineArms = <String>[
+  'held above the soft ceiling every tick is evicted',
+  'under the soft ceiling is never evicted for a long run',
+];
 
 /// What a window saw: what arrived, what it cost, and when.
 ///
@@ -503,5 +590,248 @@ void main() {
               'against a firehose, and a rate above it means the bucket is not '
               'the thing shaping this link');
     }, timeout: const Timeout(Duration(seconds: 90)));
+  });
+
+  group('G5 — the boundary between conflating and evicting', () {
+    // A supporting case, not a row arm: its name carries no `Gn:` token, so
+    // the manifest never discovers it and G5 keeps its single unlettered case
+    // (07-08 deviation 6 — a non-row name *is* the supporting-case exemption,
+    // there is no list to register in). It is a text sweep rather than a
+    // socket, and it runs whether or not the row beside it is green, which is
+    // the point: the half of this pair that lives in another package has to
+    // fail here by name rather than by nobody noticing.
+    test('the engine-driven pair G5 rests on is still in the server package',
+        () {
+      final source = File(_serverPairPath);
+      expect(source.existsSync(), isTrue,
+          reason: 'this arm reads $_serverPairPath as text, so it must run '
+              'with the tfc_relay_client package root as the working '
+              'directory; dart test was invoked from ${Directory.current.path} '
+              'and found nothing there. A moved file has to fail loudly: the '
+              'substring checks below would all pass against an empty string, '
+              'and the deletion this arm exists to catch would be the thing '
+              'that made them pass');
+
+      final code = source.readAsStringSync();
+      final missing = [
+        for (final arm in _engineArms)
+          if (!code.contains(arm)) arm,
+      ];
+      expect(missing, isEmpty,
+          reason: 'these engine-driven arms are no longer in '
+              '$_serverPairPath: $missing. They are a pair — held above the '
+              'ceiling every tick means evicted, held under it for forty ticks '
+              'means never evicted — and the pub/sub survey asked the gate to '
+              'own them *as a pair so nobody deletes one* '
+              '(07-RESEARCH-PUBSUB §D.1 row G5). Half of that pair still '
+              'passes while the product has lost the other behaviour: delete '
+              'the eviction arm and a gateway that never evicts is green; '
+              'delete the never-evicted arm and a gateway that evicts every '
+              'panel on a busy page is green. If one of them has genuinely '
+              'been replaced, say what now asserts its half before editing '
+              'this list');
+    });
+
+    test('G5: conflation is not eviction, and the boundary between them is a '
+        'pair', () async {
+      final keys = plantPage(_g5Page);
+      final fixture = await gateFixture(
+        clients: 1,
+        keys: keys.toSet(),
+        serverConfig: (port) => ServerConfig(
+          tick: _tick,
+          port: port,
+          peakThreshold: _ceiling,
+          peakWindowMs: _peakWindow.inMilliseconds,
+        ),
+        seed: (plant) => plant.setValues({for (final key in keys) key: _seed}),
+      );
+      final panel = fixture.clients.single;
+      final engine = fixture.server.engine!;
+
+      // **No hand-built buffer anywhere in this case, and that is the point.**
+      // 03-REVIEW WR-02: the original arms constructed a `ConflatingSendBuffer`
+      // and called `poll`/`drain` themselves, which made them pass whether the
+      // engine's own order — poll before drain — was right or not. Everything
+      // below goes through a real gateway on a real socket, so what is asserted
+      // is the path production takes.
+
+      // **The registry invariant, sampled rather than read at the end.** The
+      // eviction is decided inside a tick, and the session has to leave the
+      // registry in the same turn it was decided in: everything before the
+      // first `await` in `RelaySession._teardown` is the synchronous half, and
+      // the registry removal is step 2 of it (`relay_session.dart:1035-1062`).
+      // A session still selectable after its close code was set is one the next
+      // tick fans out to and the reaper sweeps. Sampled at 2 ms, a fiftieth of
+      // a tick, so a removal deferred by so much as one turn of the event loop
+      // lands in this list.
+      final zombies = <String>[];
+      final watch = Timer.periodic(const Duration(milliseconds: 2), (_) {
+        for (final session in fixture.server.sessions.sessions) {
+          final code = session.sentCloseCode;
+          if (code != null) {
+            zombies.add('a session with sentCloseCode $code was still in the '
+                'registry at tick ${engine.ticks}');
+          }
+        }
+      });
+      addTearDown(watch.cancel);
+
+      // ARM ONE — held just under the ceiling for forty ticks.
+      //
+      // It runs first on purpose. The other arm ends with the panel thrown off
+      // and redialling, and a quiet arm measured on a session that has just
+      // re-established would be measuring the resync's own burst of handles
+      // rather than a steady line.
+      final delivered = <num>[];
+      final tap = panel.client.subscribe(keys.first).listen((value) {
+        // Nulls dropped: a resync blanks the page before refilling it, so a
+        // null is "between establishments" rather than a value an operator was
+        // shown. Counting them would make the ordering arm below fail on a
+        // reconnect instead of on a queue.
+        if (value.value case final num seen) delivered.add(seen);
+      });
+      addTearDown(tap.cancel);
+
+      final quiet = drivePage(fixture.served, [keys.first], period: _tick);
+      final quietFrom = engine.ticks;
+      await until(
+        'the gateway to turn $_quietTicks ticks with one changed handle each',
+        () => engine.ticks - quietFrom >= _quietTicks,
+        budget: Duration(milliseconds: _tick.inMilliseconds * _quietTicks * 3),
+      );
+      quiet.cancel();
+      final quietTicks = engine.ticks - quietFrom;
+      final closeAfterQuiet = panel.observedClose;
+
+      // The last value has to be allowed to cross the socket: the plant stopped
+      // between two ticks, so the newest value is at most one tick from having
+      // been sent. A window, never an instant.
+      await until(
+          'the panel to hold the last value the quiet plant wrote '
+          '(${quiet.latest})',
+          () => delivered.isNotEmpty && delivered.last == quiet.latest,
+          budget: recovery);
+
+      print('G5 under the ceiling: $quietTicks ticks at 1 changed handle each '
+          'against a ceiling of $_ceiling; the plant swept ${quiet.sweeps} '
+          'times and the panel was shown ${delivered.length} values, ending at '
+          '${delivered.last} against a plant at ${quiet.latest}; the panel '
+          'observed ${closeAfterQuiet.closeCode ?? 'no close'} and the gateway '
+          'holds ${fixture.sessionCount} sessions');
+
+      expect(quietTicks, greaterThanOrEqualTo(_quietTicks),
+          reason: 'the gateway turned $quietTicks ticks while production was '
+              'held under the ceiling, against the $_quietTicks the catalogue '
+              'names. The clause is counted in ticks because the ceiling is '
+              'judged once per tick, and an arm that ran short would be '
+              'asserting that a shorter run does not evict');
+      expect(closeAfterQuiet.closeCode, isNull,
+          reason: 'the panel was thrown off with '
+              '${closeAfterQuiet.closeCode} while producing one changed handle '
+              'a tick against a ceiling of $_ceiling. That is conflation being '
+              'confused for eviction, and it is the failure an operator meets '
+              'as a panel dropping off the wall on a healthy line — a window '
+              'that accumulated without a recovery signal would evict every '
+              'panel in the plant eventually');
+      expect(fixture.sessionCount, 1,
+          reason: 'the gateway holds ${fixture.sessionCount} sessions after '
+              '$quietTicks ticks under the ceiling, against the one panel this '
+              'fixture built');
+      expect(fixture.evictions, isEmpty,
+          reason: 'the gateway ended ${fixture.evictions} over the quiet arm. '
+              'Nothing was injected: one key moved at the tick rate on an '
+              'unmetered loopback socket');
+      expect(delivered, orderedEquals(List.of(delivered)..sort()),
+          reason: 'the values the panel was shown are not in ascending order: '
+              '$delivered. The plant only counts up, so a value that arrived '
+              'after a larger one is an old value delivered late — which is a '
+              'queue. Conflation reorders nothing, and never an old queued one '
+              'is the clause');
+      expect(delivered.last, quiet.latest,
+          reason: 'the panel is holding ${delivered.last} and the plant left '
+              'off at ${quiet.latest}. "Always receiving the latest value" is '
+              'the half of this arm that says conflation is not *starvation*: '
+              'a panel under the ceiling is served, and what it is served is '
+              'current');
+      expect(delivered.length, greaterThan(quiet.sweeps * 3 ~/ 4),
+          reason: 'the plant swept ${quiet.sweeps} times and the panel was '
+              'shown ${delivered.length} values. At one changed handle a tick '
+              'against a tick-paced plant there is nothing to conflate, so a '
+              'panel shown a fraction of them is a panel being starved under '
+              'the ceiling rather than served under it');
+
+      // ARM TWO — held above the ceiling every tick.
+      //
+      // Same fixture, same page, same ceiling, same window. The *only* thing
+      // that changes is how many handles the plant moves between two ticks,
+      // which is what makes this a boundary rather than two scenarios.
+      final busy = drivePage(fixture.served, keys, period: _tick, from: 100000);
+      final busyFrom = engine.ticks;
+      await until('the panel to observe the gateway giving up on it',
+          () => panel.observedClose.closeCode != null,
+          budget: _evictionBudget);
+      // Stopped the instant the verdict lands: left running, the panel redials
+      // into the same production rate and is evicted again every window for the
+      // rest of the case, which is an eviction storm in the teardown rather
+      // than evidence.
+      busy.cancel();
+      final firedAfter = engine.ticks - busyFrom;
+      final closed = panel.observedClose;
+      final windowTicks = _peakWindow.inMilliseconds ~/ _tick.inMilliseconds;
+
+      print('G5 above the ceiling: $_g5Page changed handles a tick against a '
+          'ceiling of $_ceiling; the verdict fired $firedAfter ticks later '
+          '(a ${_peakWindow.inMilliseconds} ms window is $windowTicks ticks), '
+          'the panel observed ${closed.closeCode} "${closed.closeReason}", the '
+          'gateway\'s ledger reads ${fixture.evictedForBackpressure}, and it '
+          'holds ${fixture.sessionCount} sessions');
+
+      expect(closed.closeCode, CloseCodes.backpressureOverrun,
+          reason: 'the panel observed close code ${closed.closeCode} rather '
+              'than ${CloseCodes.backpressureOverrun}. A panel that is thrown '
+              'off has to be told which ceiling it hit: a bare 1006 is '
+              'indistinguishable from a crashed gateway, and a panel that '
+              'cannot tell those apart reconnects into the same wall for ever');
+      expect(closed.closeReason, contains('unable to keep up'),
+          reason: 'the close reason was "${closed.closeReason}". This arm is '
+              'about the **soft** ceiling — the sustained-peak verdict, judged '
+              'over a window — and the hard `maxPending` limit carries a '
+              'different sentence. A 4004 arriving for the wrong reason would '
+              'let this pair pass on a gateway whose peak verdict is dead, '
+              'which is precisely the state 03-REVIEW WR-02 found it in');
+      expect(closed.closeReason, contains('$_ceiling'),
+          reason: 'the reason names no ceiling: "${closed.closeReason}". An '
+              'operator reading it should learn which limit was hit without '
+              'reading the gateway\'s source');
+      expect(fixture.evictedForBackpressure, hasLength(1),
+          reason: 'the gateway\'s own ledger records '
+              '${fixture.evictedForBackpressure} backpressure evictions. The '
+              'panel\'s socket and the gateway\'s ledger are two independent '
+              'observations of one decision, and a 4004 the gateway did not '
+              'record deciding is a close that came from somewhere else');
+      expect(zombies, isEmpty,
+          reason: 'these sessions were still in the gateway\'s registry after '
+              'their close code had been set: $zombies. The eviction is a '
+              'decision a tick takes, and the session has to be out of the '
+              'registry in the same turn — a session still selectable is one '
+              'the next tick fans out to and the reaper sweeps, which is a '
+              'gateway writing frames to a socket it has already given up on. '
+              'The same-tick property is asserted exactly, with hand-driven '
+              'ticks, at backpressure_test.dart:99-190; what is sampled here '
+              'is the half a client-side case can see');
+      expect(firedAfter, greaterThanOrEqualTo(windowTicks),
+          reason: 'the verdict fired $firedAfter ticks after production went '
+              'above the ceiling, and a ${_peakWindow.inMilliseconds} ms '
+              'window is $windowTicks ticks. An eviction that fires sooner '
+              'than its own window is an instant verdict wearing a window\'s '
+              'name, and it would throw a panel off for one busy tick — which '
+              'is every panel, on every resync');
+      expect(firedAfter,
+          lessThan(_evictionBudget.inMilliseconds ~/ _tick.inMilliseconds),
+          reason: 'the verdict took $firedAfter ticks to fire against a window '
+              'of $windowTicks. A window that keeps sliding is a ceiling '
+              'nobody ever hits');
+    }, timeout: const Timeout(Duration(seconds: 120)));
   });
 }
