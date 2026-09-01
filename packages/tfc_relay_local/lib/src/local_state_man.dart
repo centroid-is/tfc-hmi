@@ -242,6 +242,12 @@ final class LocalStateMan implements StateManApi {
   @override
   Future<void> dispose() async {
     if (_disposed) return;
+    // BEFORE the flag, because the zero is written through the ordinary write
+    // path and that path refuses a disposed source. A hold must not outlive
+    // its source: a disposed gateway that left a counter frozen at its last
+    // value is a machine nobody is holding that the PLC still thinks somebody
+    // is, for as long as its deadman window lasts.
+    await _releaseHolds(HoldEnded.disposed);
     _disposed = true;
     await _fanIn.dispose();
     _sweep.dispose();
@@ -801,12 +807,104 @@ final class LocalStateMan implements StateManApi {
     return ms;
   }
 
-  // ----------------------------------------------------------- not this plan
-
+  /// Engages a hold-to-run deadman on [key] and hands back the live hold.
+  ///
+  /// **The deadman is an ordinary tag written through the ordinary path.** The
+  /// engage is [write] and so is the release, which is what makes a hold
+  /// interlockable like any other command and what puts its outcome in the
+  /// same log `writeStatus` answers from. There is exactly one key and it is
+  /// the one passed in.
+  ///
+  /// [HoldHandle] is constructed, never subclassed, and no member is added to
+  /// `StateManApi` — the surface is pinned at 49 (`api_surface_test.dart:
+  /// 213-224`) and the two-callback design exists precisely so one class
+  /// serves the fake, the harness, the gateway and the client. `tick()` is not
+  /// on the interface and must never be put there: a method there is something
+  /// any connected client may invoke against any key, and a bare `tick(key, n)`
+  /// is a write primitive with no engage in front of it.
+  ///
+  /// The counter is minted **here** and a tick's value never comes from a
+  /// caller (`value_handlers.dart:628-654` discards the wire's `n` for the same
+  /// reason): the liveness an operator's finger is supposed to provide must not
+  /// be something a peer can assert.
   @override
-  Future<HoldHandle> holdToRun(String key) =>
-      throw UnimplementedError('08-06 owes LocalStateMan.holdToRun — a hold '
-          'engage is a write with a deadman counter on top of it');
+  Future<HoldHandle> holdToRun(String key) async {
+    final engagement = await write(key, 1);
+    final hold = HoldHandle(
+      key: key,
+      engagement: engagement,
+      onTick: (counter) => _feedDeadman(key, counter),
+      onRelease: (counter) => write(key, counter),
+    );
+    if (hold.isHeld) {
+      _liveHolds.add(hold);
+      // The handle completes `onReleased` exactly once, however the hold ends,
+      // so this is the one place the set is pruned.
+      unawaited(hold.onReleased.then((_) => _liveHolds.remove(hold)));
+    }
+    return hold;
+  }
+
+  /// Every hold this source is currently feeding, so [dispose] can end them.
+  final Set<HoldHandle> _liveHolds = <HoldHandle>{};
+
+  /// One tick: the gateway's counter, onto the plant, with nobody waiting.
+  ///
+  /// Fire-and-forget by design — safety comes from the counter *stopping*, so
+  /// giving a tick an outcome would invite somebody to await it, and awaiting
+  /// liveness is how a stalled socket becomes a queue
+  /// (`hold_handle.dart:127-133`). A lost tick costs nothing a re-tick 100 ms
+  /// later does not fix, so it neither ends the hold nor throws.
+  ///
+  /// **Ticks are deliberately not recorded in the outcome log.** The engage and
+  /// the release are commands somebody may ask `writeStatus` about; a tick is
+  /// liveness. At 10 Hz a two-minute hold is 1,200 of them, and recording them
+  /// would evict the operator's real outcomes out of a bounded log inside
+  /// seconds — which is the log answering "I forgot" about the writes that
+  /// mattered so that it could remember the ones that did not.
+  void _feedDeadman(String key, int counter) {
+    if (_disposed) return;
+    final route = router.route(key);
+    // Not a ClaimedRoute means the engage cannot have applied, so there is no
+    // live hold to feed. Checked rather than asserted: a route can stop being
+    // claimed under a hold (a disabled alias, a keymapping reload), and the
+    // right answer to that is to stop feeding, not to throw into a timer.
+    if (route is! ClaimedRoute) return;
+    final sent = _crossIntoThePlant(
+      link: route.link,
+      ref: route.ref,
+      value: DynamicValue(value: counter),
+      cmd: newUlid(nowMs: _now().millisecondsSinceEpoch),
+    );
+    // `unawaited` attaches NO error handler (project memory), and an
+    // unhandled error out of a tick would take down the isolate the whole
+    // gateway runs on. `state_man.dart:2369` is the shape, discipline
+    // included.
+    unawaited(sent.catchError((Object error) => WriteUnknown(
+        'tick',
+        WriteReason('gateway_lost_track',
+            message: redactUpstreamError(error.toString())))));
+  }
+
+  /// Ends every live hold, writing the zero, before anything is torn down.
+  ///
+  /// Awaited, and safely: every upstream write is bounded by its required
+  /// deadline (`upstream_link.dart`), so there is nothing here that can hang
+  /// and therefore no `.timeout(` on this path — a dispose that gave up half
+  /// way would leave the thing it was disposing in a state nobody owns.
+  Future<void> _releaseHolds(HoldEnded reason) async {
+    if (_liveHolds.isEmpty) return;
+    final holds = List<HoldHandle>.of(_liveHolds);
+    _liveHolds.clear();
+    for (final hold in holds) {
+      // `release` is idempotent, so a disconnect racing an operator's finger
+      // cannot put two zeros on the wire. The outcome is informational: the
+      // machine stopped when the counter stopped.
+      await hold.release(reason: reason).then((_) {}, onError: (Object _) {});
+    }
+  }
+
+  // ----------------------------------------------------------- not this plan
 
   @override
   BrowseApi get browse =>
