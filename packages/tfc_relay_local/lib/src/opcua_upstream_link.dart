@@ -477,18 +477,17 @@ final class OpcUaUpstreamLink implements UpstreamLink {
           onSourceTimeFallback: () => _sourceTimeFallbacks++,
         );
         _cache[monitored.key] = translated;
+        if (translated.quality == Quality.good) {
+          _lastGoodValues[monitored.key] = translated.value;
+        }
         if (!monitored.controller.isClosed) {
           monitored.controller.add(translated);
         }
       },
       onError: (Object error) {
         _recordError(error);
-        final degraded = DynamicValue(
-            value: null,
-            quality: qualityForOpcUaErrorText(error.toString()),
-            sourceTime: DateTime.now().toUtc());
-        _cache[monitored.key] = degraded;
-        if (!monitored.controller.isClosed) monitored.controller.add(degraded);
+        _publishDegraded(
+            monitored.key, qualityForOpcUaErrorText(error.toString()));
       },
     );
   }
@@ -653,8 +652,139 @@ final class OpcUaUpstreamLink implements UpstreamLink {
     // assertion written against it read `connecting`.
   }
 
-  void _onEffectiveStatus(EffectiveDeviceStatus status) =>
-      _setState(mapEffectiveStatus(status));
+  /// The keys this link currently holds a monitored item for.
+  ///
+  /// A resubscribe must re-establish the **same set**. A set that grew means
+  /// the old monitored items were never released and the PLC is carrying two
+  /// of everything, which is the storm `state_man.dart:1480-1501` was written
+  /// to stop.
+  Iterable<String> get subscribedKeys => _monitors.keys;
+
+  void _onEffectiveStatus(EffectiveDeviceStatus status) {
+    final next = mapEffectiveStatus(status);
+    final was = _state;
+    _setState(next);
+    if (was == next) return;
+    if (next == UpstreamLinkState.disconnected ||
+        next == UpstreamLinkState.unhealthy) {
+      _degradeAll();
+    }
+  }
+
+  /// Whether a resubscribe is already in flight.
+  ///
+  /// `SingleWorker`'s job in `ClientWrapper`, in one bool: two overlapping
+  /// resubscribes are how one key's monitored-item id collides with another's.
+  bool _resubscribing = false;
+
+  /// Every key on this link degrades to [Quality.badCommFault], in one pass.
+  ///
+  /// **Band-guarded.** A key already worse keeps its own verdict: `errorConfig`
+  /// means the tag is gone and waiting will not fix it, `badCommFault` means
+  /// the link is down and waiting might, and overwriting the first with the
+  /// second tells the operator to wait for something that is never coming back.
+  ///
+  /// One pass over the cache, and the *announcement* is [_setState]'s separate
+  /// act — `fake_state_man.dart:598-605` keeps them apart and so does this. At
+  /// 1500 keys a per-key status fan-out is a denial of service against the
+  /// screen the operator is trying to read.
+  void _degradeAll() {
+    for (final key in _cache.keys.toList()) {
+      _publishDegraded(key, Quality.badCommFault);
+    }
+  }
+
+  /// Puts [quality] on [key] **unless the key is already worse**.
+  ///
+  /// The band guard lives here rather than at each caller because both routes
+  /// into a degrade need it and only one of them is obvious. The mass
+  /// degradation on link loss is the obvious one; the second is a *per-key*
+  /// subscription error, which arrives on the same link failure a beat earlier
+  /// and would otherwise overwrite an `errorConfig` with a `badCommFault`
+  /// before the mass pass ever ran. That was measured: the guard was in
+  /// `_degradeAll` alone and the deleted tag still came out 522.
+  void _publishDegraded(String key, Quality quality) {
+    final current = _cache[key];
+    if (current != null) {
+      if (current.quality.isError && quality == Quality.badCommFault) return;
+      if (current.quality == quality) return;
+    }
+    final degraded = DynamicValue(
+      value: null,
+      quality: quality,
+      sourceTime: current?.sourceTime ?? DateTime.now().toUtc(),
+    );
+    _cache[key] = degraded;
+    final monitored = _monitors[key];
+    if (monitored != null && !monitored.controller.isClosed) {
+      monitored.controller.add(degraded);
+    }
+  }
+
+  /// The link is back; the numbers are not vouched for until each is re-read.
+  ///
+  /// [Quality.uncertainLastKnown] **with the old value still attached** — a
+  /// stale number, openly labelled. Straight back to good would republish an
+  /// hour-old reading as current the instant the socket reopened, and blanking
+  /// it would throw away the only information there is.
+  void _markRestored() {
+    for (final entry in _cache.entries.toList()) {
+      final current = entry.value;
+      if (current.quality.isError) continue;
+      final restored = DynamicValue(
+        value: current.value ?? _lastGoodValues[entry.key],
+        quality: Quality.uncertainLastKnown,
+        sourceTime: current.sourceTime,
+      );
+      _cache[entry.key] = restored;
+      final monitored = _monitors[entry.key];
+      if (monitored != null && !monitored.controller.isClosed) {
+        monitored.controller.add(restored);
+      }
+    }
+  }
+
+  /// Re-establishes every monitored key on a fresh subscription.
+  ///
+  /// **Two-phase, and the order is the whole point** (`state_man.dart:1480-
+  /// 1501`): cancel every existing monitored item FIRST, then create the new
+  /// subscription, then re-monitor. Interleaving them is what let one key's
+  /// monitored-item id collide with another's and produced the storm this
+  /// ordering was measured to fix.
+  Future<void> _resubscribeAll() async {
+    if (_resubscribing || _disposed) return;
+    final client = _client;
+    if (client == null) return;
+    _resubscribing = true;
+    try {
+      // Phase one: let go of everything.
+      for (final monitored in _monitors.values) {
+        await monitored.subscription?.cancel();
+        monitored.subscription = null;
+      }
+      // Phase two: a new subscription, and the heartbeat back on it.
+      _subscriptionId = await client
+          .subscriptionCreate(
+              requestedPublishingInterval: _config.publishingInterval,
+              requestedMaxKeepAliveCount: 30)
+          .timeout(const Duration(seconds: 10));
+      _wrapper?.startHeartbeat(_subscriptionId!);
+      // Phase three: the same key set, never a bigger one.
+      for (final monitored in _monitors.values) {
+        _subscriptionsCreated++;
+        await _establish(monitored);
+      }
+    } finally {
+      _resubscribing = false;
+    }
+  }
+
+  /// The last value each key was known to be good at.
+  ///
+  /// Kept beside the cache rather than inside it so a degrade can null the
+  /// published value — which it must, because a bad sample has no payload —
+  /// without losing the number a restore then labels uncertain.
+  final Map<String, Object?> _lastGoodValues = <String, Object?>{};
 
   void _setState(UpstreamLinkState next) {
     if (_state == next) return;
@@ -689,6 +819,7 @@ final class OpcUaUpstreamLink implements UpstreamLink {
     if (client == null) return;
     _iterating = true;
     _iterateTicks++;
+    _reopenSessionIfNeeded(client);
     if (client is ua.Client) {
       try {
         client.runIterate(_iteratePeriod);
@@ -712,6 +843,88 @@ final class OpcUaUpstreamLink implements UpstreamLink {
     // An injected fake: nothing to iterate.
     _iterating = false;
   }
+
+  /// Reopens a lost session — **and nothing else**.
+  ///
+  /// The standing constraint is "no auto-retry anywhere upstream", and it is
+  /// about the *plant*, not the socket: reads and subscriptions may keep their
+  /// reconnect logic, writes may never be re-issued (08-CONTEXT's carry-forward
+  /// list says so in those words). This is the reconnect half. It reopens the
+  /// session and lets [_resubscribeAll] put the monitored items back; it does
+  /// not remember, replay or re-send a single write, and the behavioural arm in
+  /// `opcua_fault_test.dart` counts at the server to prove it.
+  ///
+  /// `state_man.dart:1364-1381` does this with a `while` loop and a bare
+  /// `Logger()`. Here it rides the driver that is already running: no second
+  /// timer, no second thing to cancel, and a floor on how often it may dial so
+  /// a dead PLC is not hammered ten times a second.
+  void _reopenSessionIfNeeded(ua.ClientApi client) {
+    if (_reopening || _resubscribing) return;
+    final wrapper = _wrapper;
+    if (wrapper == null) return;
+    // **The two honest "the session is gone" signals, and no third.** This was
+    // measured rather than guessed: keying it on
+    // `UpstreamLinkState.disconnected` alone left the link dead after a TCP
+    // reset, because `effectiveStatus` reports `opcuaUnhealthy` — the channel
+    // is formally still there. `sessionLost` is what `ClientWrapper` sets when
+    // `isSubscriptionDead` classifies a heartbeat error as fatal (`:872`), and
+    // it is precisely the frozen-session case that a new session is the only
+    // cure for. Keying on "not connected" instead would dial over the top of a
+    // healthy warm-up, which is a different bug.
+    if (!wrapper.sessionLost &&
+        wrapper.connectionStatus != ConnectionStatus.disconnected) {
+      return;
+    }
+    final last = _lastReopenAt;
+    final now = DateTime.now();
+    if (last != null && now.difference(last) < _reopenFloor) return;
+    _lastReopenAt = now;
+    _reopening = true;
+    _inFlight = client.connect(_endpoint).timeout(_connectDeadline).then<void>(
+      (_) {
+        _reopening = false;
+        wrapper.sessionLost = false;
+        // **Restored is marked HERE, not on the transition back to
+        // connected.** The link being back is a fact about the socket; the
+        // numbers are still the old ones and nothing has re-read them. Doing
+        // it on the connected transition would run *after* the resubscribe had
+        // already delivered fresh values and would relabel a good reading as
+        // uncertain — the right badge on the wrong sample.
+        _markRestored();
+        return _resubscribeAll();
+      },
+      onError: (Object error, StackTrace stack) {
+        _reopening = false;
+        _recordError(error);
+      },
+    );
+    unawaited(_inFlight!.catchError(_recordError));
+  }
+
+  /// The reopen-and-resubscribe currently running, if any.
+  ///
+  /// **Awaited by [dispose], and that is a use-after-free fix rather than
+  /// tidiness.** `client.delete()` frees the native client; a `connect` or a
+  /// `subscriptionCreate` still in flight against it then walks freed memory
+  /// and the VM SEGVs rather than failing — which is exactly what happened,
+  /// intermittently, before this field existed. It is the same hazard 08-01
+  /// hit reading a `UA_DataValue` across an await, one layer up.
+  ///
+  /// No `.timeout` is added at the dispose seam (project memory: a dispose
+  /// that gives up half way leaves the thing it was disposing in a state
+  /// nobody owns). None is needed: the connect inside carries
+  /// [_connectDeadline] and the `subscriptionCreate` carries its own, so this
+  /// future is bounded where the work is rather than where the waiting is.
+  Future<void>? _inFlight;
+
+  /// How often a disconnected link may dial.
+  static const Duration _reopenFloor = Duration(seconds: 1);
+
+  /// The bound on one dial, so a half-open socket cannot park the driver.
+  static const Duration _connectDeadline = Duration(seconds: 10);
+
+  bool _reopening = false;
+  DateTime? _lastReopenAt;
 
   void _superviseIterate(Object error, StackTrace stack) {
     _iterateErrors.add(error);
@@ -741,6 +954,13 @@ final class OpcUaUpstreamLink implements UpstreamLink {
     // up half way leaves the thing it was disposing in a state nobody owns).
     _iterateTimer?.cancel();
     _iterateTimer = null;
+    // Then let any reopen/resubscribe already crossing the FFI boundary
+    // finish, BEFORE the client is deleted underneath it. See [_inFlight].
+    try {
+      await _inFlight;
+    } catch (_) {
+      // A failed reopen is not a disposal failure.
+    }
     for (final monitored in _monitors.values) {
       await monitored.subscription?.cancel();
       await monitored.controller.close();

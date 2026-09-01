@@ -161,11 +161,15 @@ const int declaredRetainedTimers = 1;
 ///    adapter boundary rather than by editing `tfc_dart`.
 ///  * `OpcUaUpstreamLink.write` — `client.write(nodeId, value)`, bounded, and
 ///    counted again below.
+///  * `OpcUaUpstreamLink._reopenSessionIfNeeded` — the session dial after a
+///    drop, bounded. It is a RECONNECT, which the standing constraint allows
+///    on the read/subscribe side; what it may never do is re-issue a write,
+///    and that half is proven behaviourally rather than by this count.
 ///
 /// It moves **by a number somebody wrote down** — every one of those call
 /// sites has to carry a `deadline` argument or a `.timeout(`, and the offender
 /// case is what enforces that.
-const int declaredUpstreamAwaitSites = 6;
+const int declaredUpstreamAwaitSites = 7;
 
 /// Lines under `lib/` that call `.write(` on an upstream.
 ///
@@ -328,7 +332,7 @@ void main() {
               'than prevented (T-08-10)');
     });
 
-    test('the upstream call-site count is the declared one — six since '
+    test('the upstream call-site count is the declared one — seven since '
         '08-07, so this case counts something as well as being non-vacuous',
         () {
       expect(upstreamAwaitSites(libRoot), hasLength(declaredUpstreamAwaitSites),
