@@ -304,8 +304,16 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
     // the same degradation AccessStatusAction itself applies.
     final accessElevated =
         ref.watch(accessSessionProvider).valueOrNull?.isElevated ?? false;
-    final appBarRightMargin =
-        280.0 + (accessElevated ? kAccessStatusActionMaxWidth : 48.0);
+    // The access action sits in the left cluster, between the back arrow and
+    // the clock, so it widens the left margin rather than the right. Its width
+    // is what moves: ~48px for the sign-in icon button while anonymous, up to
+    // kAccessStatusActionMaxWidth once somebody is signed in. The clock rides
+    // that change -- it is the cost of grouping identity with the navigation
+    // controls, and it is deliberate.
+    final appBarLeftMargin = 48.0 +
+        (accessElevated ? kAccessStatusActionMaxWidth : 48.0) +
+        _clockWidth;
+    const appBarRightMargin = 280.0;
 
     return Scaffold(
       appBar: _isFullscreen
@@ -323,16 +331,11 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                     // with aspect ratio ~4.2 => ~210px wide, plus 16px right
                     // padding, plus ~48px theme toggle IconButton = ~274px.
                     // Use 280 for a small safety buffer.
-                    // Left margin: ~48px back-arrow IconButton plus the clock,
-                    // which is [_clockWidth] wide.
-                    //
-                    // The access status action sits inboard of the right-hand
-                    // logo and theme toggle and is added on top of that 280:
-                    // ~48px for the sign-in icon button while anonymous, and up
-                    // to kAccessStatusActionMaxWidth once somebody is signed
-                    // in. See appBarRightMargin above.
+                    // Left margin: the back arrow, the access action and the
+                    // clock -- see appBarLeftMargin above, which is the one
+                    // that changes with the session.
                     Positioned.fill(
-                      left: 48 + _clockWidth,
+                      left: appBarLeftMargin,
                       right: appBarRightMargin,
                       child: Align(
                         alignment: Alignment.center,
@@ -371,6 +374,11 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                                 context.beamBack();
                               }),
                             ),
+                          // Sign in when nobody is; who is signed in, in
+                          // orange, when somebody is. Between the back arrow
+                          // and the clock, so identity reads with the
+                          // navigation controls rather than beside the logo.
+                          const AccessStatusAction(),
                           SizedBox(
                             width: _clockWidth,
                             child: Padding(
@@ -396,10 +404,6 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          // Sign in when nobody is; who is signed in, in
-                          // orange, when somebody is. First child so it sits
-                          // inboard of the logo and the theme toggle.
-                          const AccessStatusAction(),
                           // Only show SVG if not in mobile portrait mode
                           if (!(MediaQuery.of(context).orientation ==
                                   Orientation.portrait &&
