@@ -11,7 +11,12 @@ import '../../helpers/golden_tolerance.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/widgets/panes/pane_chrome.dart'
-    show PaneStatus, PaneSection, PaneGraphTile;
+    show
+        PaneStatus,
+        PaneSection,
+        PaneGraphTile,
+        kPaneTrendTileHeight,
+        kPaneTrendDialogSize;
 import 'package:tfc/widgets/panes/side_pane.dart' show SidePane, closeSidePane;
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/number.dart';
@@ -540,8 +545,10 @@ void main() {
     // CHART: one lit diode per row, so the whole vocabulary can be checked down
     // a single column.
     //
-    // SIX rows from TWO sources, which is the point of this image. The top four
-    // are the kind's own, read one key per PLC member off the `BER01` prefix.
+    // FIVE rows from TWO sources, which is the point of this image. The top
+    // three are the kind's own, read one key per PLC member off the `BER01`
+    // prefix -- there is no `Running` row any more, because the pane header
+    // above it and the run LED on the machine already say that.
     // The bottom two are per-instance [ExtraStatusBit]s, loose keys an engineer
     // adds in the editor because only BER01's carton chutes are sensed. They
     // must be indistinguishable from the kind's own rows -- same row shape,
@@ -662,7 +669,6 @@ void main() {
                             bits: kEquipmentStatusBits[
                                 ThirdPartyEquipmentKind.boxErector]!,
                             values: const {
-                              'Running': true,
                               'WaitingFrustration': false,
                               'PermitInfeed': true,
                               'PermitOutfeed': true,
@@ -699,11 +705,12 @@ void main() {
     // throughput is the one thing on this pane that is not a lamp, and it was
     // going out the door unseen.
     //
-    // Composed exactly as `_trendSection` composes it: a [PaneGraphTile] at the
-    // same 84 px, the compact preview over a 15-minute span, tapping through to
-    // the full chart. What it pins is the change this branch made -- the trace
-    // is read from a PLAIN NUMERIC KEY (`BER01.CartonsPerMinute`), where it
-    // used to be a `sample_members` pick three levels into an FB_BPM instance.
+    // Composed exactly as `boxErectorBpmTrendTile` composes it: a
+    // [PaneGraphTile] at the shared [kPaneTrendTileHeight], the series named in
+    // the tile header, the compact preview over a 15-minute span, tapping
+    // through to the full chart. What it pins now is that this tile is drawn to
+    // the same recipe as the conveyor's -- `pane_trend_parity_test.dart` pins
+    // the recipe itself.
     //
     // Timestamps are fixed relative to a fixed `now`, not `DateTime.now()`:
     // the chart frames its x axis on the newest sample, so real clock values
@@ -754,8 +761,15 @@ void main() {
                       status: const PaneStatus.running(),
                       child: PaneSection(
                         title: 'Trend',
+                        // Every presentation value off the same constants
+                        // `boxErectorBpmTrendTile` uses -- the series named in
+                        // the header, the shared line-trend height, the shared
+                        // dialog size. Only the chart itself is swapped, for a
+                        // collector-free one on a fixed window: a golden can
+                        // reach no Collector and can have no wall clock.
                         child: PaneGraphTile(
-                          height: 84,
+                          legend: boxErectorBpmColors,
+                          height: kPaneTrendTileHeight,
                           preview: BoxErectorBpmGraph(
                             collector: _FakeCollector(samples),
                             keyName: 'BER01.CartonsPerMinute',
@@ -764,6 +778,7 @@ void main() {
                             xRange: window,
                           ),
                           expandedTitle: 'Cartons per minute',
+                          expandedSize: kPaneTrendDialogSize,
                           expandedBuilder: (context) => BoxErectorBpmGraph(
                             collector: _FakeCollector(samples),
                             keyName: 'BER01.CartonsPerMinute',

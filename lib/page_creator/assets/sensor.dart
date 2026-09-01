@@ -717,10 +717,10 @@ class _SensorState extends ConsumerState<Sensor> {
               final tag = widget.config.tag;
               final title = tag != null && tag.isNotEmpty ? tag : key;
               trendTile = PaneGraphTile(
-                // Shorter than the conveyor's two-axis 100px, but tall
-                // enough that the True/False ticks and the time row don't
-                // print over each other.
-                height: 84,
+                // A two-state timeline, not a line chart — see
+                // [kPaneBooleanTrendTileHeight] for why this one tile is
+                // shorter than every other trend tile on the HMI.
+                height: kPaneBooleanTrendTileHeight,
                 preview: SensorTrendGraphLoader(
                   keyName: key,
                   member: member,

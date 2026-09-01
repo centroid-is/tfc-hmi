@@ -691,9 +691,11 @@ void main() {
 
     testWidgets('each diode resolves its bit: on colour, off white, '
         'missing unknown', (tester) async {
-      // Only Running and Cleaning confirmed present — BatchReady, DropOk and
-      // Dropped are absent from the struct, the way a PLC that does not
-      // expose them would hand it to us.
+      // Only Cleaning is confirmed present — BatchReady, DropOk and Dropped
+      // are absent from the struct, the way a PLC that does not expose them
+      // would hand it to us. (`p_stat_Running` is still in the struct and
+      // still read, by [speedBatcherPaneStatus] for the header badge; it just
+      // no longer draws a row of its own.)
       final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
         'p_stat_Running': true,
         'p_stat_Cleaning': false,
@@ -710,11 +712,8 @@ void main() {
       // declares rather than a hardcoded Colors.green -- `wrap` supplies no
       // HmiStateColors, so this resolves through theme.dart's Solarized
       // fallback.
-      final ctx = tester.element(find.byType(StructStatusDiodes));
-      expect(painters[0].color, HmiColorRole.green.resolve(ctx),
-          reason: 'Running is true');
-      expect(painters[1].color, Colors.white, reason: 'Cleaning is false');
-      for (var i = 2; i < painters.length; i++) {
+      expect(painters[0].color, Colors.white, reason: 'Cleaning is false');
+      for (var i = 1; i < painters.length; i++) {
         expect(painters[i].color, isNull,
             reason: 'A bit the PLC does not expose must render unknown, '
                 'not off.');
@@ -732,7 +731,7 @@ void main() {
       )));
 
       final ctx = tester.element(find.byType(StructStatusDiodes));
-      expect(diodePaintersOf(tester)[1].color, HmiColorRole.blue.resolve(ctx));
+      expect(diodePaintersOf(tester)[0].color, HmiColorRole.blue.resolve(ctx));
     });
   });
 
@@ -1023,11 +1022,16 @@ void main() {
           stateMan.controllers.keys.toSet(),
           {
             for (final bit in entry.value) 'CN22.Machine.${bit.suffix}',
-            // Not a diode, but it rides the same map and the same teardown:
-            // the link-health key decides whether any of the others may be
-            // believed, so it must be subscribed off the same prefix.
-            if (entry.key == ThirdPartyEquipmentKind.boxErector)
+            // Not diodes, but they ride the same map and the same teardown.
+            // The link-health key decides whether any of the others may be
+            // believed; the run key drives the pane header and the machine's
+            // LED, and lost its own diode BECAUSE those two already say it --
+            // so it has to stay subscribed here, or removing a duplicate row
+            // would have taken the run state away with it.
+            if (entry.key == ThirdPartyEquipmentKind.boxErector) ...{
               'CN22.Machine.$kBoxErectorCommsSuffix',
+              'CN22.Machine.$kBoxErectorRunSuffix',
+            },
           },
           reason: '${entry.key.name}: every diode must subscribe its '
               'prefix.suffix key.',
