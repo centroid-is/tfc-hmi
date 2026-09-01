@@ -559,10 +559,55 @@ final class ConnectionSupervisor {
         seq: update.seq, changes: changes, generation: update.generation);
   }
 
-  /// A tick: the link is alive, and every subscription is re-judged against
-  /// the gateway's own clock.
-  void _tick(rpc.Parameters params) =>
-      watchdog.sawTick(TickParams.fromJson(_asJson(sanitize(params.asMap).value)));
+  /// A tick: the link is alive, every subscription is re-judged against the
+  /// gateway's own clock, and any subscription the gateway has numbered past
+  /// us is recovered.
+  ///
+  /// **The tick is the only thing that speaks while the plant is quiet.** It
+  /// has carried each subscription's current sequence since Phase 3
+  /// (`tick_engine.dart`'s `_writeTick`) and the client decoded it and threw it
+  /// away until 07-07 (07-RESEARCH-PUBSUB §A.4). Every notification handler
+  /// here is armored drop-not-throw, so a `u` that cannot be decoded is lost
+  /// without a sound, and the only thing that would ever notice is the gap on
+  /// the *next* `u` — of which a quiet plant sends none. The panel then holds a
+  /// value the gateway has already superseded, under good quality, while
+  /// `evaluatedAt` keeps advancing and the freshness watchdog keeps reporting
+  /// fresh. MoldUDP64's heartbeat carries the next expected sequence for
+  /// exactly this reason; this is that, on the frame we already send.
+  ///
+  /// **Ahead of, not different from.** A tick *behind* the client's own
+  /// sequence would be a gateway that rewound — a different bug, and resyncing
+  /// on it would hide it behind a page that rebuilds itself forever. It is also
+  /// the ordinary shape of a same-socket re-establish seen from the wrong side:
+  /// the replacement subscription numbers from zero while this client still
+  /// holds the old baseline, for as long as it takes the snapshot to be
+  /// adopted.
+  ///
+  /// **Awaited, and through [ResyncEngine.onResync].** `_recover` records its
+  /// own failures into `complaints` rather than throwing
+  /// (`resync_engine.dart`), so awaiting is safe in a handler that has nowhere
+  /// to throw, where an unawaited future would need a `.catchError` or become
+  /// an unhandled async error. `onResync` is the existing coalesced path, so a
+  /// run of ticks arriving during one recovery costs one resubscribe and not
+  /// one each.
+  ///
+  /// **Not in [FreshnessWatchdog].** Its own library doc draws a line above its
+  /// subscription half: nothing below it schedules anything or asks for the
+  /// stream to be rebuilt. This asks for exactly that, so it lives here, where
+  /// the peer, the schedule and `_resync` already are.
+  Future<void> _tick(rpc.Parameters params) async {
+    final tick = TickParams.fromJson(_asJson(sanitize(params.asMap).value));
+    watchdog.sawTick(tick);
+    for (final entry in tick.subs.entries) {
+      // A subscription this client does not hold, or one with no numbered
+      // frame yet: skipped, and neither is a complaint. The first is a page
+      // somebody else opened on this session; the second is a subscribe whose
+      // snapshot has not landed.
+      final lastSeq = subscriptions[entry.key]?.lastSeq;
+      if (lastSeq == null || entry.value.seq <= lastSeq) continue;
+      await _resync.onResync(entry.key);
+    }
+  }
 
   /// The gateway announced that one page must be rebuilt.
   Future<void> _resynced(rpc.Parameters params) async {

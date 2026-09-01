@@ -17,10 +17,29 @@
 /// self-sustaining. And an engine that resynced everything on any gap passes
 /// every single-subscription case in this file — which is why the two-sub arm
 /// carries an anti-vacuity check that the other page held values at all.
+///
+/// **The last two groups do use a socket, and they have to** (07-07). What
+/// triggers a recovery is not only a verdict the engine reaches on its own:
+/// since 07-07 a *tick* whose advertised sequence is ahead of the client's
+/// starts one, and an update naming a handle nobody announced starts one too.
+/// Both decisions live in `ConnectionSupervisor`'s notification handlers, and a
+/// notification handler needs a `Peer`, which needs a channel. So those arms
+/// script a gateway on loopback and count the subscribes it is asked for — the
+/// same instrument `reconnect_test.dart`'s `_FakeGateway` is, aimed at a
+/// different property: that one scripts *closes and refusals* to drive the
+/// backoff, this one scripts *sequences* to drive the recovery.
 library;
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
 
+import 'package:tfc_relay_client/src/backoff.dart';
+import 'package:tfc_relay_client/src/client_config.dart';
+import 'package:tfc_relay_client/src/connection_supervisor.dart';
+import 'package:tfc_relay_client/src/freshness_watchdog.dart';
+import 'package:tfc_relay_client/src/readiness_barrier.dart';
 import 'package:tfc_relay_client/src/resync_engine.dart';
 import 'package:tfc_relay_client/src/subscription_state.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
@@ -86,6 +105,220 @@ final class _ScriptedSubscribe {
 }
 
 DynamicValue _v(Object? value) => DynamicValue(value: value);
+
+/// The one key the socket-backed arms watch.
+const String _pageKey = 'ST101.CN01.MOT01.setpoint';
+
+/// The handle the gateway below assigns it.
+const int _pageHandle = 1;
+
+/// The subscription name those arms use.
+const String _page = 'p';
+
+/// The sequence the scripted snapshot answers with.
+///
+/// Four rather than zero on purpose: a comparison written against a constant,
+/// or one that treated a fresh page as "nothing applied yet", would pass every
+/// arm below if the baseline were zero.
+const int _snapshotSeq = 4;
+
+/// How long the socket-backed arms give the client to do something, and how
+/// long they watch to be sure it did nothing more.
+const Duration _budget = Duration(seconds: 5);
+const Duration _settle = Duration(milliseconds: 300);
+
+/// A gateway that answers `hello` and `subscribe` by script and pushes
+/// whatever notification an arm asks it to.
+///
+/// It counts subscribes, which is the number all four arms below are about:
+/// how many times the client asked for the page to be rebuilt. Nothing here
+/// reaches into the client — not `_inFlight`, not `lastSeq` — because the
+/// property is what the *gateway* was asked for, and that is a fact about the
+/// wire.
+final class _SequencedGateway {
+  _SequencedGateway._(this._http);
+
+  static Future<_SequencedGateway> start() async {
+    final http = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final gateway = _SequencedGateway._(http);
+    unawaited(gateway._accept());
+    addTearDown(gateway.shutdown);
+    return gateway;
+  }
+
+  final HttpServer _http;
+  WebSocket? _link;
+
+  /// How many `subscribe` calls this gateway has answered.
+  int subscribes = 0;
+
+  /// The value the next snapshot carries, so an arm can prove a rebuild
+  /// actually delivered something.
+  Object? snapshotValue = 1200;
+
+  /// The generation the next snapshot carries. Bumped per answer, as the real
+  /// registry mints one per establish.
+  int generation = 0;
+
+  Uri get uri => Uri.parse('ws://127.0.0.1:${_http.port}');
+
+  Future<void> _accept() async {
+    await for (final request in _http) {
+      final socket = await WebSocketTransformer.upgrade(request);
+      _link = socket;
+      socket.listen(
+        (Object? data) {
+          final frame = jsonDecode('$data');
+          if (frame is! Map) return;
+          final id = frame['id'];
+          final method = frame['method'];
+          if (id is! int || method is! String) return;
+          switch (method) {
+            case Methods.hello:
+              _send({
+                'jsonrpc': '2.0',
+                'id': id,
+                'result': HelloResult(
+                  protocol: protocolVersion,
+                  server: const PeerInfo('sequenced-gateway', '0.0.1'),
+                  sessionId: 'S1',
+                  epoch: 'E1',
+                  resumed: false,
+                  serverTime: DateTime.now().millisecondsSinceEpoch,
+                ).toJson(),
+              });
+            case Methods.subscribe:
+              subscribes++;
+              _send({
+                'jsonrpc': '2.0',
+                'id': id,
+                'result': {
+                  'sub': _page,
+                  'epoch': 'E1',
+                  'seq': _snapshotSeq,
+                  'generation': ++generation,
+                  'handles': {_pageKey: _pageHandle},
+                  'snapshot': {
+                    '$_pageHandle': WireValue.of(snapshotValue).toJson(),
+                  },
+                },
+              });
+            default:
+              _send({
+                'jsonrpc': '2.0',
+                'id': id,
+                'error': {'code': -32601, 'message': 'no such method'},
+              });
+          }
+        },
+        onError: (Object _) {},
+        cancelOnError: true,
+      );
+    }
+  }
+
+  /// Announces a tick naming [seq] for the page.
+  void tick(int seq) => _send({
+        'jsonrpc': '2.0',
+        'method': Methods.tick,
+        'params': {
+          'serverTime': DateTime.now().millisecondsSinceEpoch,
+          'subs': {
+            _page: {
+              'seq': seq,
+              'evaluatedAt': DateTime.now().millisecondsSinceEpoch,
+            },
+          },
+        },
+      });
+
+  /// Pushes an update naming [handles] — handle to value — at [seq].
+  void update(int seq, Map<int, Object?> handles) => _send({
+        'jsonrpc': '2.0',
+        'method': Methods.update,
+        'params': {
+          'sub': _page,
+          'seq': seq,
+          't': DateTime.now().millisecondsSinceEpoch,
+          'g': generation,
+          'c': {
+            for (final entry in handles.entries)
+              '${entry.key}': WireValue.of(entry.value).toJson(),
+          },
+        },
+      });
+
+  void _send(Object? frame) {
+    final socket = _link;
+    if (socket == null || socket.readyState != WebSocket.open) return;
+    socket.add(jsonEncode(frame));
+  }
+
+  Future<void> shutdown() async {
+    await _link?.close().catchError((Object _) => null);
+    await _http.close(force: true);
+  }
+}
+
+/// Everything a socket-backed arm drives.
+typedef _Panel = ({
+  ConnectionSupervisor supervisor,
+  Map<String, SubscriptionState> subscriptions,
+  ValueStore store,
+});
+
+/// The client's knobs for those arms.
+///
+/// The freshness deadline is far longer than any of them run, deliberately: a
+/// scripted gateway that only speaks when an arm tells it to is a silent link,
+/// and a watchdog that tore it down mid-arm would reconnect, re-subscribe, and
+/// add a subscribe nobody asked for to the count the arms are built on.
+ClientConfig _socketConfig() => ClientConfig(
+      controlDeadline: Duration(milliseconds: 600),
+      writeDeadline: Duration(milliseconds: 600),
+      freshnessDeadline: Duration(seconds: 30),
+      backoffBase: Duration(milliseconds: 40),
+      backoffCap: Duration(seconds: 2),
+      deadlineFloor: Duration(milliseconds: 50),
+    );
+
+/// Builds a supervisor holding one page, pointed at [gateway], and starts it.
+Future<_Panel> _connected(_SequencedGateway gateway) async {
+  final subscriptions = <String, SubscriptionState>{
+    _page: SubscriptionState(subId: _page, keys: const {_pageKey}),
+  };
+  final store = ValueStore();
+  addTearDown(store.dispose);
+  final supervisor = ConnectionSupervisor(
+    uri: gateway.uri,
+    config: _socketConfig(),
+    backoff: Backoff(
+        base: const Duration(milliseconds: 40),
+        cap: const Duration(seconds: 2),
+        random: Random(1)),
+    barrier: ReadinessBarrier(),
+    watchdog: FreshnessWatchdog(
+        config: _socketConfig(), onViewFreshnessChanged: (_) {}),
+    subscriptions: subscriptions,
+    storeFor: (_) => store,
+  );
+  addTearDown(supervisor.dispose);
+  supervisor.start();
+  await _until('the page to be established',
+      () => subscriptions[_page]!.lastSeq == _snapshotSeq);
+  return (supervisor: supervisor, subscriptions: subscriptions, store: store);
+}
+
+/// Polls [done] until it holds or [_budget] runs out, naming [what] on failure.
+Future<void> _until(String what, bool Function() done) async {
+  final deadline = DateTime.now().add(_budget);
+  while (!done()) {
+    if (DateTime.now().isAfter(deadline)) {
+      fail('timed out after ${_budget.inMilliseconds} ms waiting for: $what');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+  }
+}
 
 void main() {
   late _ScriptedSubscribe script;
@@ -453,6 +686,71 @@ void main() {
               'frame into a false gap');
       expect(storeFor('s1').peek('PACK.rate'), isNull,
           reason: 'and its values must not stay on screen as if fresh');
+    });
+  });
+
+  // 07-07, G1 arm A. The gateway has written its current per-subscription
+  // sequence into every tick since Phase 3 and the client threw it away; a `u`
+  // lost on the way in was caught only by the *next* one's gap, and a quiet
+  // plant sends no next one.
+  group('the tick carries the gateway\'s sequence, and the client reads it',
+      () {
+    test('a tick advertising a sequence ahead of the client\'s costs exactly '
+        'one resubscribe', () async {
+      final gateway = await _SequencedGateway.start();
+      final panel = await _connected(gateway);
+      expect(gateway.subscribes, 1,
+          reason: 'the page was established by more than one subscribe, so '
+              'the count below starts from a number this arm did not set');
+
+      // The gateway has pushed frames this client never received — which is
+      // what a locally dropped `u` looks like from the far end. The snapshot
+      // the recovery brings carries a different value, so "it resubscribed"
+      // and "it got the current reading" are two assertions and not one.
+      gateway.snapshotValue = 1300;
+      gateway.tick(_snapshotSeq + 1);
+
+      await _until('the recovery the tick asked for',
+          () => gateway.subscribes == 2);
+      // Spent on purpose: a client that resynced once per tick would answer
+      // the next number here, and an absence is only worth the window it was
+      // watched over.
+      await Future<void>.delayed(_settle);
+
+      expect(gateway.subscribes, 2,
+          reason: 'one tick advertising one lost push cost '
+              '${gateway.subscribes - 1} resubscribes. The recovery goes '
+              'through onResync so the engine\'s in-flight coalescing applies; '
+              'one per tick is the rebuild storm this detector must not be');
+      expect(panel.store.peek(_pageKey)?.value, 1300,
+          reason: 'the page resubscribed and did not end up holding the '
+              'snapshot it was answered with, so the recovery healed nothing');
+      expect(panel.subscriptions[_page]!.lastSeq, _snapshotSeq,
+          reason: 'the baseline was not taken from the new snapshot, so the '
+              'next genuine frame reads as a gap and asks again');
+    });
+
+    test('a tick advertising the sequence the client has applied costs none',
+        () async {
+      final gateway = await _SequencedGateway.start();
+      await _connected(gateway);
+
+      // Five of them, and one behind for good measure: the comparison is
+      // "ahead of", not "different from". A tick *behind* the client is a
+      // gateway that rewound — a different bug, which resyncing would mask —
+      // and it is also what a same-socket re-establish looks like in the
+      // window before this client adopts the replacement snapshot.
+      for (var i = 0; i < 5; i++) {
+        gateway.tick(_snapshotSeq);
+      }
+      gateway.tick(_snapshotSeq - 1);
+      await Future<void>.delayed(_settle);
+
+      expect(gateway.subscribes, 1,
+          reason: 'six ticks on a healthy link cost '
+              '${gateway.subscribes - 1} rebuilds. A detector that fires when '
+              'the gateway and the client agree turns every idle panel into a '
+              'resync per tick against the one process serving all of them');
     });
   });
 }
