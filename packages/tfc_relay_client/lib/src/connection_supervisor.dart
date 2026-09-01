@@ -598,6 +598,12 @@ final class ConnectionSupervisor {
     final state = subscriptions[update.sub];
     if (state == null) return;
 
+    // Whether this client still believes in the page at all. An unestablished
+    // one has no handle table, so *every* handle in every frame the gateway
+    // goes on pushing is unknown — and none of them is a fault anybody can act
+    // on, because this client threw the table away itself.
+    final established = state.lastSeq != null;
+
     var sawUnknownHandle = false;
     final changes = <String, DynamicValue>{};
     for (final entry in update.changes.entries) {
@@ -606,15 +612,30 @@ final class ConnectionSupervisor {
         // Never filed under a guess: a value on a mimic under a label the
         // gateway never agreed to is worse than a value missing from it.
         sawUnknownHandle = true;
-        _resync.complaints.add('update for "${update.sub}" named handle '
-            '${entry.key}, which this session never announced');
+        // Diagnostic, and only where there is something to diagnose: on an
+        // unestablished page this is a line per handle per frame on an
+        // unbounded list, for the life of the socket (07-REVIEW WR-07).
+        if (established) {
+          _resync.complaints.add('update for "${update.sub}" named handle '
+              '${entry.key}, which this session never announced');
+        }
         continue;
       }
       changes[key] = entry.value.toDynamicValue();
     }
     await _resync.onUpdate(update.sub,
         seq: update.seq, changes: changes, generation: update.generation);
-    if (sawUnknownHandle) await _resync.onResync(update.sub);
+    // **Only for a page this client still believes in** (07-REVIEW WR-07).
+    // `ResyncEngine._recover` failing leaves the subscription unestablished on
+    // purpose and does not unsubscribe server-side, so the gateway keeps
+    // pushing `u` frames for the rest of the socket's life — every one of them
+    // with all its handles unknown, every one of them restarting the recovery
+    // that just failed, each with another complaint on an unbounded list.
+    // `lastSeq == null` is the same "unestablished" signal `_tick`'s loop
+    // skips on two methods down, so the two branches agree.
+    if (sawUnknownHandle && state.lastSeq != null) {
+      await _resync.onResync(update.sub);
+    }
   }
 
   /// A tick: the link is alive, every subscription is re-judged against the

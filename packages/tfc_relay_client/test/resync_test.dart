@@ -152,6 +152,10 @@ final class _SequencedGateway {
   /// How many `subscribe` calls this gateway has answered.
   int subscribes = 0;
 
+  /// Whether the next `subscribe` is refused. The lever that puts a page into
+  /// the deliberately-unestablished state `ResyncEngine._unestablish` leaves.
+  bool refuseSubscribe = false;
+
   /// The value the next snapshot carries, so an arm can prove a rebuild
   /// actually delivered something.
   Object? snapshotValue = 1200;
@@ -189,6 +193,14 @@ final class _SequencedGateway {
               });
             case Methods.subscribe:
               subscribes++;
+              if (refuseSubscribe) {
+                _send({
+                  'jsonrpc': '2.0',
+                  'id': id,
+                  'error': {'code': -32000, 'message': 'no'},
+                });
+                return;
+              }
               _send({
                 'jsonrpc': '2.0',
                 'id': id,
@@ -803,6 +815,55 @@ void main() {
       expect(gateway.subscribes, 2,
           reason: 'one batch naming one stranger cost '
               '${gateway.subscribes - 1} rebuilds');
+    });
+
+    test('costs nothing at all once the page has been left unestablished',
+        () async {
+      // **07-REVIEW WR-07.** `_recover` failing appends a complaint and calls
+      // `_unestablish`, which deliberately leaves the subscription down — but
+      // it does not unsubscribe server-side, so the gateway goes on pushing
+      // `u` frames for the whole life of the socket. Every one of those frames
+      // now has all its handles unknown, so the unannounced-handle branch
+      // restarts the recovery that just failed, for ever, appending a
+      // complaint per attempt to an unbounded list. Coalescing keeps it to one
+      // attempt per control deadline rather than one per frame, so it is a
+      // slow leak rather than a storm — and it is still a retry loop on a
+      // class whose whole discipline is about not retrying.
+      final gateway = await _SequencedGateway.start();
+      final panel = await _connected(gateway);
+
+      gateway.refuseSubscribe = true;
+      gateway.update(_snapshotSeq + 1, {_pageHandle: 1300, 99: 'stranger'});
+
+      await _until('the recovery the unannounced handle asked for, and its '
+          'refusal', () => gateway.subscribes == 2);
+      await Future<void>.delayed(_settle);
+
+      final state = panel.subscriptions[_page]!;
+      expect(state.lastSeq, isNull,
+          reason: 'the refused recovery did not leave the page '
+              'unestablished, so the rest of this case is about a different '
+              'state than the one it names');
+
+      // The gateway keeps pushing, because nothing told it to stop.
+      for (var i = 2; i < 8; i++) {
+        gateway.update(_snapshotSeq + i, {_pageHandle: 1300 + i, 99: 'again'});
+        await Future<void>.delayed(_settle);
+      }
+
+      expect(gateway.subscribes, 2,
+          reason: 'six further frames at a page this client has deliberately '
+              'given up on cost ${gateway.subscribes - 2} more subscribe '
+              'attempts. `lastSeq == null` is the exact "unestablished" signal '
+              '`_tick`\'s loop already skips on, and the unannounced-handle '
+              'branch beside it has to skip on the same one or a page that '
+              'failed recovery retries it for as long as the socket lives');
+      expect(panel.supervisor.resync.complaints.length, lessThan(4),
+          reason: 'the complaint list grew to '
+              '${panel.supervisor.resync.complaints.length} entries while the '
+              'client was doing nothing but refusing to act. An unbounded '
+              'List<String> filled by a loop is the leak, not just the '
+              'symptom of it');
     });
 
     test('costs one resubscribe however many handles in it were strangers',
