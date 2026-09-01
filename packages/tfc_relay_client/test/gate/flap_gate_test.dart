@@ -337,10 +337,36 @@ void main() {
       var completed = 0;
       var interrupted = 0;
       var previousState = LinkState.ready;
+
+      // **And one of them is armed off the observation rather than raced
+      // against the clock** (07-REVIEW WR-06). The flap alone leaves the
+      // precondition to a race between a fixed 200 ms up-window and a hello
+      // plus subscribe measured at 50-100 ms, and on a fast quiet machine the
+      // round trip sometimes wins every cycle: `deferred-items.md` recorded
+      // **2 failures in 20 standalone runs** reading `N sockets opened, N
+      // subscribes completed, 0 cut`. The arm was right and the lever was
+      // unreliable, which is not a reason to relax the arm.
+      //
+      // So the first `resyncing` inside the flap window is cut on sight, the
+      // way 07-06's F9 arms its second kill. `resyncing` is entered once the
+      // peer is wired and before the hello goes out, so a reset delivered
+      // there lands strictly inside the window this row is about — and if the
+      // flap's own drop gets there first, that is the same event and the same
+      // transition. The flap still supplies the other tens of them; what this
+      // removes is the possibility of zero.
+      var cutTheNextEstablishment = false;
+      var cutOnSight = 0;
       final watching = fixture.client.linkStates.listen((state) {
         if (state == LinkState.ready) completed++;
         if (state == LinkState.down && previousState == LinkState.resyncing) {
           interrupted++;
+        }
+        if (cutTheNextEstablishment && state == LinkState.resyncing) {
+          cutTheNextEstablishment = false;
+          cutOnSight++;
+          // Composes with the flap: `exclusiveModePairs` excludes `killOnce`
+          // from `cutMidFrame` and `reject`, neither of which this row pulls.
+          fixture.proxy.killOnce();
         }
         previousState = state;
       });
@@ -364,6 +390,7 @@ void main() {
         final sampling = Timer.periodic(_sampleInterval, (_) {
           samples.add(fixture.client.read(scenarioKey)?.value as int?);
         });
+        cutTheNextEstablishment = true;
         fixture.proxy.flap(_fastUp, _fastDown);
         // The window *is* the experiment: there is no event that means "forty
         // establishments were interrupted", so the time has to pass.
@@ -384,26 +411,36 @@ void main() {
       print('F3: flap(${_fastUp.inMilliseconds}ms, '
           '${_fastDown.inMilliseconds}ms) for ${_fastWindow.inSeconds}s: '
           '$attempted sockets opened, $finished subscribes completed, '
-          '$interrupted cut between the socket and the snapshot, '
-          '${fixture.proxy.flapTransitions} transitions, ${samples.length} '
-          'samples, plant reached $plantValue');
+          '$interrupted cut between the socket and the snapshot '
+          '($cutOnSight of them armed off an observed resyncing rather than '
+          'the clock), ${fixture.proxy.flapTransitions} transitions, '
+          '${samples.length} samples, plant reached $plantValue');
 
 
       // Anti-vacuity, and the whole reason 200 ms is the number. 04-RESEARCH
       // Finding 8 measured a 50-100 ms transport round trip, and a completed
       // establishment costs a hello *and* a subscribe on top of the WebSocket
       // handshake — so a 200 ms up-window straddles it and some sockets open
-      // and are cut before their subscribe returns. If every opened socket
-      // finished, 200 ms was not shorter than the handshake on this machine
-      // and the case measured nothing: narrow the flap, do not widen this.
+      // and are cut before their subscribe returns. On a fast quiet machine
+      // the round trip sometimes won every cycle, which is the flake
+      // `deferred-items.md` recorded at 2 of 20; the cut armed off the first
+      // observed `resyncing` is what removed it. Do not relax this arm — it is
+      // the only thing standing between this case and a vacuous pass, and the
+      // fix for a red one is a more reliable lever, not a weaker assertion.
       expect(interrupted, greaterThan(0),
           reason: 'not one of the $attempted sockets that opened during the '
               'flap was cut between the socket and the snapshot — all '
               '$finished of them finished their subscribe — so no '
               'establishment was actually interrupted and the generation '
-              'property below was never put under any load. Narrow the flap; '
-              'do not relax this arm, which is the only thing standing '
-              'between this case and a vacuous pass');
+              'property below was never put under any load. $cutOnSight cut(s) '
+              'were armed off an observed resyncing transition, so if that '
+              'number is 1 the arm fired and the client still reached ready '
+              'before the reset landed; if it is 0 the arm never ran at all');
+      expect(cutOnSight, 1,
+          reason: 'the interruption armed off an observed `resyncing` did not '
+              'run, so the arm above is back to racing a 200 ms window against '
+              'a 50-100 ms handshake — which is exactly the 2-in-20 flake this '
+              'lever replaced');
       expect(samples.length, greaterThan(_fastWindow.inMilliseconds ~/
           _sampleInterval.inMilliseconds ~/ 2),
           reason: 'the sampler took ${samples.length} readings over '
