@@ -1311,6 +1311,32 @@ void main() {
               CollectEntry(key: 'BER01.CartonsPerMinute')),
           isTrue);
     });
+
+    test('the rate axis counts in whole cartons', () {
+      // Cartons leave the erector one at a time, so a gridline offering 12.8
+      // of one is a precision the machine does not have.
+      //
+      // Asserted here rather than left to the golden because the axis labels
+      // are painted onto the chart canvas, not into `Text` widgets: no finder
+      // can read them back, and a golden says only that some pixels moved.
+      for (final compact in [true, false]) {
+        expect(boxErectorBpmYAxis(compact: compact).decimals, 0,
+            reason: 'compact: $compact');
+        // NOT integersOnly. That moves the gridlines instead of the text, and
+        // on the 15-minute preview -- short enough for only two ticks -- the
+        // rounded step came out wider than the range and took the top label
+        // with it, leaving an axis that read `0` and nothing else.
+        expect(boxErectorBpmYAxis(compact: compact).integersOnly, isFalse,
+            reason: 'compact: $compact');
+        // The floor stays pinned: a rate chart that rescales its baseline
+        // turns a small dip into an apparent stoppage.
+        expect(boxErectorBpmYAxis(compact: compact).min, 0);
+      }
+      // Only the labels are rounded. The unit still names the quantity in the
+      // expanded chart, and is dropped in the tile where the header names it.
+      expect(boxErectorBpmYAxis(compact: false).unit, 'Cartons/min');
+      expect(boxErectorBpmYAxis(compact: true).unit, isEmpty);
+    });
   });
 
   group('Box erector Modbus link gate', () {
