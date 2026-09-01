@@ -594,8 +594,10 @@ stays bounded" is true of the conflating send map and false of the socket:
    minute behind reading as live — without pretending the queue is bounded.
 
 **Where the real answer lives: a protocol-level acknowledgement.** The
-client's existing app heartbeat carries the highest `seq` it has applied per
-subscription, and the gateway gates the drain on it. That is the honest
+client's app heartbeat would carry the highest `seq` it has applied per
+subscription, and the gateway would gate the drain on it. The shipped pump
+sends `Methods.ping` with no params (`heartbeat_pump.dart`), so a reader
+looking for the sequence on the wire today will not find it. That is the honest
 implementation of the clause above and it also gives Phase 8's
 `PIPE.effective_hz` and `pending_keys` a real source instead of a proxy
 measure. It is **a named follow-up, not scheduled** — it is a protocol

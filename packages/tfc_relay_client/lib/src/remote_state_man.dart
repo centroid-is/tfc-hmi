@@ -1177,24 +1177,30 @@ final class RemoteStateMan implements StateManApi {
     }
     _refuseIfDisposed(method);
     onSend?.call();
-    // Every request this client makes funnels through here, so this one line
-    // is enough to make the heartbeat a *silence* timer rather than a
-    // metronome: a panel that is reading, writing or re-querying has already
-    // moved the gateway's deadline and needs no ping on top. Placed after the
-    // barrier, so it records a frame that is genuinely going out rather than
-    // one parked waiting for a link.
-    _heartbeat.noteOutbound();
     // The budget again rather than what is left of it. A link that arrived at
     // the last millisecond of the wait has earned the whole round-trip window;
     // a truncated one would expire against a perfectly healthy gateway and
     // report a write it never sent as unknown. So the worst case is two
     // budgets, bounded and deliberate, instead of one budget and a queue.
-    return callWithDeadline(
+    final call = callWithDeadline(
       () => _supervisor.peer,
       method,
       params: params,
       deadline: budget,
     );
+    // Every request this client makes funnels through here, so this one line
+    // is enough to make the heartbeat a *silence* timer rather than a
+    // metronome: a panel that is reading, writing or re-querying has already
+    // moved the gateway's deadline and needs no ping on top.
+    //
+    // **After the call and not before it** (07-REVIEW IN-05).
+    // `callWithDeadline` throws `LinkDown` **synchronously** for a null peer —
+    // the barrier above being open does not promise one is still there — and
+    // recording that as outbound suppressed a beat for a frame that never
+    // reached the wire. Bounded to one extra period of silence and harmless at
+    // the derived period, but there is no reason to record a send that threw.
+    _heartbeat.noteOutbound();
+    return call;
   }
 
   /// A [StateError] of this file's own, naming the call that arrived after the
