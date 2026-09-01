@@ -155,15 +155,32 @@ void main() {
 
       // And the client is still usable. A replay makes the resync engine
       // resubscribe — "a duplicate on the wire means the stream is not what
-      // the client thought it was" — and against the real gateway that
-      // resubscribe is *refused*, because the subscription still exists on the
-      // live session (-32602, `subscription_registry.dart:214`). The recovery
-      // therefore fails, and the property that matters is that failing
-      // recovery costs the panel nothing it was still holding: the cache is
-      // untouched, the link is up, and the next call is answered. The gap this
-      // leaves is written up in the 04-11 SUMMARY, because closing it is a
-      // decision about what `subscribe` means on a live session and not
-      // something a test may make on its own.
+      // the client thought it was" (`resync_engine.dart:149-152`) — and
+      // against the real gateway that resubscribe **succeeds**: a subscribe
+      // naming a live subscription is a *re-establish*, which drops the old
+      // listeners and the old establishment's pending send-buffer lane
+      // (`session_handlers.dart:147-174`, `ConflatingSendBuffer.dropSub`) and
+      // answers with one entry, one seq, a fresh snapshot and a new
+      // generation.
+      //
+      // **Corrected 07-13, owed since 07-06.** This paragraph used to say the
+      // resubscribe was *refused* with -32602 because the subscription still
+      // existed on the live session, citing
+      // `subscription_registry.dart:214`. That has not been true since
+      // 04-REVIEW CR-03: line 214 is now `bool contains(String sub)` and the
+      // refusal it fed was deleted, precisely because it wedged this recovery
+      // path — a gapped client asked for the page, the refusal threw before
+      // `store.clear()` could rebase `lastSeq`, and the next frame was another
+      // gap, for as long as the socket lived. The re-establish is the
+      // mechanism 07-06's G3a and G4 both drive, so the old wording described
+      // a build the rest of this directory contradicts, and the "gap written
+      // up in the 04-11 SUMMARY" is closed.
+      //
+      // What the two arms below assert is unchanged and still worth asserting:
+      // the recovery costs the panel nothing it was holding. The cache is not
+      // blanked back to the replayed value, the link is up, and the next call
+      // is answered — which is the property either way, and the only thing
+      // this case can see from outside.
       final fresh = await fixture.client.readFresh(scenarioKey).timeout(recovery);
       expect(fresh.value, 1500,
           reason: 'a forced round trip after the replay did not come back with '

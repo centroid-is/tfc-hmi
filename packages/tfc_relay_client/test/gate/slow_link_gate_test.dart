@@ -677,8 +677,23 @@ void main() {
       // land on one. So the close is latched at 2 ms into a set, and what the
       // arm *waits* on is the gateway's ledger, which is a record rather than
       // a reading and cannot be overwritten by a reconnect.
+      //
+      // **And it latches the close *reason* beside the code, in the same
+      // sample** (07-13). Latching only the code left half the race in place:
+      // the arm below waits on the latched set and then reads the reason off
+      // `observedClose`, which by then is the *next* attempt's — so on a
+      // loaded run the redial won and the reason read null while the code was
+      // still in the set. Reproduced deterministically by putting a 300 ms
+      // delay between the wait and the read: `Expected: contains 'unable to
+      // keep up' / Actual: <null>`, which is byte-for-byte the failure one in
+      // five full-suite runs produced. Read here, the two fields come off one
+      // `ConnectAttempt` in one synchronous turn, so a latched code always has
+      // whatever reason accompanied it. **Do not widen the `until()` above** —
+      // the value is destroyed by the passage of time rather than produced by
+      // it, so a longer wait makes this worse.
       final zombies = <String>[];
       final seenCodes = <int>{};
+      final seenReasons = <int, String>{};
       final watch = Timer.periodic(const Duration(milliseconds: 2), (_) {
         for (final session in fixture.server.sessions.sessions) {
           final code = session.sentCloseCode;
@@ -687,8 +702,13 @@ void main() {
                 'registry at tick ${engine.ticks}');
           }
         }
-        final observed = panel.observedClose.closeCode;
-        if (observed != null) seenCodes.add(observed);
+        final observed = panel.observedClose;
+        if (observed.closeCode case final int code) {
+          seenCodes.add(code);
+          if (observed.closeReason case final String said) {
+            seenReasons.putIfAbsent(code, () => said);
+          }
+        }
       });
       addTearDown(watch.cancel);
 
@@ -809,7 +829,8 @@ void main() {
       // instant.
       await until('the panel\'s own socket to observe the close the gateway '
           'has already recorded', () => seenCodes.isNotEmpty, budget: recovery);
-      final reason = panel.observedClose.closeReason;
+      // Off the latch, not off the panel: see the sampler's own note.
+      final reason = seenReasons[CloseCodes.backpressureOverrun];
 
       print('G5 above the ceiling: $_g5Page changed handles a tick against a '
           'ceiling of $_ceiling; the verdict fired after '
