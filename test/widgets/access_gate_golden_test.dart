@@ -529,10 +529,13 @@ void main() {
       await tester.tap(find.text('Advanced'));
       await tester.pumpAndSettle();
 
-      // Two locks, on the two raised entries — with a repository present the
-      // Server Config exemption is inert and it needs `administer` like
-      // anything else. Nothing beside the ordinary page.
-      expect(find.byIcon(Icons.lock_outline), findsNWidgets(2));
+      // No locks, because there is nothing left to lock: an entry this
+      // session cannot open is hidden rather than shown wearing one. With a
+      // repository present the Server Config exemption is inert, so both
+      // raised entries go and only the ordinary page remains.
+      expect(find.byIcon(Icons.lock_outline), findsNothing);
+      expect(find.text('Page Editor'), findsNothing);
+      expect(find.text('Server Config'), findsNothing);
 
       await expectLater(
         find.byType(MaterialApp),

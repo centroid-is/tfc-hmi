@@ -566,48 +566,47 @@ void main() {
         await tester.pumpAndSettle();
       }
 
-      testWidgets('a raised entry the session cannot open shows a lock',
+      testWidgets('a raised entry the session cannot open is hidden',
           (tester) async {
         await openMenu(tester);
 
-        expect(_lockFor('Page Editor'), findsOneWidget);
-        expect(_lockFor('Server Config'), findsOneWidget,
+        expect(find.widgetWithText(PopupMenuItem<void>, 'Page Editor'),
+            findsNothing,
+            reason: 'an entry this session cannot open is left out of the '
+                'menu rather than shown wearing a lock');
+        expect(find.widgetWithText(PopupMenuItem<void>, 'Server Config'),
+            findsNothing,
             reason: 'with a repository present the exemption is inert and '
                 'Server Config needs administer like anything else');
+        expect(find.widgetWithText(PopupMenuItem<void>, 'Dashboard'),
+            findsOneWidget,
+            reason: 'an unraised entry is unaffected');
       });
 
       testWidgets(
-          'with the repository unavailable, Server Config alone loses its lock',
+          'with the repository unavailable, Server Config alone stays visible',
           (tester) async {
         await openMenu(tester, repository: _absentRepository);
 
-        expect(_lockFor('Server Config'), findsNothing,
+        expect(find.widgetWithText(PopupMenuItem<void>, 'Server Config'),
+            findsOneWidget,
             reason: 'the page that configures the database must not be '
-                'locked by the database being unavailable');
-        expect(_lockFor('Page Editor'), findsOneWidget,
-            reason: 'the other five stay locked through an outage');
+                'hidden by the database being unavailable — that is the one '
+                'route out of the outage');
+        expect(find.widgetWithText(PopupMenuItem<void>, 'Page Editor'),
+            findsNothing,
+            reason: 'the others stay hidden through an outage');
       });
 
-      testWidgets('a locked entry is still enabled and still navigates',
+      testWidgets('a hidden entry is not in the menu to be tapped',
           (tester) async {
         final delegate = _buildTestNavBarDelegate(_accessTestMenuItem());
         await openMenu(tester, delegate: delegate);
 
-        final item =
-            tester.widget<PopupMenuItem<void>>(find.ancestor(
-          of: find.text('Page Editor'),
-          matching: find.byType(PopupMenuItem<void>),
-        ));
-        expect(item.enabled, isTrue,
-            reason: 'the lock is a badge, not a disable — a dead control is '
-                'what the UI rules forbid outright');
-
-        await tester.tap(find.text('Page Editor'));
-        await tester.pumpAndSettle();
-
-        expect(delegate.configuration.uri.path, '/advanced/page-editor',
-            reason: 'tapping a locked entry navigates as it always did; the '
-                'locked page on the far side is what offers the sign-in');
+        expect(find.text('Page Editor'), findsNothing,
+            reason: 'there is no row left to tap; the AccessGate on the route '
+                'is still what refuses anyone who reaches the path directly, '
+                'so hiding is presentation and never the enforcement point');
       });
 
       testWidgets('an unraised entry occupies zero width', (tester) async {
@@ -625,24 +624,20 @@ void main() {
 
         expect(_badgeFor('Config'), findsNothing,
             reason: 'a section groups, it does not route');
-        expect(find.byType(AccessLockBadge), findsNWidgets(3),
-            reason: 'one per leaf — Page Editor, Server Config, Dashboard');
+        expect(find.byType(AccessLockBadge), findsNWidgets(1),
+            reason: 'only Dashboard is still in the menu; the two raised '
+                'entries are hidden, and a hidden row carries no badge');
       });
 
-      testWidgets('a locked row is the same height as an unlocked one',
+      testWidgets('an ordinary row keeps the height the popup is sized from',
           (tester) async {
         await openMenu(tester);
 
-        final locked = tester.getSize(find.ancestor(
-          of: find.text('Page Editor'),
-          matching: find.byType(PopupMenuItem<void>),
-        ));
-        final unlocked = tester.getSize(find.ancestor(
+        final row = tester.getSize(find.ancestor(
           of: find.text('Dashboard'),
           matching: find.byType(PopupMenuItem<void>),
         ));
-        expect(locked.height, unlocked.height);
-        expect(locked.height, NavDropdown.itemHeight,
+        expect(row.height, NavDropdown.itemHeight,
             reason: 'menuHeight is computed as totalItems * itemHeight before '
                 'the popup opens; a badge that added vertical size would '
                 'break that arithmetic');

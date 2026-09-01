@@ -48,6 +48,40 @@ import 'access_gate.dart';
 /// **No tooltip.** This lives inside a popup route, and a tooltip overlay above
 /// a popup overlay is a bug waiting to happen. The explanation belongs on the
 /// locked page, which is one tap away.
+/// True when [path] names a route this session cannot open.
+///
+/// **One copy of the question, deliberately.** [AccessLockBadge] draws a lock
+/// from this and the navigation menu hides an entry from it. Two copies of
+/// "locked when..." is exactly how a lock ends up on a page that opens, or a
+/// page vanishes that would have opened — the first time one of them is edited.
+/// It calls [resolveAccessGate] for the same reason the badge did: the route
+/// gate and the menu must agree in every repository state, including both
+/// causes of an unavailable one.
+///
+/// **Call it from `build`.** It `watch`es, so a menu rebuilt after somebody
+/// signs in shows the entries they can now reach without being reopened.
+/// Pass `watch: false` from a callback that runs OUTSIDE `build` — a
+/// `PopupMenuButton.itemBuilder`, for instance, which Flutter invokes when the
+/// menu opens rather than while the owning widget is building. `ref.watch` is
+/// only legal during build, and calling it from such a callback does not
+/// rebuild anything; it silently fails to track. A popup is built afresh every
+/// time it opens, so a read is the right answer there anyway.
+bool accessRouteLocked(WidgetRef ref, String? path, {bool watch = true}) {
+  final group = accessGroupForRoute(path);
+  if (group == AccessGroup.operate) return false;
+  final state = resolveAccessGate(
+    group: group,
+    repository: watch
+        ? ref.watch(accessRepositoryProvider)
+        : ref.read(accessRepositoryProvider),
+    session: watch
+        ? ref.watch(accessSessionProvider)
+        : ref.read(accessSessionProvider),
+    allowWhenRepositoryUnavailable: routeAllowedWhenRepositoryUnavailable(path),
+  );
+  return state == AccessGateState.denied;
+}
+
 class AccessLockBadge extends ConsumerWidget {
   const AccessLockBadge({super.key, required this.path});
 
@@ -69,15 +103,7 @@ class AccessLockBadge extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final group = accessGroupForRoute(path);
     if (group == AccessGroup.operate) return const SizedBox.shrink();
-
-    final state = resolveAccessGate(
-      group: group,
-      repository: ref.watch(accessRepositoryProvider),
-      session: ref.watch(accessSessionProvider),
-      allowWhenRepositoryUnavailable:
-          routeAllowedWhenRepositoryUnavailable(path),
-    );
-    if (state != AccessGateState.denied) return const SizedBox.shrink();
+    if (!accessRouteLocked(ref, path)) return const SizedBox.shrink();
 
     return Semantics(
       // Named, not just drawn: a glyph-only lock says nothing to a screen

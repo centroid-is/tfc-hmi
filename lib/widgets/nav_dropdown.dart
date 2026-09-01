@@ -8,6 +8,7 @@ import 'package:tfc_dart/core/alarm.dart';
 import '../models/menu_item.dart';
 import '../providers/nav_alarm.dart' show navigationAlarmLevelFor;
 import '../route_registry.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'access_lock_badge.dart';
 import 'nav_alarm_badge.dart';
 import 'leave_guard.dart';
@@ -54,7 +55,7 @@ class TopLevelNavIndicator extends StatelessWidget {
   }
 }
 
-class NavDropdown extends StatefulWidget {
+class NavDropdown extends ConsumerStatefulWidget {
   static const double itemHeight = 48.0;
   static const double menuWidth = 260.0;
 
@@ -85,10 +86,10 @@ class NavDropdown extends StatefulWidget {
   });
 
   @override
-  State<NavDropdown> createState() => NavDropdownState();
+  ConsumerState<NavDropdown> createState() => NavDropdownState();
 }
 
-class NavDropdownState extends State<NavDropdown> {
+class NavDropdownState extends ConsumerState<NavDropdown> {
   /// Guard that prevents [showMenu] from being called while a popup menu is
   /// already open. Without this, rapid tapping can push a second popup route
   /// while the Navigator is still transitioning, throwing
@@ -118,6 +119,26 @@ class NavDropdownState extends State<NavDropdown> {
   /// Navigation is performed in [PopupMenuItem.onTap] (which fires before
   /// Flutter's internal `Navigator.pop(null)`), so the pop value is always
   /// `void` — compatible with any route type on the root Navigator stack.
+  /// Paths this session cannot open, recomputed on every build.
+  Set<String> _lockedPaths = const {};
+
+  Set<String> _collectLockedPaths(MenuItem root) {
+    final locked = <String>{};
+    void walk(MenuItem item) {
+      for (final child in item.children) {
+        if (child.isNavigationSection) {
+          walk(child);
+        } else {
+          final path = child.path;
+          if (path != null && accessRouteLocked(ref, path)) locked.add(path);
+        }
+      }
+    }
+
+    walk(root);
+    return locked;
+  }
+
   List<PopupMenuEntry<void>> buildFlatMenu(MenuItem root,
       {required BuildContext parentContext, int depth = 0}) {
     final items = <PopupMenuEntry<void>>[];
@@ -145,9 +166,22 @@ class NavDropdownState extends State<NavDropdown> {
             ),
           ),
         ));
-        items.addAll(buildFlatMenu(child,
-            parentContext: parentContext, depth: depth + 1));
+        final sub = buildFlatMenu(child,
+            parentContext: parentContext, depth: depth + 1);
+        // A section whose every page is hidden is a heading over nothing, so
+        // it goes too — and its own header, added just above, comes back off.
+        if (sub.isEmpty) {
+          items.removeLast();
+        } else {
+          items.addAll(sub);
+        }
       } else {
+        // Hidden, not locked-and-visible. An entry this session cannot open is
+        // left out of the menu entirely; `accessRouteLocked` is the same
+        // question `AccessLockBadge` asks, so the menu and the route gate
+        // cannot disagree. The gate still refuses anyone who reaches the path
+        // directly -- hiding is presentation, never the enforcement point.
+        if (_lockedPaths.contains(child.path)) continue;
         items.add(PopupMenuItem<void>(
           height: NavDropdown.itemHeight,
           onTap: () => beamSafelyKids(parentContext, child),
@@ -192,6 +226,18 @@ class NavDropdownState extends State<NavDropdown> {
   Widget build(BuildContext context) {
     // Capture the parent context so we can safely navigate after the popup closes
     final parentContext = context;
+
+    // Which entries this session cannot open, resolved HERE rather than in
+    // `buildFlatMenu`.
+    //
+    // `buildFlatMenu` runs from `showMenu`'s item list, i.e. when the menu is
+    // opened, not while this widget builds. `ref.watch` is only legal during
+    // build, and a `read` there is worse than useless: the session resolves
+    // asynchronously, so at menu-open time it is still loading and NOTHING
+    // reads as denied yet. Watching here means the set is already settled by
+    // the time a menu can be opened, and a session that resolves later rebuilds
+    // this widget and updates it.
+    _lockedPaths = _collectLockedPaths(widget.menuItem);
     final activeRoot = findRootNodeOfLeaf(RouteRegistry().root, null,
         (context.currentBeamLocation.state as BeamState).uri.path);
     if (activeRoot != null) {
