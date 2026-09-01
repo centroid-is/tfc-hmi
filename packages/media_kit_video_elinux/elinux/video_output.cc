@@ -20,6 +20,11 @@ VideoOutput::VideoOutput(mpv_handle* handle,
     : handle_(handle), mpv_(mpv), texture_registrar_(texture_registrar) {}
 
 VideoOutput::~VideoOutput() {
+  // mpv allows only one mpv_render_* call at a time, and CopyPixelBuffer runs
+  // on another thread; the lock is what makes "no render is in flight" true
+  // rather than merely likely.
+  std::lock_guard<std::mutex> lock(mutex_);
+  shut_down_ = true;
   if (render_context_ != nullptr) {
     mpv_->render_context_set_update_callback(render_context_, nullptr, nullptr);
     mpv_->render_context_free(render_context_);
@@ -56,6 +61,8 @@ bool VideoOutput::Initialize(const Size& requested_size, std::string* error) {
     return false;
   }
 
+  // Nothing but marking the texture dirty may happen in here: mpv forbids
+  // calling any mpv_render_* function from inside this callback.
   mpv_->render_context_set_update_callback(
       render_context_,
       [](void* context) {

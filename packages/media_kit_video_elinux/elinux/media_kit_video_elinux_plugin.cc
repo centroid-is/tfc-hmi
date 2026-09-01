@@ -71,6 +71,15 @@ class MediaKitVideoElinuxPlugin : public flutter::Plugin {
       std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel)
       : texture_registrar_(texture_registrar), channel_(std::move(channel)) {}
 
+  ~MediaKitVideoElinuxPlugin() override {
+    // Engine teardown with players still open: stop rendering before the
+    // registrar goes away rather than leaving live textures behind.
+    for (auto& entry : outputs_) {
+      entry.second->Shutdown(entry.second);
+    }
+    outputs_.clear();
+  }
+
   void Listen() {
     channel_->SetMethodCallHandler(
         [this](const auto& call, auto result) { Handle(call, *result); });
