@@ -75,8 +75,12 @@
 /// is the structure the clause is actually about — the unresolved-write set and
 /// the count of writes that reached a socket — sampled through the outage so
 /// that a leak shows as a slope rather than as one end-state reading, which is
-/// `teardown_test.dart`'s checkpoint doctrine. `grep -c currentRss` on this
-/// file is 0, in both arms.
+/// `teardown_test.dart`'s checkpoint doctrine. **No line of code in either arm
+/// reads `ProcessInfo.currentRss`** — the only two occurrences of that name in
+/// this file are in this paragraph, and there is no coarse 10x smoke-detector
+/// ceiling in the soak arm either: a ceiling loose enough to survive the VM's
+/// own allocator is one no leak this row could produce would ever trip, and it
+/// would read like a memory assertion to the next person.
 ///
 /// **The soak arm earned its keep on the first run: ten minutes crosses a
 /// safety boundary that thirty seconds does not.** `ServerConfig
