@@ -56,12 +56,12 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 import 'package:tfc_relay_client/src/client_config.dart';
+import 'package:tfc_relay_client/src/connection_supervisor.dart' show LinkState;
 import 'package:tfc_relay_client/src/remote_state_man.dart';
 import 'package:tfc_relay_client/src/ws_transport.dart';
-// `RelayErrorHandler` is not on the server package's public surface — the
-// barrel exports the configuration types and not the reporter — so it is
-// reached through `src/`, the way `error_reporter_test.dart:21` reaches it.
-import 'package:tfc_relay_server/src/error_reporter.dart';
+// `CloseCodes`, for the eviction set: the codes that mean a panel was thrown
+// off, told apart from the 4002 the gateway sends on its own way out.
+import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_relay_server/tfc_relay_server.dart';
 import 'package:tfc_stateman_contract/faults.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
@@ -152,6 +152,27 @@ final class GateClient {
   /// `proxyPerClient: true`, which is what F12 needs — see [gateFixture].
   final FaultProxy proxy;
 
+  /// Every link state this panel has published since the fixture was built.
+  ///
+  /// **This is the herd's attempt counter, and `FrameSeam.dials` is not.** The
+  /// seam increments only after `ws.ready` completes
+  /// (`frame_seam.dart:107-124`), so a dial into a gateway that is not
+  /// listening — which is every attempt made during a restart — is invisible to
+  /// it. `LinkState.connecting` is the storm observable 07-04 named, and
+  /// counting transitions into it is how a case sees the difference between a
+  /// herd that backed off and a herd that hammered.
+  ///
+  /// The recorder is attached immediately after the panel is constructed, so
+  /// it may miss the very first transition of the very first dial. Every herd
+  /// measurement is a delta across a window, so that does not matter — but a
+  /// case asserting on the absolute count of the first establishment would be
+  /// wrong, and this is where it would go wrong.
+  final List<LinkState> states = <LinkState>[];
+
+  /// How many times this panel has entered [LinkState.connecting].
+  int get attempts =>
+      states.where((state) => state == LinkState.connecting).length;
+
   /// The close this panel's socket has observed, both fields null while it is
   /// open.
   ///
@@ -174,6 +195,8 @@ final class GateFixture {
     this.proxies,
     this.clients,
     this._keys,
+    this.gatewayComplaints,
+    this._retired,
   );
 
   /// The plant behind the gateway. Levers go straight here, never over the
@@ -204,6 +227,24 @@ final class GateFixture {
   final List<GateClient> clients;
 
   final Set<String> _keys;
+
+  /// Everything the gateway complained about, across every restart.
+  ///
+  /// `RelayServer`'s default handler discards (`fault_fixture.dart:259-263`'s
+  /// reason: every case here provokes an error on purpose). A herd is exactly
+  /// the shape that escapes one — twenty panels reconnecting at once, each
+  /// with a socket dying under a handler — so this fixture always collects
+  /// rather than discarding, and a case asserts the list is empty. Discarding
+  /// them would make "no escaped async errors" a claim nothing could refute.
+  final List<String> gatewayComplaints;
+
+  /// The close ledgers of every gateway this fixture has retired.
+  ///
+  /// A restart throws the old `RelayServer` away and its ledger with it, so a
+  /// case that asked the live gateway "was anybody evicted?" would be asking
+  /// the one object that cannot have seen it. Captured at restart time and
+  /// prepended to the live ledger by [evictions].
+  final List<ConnectionClose> _retired;
 
   /// The one proxy the whole herd shares.
   ///
@@ -240,20 +281,37 @@ final class GateFixture {
   int get unauthenticatedSlots =>
       server.sessions.sessions.where((s) => s.sessionId == null).length;
 
-  /// Every close the gateway *initiated*, as it recorded them.
+  /// The close codes that mean the gateway threw a panel off.
+  ///
+  /// **`serverDraining` (4002) is deliberately not here.** It is what
+  /// `RelayServer.close` sends every live session on its way out, so it is the
+  /// signature of the restart *itself* — F10's whole injection — and of the
+  /// fixture's own teardown. Counting it as an eviction would make every herd
+  /// row red for having done the thing it was asked to do. What is left is the
+  /// set an operator would call being thrown off: a credential that stopped
+  /// being valid, a heartbeat the gateway gave up on, and a send buffer the
+  /// gateway refused to keep growing.
+  static const Set<int> evictionCodes = <int>{
+    CloseCodes.authExpired,
+    CloseCodes.heartbeatTimeout,
+    CloseCodes.backpressureOverrun,
+  };
+
+  /// Every close the gateway *initiated* that was an eviction, across every
+  /// gateway this fixture has run.
   ///
   /// This is the eviction question, and it is asked of the gateway rather than
   /// of the panels on purpose. A panel whose socket the proxy reset observes
   /// 1002 or 1006 — a fault the case injected — while a panel the gateway threw
-  /// off observes a 4000-4999 code the gateway chose (`CloseCodes`). Only the
-  /// second is an eviction, and only the gateway's ledger can tell them apart.
+  /// off observes a code the gateway chose. Only the second is an eviction, and
+  /// only the gateway's ledger can tell them apart: from the panel's side a
+  /// flap and an eviction are the same dead socket.
   ///
-  /// Read it **before** teardown: `RelayServer.close` drains every live session
-  /// with `serverDraining` (4002), so a ledger read afterwards names every
-  /// panel as evicted by a gateway that was merely shutting down.
+  /// Read it **before** teardown for the live gateway's half, because
+  /// `RelayServer.close` is about to drain every remaining session.
   List<ConnectionClose> get evictions => [
-        for (final close in server.closeLedger)
-          if (close.serverCloseCode != null) close,
+        for (final close in [..._retired, ...server.closeLedger])
+          if (evictionCodes.contains(close.serverCloseCode)) close,
       ];
 
   /// Every panel's observed close, in herd order.
@@ -288,11 +346,15 @@ final class GateFixture {
     int attempts = 5,
   }) async {
     await _slot.server.close();
+    // After the close, because the drain is what writes the outgoing
+    // gateway's last ledger entries, and before the replacement exists,
+    // because from here on `server` names a different object.
+    _retired.addAll(_slot.server.closeLedger);
     if (downtime > Duration.zero) await Future<void>.delayed(downtime);
 
     var retries = 0;
     while (true) {
-      final replacement = _buildGateway(served, port);
+      final replacement = _buildGateway(served, port, complaints: gatewayComplaints);
       try {
         await replacement.start();
         _slot.server = replacement;
@@ -361,16 +423,19 @@ final class GateFixture {
 RelayServer _buildGateway(
   FakeStateMan plant,
   int port, {
-  RelayErrorHandler? onError,
+  required List<String> complaints,
 }) =>
     RelayServer(
       api: plant,
       config: ServerConfig(tick: ServerConfig.minTick, port: port),
-      // Discards rather than `reportToStderr`, for `fault_fixture.dart:259-263`'s
-      // reason: every case in this directory provokes an error on purpose, and
-      // a suite that printed a stack per provoked error would train everyone to
-      // scroll past them.
-      onError: onError ?? (_, __, ___) {},
+      // Collected rather than printed, and collected rather than discarded.
+      // `fault_fixture.dart:259-263` discards because every case there provokes
+      // an error on purpose and a stack per provoked error trains everyone to
+      // scroll past them — that argument holds for the printing and not for the
+      // dropping. A herd is the shape that escapes an async error, so the
+      // errors are kept where a case can assert over them and nothing is
+      // written to stderr.
+      onError: (error, _, where) => complaints.add('$where: $error'),
     );
 
 /// Stands up a plant, a gateway on a fixed port, one or N proxies, and N real
@@ -417,10 +482,13 @@ Future<GateFixture> gateFixture({
   addTearDown(served.dispose);
   seed?.call(served);
 
+  final gatewayComplaints = <String>[];
+  final retired = <ConnectionClose>[];
+
   // Port 0: the kernel picks, and the number it picks is what every
   // replacement binds. See the library doc on why the port is fixed from the
   // first bind rather than chosen here.
-  final first = _buildGateway(served, 0);
+  final first = _buildGateway(served, 0, complaints: gatewayComplaints);
   await first.start();
   final slot = _GatewaySlot(first);
   final port = first.port;
@@ -458,9 +526,15 @@ Future<GateFixture> gateFixture({
     one = GateClient._(i, client, seam, proxy);
     herd.add(one);
     addTearDown(client.dispose);
+    // Registered after the dispose, so it runs *before* it: a subscription
+    // still open while the panel tears its supervisor down is the shape that
+    // delivers a transition into a closed recorder.
+    final states = client.linkStates.listen(one.states.add);
+    addTearDown(states.cancel);
   }
 
-  final fixture = GateFixture._(served, slot, port, proxies, herd, keys);
+  final fixture = GateFixture._(
+      served, slot, port, proxies, herd, keys, gatewayComplaints, retired);
 
   if (waitForReady) {
     await until(
