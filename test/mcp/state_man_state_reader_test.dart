@@ -306,6 +306,108 @@ void main() {
       });
     });
 
+    group('structured values are not rendered until somebody reads them', () {
+      // A 45s sampling profile of an idle production station (latest-profile
+      // AOT build) put DynamicValue.toString at 0.9% of self time (130 of
+      // ~14000 samples), with MapBase.mapToString, StringBuffer.write and
+      // this reader's _extractValue all in the call tree above it. The reader
+      // subscribes to every key in the mapping, and a struct-valued key used
+      // to be rendered to a String on *every* update -- into a cache nothing
+      // reads except the MCP tag tools, at human pace.
+
+      test('a burst of struct updates renders nothing', () async {
+        final controller = StreamController<DynamicValue>.broadcast();
+        final reader = StateManStateReader.forTest(
+          keys: ['conveyor.status'],
+          streams: {'conveyor.status': controller.stream},
+        );
+        await reader.init();
+
+        const updates = 500;
+        final members = <_CountingDynamicValue>[];
+        for (var i = 0; i < updates; i++) {
+          final speed = _CountingDynamicValue(i.toDouble());
+          final running = _CountingDynamicValue(i.isEven);
+          members
+            ..add(speed)
+            ..add(running);
+          controller.add(_struct({'speed': speed, 'running': running}));
+        }
+        await pumpEventQueue();
+
+        expect(members.map((m) => m.toStringCalls), everyElement(0),
+            reason: '$updates struct updates arrived and nobody asked for any '
+                'of them; rendering them eagerly cost ${members.length} '
+                'DynamicValue.toString calls plus a map walk per update');
+
+        // The read still produces exactly what the eager version cached.
+        expect(
+            reader.getValue('conveyor.status'),
+            _struct({
+              'speed': DynamicValue(value: (updates - 1).toDouble()),
+              'running': DynamicValue(value: (updates - 1).isEven),
+            }).value.toString());
+
+        // Only the surviving update is rendered, and only once: a second read
+        // reuses the string rather than rebuilding it.
+        reader.getValue('conveyor.status');
+        final live = members.sublist(members.length - 2);
+        expect(live.map((m) => m.toStringCalls), everyElement(1));
+        expect(
+            members.sublist(0, members.length - 2).map((m) => m.toStringCalls),
+            everyElement(0),
+            reason: 'superseded updates must never be rendered at all');
+
+        await controller.close();
+        reader.dispose();
+      });
+
+      test('currentValues renders the deferred entries', () async {
+        final scalar = StreamController<DynamicValue>.broadcast();
+        final structured = StreamController<DynamicValue>.broadcast();
+        final reader = StateManStateReader.forTest(
+          keys: ['n', 's'],
+          streams: {'n': scalar.stream, 's': structured.stream},
+        );
+        await reader.init();
+
+        scalar.add(DynamicValue(value: 3));
+        structured.add(_struct({'on': DynamicValue(value: true)}));
+        await pumpEventQueue();
+
+        expect(reader.currentValues, {
+          'n': 3,
+          's': _struct({'on': DynamicValue(value: true)}).value.toString(),
+        });
+        expect(() => reader.currentValues['x'] = 1, throwsUnsupportedError);
+
+        await scalar.close();
+        await structured.close();
+        reader.dispose();
+      });
+
+      test('an array value renders the same way a struct does', () async {
+        final controller = StreamController<DynamicValue>.broadcast();
+        final reader = StateManStateReader.forTest(
+          keys: ['recipe.steps'],
+          streams: {'recipe.steps': controller.stream},
+        );
+        await reader.init();
+
+        final member = _CountingDynamicValue(1);
+        controller.add(DynamicValue.fromList([member]));
+        await pumpEventQueue();
+
+        expect(member.toStringCalls, 0);
+        expect(reader.getValue('recipe.steps'),
+            DynamicValue.fromList([DynamicValue(value: 1)]).value.toString());
+        expect(member.toStringCalls, 1);
+
+        await controller.close();
+        reader.dispose();
+      });
+    });
+
     test('dispose cancels all subscriptions', () async {
       final controller = StreamController<DynamicValue>.broadcast();
       final reader = StateManStateReader.forTest(
@@ -320,4 +422,29 @@ void main() {
       expect(controller.hasListener, isFalse);
     });
   });
+}
+
+/// A [DynamicValue] that counts every time something renders it as a String.
+///
+/// Subclassing is what makes the waste countable: the reader stringified the
+/// *containing* map, and `MapBase.mapToString` calls `toString()` on each
+/// member, so a counter on the members counts the whole render.
+class _CountingDynamicValue extends DynamicValue {
+  _CountingDynamicValue(Object? value) : super(value: value);
+
+  int toStringCalls = 0;
+
+  @override
+  String toString() {
+    toStringCalls++;
+    return super.toString();
+  }
+}
+
+/// A struct-valued [DynamicValue] -- the shape most plant keys carry, and the
+/// shape whose rendering the profile caught.
+DynamicValue _struct(Map<String, DynamicValue> members) {
+  final dv = DynamicValue();
+  members.forEach((name, member) => dv[name] = member);
+  return dv;
 }

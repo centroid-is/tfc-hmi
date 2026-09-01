@@ -21,6 +21,13 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
 /// ```
 class StateManStateReader implements StateReader, ServerAliasProvider {
   final StateMan? _stateMan;
+
+  /// Latest value per subscribed key.
+  ///
+  /// An entry is either a plain scalar (int, double, bool, String) or a
+  /// [_DeferredRender] holding the [DynamicValue] itself. See [_extractValue]
+  /// for why the structured ones are not rendered on arrival, and [_render]
+  /// for where they are.
   final Map<String, dynamic> _cache = {};
   final Map<String, StreamSubscription<DynamicValue>> _subscriptions = {};
 
@@ -136,13 +143,7 @@ class StateManStateReader implements StateReader, ServerAliasProvider {
       }
 
       final sub = stream.listen(
-        (dynamicValue) {
-          try {
-            _cache[key] = _extractValue(dynamicValue);
-          } catch (e) {
-            _cache[key] = dynamicValue.toString();
-          }
-        },
+        (dynamicValue) => _cache[key] = _extractValue(dynamicValue),
         onError: (error) {
           io.stderr.writeln(
               'StateManStateReader: subscription error for key "$key": $error');
@@ -162,14 +163,36 @@ class StateManStateReader implements StateReader, ServerAliasProvider {
 
   /// Extract a plain Dart value from a [DynamicValue].
   ///
-  /// Returns int, double, bool, String, or null for scalar types.
-  /// Falls back to `.toString()` for unexpected types.
+  /// Returns int, double, bool, String, or null for scalar types. Anything
+  /// else -- a struct, an array, a DateTime, a NodeId -- is parked in a
+  /// [_DeferredRender] and turned into a String only if somebody reads it.
+  ///
+  /// The rendering used to happen right here, in the subscription callback.
+  /// For a struct that means `LinkedHashMap<String, DynamicValue>.toString()`:
+  /// `MapBase.mapToString` walking every member, each member's own
+  /// `DynamicValue.toString` (itself three interpolations), and the
+  /// `StringBuffer` behind them -- a fresh string per member per update. This
+  /// reader subscribes to *every* key in the mapping (>1500 in a full plant
+  /// config), so that ran at the plant's whole tag-update rate, while the
+  /// only consumers of the cache are the MCP tag tools, which read at human
+  /// pace. Practically all of it was built and thrown away.
+  ///
+  /// Parking the [DynamicValue] costs one small object and no extra
+  /// retention: the value is already held upstream as the replay buffer of
+  /// its `AutoDisposingStream`, so the cache holds a pointer to an object
+  /// that was going to live anyway.
   static dynamic _extractValue(DynamicValue dv) {
     final v = dv.value;
     if (v == null) return null;
     if (v is int || v is double || v is bool || v is String) return v;
-    return v.toString();
+    return _DeferredRender(dv);
   }
+
+  /// Turns a cache entry into what a reader expects: scalars unchanged,
+  /// deferred structured values rendered -- once -- to the String the eager
+  /// version produced.
+  static dynamic _render(dynamic cached) =>
+      cached is _DeferredRender ? cached.rendered : cached;
 
   @override
   List<String> get keys => _keySource();
@@ -185,11 +208,12 @@ class StateManStateReader implements StateReader, ServerAliasProvider {
         _keySource().contains(key)) {
       unawaited(_subscribeKey(key));
     }
-    return _cache[key];
+    return _render(_cache[key]);
   }
 
   @override
-  Map<String, dynamic> get currentValues => Map.unmodifiable(_cache);
+  Map<String, dynamic> get currentValues => Map.unmodifiable(
+      {for (final e in _cache.entries) e.key: _render(e.value)});
 
   @override
   List<String> get serverAliases {
@@ -208,5 +232,38 @@ class StateManStateReader implements StateReader, ServerAliasProvider {
     _subscriptions.clear();
     _subscribing.clear();
     _cache.clear();
+  }
+}
+
+/// A structured [DynamicValue] sitting in [StateManStateReader]'s cache,
+/// rendered to a String only when somebody asks for it -- and then only once.
+///
+/// Rendering is what the reader used to do on every update of every
+/// structured key; see [StateManStateReader._extractValue].
+class _DeferredRender {
+  _DeferredRender(this._value);
+
+  final DynamicValue _value;
+  Object? _rendered;
+  bool _hasRendered = false;
+
+  /// The exact String the eager version put in the cache.
+  Object? get rendered {
+    if (_hasRendered) return _rendered;
+    _hasRendered = true;
+    try {
+      _rendered = _value.value.toString();
+    } catch (_) {
+      // The old code caught a throwing `_extractValue` and cached
+      // `dynamicValue.toString()` instead. Keep that fallback, and swallow a
+      // throw from it too: this now runs inside a read, and an MCP tag query
+      // returning null beats one throwing out of a synchronous getter.
+      try {
+        _rendered = _value.toString();
+      } catch (_) {
+        _rendered = null;
+      }
+    }
+    return _rendered;
   }
 }
