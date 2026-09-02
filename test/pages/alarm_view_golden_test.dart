@@ -1,5 +1,5 @@
 /// Goldens of the alarm page in both of its readings: the alarm lists with
-/// the page's own Alarms/Stops header row, and the stop analysis rendered
+/// the page's own Alarms/Downtime header row, and the stop analysis rendered
 /// where the operator actually finds it. The header control is deliberately
 /// NOT part of the list's search bar — it switches what the page shows, not
 /// which list — and these images are the review of that placement.
@@ -194,14 +194,14 @@ void main() {
 
   group('alarm page goldens',
       skip: !Platform.isMacOS ? 'Golden tests only run on macOS' : null, () {
-    testWidgets('the lists, with the Alarms/Stops header row — light',
+    testWidgets('the lists, with the Alarms/Downtime header row — light',
         (tester) async {
       await _pumpPage(tester, dark: false);
       await expectLater(
           _body, matchesGoldenFile('goldens/alarm_view_alarms_light.png'));
     });
 
-    testWidgets('the lists, with the Alarms/Stops header row — dark',
+    testWidgets('the lists, with the Alarms/Downtime header row — dark',
         (tester) async {
       await _pumpPage(tester, dark: true);
       await expectLater(
@@ -211,7 +211,7 @@ void main() {
     testWidgets('the stop analysis where the operator finds it — light',
         (tester) async {
       await _pumpPage(tester, dark: false);
-      await tester.tap(find.text('Stops'));
+      await tester.tap(find.text('Downtime'));
       await tester.pumpAndSettle();
       await expectLater(
           _body, matchesGoldenFile('goldens/alarm_view_stops_light.png'));
@@ -220,7 +220,7 @@ void main() {
     testWidgets('the stop analysis where the operator finds it — dark',
         (tester) async {
       await _pumpPage(tester, dark: true);
-      await tester.tap(find.text('Stops'));
+      await tester.tap(find.text('Downtime'));
       await tester.pumpAndSettle();
       await expectLater(
           _body, matchesGoldenFile('goldens/alarm_view_stops_dark.png'));

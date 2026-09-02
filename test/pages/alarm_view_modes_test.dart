@@ -133,7 +133,7 @@ void main() {
     expect(find.byType(ListActiveAlarms), findsOneWidget);
     expect(find.byType(StopTimelineView), findsNothing);
 
-    await tester.tap(find.text('Stops'));
+    await tester.tap(find.text('Downtime'));
     await tester.pumpAndSettle();
 
     expect(find.byType(StopTimelineView), findsOneWidget);
@@ -164,7 +164,7 @@ void main() {
     );
     await _pumpPage(tester, man);
 
-    await tester.tap(find.text('Stops'));
+    await tester.tap(find.text('Downtime'));
     await tester.pumpAndSettle();
 
     expect(find.text('conveyor-jam'), findsOneWidget);

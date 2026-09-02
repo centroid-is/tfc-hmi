@@ -229,7 +229,7 @@ void main() {
       await pumpTimeline(tester,
           config: StopTimelineSpec(headerText: 'Packing hall stops'));
       expect(find.text('Packing hall stops'), findsOneWidget);
-      expect(find.text('Stop analysis'), findsNothing);
+      expect(find.text('Downtime'), findsNothing);
     });
 
     testWidgets('at strip height the brush and detail row are dropped',

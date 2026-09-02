@@ -56,7 +56,7 @@ class _AlarmViewPageState extends State<AlarmViewPage> {
   @override
   Widget build(BuildContext context) {
     return BaseScaffold(
-      title: _showStops ? 'Stop Analysis' : 'Active Alarms',
+      title: _showStops ? 'Downtime' : 'Active Alarms',
       // Its own repaint boundary so a golden of the body captures the body,
       // not the window it happens to share with the app bar's live clock.
       body: RepaintBoundary(
@@ -84,7 +84,7 @@ class _AlarmViewPageState extends State<AlarmViewPage> {
                       ButtonSegment<bool>(
                         value: true,
                         icon: Icon(Icons.align_horizontal_left),
-                        label: Text('Stops'),
+                        label: Text('Downtime'),
                       ),
                     ],
                     selected: {_showStops},

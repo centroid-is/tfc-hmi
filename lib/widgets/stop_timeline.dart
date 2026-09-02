@@ -461,7 +461,7 @@ class _StopTimelineViewState extends State<StopTimelineView> {
           Flexible(
             flex: 2,
             child: Text(
-              widget.config.headerText ?? 'Stop analysis',
+              widget.config.headerText ?? 'Downtime',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: theme.textTheme.titleSmall,
