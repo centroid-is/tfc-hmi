@@ -263,9 +263,19 @@ abstract class DeviceClientUpstreamLink implements UpstreamLink {
     _feeds[ref.key] = controller;
     _subscriptionsCreated++;
     _roundTrips++;
-    _upstream[ref.key] = client.subscribe(ref.key).listen(
-      (sample) => deliver(
-          ref.key, translateSample(sample, arrivedAt: DateTime.now().toUtc())),
+    _upstream[ref.key] = client.subscribe(upstreamKeyFor(ref)).listen(
+      (sample) {
+        final translated =
+            translateSample(sample, arrivedAt: DateTime.now().toUtc());
+        final shaped = shapeSample(ref.key, translated);
+        // **Null is "this sample is not for this key"**, which is a real
+        // outcome rather than an error: a weigher record that fails its
+        // configured `status_filter` is a weighing that happened and does not
+        // belong to this key. Publishing a bad quality for it would put a red
+        // badge on a page every time the machine did something the operator
+        // did not ask to watch.
+        if (shaped != null) deliver(ref.key, shaped);
+      },
       onError: (Object error) {
         recordUpstreamError(error);
         publishDegraded(ref.key, Quality.badCommFault);
@@ -292,6 +302,22 @@ abstract class DeviceClientUpstreamLink implements UpstreamLink {
       return _bad(Quality.badCommFault);
     }
   }
+
+  /// The key the wrapped client knows this ref by.
+  ///
+  /// The same as the gateway key for Modbus, where one key is one register. Not
+  /// the same for the M2400, where **many gateway keys share one record
+  /// stream** — `weigher1v.weight` and `weigher1v.giveaway` are two fields of
+  /// one `BATCH` record, and subscribing to a per-field key would ask the
+  /// wrapper to split a struct it is about to hand over whole.
+  String upstreamKeyFor(UpstreamRef ref) => ref.key;
+
+  /// The last transform between the wire and the cache, or null to publish
+  /// nothing.
+  ///
+  /// Identity for Modbus. For the M2400 this is the lifted `status_filter` and
+  /// field extraction, which is the one place a record becomes a value.
+  DynamicValue? shapeSample(String key, DynamicValue value) => value;
 
   /// One read from the device, unbounded — [read] applies the deadline.
   ///

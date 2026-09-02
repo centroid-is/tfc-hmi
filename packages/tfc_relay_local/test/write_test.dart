@@ -15,12 +15,13 @@ library;
 
 import 'package:test/test.dart';
 import 'package:tfc_relay_local/tfc_relay_local.dart';
-// Reached through `src/` rather than through the barrel deliberately:
-// `lib/tfc_relay_local.dart` is not in this plan's `files_modified`, and the
-// only consumers of the translation in this phase are 08-07's and 08-10's
-// adapters, which live inside this package and import it relatively. The plan
-// that first needs it from outside adds the export line.
-import 'package:tfc_relay_local/src/write_translation.dart';
+// 08-06 reached this through `src/` and wrote down that "the plan that first
+// needs it from outside adds the export line". 08-10 is that plan: the two
+// `DeviceClient` adapters name `UpstreamProtocol` and `WriteAnswer` in their
+// own public signatures, so leaving the file unexported would make two members
+// of an exported class unnameable — and `notWritableReason` is the gateway's
+// single spelling of the read-only refusal, which a caller has to be able to
+// compare against. The barrel now carries it and the `src/` import is gone.
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import 'support/fake_upstream_link.dart';
