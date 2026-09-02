@@ -108,7 +108,7 @@ class _ProposalBannerState extends ConsumerState<ProposalBanner> {
         // The whole queue is this one proposal, so Accept can commit it.
         _buildAcceptButton(proposal, isWholeQueue: true),
         const SizedBox(width: 4),
-        _buildRejectButton(proposal.id),
+        _buildRejectButton(proposal, isWholeQueue: true),
       ],
     );
   }
@@ -210,7 +210,7 @@ class _ProposalBannerState extends ConsumerState<ProposalBanner> {
                   // one. Opening its editor is as far as this row can go.
                   _buildAcceptButton(p, isWholeQueue: false),
                   const SizedBox(width: 4),
-                  _buildRejectButton(p.id),
+                  _buildRejectButton(p, isWholeQueue: false),
                 ],
               ),
             ),
@@ -335,10 +335,33 @@ class _ProposalBannerState extends ConsumerState<ProposalBanner> {
     );
   }
 
-  Widget _buildRejectButton(int id) {
+  /// Reject for one proposal: revert the staged edit, then mark it rejected
+  /// -- the same two halves as Accept, and in the same order.
+  ///
+  /// Never a bare `rejectProposal()` while an editor has the whole queue
+  /// staged. That only does the second half: the banner went away and the
+  /// staged assets stayed on the page, where the operator's next save wrote
+  /// them exactly as an accept would have. Reported on 2026-09-02 against a
+  /// `propose_asset` batch: a rejected 35-asset "ST101 cabinet layout"
+  /// proposal persisted to /+ST101. So when this proposal is the whole queue,
+  /// the editor's published discard is the whole job -- it restores the
+  /// pre-proposal snapshot and marks the row rejected.
+  ///
+  /// For one row of a batch ([isWholeQueue] false) discarding would revert
+  /// the operator's other rows too, so the plain reject stands -- and the
+  /// editor that staged it un-stages its copy off the feedback stream.
+  Widget _buildRejectButton(PendingProposal proposal,
+      {required bool isWholeQueue}) {
     return TextButton(
       onPressed: () {
-        ref.read(proposalStateProvider.notifier).rejectProposal(id);
+        if (isWholeQueue) {
+          final discard = ref.read(proposalDiscardProvider);
+          if (discard != null) {
+            discard();
+            return;
+          }
+        }
+        ref.read(proposalStateProvider.notifier).rejectProposal(proposal.id);
       },
       style: TextButton.styleFrom(
         foregroundColor: Colors.red,
