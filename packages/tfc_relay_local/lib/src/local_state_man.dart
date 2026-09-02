@@ -246,6 +246,12 @@ final class LocalStateMan implements StateManApi {
       // three independent listeners on the same stream would run in whatever
       // order they happened to be registered.
       _linkStates.add(link.stateStream.listen((state) => _onLinkState(link)));
+      // The epoch is a second, independent thing that can change about a link:
+      // 08-08's rule is that a PLC download is not a reconnection, so the two
+      // streams move two different keys and neither moves the other's. The
+      // link has already degraded and re-browsed by the time this fires — all
+      // that is owed here is republishing what it now says about itself.
+      _linkEpochs.add(link.epochStream.listen((_) => _health.onLinkEvent(link)));
       try {
         await link.connect(deadline: connectDeadline);
       } catch (error) {
@@ -282,6 +288,10 @@ final class LocalStateMan implements StateManApi {
       await subscription.cancel();
     }
     _linkStates.clear();
+    for (final subscription in _linkEpochs) {
+      await subscription.cancel();
+    }
+    _linkEpochs.clear();
     await _status.close();
     await _fanIn.dispose();
     _sweep.dispose();
@@ -1102,6 +1112,13 @@ final class LocalStateMan implements StateManApi {
   /// One subscription per configured link, opened by [start].
   final List<StreamSubscription<UpstreamLinkState>> _linkStates =
       <StreamSubscription<UpstreamLinkState>>[];
+
+  /// The same, for identity changes. Separate because the two facts are
+  /// separate: `birth_count` answers "how often has this link come back" and
+  /// the epoch answers "is it still the same server", and a reprogram moves
+  /// exactly one of them.
+  final List<StreamSubscription<String>> _linkEpochs =
+      <StreamSubscription<String>>[];
 
   /// Link-state announcements, **one per link event and never one per key**.
   ///
