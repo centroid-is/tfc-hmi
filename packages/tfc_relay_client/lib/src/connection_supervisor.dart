@@ -117,6 +117,14 @@ const int _unauthorized = -32003;
 /// The code this client reports its own handler failures under.
 const int _handlerFailed = -32000;
 
+/// The `ResyncParams.reason` a stalled gateway announces itself under — one of
+/// the wire vocabulary `messages.dart:455-464` documents.
+///
+/// Declared here as the literal for the same reason the error codes above are:
+/// `tfc_relay_server`'s `gatewayStalled` constant lives in a package this one
+/// depends on only for its tests, and the wire string is the contract.
+const String _gatewayStalled = 'gateway_stalled';
+
 /// Builds a socket, builds a peer, drives hello through resubscribe to a
 /// snapshot, feeds the watchdog, and schedules the next attempt when the link
 /// dies.
@@ -243,6 +251,16 @@ final class ConnectionSupervisor {
   /// connection has already complained about. Cleared on the way down.
   final Map<String, int> _tickResyncAtMs = <String, int>{};
   final Set<String> _tickResyncComplained = <String>{};
+
+  /// The `gateway_stalled` reason and its absolute duration, carried up from the
+  /// last such resync on this connection (09-07). Both null until the gateway
+  /// announces a stall; both cleared on the way down, because a stall on a
+  /// previous socket is not a fact about this one. [_stallComplained] damps the
+  /// complaint to once per connection — fifty subscriptions resyncing on one
+  /// stall is one operator-facing sentence, not fifty (WR-02's shape).
+  String? _stallReason;
+  int? _stalledMs;
+  bool _stallComplained = false;
   Timer? _retry;
   bool _stopped = false;
   String? _stopReason;
@@ -298,16 +316,14 @@ final class ConnectionSupervisor {
   /// The reason of the last `gateway_stalled` resync this connection was told,
   /// or null. See [RemoteStateMan.stallReason].
   ///
-  /// **Stub (09-07 task 2): returns null.** 09-07 task 3 carries the reason and
-  /// duration up through [_resynced] instead of decoding and dropping them, and
-  /// this getter reads the field that fix records. Until then the surface
-  /// exists so the F22b arm compiles and fails for the right reason — the
-  /// gateway told this client the reason and nothing here remembers it.
-  String? get stallReason => null;
+  /// Recorded by [_resynced], which used to decode `ResyncParams.reason` and
+  /// drop it (09-07 ruling 5a). Reset on the way down: a stall reported over a
+  /// previous socket is not a fact about this one.
+  String? get stallReason => _stallReason;
 
   /// The absolute stalledMs of that resync, or null. See
-  /// [RemoteStateMan.stalledMs]. Stub (09-07 task 2): returns null.
-  int? get stalledMs => null;
+  /// [RemoteStateMan.stalledMs]. The figure the gateway sent, never recomputed.
+  int? get stalledMs => _stalledMs;
 
   /// Every delay this supervisor has waited before an attempt, in order.
   ///
@@ -751,9 +767,48 @@ final class ConnectionSupervisor {
   }
 
   /// The gateway announced that one page must be rebuilt.
+  ///
+  /// **The reason and duration are carried up, not dropped** (09-07 ruling 5a).
+  /// Until now this decoded `ResyncParams` and used only `asked.sub`, throwing
+  /// `asked.reason` and `asked.stalledMs` on the floor — so a panel could not
+  /// say "gateway stalled" because nothing this side remembered that the
+  /// gateway said so. The rebuild path is unchanged: it still goes through the
+  /// one coalesced [ResyncEngine.onResync]. The stall surface is set *beside*
+  /// it, on the existing getter seam `lastDownReason` uses, with no second
+  /// notification channel and no stream.
+  ///
+  /// Only `gateway_stalled` touches the stall surface. A resync for any other
+  /// reason — `epoch_changed`, `server_restart`, the ordinary ones — is not a
+  /// stall and must leave the surface exactly as it was: neither cleared to a
+  /// misleading default nor set to a bogus one. The reason vocabulary is
+  /// `ResyncParams`' own (`messages.dart:455-464`).
   Future<void> _resynced(rpc.Parameters params) async {
     watchdog.sawFrame(InboundFrame.update);
     final asked = ResyncParams.fromJson(_asJson(sanitize(params.asMap).value));
+    if (asked.reason == _gatewayStalled) {
+      // The absolute figure the gateway sent, stored as-is: a panel renders it
+      // as "the plant view was frozen for N ms", and recomputing it from this
+      // panel's clock would drift (03-CONTEXT chose absolute).
+      _stallReason = asked.reason;
+      _stalledMs = asked.stalledMs;
+      // Once per connection, not once per subscription: one stall is one
+      // sentence, however many pages resync on it (07-REVIEW WR-02's damping
+      // shape, applied to a new surface). Reset with the surface on the way
+      // down. The duration also lives on the getter above, because a complaint
+      // list is a diagnostic an engineer reads tomorrow, not a value a widget
+      // binds to.
+      if (!_stallComplained) {
+        _stallComplained = true;
+        _resync.complaints.add(asked.stalledMs == null
+            ? 'the gateway announced its event loop stalled; the plant view '
+                'was frozen and every page on this connection is rebuilding '
+                'from a fresh snapshot'
+            : 'the gateway announced its event loop stalled for '
+                '${asked.stalledMs} ms; the plant view was frozen for that '
+                'long and every page on this connection is rebuilding from a '
+                'fresh snapshot');
+      }
+    }
     await _resync.onResync(asked.sub);
   }
 
@@ -906,6 +961,12 @@ final class ConnectionSupervisor {
       // recovered be refused the rebuild it needs.
       _tickResyncAtMs.clear();
       _tickResyncComplained.clear();
+      // The stall surface is a fact about the socket that heard the
+      // announcement (09-07): a new connection starts with no stall reason, and
+      // the once-per-connection complaint damper re-arms.
+      _stallReason = null;
+      _stalledMs = null;
+      _stallComplained = false;
     }
     if (next == LinkState.ready) {
       barrier.open();
