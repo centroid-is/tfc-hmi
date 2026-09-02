@@ -1585,11 +1585,15 @@ final class LocalStateMan implements StateManApi {
   /// that reported "connected" while one of its four PLCs was dark would make
   /// the glance worse than useless.
   ///
-  /// `PipeKeys.connected` is documented as the pipe-wide bit and the *session*
-  /// overlay owns the socket half of it (08-CONTEXT ruling 9 splits per-client
-  /// facts from per-plant ones). This is the per-plant half, and it lives here
-  /// because this is the object that knows what a link's state is. There is no
-  /// second producer for it in `tfc_relay_server`.
+  /// **There is one producer and one bit** (08-REVIEW IN-01). This comment
+  /// used to say the session overlay owned "the socket half" of
+  /// `PipeKeys.connected`; it does not, and never did —
+  /// `SessionHealthStateMan.ownKeys` lists six keys and this is not among
+  /// them, and the §8 amendment in `relay-comm-design.md` now states
+  /// positively that the overlay deliberately does not claim it. 08-CONTEXT
+  /// ruling 9 splits per-client facts from per-plant ones, and this is a
+  /// per-plant one; it lives here because this is the object that knows what
+  /// a link's state is.
   ///
   /// Written through [_degrade] and not [applyUpstreamBatch]: a health key is
   /// outside freshness accounting (HLTH-02), and stamping an arrival on it

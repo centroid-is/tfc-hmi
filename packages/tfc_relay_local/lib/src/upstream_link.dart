@@ -204,6 +204,17 @@ abstract interface class UpstreamLink {
   /// as `StateMan` falls through M2400 → Modbus → OPC UA today
   /// (`state_man.dart:2054-2084`) but without the protocol knowledge baked
   /// into the router.
+  ///
+  /// **Resolving is a REGISTRATION, not a query** (08-REVIEW IN-06). Both
+  /// shipped adapters write their own tables here — node ids, array indices,
+  /// poll groups, bit masks, record keys, status filters, field names — and
+  /// `KeyRouter.route` calls this from the read path, the write path, `_touch`
+  /// and `aliasOfKey`. So a lookup quietly re-registers configuration. It is
+  /// correct today because the mapping entry is the source of truth on every
+  /// call, but an implementation must not assume it is only ever asked, and a
+  /// `route()` for a key whose mapping has been *removed* would leave the
+  /// last-known address registered under it. Write the table from the entry
+  /// you were handed and never from what you remember.
   UpstreamRef? resolve(String key, Object mappingEntry);
 
   /// Values for [ref], as a **plain Stream**.

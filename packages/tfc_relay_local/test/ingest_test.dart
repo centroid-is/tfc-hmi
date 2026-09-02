@@ -221,4 +221,50 @@ void main() {
           reason: 'one of the two moved; one of the two pages rebuilds');
     });
   });
+
+  group('IN-02: landed counts the batch, not the arithmetic', () {
+    test('a key repeated in one cycle — refused then good — is counted as '
+        'landed once, not as refused', () {
+      // The batch is keyed by name, so the second sample overwrites the first
+      // and the map holds ONE entry. `refusals` still holds the key from the
+      // earlier attempt, and `batch.length - refusals.length` then counted a
+      // key that landed as one that did not — reaching zero, or below it on a
+      // cycle with several such keys.
+      final outcome = ingestSamples(<RawSample>[
+        (key: 'ST101.CN01.MOT01.speed', raw: _cyclic()),
+        (key: 'ST101.CN01.MOT01.speed', raw: 41.5),
+      ]);
+
+      expect(outcome.batch, hasLength(1));
+      expect(outcome.refusals, isEmpty,
+          reason: 'the surviving entry is good, so nothing in this batch is '
+              'being published as refused. The THROW is not forgotten — '
+              'IngestLog has it, and that is where a converter bug is '
+              'diagnosed from');
+      expect(outcome.landed, 1,
+          reason: 'the surviving entry converted cleanly and is what every '
+              'subscriber will read. The number is described as evidence '
+              'somebody reads, so it has to be about the batch rather than '
+              'about two lengths that describe different things');
+      expect(outcome.batch.values.single.value, 41.5);
+    });
+
+    test('and it never goes negative, which is what the subtraction could do',
+        () {
+      final outcome = ingestSamples(<RawSample>[
+        for (var i = 0; i < 3; i++) (key: 'one.key', raw: _cyclic()),
+        (key: 'one.key', raw: 1),
+      ]);
+      expect(outcome.landed, greaterThanOrEqualTo(0));
+      expect(outcome.landed, 1);
+    });
+  });
+}
+
+/// A self-referential structure — what `sanitize` refuses, and the cheapest
+/// way to make one key fail without inventing a converter.
+Object _cyclic() {
+  final list = <Object?>[];
+  list.add(list);
+  return list;
 }

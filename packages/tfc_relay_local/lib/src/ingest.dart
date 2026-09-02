@@ -62,12 +62,31 @@ final class IngestOutcome {
   /// a fault belongs.
   final Map<String, DynamicValue> batch;
 
-  /// The keys whose conversion threw, and what it threw. Per key, never per
-  /// file and never per cycle.
+  /// The keys whose **final** entry in [batch] is a refusal, and what threw.
+  ///
+  /// Per key, never per file and never per cycle. "Final" matters when a key
+  /// appears twice in one cycle (08-REVIEW IN-02): the batch is keyed by name,
+  /// so a later good sample replaces an earlier refused one, and reporting the
+  /// key as refused would describe a value that is not the one every
+  /// subscriber is about to read.
+  ///
+  /// **[IngestLog] still records the throw.** The two are different questions
+  /// — *what is this batch publishing as bad* versus *what has ever failed to
+  /// convert* — and the log is the one that answers the second, which is the
+  /// one a converter bug shows up in.
   final Map<String, Object> refusals;
 
   /// How many keys converted cleanly.
-  int get landed => batch.length - refusals.length;
+  ///
+  /// Counted by asking the batch, not by subtracting (08-REVIEW IN-02).
+  /// [batch] is keyed by name, so a key appearing twice in one poll cycle
+  /// collapses to one entry while `batch.length - refusals.length` went on
+  /// treating the two maps as if they described the same population — and
+  /// counted a key that had landed as refused, reaching zero or below it on a
+  /// cycle with several such keys. Diagnostics only, but this number is
+  /// described below as evidence somebody reads.
+  int get landed =>
+      batch.keys.where((key) => !refusals.containsKey(key)).length;
 
   @override
   String toString() =>
@@ -142,6 +161,11 @@ IngestOutcome ingestSamples(
         quality: quality,
         sourceTime: sourceTime,
       );
+      // A later good sample for a key that failed earlier in the same cycle
+      // REPLACES its refusal, because it has already replaced its value: the
+      // batch is keyed by name (08-REVIEW IN-02). The throw is not forgotten —
+      // `log` has it, and that is where a converter bug is diagnosed from.
+      refusals.remove(sample.key);
     } catch (error) {
       refusals[sample.key] = error;
       log?.note(sample.key, error);

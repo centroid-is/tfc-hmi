@@ -20,6 +20,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:tfc_dart/core/state_man.dart' show KeyMappings, KeyMappingEntry;
@@ -85,7 +86,11 @@ void main() {
         ..['build_stamp_key'] = 'ST101.build'
         ..['use_isolate'] = false;
 
-      final again = GatewayConfig.fromJson(GatewayConfig.fromJson(json).toJson());
+      // The round trip is what opts in to the secrets (08-REVIEW IN-05): the
+      // default rendering is the safe one, so a log line or a support bundle
+      // cannot carry a password by accident.
+      final again = GatewayConfig.fromJson(
+          GatewayConfig.fromJson(json).toJson(includeSecrets: true));
 
       expect(again.staleAfter, const Duration(milliseconds: 7000));
       expect(again.linger, const Duration(milliseconds: 250));
@@ -100,6 +105,31 @@ void main() {
       expect(link.stringEncoding, ServerStringEncoding.latin1);
       expect(link.buildStampKey, 'ST101.build');
       expect(link.useIsolate, isFalse);
+    });
+
+    test('IN-05: the DEFAULT rendering carries no secret, so a support bundle '
+        'cannot leak one', () {
+      final json = oneLinkJson();
+      (json['links'] as List).first
+        ..['username'] = 'hmi'
+        ..['password'] = 'secret';
+      (json['server'] as Map)['tls'] = <String, dynamic>{
+        'chain_path': '/etc/relay/leaf.pem',
+        'key_path': '/etc/relay/leaf.key',
+        'key_password': 'keypass',
+      };
+
+      final rendered = jsonEncode(GatewayConfig.fromJson(json).toJson());
+
+      expect(rendered, isNot(contains('secret')),
+          reason: 'this is the reason certificatePath is a path and not '
+              'bytes, applied to the field beside it: a config object gets '
+              'logged, and the first time it does the upstream password is in '
+              'the log');
+      expect(rendered, isNot(contains('keypass')));
+      expect(rendered, contains('hmi'),
+          reason: 'and the username stays — a config nobody can read is a '
+              'config nobody can diagnose, and the identity is not the secret');
     });
 
     test('the per-alias encoding table is built from the links', () {
@@ -173,6 +203,16 @@ void main() {
               'alias somebody left blank is indistinguishable from the plant '
               'that legitimately has none, and it would silently claim all of '
               'them');
+    });
+
+    test('IN-03: a config with no key_mappings is refused here, not in the '
+        'filesystem', () {
+      final json = oneLinkJson()..remove('key_mappings');
+      expect(() => GatewayConfig.fromJson(json), throwsArgumentError,
+          reason: 'the same argument the class already makes for an empty '
+              'endpoint: an empty path reaches the filesystem as a request to '
+              'read "", so the operator gets a FileSystemException about a '
+              'file nobody named instead of the line they left out');
     });
 
     test('an empty link list is a legitimate gateway', () {

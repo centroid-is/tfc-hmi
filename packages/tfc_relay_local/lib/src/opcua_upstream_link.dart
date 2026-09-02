@@ -384,13 +384,32 @@ final class OpcUaUpstreamLink implements UpstreamLink {
   /// Everything the driver's supervisor caught.
   List<Object> get iterateErrors => List<Object>.unmodifiable(_iterateErrors);
 
-  /// How many samples arrived with no source timestamp of their own.
+  /// How many **subscription** samples arrived with no source timestamp of
+  /// their own.
   ///
   /// The recorded fact behind [translateOpcUaSample]'s fallback: a gateway
   /// silently substituting arrival time for source time is exactly threat
   /// T-08-25, and the difference between a mitigation and a hope is that this
   /// number exists.
+  ///
+  /// **Monitored items only, since 08-REVIEW IN-04.** `sourceTimestamp` is
+  /// populated by the binding's monitor callback and by nothing else —
+  /// `client.read` does not set it — so counting the read path here meant one
+  /// tick per `readFresh`/`readMany` key regardless of what the server did.
+  /// A counter that increments on every ordinary read is not measuring an
+  /// anomaly, it is measuring traffic, and the number T-08-25 wants is one
+  /// that stays at zero on a healthy plant. Reads have their own counter
+  /// below, so the fact is still observable and simply is not conflated.
   int get sourceTimeFallbacks => _sourceTimeFallbacks;
+
+  /// How many **read-path** answers were stamped with arrival time.
+  ///
+  /// Expected to equal the number of reads: the binding does not put a source
+  /// timestamp on a `read` at all. It is here so the substitution is recorded
+  /// rather than silent — which is the whole of T-08-25 — without drowning
+  /// [sourceTimeFallbacks], whose value is that it stays at zero.
+  int get readSourceTimeFallbacks => _readSourceTimeFallbacks;
+  int _readSourceTimeFallbacks = 0;
 
   /// How many times this link has re-resolved its keys against a new address
   /// space.
@@ -573,7 +592,9 @@ final class OpcUaUpstreamLink implements UpstreamLink {
       final translated = translateOpcUaSample(
         sample,
         arrivedAt: DateTime.now().toUtc(),
-        onSourceTimeFallback: () => _sourceTimeFallbacks++,
+        // The READ counter, not the subscription one — see IN-04 on
+        // [sourceTimeFallbacks]. Every read contributes here by construction.
+        onSourceTimeFallback: () => _readSourceTimeFallbacks++,
       );
       _cache[ref.key] = translated;
       return translated;

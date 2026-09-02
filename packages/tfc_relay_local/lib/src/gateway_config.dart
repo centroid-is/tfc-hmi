@@ -208,12 +208,21 @@ final class UpstreamLinkConfig {
   /// this plant is set to.
   final int unitId;
 
-  Map<String, dynamic> toJson() => <String, dynamic>{
+  /// [includeSecrets] carries `password` back out, and **defaults to false**.
+  ///
+  /// 08-REVIEW IN-05: this used to echo the upstream password unconditionally,
+  /// which is defensible for a round-trip test and dangerous the first time
+  /// somebody logs a `GatewayConfig` or drops one into a support bundle —
+  /// which is the very reason `certificatePath` two fields above is a path and
+  /// not bytes. The safe rendering is the default and the round trip opts in,
+  /// so the dangerous direction is the one somebody has to type.
+  Map<String, dynamic> toJson({bool includeSecrets = false}) =>
+      <String, dynamic>{
         'alias': alias,
         'protocol': _wireNameOf(protocol),
         'endpoint': endpoint,
         if (username != null) 'username': username,
-        if (password != null) 'password': password,
+        if (password != null && includeSecrets) 'password': password,
         if (certificatePath != null) 'certificate_path': certificatePath,
         if (privateKeyPath != null) 'private_key_path': privateKeyPath,
         if (stringEncoding != ServerStringEncoding.utf8)
@@ -274,7 +283,36 @@ final class GatewayConfig {
     }
   }
 
-  factory GatewayConfig.fromJson(Map<String, dynamic> json) => GatewayConfig(
+  /// Parses a configuration **file's** contents.
+  ///
+  /// **`key_mappings` is required here and not on the constructor** (08-REVIEW
+  /// IN-03). The field defaulted to `''`, so a file missing the line failed
+  /// later in `main` as a `FileSystemException` on the empty path — a message
+  /// about a file nobody named — rather than as the configuration error it is,
+  /// which is the same argument [UpstreamLinkConfig] already makes for an
+  /// empty `endpoint`.
+  ///
+  /// The check belongs to this factory rather than to the constructor because
+  /// the path is only how a *file* names its mappings: `buildGateway` takes
+  /// them as an argument, so an embedder that already holds a `KeyMappings` —
+  /// every end-to-end case here, and any host that composes the gateway
+  /// in-process — has no file to name and must not be made to invent one.
+  factory GatewayConfig.fromJson(Map<String, dynamic> json) {
+    final path = json['key_mappings'] as String? ?? '';
+    if (path.trim().isEmpty) {
+      throw ArgumentError.value(
+          path,
+          'key_mappings',
+          'this configuration names no keymapping file, so the gateway it '
+              'describes can serve no plant key at all. An empty path reaches '
+              'the filesystem as a request to read "", and the operator gets '
+              'a message about a file nobody named instead of the line they '
+              'left out');
+    }
+    return _fromJson(json);
+  }
+
+  static GatewayConfig _fromJson(Map<String, dynamic> json) => GatewayConfig(
         server: serverConfigFromJson(
             (json['server'] as Map?)?.cast<String, dynamic>() ??
                 const <String, dynamic>{}),
@@ -321,9 +359,15 @@ final class GatewayConfig {
         for (final link in links) link.alias: link.stringEncoding,
       });
 
-  Map<String, dynamic> toJson() => <String, dynamic>{
-        'server': serverConfigToJson(server),
-        'links': <Map<String, dynamic>>[for (final l in links) l.toJson()],
+  /// [includeSecrets] is threaded to every part of the rendering that has one
+  /// — the upstream passwords and the TLS key password — and defaults to
+  /// false. See [UpstreamLinkConfig.toJson] for the argument.
+  Map<String, dynamic> toJson({bool includeSecrets = false}) =>
+      <String, dynamic>{
+        'server': serverConfigToJson(server, includeSecrets: includeSecrets),
+        'links': <Map<String, dynamic>>[
+          for (final l in links) l.toJson(includeSecrets: includeSecrets),
+        ],
         'key_mappings': keyMappingsPath,
         'stale_after_ms': staleAfter.inMilliseconds,
         'linger_ms': linger.inMilliseconds,
@@ -340,6 +384,14 @@ final class GatewayConfig {
 /// keep the defaults the server package argued for, and a config file that
 /// wanted to override a backpressure ceiling would add the line here in the
 /// commit that needed it.
+/// **A missing `port` binds an EPHEMERAL one** (08-REVIEW IN-03). That is
+/// right for the free-port draw the tests do and wrong for a plant whose
+/// panels are configured with a fixed address — they would come up unable to
+/// find the gateway, on a boot that reported no error. It is not refused here
+/// because the tests genuinely want it and a `ServerConfig` cannot tell which
+/// caller it has; instead `bin/relay_gateway.dart` logs the port it actually
+/// bound, which is the line an operator checks. Say `"port": 0` deliberately
+/// if that is what is meant.
 ServerConfig serverConfigFromJson(Map<String, dynamic> json) {
   final tls = (json['tls'] as Map?)?.cast<String, dynamic>();
   final auth = (json['auth'] as Map?)?.cast<String, dynamic>();
@@ -367,9 +419,14 @@ ServerConfig serverConfigFromJson(Map<String, dynamic> json) {
   );
 }
 
-/// The inverse, for the round trip. Secrets are carried because they were
-/// given: this is the config the operator wrote, echoed back.
-Map<String, dynamic> serverConfigToJson(ServerConfig config) =>
+/// The inverse, for the round trip.
+///
+/// **Secrets are omitted unless [includeSecrets] asks for them** (08-REVIEW
+/// IN-05). "The config the operator wrote, echoed back" is the right thing for
+/// a round-trip case and the wrong thing for the first log line or support
+/// bundle that renders one, so the round trip is what opts in.
+Map<String, dynamic> serverConfigToJson(ServerConfig config,
+        {bool includeSecrets = false}) =>
     <String, dynamic>{
       'port': config.port,
       'address': config.address.address,
@@ -381,7 +438,7 @@ Map<String, dynamic> serverConfigToJson(ServerConfig config) =>
         'tls': <String, dynamic>{
           'chain_path': config.tls!.chainPath,
           'key_path': config.tls!.keyPath,
-          if (config.tls!.keyPassword != null)
+          if (config.tls!.keyPassword != null && includeSecrets)
             'key_password': config.tls!.keyPassword,
         },
       if (config.auth != null)
