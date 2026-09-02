@@ -142,6 +142,19 @@ class FakeSettingsConnection extends _Unstubbed
   /// When set, [getSettings] throws it — a profile deleted mid-walk.
   final Object? getSettingsError;
 
+  /// Secrets per setting name, as `GetSecrets` returns them. `GetSettings`
+  /// deliberately does not include these, mirroring the real bus.
+  final Map<String, Map<String, DBusValue>> secrets;
+
+  /// When set, [getSecrets] throws it — secrets we are not allowed to read.
+  final Object? getSecretsError;
+
+  /// When set, [delete] throws it.
+  final Object? deleteError;
+
+  /// Setting names passed to [getSecrets], in call order.
+  final List<String> secretRequests = [];
+
   /// Settings maps passed to [update], in call order.
   final List<Map<String, Map<String, DBusValue>>> updates = [];
   bool deleted = false;
@@ -150,7 +163,20 @@ class FakeSettingsConnection extends _Unstubbed
     this.id = '',
     this.settings = const {},
     this.getSettingsError,
+    this.secrets = const {},
+    this.getSecretsError,
+    this.deleteError,
   });
+
+  @override
+  Future<Map<String, Map<String, DBusValue>>> getSecrets(
+      [String settingName = '']) async {
+    secretRequests.add(settingName);
+    final error = getSecretsError;
+    if (error != null) throw error;
+    final section = secrets[settingName];
+    return section == null ? {} : {settingName: section};
+  }
 
   @override
   Future<Map<String, Map<String, DBusValue>>> getSettings() async {
@@ -167,6 +193,8 @@ class FakeSettingsConnection extends _Unstubbed
 
   @override
   Future<void> delete() async {
+    final error = deleteError;
+    if (error != null) throw error;
     deleted = true;
   }
 }
