@@ -74,7 +74,7 @@ void main() {
 
   Future<List<String>> inWindow({DateTime? from, DateTime? to}) async {
     final query = db.select(db.alarmHistory)
-      ..where((t) => alarmHistoryOverlaps(t, types: db.typeMapping, from: from, to: to));
+      ..where((t) => alarmHistoryOverlaps(t, from: from, to: to));
     final rows = await query.get();
     return rows.map((r) => r.alarmUid).toList()..sort();
   }
