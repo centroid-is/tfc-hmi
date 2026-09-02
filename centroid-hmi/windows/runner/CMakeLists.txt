@@ -58,6 +58,11 @@ target_link_libraries(${BINARY_NAME} PRIVATE "d3d11.lib" "dxgi.lib")
 # RegisterEventSource / ReportEvent — a crash record has to reach somewhere
 # that outlives the app's own log file.
 target_link_libraries(${BINARY_NAME} PRIVATE "advapi32.lib")
+# RevokeDragDrop — DestroyController returns the Flutter child window to a clean
+# OLE drag-and-drop state before the engine tears its plugins down, so
+# desktop_drop's IDropTarget reference count stays balanced across engine
+# rebuilds. See the crash note in flutter_window.cpp DestroyController().
+target_link_libraries(${BINARY_NAME} PRIVATE "ole32.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
