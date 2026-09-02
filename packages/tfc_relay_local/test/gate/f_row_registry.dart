@@ -262,11 +262,6 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     owner: '09-07',
     clause: 'the stall harness, the announcement and the staleness clauses (F22a/b/d); the reaper half ("synchronized false disconnect") is 09-08\'s RED and fix, and the historian half ("historian marks the gap") is 09-09\'s db-tagged arm',
   ),
-  'F26': Outstanding(
-    kind: OutstandingKind.partial,
-    owner: '09-05',
-    clause: 'the three arms and the control land in this commit; the measured hold-expiry window (F26c) and its registry deviation land in this plan\'s closing commit',
-  ),
   'F27': Outstanding(
     kind: OutstandingKind.missing,
     owner: '09-06',
@@ -398,6 +393,27 @@ const List<Deviation> gateDeviations = <Deviation>[
         'Deriving evaluatedAt from real per-subscription source evaluation is '
         'the costed follow-up — it changes a per-tick hot path that '
         'tick_test.dart pins.',
+    followUp: 'post-milestone',
+  ),
+  Deviation(
+    row: 'F26',
+    clause: '(c) background app',
+    source: 'injection',
+    reason: 'the gateway has no per-hold tick deadline independent of the '
+        'session: a session that keeps heartbeating while its hold ticks stop '
+        'holds an engaged hold with a frozen counter until the reaper takes '
+        'the session. 09-CONTEXT ruling 3 is measure-first — no second timeout '
+        'is added to a safety path in a gate phase, because the PLC\'s '
+        'FB_HoldToRun T#1000MS TON is the safety authority (Phase 5 ruling): '
+        'the machine stops the instant the counter stops advancing, which is '
+        'what every F26 arm asserts. Measured (09-05, '
+        'stuck_momentary_gate_test F26c): the interval between the counter '
+        'freezing on pause and the tag reaching 0 was 3027 ms — one '
+        'heartbeatDeadline (3000 ms, the reaper\'s deadline, read off the '
+        'gateway config) plus the poll margin. That is the window in which the '
+        'gateway believes a hold is live that nobody is holding; it is '
+        'recorded here so a later phase can decide with the number rather than '
+        'about it. The server Timer.periodic count in lib/src stays 1.',
     followUp: 'post-milestone',
   ),
 ];

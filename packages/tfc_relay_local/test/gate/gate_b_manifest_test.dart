@@ -94,7 +94,7 @@ const _gateDir = 'test/gate';
 /// the failure worth catching — a deviation deleted without saying what now
 /// asserts the clause is the gate quietly widening its own promise.
 const _declaredRows = 7;
-const _declaredDeviations = 7;
+const _declaredDeviations = 8;
 
 /// Gate A's registry, reached by relative path from this package's root and
 /// read as **text** — the same crossing `no_retry_test.dart:182-293` makes
