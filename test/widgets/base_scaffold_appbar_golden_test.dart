@@ -198,7 +198,7 @@ void main() {
         await _pump(tester, noisy());
         // The regression this guards: the clock used to be the *else* branch
         // of the alarm banner, so an active alarm took the time away.
-        expect(find.text('31-08-2026'), findsOneWidget);
+        expect(find.text('31.08.26'), findsOneWidget);
         expect(find.text('14:05:09'), findsOneWidget);
         expect(
             find.textContaining('Blóðgunarker hitastig', findRichText: true),
@@ -210,9 +210,9 @@ void main() {
         (tester) async {
       await withClock(_goldenClock, () async {
         await _pump(tester, quiet);
-        expect(find.text('31-08-2026'), findsOneWidget);
+        expect(find.text('31.08.26'), findsOneWidget);
         expect(find.text('14:05:09'), findsOneWidget);
-        expect(find.text('31-08-2026 14:05:09'), findsNothing);
+        expect(find.text('31.08.26 14:05:09'), findsNothing);
       });
     });
   });

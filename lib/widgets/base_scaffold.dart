@@ -66,9 +66,10 @@ bool isTopLevelDestinationPath(String? path) {
 
 String _twoLetter(int value) => value < 10 ? '0$value' : '$value';
 
-/// `dd-MM-yyyy`.
+/// `dd.MM.yy` -- the local written convention, and two digits of year keep
+/// the top-bar clock narrow beside the alarm banner.
 String formatDate(DateTime timestamp) =>
-    '${_twoLetter(timestamp.day)}-${_twoLetter(timestamp.month)}-${timestamp.year}';
+    '${_twoLetter(timestamp.day)}.${_twoLetter(timestamp.month)}.${_twoLetter(timestamp.year % 100)}';
 
 /// `HH:mm:ss`.
 String formatTimeOfDay(DateTime timestamp) =>
@@ -176,7 +177,7 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
         final currentTime = clock.now();
         // scaleDown, and both lines unwrappable: the sizes below are picked
         // for roboto-mono in a 56px toolbar, but a wider fallback font or an
-        // operator's text scaling would otherwise wrap `dd-MM-yyyy` onto two
+        // operator's text scaling would otherwise wrap `dd.MM.yy` onto two
         // lines and overflow the bar. Shrinking to fit is the graceful
         // failure; a yellow-and-black overflow stripe is not.
         return FittedBox(
