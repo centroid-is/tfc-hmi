@@ -442,12 +442,20 @@ class _AssetStackState extends ConsumerState<AssetStack> {
           final halfAabbW = aabbW / 2;
           final halfAabbH = aabbH / 2;
 
-          frames[asset] = _AssetFrame(
+          final frame = _AssetFrame(
             center: center,
             size: assetSize,
             aabb: Size(aabbW, aabbH),
             angle: angleRadians,
           );
+          frames[asset] = frame;
+          // A composite asset's slices ride their parent's frame: the frame
+          // is only the coarse "is it still here / did it move" tracking for
+          // the mark, and a slice moves exactly when its rack does. The
+          // slice's own outline comes from the shape probe, not from here.
+          for (final sub in asset.childAssets) {
+            frames[sub] = frame;
+          }
 
           positionedChildren.add(
             Positioned(

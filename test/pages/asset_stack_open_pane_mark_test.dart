@@ -188,6 +188,43 @@ void main() {
         reason: 'the outline is the disc, not the asset rectangle');
   });
 
+  testWidgets('a pane opened from a rack slice marks that slice alone',
+      (tester) async {
+    // The Beckhoff case in miniature: a rack head draws its slices inside
+    // its own box, so a tap on one slice used to inherit the rack's subject
+    // and the ring framed the whole block. Each slice sits in its own
+    // [SubdeviceSubject] and is registered under the rack's frame via
+    // [Asset.childAssets]; the ring must come back that one slice's rect.
+    final rack = _RackAsset();
+    await tester.pumpWidget(_wrap([rack]));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('sliceA'));
+    await pumpMarked(tester);
+
+    expect(isSidePaneOpen(id: 'pane:sliceA'), isTrue);
+    expect(markOpacity(tester), 1);
+
+    final slice = tester.getRect(find.byKey(const ValueKey('face:sliceA')));
+    final rackBox = tester.getRect(find.byKey(rackRowKey));
+    final bounds = markBounds(tester);
+    final air = HitBoundaryStyle.selection.standoff * 2;
+    expect(bounds.center.dx, closeTo(slice.center.dx, 2),
+        reason: 'the ring belongs to the tapped slice');
+    expect(bounds.width, lessThan(slice.width + air + 4),
+        reason: 'the ring is the slice, not the whole rack');
+    expect(bounds.width, lessThan(rackBox.width * 0.75));
+    expect(bounds.height, closeTo(slice.height + air, 4));
+
+    // The neighbouring slice: the pane swaps and the ring crosses the rack.
+    await tester.tap(find.text('sliceB'));
+    await pumpMarked(tester);
+
+    final sliceB = tester.getRect(find.byKey(const ValueKey('face:sliceB')));
+    expect(markCentre(tester).dx, closeTo(sliceB.center.dx, 2));
+    expect(find.byKey(openPaneMarkKey), findsOneWidget);
+  });
+
   testWidgets('an asset that publishes nothing is marked with its face',
       (tester) async {
     // Most assets take taps on an opaque box, and for them the box is not a
@@ -449,6 +486,54 @@ class _DiscPainter extends CustomPainter {
   bool shouldRepaint(_DiscPainter oldDelegate) =>
       oldDelegate.radius != radius || oldDelegate.box != box;
 }
+
+/// A composite asset the way the Beckhoff racks are one: two pane-opening
+/// slices drawn inside the parent's box, each in its own [SubdeviceSubject].
+class _RackAsset extends BaseAsset {
+  final _PaneAsset sliceA = _PaneAsset('sliceA', x: 0.5);
+  final _PaneAsset sliceB = _PaneAsset('sliceB', x: 0.5);
+
+  _RackAsset() {
+    // Left of centre so the docked pane never covers slice B.
+    coordinates = Coordinates(x: 0.3, y: 0.5);
+    size = const RelativeSize(width: 0.4, height: 0.2);
+  }
+
+  @override
+  String get displayName => 'RackAsset';
+
+  @override
+  String get category => 'Test';
+
+  @override
+  List<Asset> get childAssets => [sliceA, sliceB];
+
+  @override
+  Widget build(BuildContext context) => Row(
+        key: rackRowKey,
+        children: [
+          for (final slice in [sliceA, sliceB])
+            Expanded(
+              child: SubdeviceSubject(
+                subdevice: slice,
+                // Through a Builder so the slice opens its pane from a
+                // context inside its own subject — the same shape
+                // `AssetStack` gives top-level assets.
+                child: Builder(builder: slice.build),
+              ),
+            ),
+        ],
+      );
+
+  @override
+  Widget configure(BuildContext context) => const SizedBox.shrink();
+
+  @override
+  Map<String, dynamic> toJson() => {constAssetName: 'RackAsset'};
+}
+
+/// Identifies the rack's whole row, for "smaller than the rack" bounds.
+const Key rackRowKey = ValueKey('rack-row');
 
 /// An asset that opens a pane from its own build context, the way every
 /// pane-owning asset in the app does.
