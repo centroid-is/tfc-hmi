@@ -221,10 +221,17 @@ final class LocalStateMan implements StateManApi {
   /// one PLC was in a download would take the other three off the screens too.
   Future<void> start() async {
     for (final link in links) {
+      // Subscribed BEFORE the connect, so the link coming up is an event this
+      // source saw rather than a state it later noticed. One subscription per
+      // link and one handler behind it: the degradation, the health keys and
+      // the announcement are three things that must happen in one order, and
+      // three independent listeners on the same stream would run in whatever
+      // order they happened to be registered.
+      _linkStates.add(link.stateStream.listen((state) => _onLinkState(link)));
       try {
         await link.connect(deadline: connectDeadline);
       } catch (error) {
-        // Never a throw out of start(). The link's own state and, from 08-09,
+        // Never a throw out of start(). The link's own state and
         // PIPE.upstream.<alias>.state are where a failed connect is reported —
         // a subscribable fact rather than an exception the caller has to
         // decide the meaning of.
@@ -249,6 +256,11 @@ final class LocalStateMan implements StateManApi {
     // is, for as long as its deadman window lasts.
     await _releaseHolds(HoldEnded.disposed);
     _disposed = true;
+    for (final subscription in _linkStates) {
+      await subscription.cancel();
+    }
+    _linkStates.clear();
+    await _status.close();
     await _fanIn.dispose();
     _sweep.dispose();
     _store.dispose();
@@ -1036,6 +1048,175 @@ final class LocalStateMan implements StateManApi {
   Map<String, String> get upstreamErrors =>
       Map<String, String>.unmodifiable(_upstreamErrors);
   final Map<String, String> _upstreamErrors = <String, String>{};
+
+  // ------------------------------------------- SRV-08: degrade, then announce
+
+  /// One subscription per configured link, opened by [start].
+  final List<StreamSubscription<UpstreamLinkState>> _linkStates =
+      <StreamSubscription<UpstreamLinkState>>[];
+
+  /// Link-state announcements, **one per link event and never one per key**.
+  ///
+  /// 08-12 wires this to the session's `status` notification path. It carries
+  /// [StatusParams] **objects** and not maps, which is 03-REVIEW WR-06 not
+  /// repeated: this channel once sent a hand-built map, a conforming client
+  /// routed it through `StatusParams.fromJson`, and `json['alias'] as String`
+  /// threw on null — on the notification path, where nothing catches.
+  Stream<StatusParams> get statusStream => _status.stream;
+  final StreamController<StatusParams> _status =
+      StreamController<StatusParams>.broadcast();
+
+  /// How many link-state announcements this source has made.
+  ///
+  /// The observable `checkUpstreamLossAnnouncesOnce` is written against, and
+  /// the number the per-key-announcement sabotage moves to twenty.
+  int get statusNotifications => _statusNotifications;
+  int _statusNotifications = 0;
+
+  /// One link changed state. **Degrade, then announce.**
+  ///
+  /// The order is the property, not the implementation. A panel that learns the
+  /// link is down and *then* reads a key which has not yet degraded sees a good
+  /// value under a dead link — precisely the stale-but-plausible failure
+  /// PROJECT.md names as the reason this project exists. So every value that
+  /// must change has changed before anything is told that anything changed.
+  ///
+  /// The health keys sit between the two for the same reason: they are how a
+  /// panel *learns*, so they must not be ahead of the values they describe.
+  void _onLinkState(UpstreamLink link) {
+    switch (link.state) {
+      case UpstreamLinkState.connected:
+        applyLinkRestored(link.alias);
+      case UpstreamLinkState.disconnected:
+      case UpstreamLinkState.unhealthy:
+      case UpstreamLinkState.reprogrammed:
+        applyLinkLoss(link.alias);
+      case UpstreamLinkState.connecting:
+        // Deliberately no value change. "A reconnect is in progress" is news
+        // about the link and not evidence about any number: the values are
+        // already carrying whatever verdict the loss that preceded it left
+        // them, and re-degrading them would restamp nothing and notify
+        // everybody.
+        break;
+    }
+    // The `PIPE.upstream.<alias>.*` producer goes here, between the two, in
+    // 08-09 task 2.
+    announceLinkState(link);
+  }
+
+  /// Degrades every key [alias] serves, in **one** [ValueStore.applyBatch].
+  ///
+  /// One batch, not one per key: the store's promise is that a batch costs one
+  /// pass and k notifications, and a link loss is the largest batch this source
+  /// will ever apply — at this plant, fifteen hundred keys.
+  ///
+  /// Three rules, and each of them is a way of getting SRV-08 wrong:
+  ///
+  ///  * **Filtered by alias.** Without it, losing one PLC greys out the other
+  ///    three, and a mimic with half its boxes greyed reads as a plant fault
+  ///    the plant does not have.
+  ///  * **Health keys are skipped**, by prefix (HLTH-02). A light that goes out
+  ///    when the thing it monitors fails is not an indicator, and
+  ///    `PIPE.upstream.$alias.state` has to stay readable *while* its link is
+  ///    down — that is the moment it exists for.
+  ///  * **The band guard stages nothing for a key already worse.**
+  ///    `errorConfig` means the tag is gone and waiting will not fix it;
+  ///    `badCommFault` means the link is down and waiting might. Repainting the
+  ///    first as the second tells an operator to wait for something that is
+  ///    never coming back — and it wakes every listener on that key to do it.
+  ///
+  /// It **does not announce**. Kept separate for `fake_state_man.dart:598-605`'s
+  /// stated reason: so a variant can fan the announcement out per key without
+  /// touching the degradation, which is the sabotage that proves the
+  /// announce-once arm bites.
+  void applyLinkLoss(String alias) {
+    final batch = <String, DynamicValue>{};
+    for (final key in _store.keys) {
+      if (PipeKeys.isPipeKey(key)) continue;
+      if (aliasOfKey(key) != alias) continue;
+      final cached = _store.peek(key);
+      if (cached == null) continue;
+      if (Quality.badCommFault.band <= cached.quality.band) continue;
+      batch[key] = cached.copyWith(quality: Quality.badCommFault);
+    }
+    _degrade(batch);
+  }
+
+  /// The snapshot after [alias] comes back: link-degraded keys read
+  /// [Quality.uncertainLastKnown], **not** good.
+  ///
+  /// The link being back is not evidence about the number. Each value becomes
+  /// good again only when it has been re-read, and a snapshot that came back
+  /// good would make a reconnection a way of laundering an hour-old reading
+  /// into a current one — the same lie as a stale value with better manners.
+  ///
+  /// Recovery is a snapshot and never a delta replay: every key that has a
+  /// value comes back at once rather than waiting until it next happens to
+  /// change, or a slow-moving tank level stays greyed for an hour after the
+  /// link healed.
+  void applyLinkRestored(String alias) {
+    final batch = <String, DynamicValue>{};
+    for (final key in _store.keys) {
+      if (PipeKeys.isPipeKey(key)) continue;
+      if (aliasOfKey(key) != alias) continue;
+      final cached = _store.peek(key);
+      if (cached == null) continue;
+      if (!_isLinkDegraded(cached.quality)) continue;
+      batch[key] = cached.copyWith(quality: Quality.uncertainLastKnown);
+    }
+    _degrade(batch);
+  }
+
+  /// Announces [link]'s current state — **once**, however many keys it cost.
+  ///
+  /// Sparkplug sends one NDEATH for a whole node for the same reason: at
+  /// fifteen hundred keys, one event per key is fifteen hundred events for one
+  /// event, arriving in the instant the client is already re-rendering every
+  /// box on the page they are all about. That is a denial of service against
+  /// the operator's own screen, delivered by their own gateway at the worst
+  /// possible moment.
+  ///
+  /// The error is [UpstreamLink.lastError], which is contracted to be redacted
+  /// **at the link**. It is deliberately not redacted a second time here: one
+  /// redactor used by every adapter is the property worth keeping, and a
+  /// belt-and-braces pass at this call site would hide an adapter that forgot.
+  void announceLinkState(UpstreamLink link) {
+    _statusNotifications++;
+    if (_status.isClosed) return;
+    _status.add(StatusParams(
+      alias: link.alias,
+      state: link.state.wireName,
+      error: link.lastError,
+    ));
+  }
+
+  /// Which link serves [key], or null for a health key, a refusal, or a name
+  /// no configured link claimed.
+  ///
+  /// **Cached, and invalidated on a keymapping reload.** A mass degradation
+  /// routes every key in the store, and routing is not free — the OPC UA
+  /// adapter builds a `NodeId` on every `resolve`. But the cache cannot be
+  /// permanent either: a reload re-points keys at different servers, and a
+  /// stale attribution would degrade the wrong PLC's keys, which is the
+  /// isolation failure this method exists to prevent wearing a disguise.
+  /// `KeyRouter.applyKeyMappings` mints a fresh `KeyMappingsIngestResult` on
+  /// every call, so its identity is the reload signal with nothing to keep in
+  /// step.
+  String? aliasOfKey(String key) {
+    final ingest = router.lastIngest;
+    if (!identical(ingest, _aliasCacheGeneration)) {
+      _aliasCache.clear();
+      _aliasCacheGeneration = ingest;
+    }
+    if (_aliasCache.containsKey(key)) return _aliasCache[key];
+    final route = router.route(key);
+    final alias = route is ClaimedRoute ? route.link.alias : null;
+    _aliasCache[key] = alias;
+    return alias;
+  }
+
+  final Map<String, String?> _aliasCache = <String, String?>{};
+  Object? _aliasCacheGeneration;
 }
 
 /// A counting view of one store node.
