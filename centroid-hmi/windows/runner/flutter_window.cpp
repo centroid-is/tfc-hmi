@@ -32,6 +32,10 @@ namespace {
 // or in Win32Window claims it.
 constexpr UINT kWatchdogTickMessage = WM_APP + 0x47;
 
+// Posted from the stderr reader thread when the engine's own error output
+// crosses the context-lost storm threshold. wparam carries the match count.
+constexpr UINT kEglStormMessage = WM_APP + 0x48;
+
 // The stale WM_TIMER id. Nothing arms it any more -- see the note on the tick
 // in flutter_window.h -- but a build that rolls back and forward could leave
 // one running, so teardown still kills it.
@@ -85,6 +89,10 @@ bool WatchdogEnabledFromEnvironment() {
 // Distinct enough to be recognisable in a service manager's log next to a
 // normal shutdown (0) and a crash-handler exit.
 constexpr int kGpuLossExitCode = 109;
+
+// One disconnect or reconnect emits several WM_WTSSESSION_CHANGE messages
+// within a second or so. One rebuild answers all of them.
+constexpr unsigned long long kSessionRebuildDebounceMs = 3000;
 
 constexpr const char* kTag = "[gpu-watchdog]";
 
@@ -247,6 +255,27 @@ bool FlutterWindow::OnCreate() {
               (::GetSystemMetrics(SM_REMOTESESSION) != 0
                    ? "remote (RDP/terminal services)"
                    : "console (local)"));
+
+  // The engine's stderr is the only witness for a context loss the sentinel
+  // and the frame probe both miss (see egl_storm_detector.h). Read it.
+  if (watchdog_enabled_) {
+    const HWND storm_hwnd = watchdog_hwnd_.load();
+    if (stderr_interposer_.Install(
+            tfc::EglStormDetector::Config(),
+            [storm_hwnd](unsigned int matches) {
+              ::PostMessage(storm_hwnd, kEglStormMessage,
+                            static_cast<WPARAM>(matches), 0);
+            })) {
+      LogWatchdog(
+          "stderr storm detector installed -- a burst of engine context-lost "
+          "errors now declares the renderer lost even when every probe "
+          "answers");
+    } else {
+      LogWatchdog(
+          "stderr storm detector could NOT be installed -- an EGL context "
+          "loss is only caught by the session-change rebuild");
+    }
+  }
 
   Dispatch(WatchdogEvent::kStarted);
   return true;
@@ -683,6 +712,38 @@ void FlutterWindow::StartProbe() {
   flutter_controller_->ForceRedraw();
 }
 
+void FlutterWindow::RebuildForSessionChange(const char* why) {
+  if (!watchdog_enabled_ || flutter_controller_ == nullptr) {
+    return;
+  }
+
+  const unsigned long long now = ::GetTickCount64();
+  if (last_session_rebuild_ms_ != 0 &&
+      now - last_session_rebuild_ms_ < kSessionRebuildDebounceMs) {
+    return;
+  }
+  last_session_rebuild_ms_ = now;
+
+  LogWatchdog(std::string("session change (") + why +
+              ") -- REBUILDING the renderer rather than probing it. The probe "
+              "cannot see this class of loss: the next-frame callback is "
+              "answered whether or not rasterisation succeeded.");
+
+  DestroyController();
+  // As in the loss recovery: leave first_frame_shown_ alone so an already
+  // visible window stays visible and an operator's maximise survives.
+  if (!CreateController()) {
+    LogWatchdog(
+        "session-change rebuild FAILED -- the window has no renderer; the "
+        "tick will keep trying and the loss path can still escalate");
+  } else {
+    LogWatchdog("renderer rebuilt after session change");
+    // The old sentinel may belong to the session's departed adapter.
+    device_probe_.Reset();
+    device_probe_.Create();
+  }
+}
+
 void FlutterWindow::OnFramePresented() {
   // The engine consumed the armed callback to get here, so the next probe is
   // free to arm a new one.
@@ -748,6 +809,19 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       Dispatch(WatchdogEvent::kRendererLost, tfc::LossCause::kContextLost);
     } else {
       Dispatch(WatchdogEvent::kTick);
+    }
+    return 0;
+  }
+
+  if (message == kEglStormMessage) {
+    if (watchdog_enabled_ && flutter_controller_ != nullptr) {
+      LogWatchdog(
+          "EGL context-lost STORM on the engine's stderr (" +
+          std::to_string(static_cast<unsigned int>(wparam)) +
+          " matching lines inside the detector window) -- the engine says "
+          "its context is gone, whatever the probes say. Declaring the "
+          "renderer lost.");
+      Dispatch(WatchdogEvent::kRendererLost, tfc::LossCause::kContextLost);
     }
     return 0;
   }
@@ -831,6 +905,15 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
             NoteLossHint(tfc::LossHint::kSessionChange,
                          static_cast<unsigned long>(wparam));
             Dispatch(WatchdogEvent::kDeviceLossHint);
+
+            // Console lock/unlock keeps the same adapter, so a probe is the
+            // right response there. A REMOTE connect or disconnect swaps it,
+            // and that is the case the probe is blind to.
+            if (wparam == WTS_REMOTE_CONNECT) {
+              RebuildForSessionChange("remote connect");
+            } else if (wparam == WTS_REMOTE_DISCONNECT) {
+              RebuildForSessionChange("remote disconnect");
+            }
           }
           break;
         default:
