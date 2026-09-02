@@ -87,6 +87,7 @@ import 'package:postgres/postgres.dart' as pg;
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/database_drift.dart';
 
+import 'advisory_lock.dart';
 import 'collection_config.dart';
 import 'timeseries_sink.dart';
 
@@ -133,6 +134,15 @@ final class TimescaleSink implements TimeseriesSink {
 
   Database? _db;
   StreamSubscription<bool>? _dbStateSub;
+
+  /// The namespace lock, held on its own out-of-pool session for the
+  /// process's life (see advisory_lock.dart's doc). Null while refused or
+  /// lost — and while null, nothing is inserted.
+  AdvisoryLock? _lock;
+
+  /// The re-acquire loop after a lost lock session — stored like
+  /// [_connecting], for the same close() reason.
+  Future<void>? _reacquiring;
 
   /// The background connect loop, **stored rather than awaited** so [close]
   /// can wait for it instead of pulling the backend out from under an
@@ -207,23 +217,77 @@ final class TimescaleSink implements TimeseriesSink {
   Future<Database> _openProduction() async {
     final dbConfig = _databaseConfig();
     await Database.probe(dbConfig);
-    final backend = useIsolate
-        ? await AppDatabase.spawn(dbConfig)
-        : await AppDatabase.create(dbConfig);
-    final db = Database(
-      backend,
-      maxQueuedRowsPerTable: config.maxQueuedRowsPerTable,
-      maxQueuedRowsTotal: config.maxQueuedRowsTotal,
-    );
+    // Ownership before rows: the lock is taken BEFORE the pool is built, so
+    // a refused gateway never holds so much as a pool slot, let alone a
+    // write path. A refusal throws AdvisoryLockRefused, which the connect
+    // loop records (naming the holder) and retries on the same backoff —
+    // the second gateway keeps asking, and takes over the day the first
+    // releases.
+    _lock = await _acquireLock();
     try {
-      await db.open();
+      final backend = useIsolate
+          ? await AppDatabase.spawn(dbConfig)
+          : await AppDatabase.create(dbConfig);
+      final db = Database(
+        backend,
+        maxQueuedRowsPerTable: config.maxQueuedRowsPerTable,
+        maxQueuedRowsTotal: config.maxQueuedRowsTotal,
+      );
+      try {
+        await db.open();
+      } catch (error) {
+        // An attempt being thrown away must release everything it holds —
+        // close() is complete where dispose() is not (class doc, item 4).
+        await db.close();
+        rethrow;
+      }
+      return db;
     } catch (error) {
-      // An attempt being thrown away must release everything it holds —
-      // close() is complete where dispose() is not (class doc, item 4).
-      await db.close();
+      final lock = _lock;
+      _lock = null;
+      if (lock != null) await lock.release();
       rethrow;
     }
-    return db;
+  }
+
+  Future<AdvisoryLock> _acquireLock() {
+    final endpoint = config.endpoint!;
+    return AdvisoryLock.acquire(
+      endpoint: pg.Endpoint(
+        host: endpoint.host,
+        port: endpoint.port,
+        database: endpoint.database,
+        username: endpoint.username,
+        password: endpoint.password,
+      ),
+      sslMode: _sslModeFor(config.sslMode),
+      applicationName: config.applicationNameFor(publisherId),
+      tablePrefix: config.tablePrefix,
+      connectTimeout: config.connectTimeout,
+    );
+  }
+
+  /// After a lost lock session: degraded, not thrashing. Re-acquiring is
+  /// resync-shaped, not a write retry — the same argument 08-07 records for
+  /// the subscribe ladder — and it runs on the connect loop's own bounded
+  /// backoff. Detection rides the insert path (see [insert]) because this
+  /// package's timer discipline forbids a watchdog clock here; the runner
+  /// inserts continuously, so silence is bounded by the sample cadence.
+  Future<void> _reacquireLoop() async {
+    var attempt = 0;
+    while (!_closed) {
+      try {
+        final stale = _lock;
+        _lock = null;
+        if (stale != null) await stale.release();
+        _lock = await _acquireLock();
+        return;
+      } catch (error) {
+        _recordFailure('lock', error);
+        attempt++;
+        await _pause(_backoffFor(attempt));
+      }
+    }
   }
 
   void _adopt(Database db) {
@@ -306,6 +370,18 @@ final class TimescaleSink implements TimeseriesSink {
       }
       return;
     }
+    final lock = _lock;
+    if (_backendFactory == null && (lock == null || !lock.isHeld)) {
+      // The production path holds the namespace lock or inserts nothing.
+      // A lost lock session means another gateway may own these tables
+      // right now; the honest verdict for the row is a counted drop, and
+      // the remedy is re-acquisition, not a buffer.
+      _sinkDropped++;
+      _lastError = 'collect: degraded — the collection lock session was '
+          'lost; dropping rows and re-acquiring';
+      _reacquiring ??= _reacquireLoop().whenComplete(() => _reacquiring = null);
+      return;
+    }
     try {
       await db.insertTimeseriesData(table, time, value);
       _handedOver++;
@@ -339,6 +415,11 @@ final class TimescaleSink implements TimeseriesSink {
     } catch (_) {
       // The loop records its own failures; shutdown proceeds regardless.
     }
+    try {
+      await _reacquiring;
+    } catch (_) {
+      // Same: recorded where it happened.
+    }
     final db = _db;
     _db = null;
     await _dbStateSub?.cancel();
@@ -353,6 +434,15 @@ final class TimescaleSink implements TimeseriesSink {
       }
       try {
         await db.close();
+      } catch (error) {
+        _recordFailure('close', error);
+      }
+    }
+    final lock = _lock;
+    _lock = null;
+    if (lock != null) {
+      try {
+        await lock.release();
       } catch (error) {
         _recordFailure('close', error);
       }
@@ -447,6 +537,14 @@ final class TimescaleSink implements TimeseriesSink {
   /// the failure class and, when one is present, the five-character SQLSTATE
   /// — a code fixed by the SQL standard that can name no deployment.
   void _recordFailure(String phase, Object error) {
+    if (error is AdvisoryLockRefused) {
+      // The one error whose detail survives: the holder's application_name
+      // is a name this project mints itself (T-8b-05's "says which
+      // process"), not a host, database or credential.
+      _lastError = 'collect: refused — another collector holds this '
+          'namespace${error.holder == null ? '' : ': ${error.holder}'}';
+      return;
+    }
     final type = error.runtimeType.toString();
     final sqlState = RegExp(r'\b(08|22|23|28|3D|42|53|57)[0-9A-Z]{3}\b')
         .firstMatch(error.toString())
