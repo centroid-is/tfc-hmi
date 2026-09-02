@@ -588,9 +588,27 @@ void main() {
     });
   });
 
-  group('an applied write is visibly unconfirmed until readback', () {
-    test('applied stages goodWritePending on the value the widget is already '
-        'watching', () async {
+  group('a write is visibly unconfirmed WHILE IN FLIGHT, and confirmed by its '
+      'readback', () {
+    // **Rewritten by 08-11, and the contract suite is why.** 08-06 badged the
+    // value AFTER the outcome and left the badge on until some later upstream
+    // sample. Two of the fifty checks say that is wrong in both halves:
+    //
+    //  * `checkWritePendingIsVisibleWhileInFlight` holds a write open and
+    //    requires the badge to be visible THEN — "over a slow link it is the
+    //    only thing telling an operator their press was registered, and an
+    //    operator who sees nothing presses again". A badge staged after the
+    //    outcome is never visible during the one window it exists for.
+    //  * The same check then requires the value to read `good` once the write
+    //    resolves: "a pending badge that never clears is a permanent amber box
+    //    the operator learns to ignore".
+    //
+    // And the badge coming off on `WriteApplied` is not a weakening of
+    // "readback is the only confirmation" — it is that rule applied, because
+    // `upstream_link.dart` defines applied as "applied *and read back*". The
+    // confirmation is the outcome, and it carries the number the device holds.
+    test('the badge is ON while the write is out and OFF once it lands, and '
+        'the number that lands is the READBACK', () async {
       final built = buildWriteFixture();
       await built.man.start();
       addTearDown(built.man.dispose);
@@ -598,37 +616,53 @@ void main() {
         st101Key: DynamicValue(value: 1),
       });
 
-      built.link.setNextWriteOutcome(
-          WriteApplied(cmd, readback: 7, at: 1700000000000));
-      await built.man.write(st101Key, 7);
+      // Held open at the link, which is where a slow PLC holds one.
+      built.link.writeLatency = const Duration(milliseconds: 80);
+      final pending = built.man.write(st101Key, 7);
 
       expect(built.man.read(st101Key)!.quality, Quality.goodWritePending,
           reason: 'the in-flight window is a property of the value, not of a '
               'handle object somebody has to remember to hold');
+      expect(built.man.read(st101Key)!.value, 1,
+          reason: 'the value showed the number that was TYPED while the write '
+              'was still out; that is a confirmation nothing upstream has '
+              'given');
       expect(built.man.writePendingKeys, contains(st101Key));
+
+      final result = await pending;
+      expect(result, isA<WriteApplied>());
+      expect(built.man.read(st101Key)!.quality, Quality.good,
+          reason: 'the write landed and its readback IS the confirmation');
+      expect(built.man.read(st101Key)!.value, 7);
+      expect(built.man.writePendingKeys, isEmpty);
     });
 
-    test('the pending badge is CLEARED by the next upstream sample — readback '
-        'is the only confirmation', () async {
+    test('a CLAMPED readback is what the store shows — never the number that '
+        'was typed', () async {
       final built = buildWriteFixture();
       await built.man.start();
       addTearDown(built.man.dispose);
       built.man.applyUpstreamBatch(<String, DynamicValue>{
-        st101Key: DynamicValue(value: 1),
+        st101Key: DynamicValue(value: 1200),
       });
+      // A PLC clamping a setpoint to its configured maximum is ordinary, and
+      // it is the case that separates a source which reads back from one which
+      // merely remembers: if the mimic shows 5000 while the machine runs at
+      // 1500, the operator has been told the plant is doing something it is
+      // not — and told it BY THE CONFIRMATION.
       built.link.setNextWriteOutcome(
-          WriteApplied(cmd, readback: 7, at: 1700000000000));
-      await built.man.write(st101Key, 7);
-      expect(built.man.writePendingKeys, contains(st101Key));
+          WriteApplied(cmd, readback: 1500, at: 1700000000000));
 
-      built.man.applyUpstreamBatch(<String, DynamicValue>{
-        st101Key: DynamicValue(value: 7),
-      });
+      final result = await built.man.write(st101Key, 5000);
 
-      expect(built.man.read(st101Key)!.quality, Quality.good);
-      expect(built.man.writePendingKeys, isEmpty,
-          reason: 'the badge comes off when the PLC says the number moved, '
-              'and at no other moment');
+      expect((result as WriteApplied).readback, 1500);
+      expect(built.man.read(st101Key)!.value, 1500,
+          reason: 'the cache must hold what the device holds');
+      expect(built.man.listen(st101Key).value.value, 1500,
+          reason: 'listen() and the device must not disagree — the widget '
+              'bound to this key would draw a number nobody upstream agreed '
+              'to');
+      expect(built.man.writePendingKeys, isEmpty);
     });
 
     test('a sample that never comes leaves the badge until STALENESS overtakes '
@@ -641,12 +675,22 @@ void main() {
         st101Key: DynamicValue(value: 1),
       });
 
-      // The staged outcome is what keeps the fake from publishing a value
-      // back: this arm is about the readback that never arrives.
-      built.link
-          .setNextWriteOutcome(WriteApplied(cmd, readback: 7, at: 1700000000));
+      // An outcome NOBODY KNOWS is the arm this is really about since 08-11:
+      // an applied write now carries its own confirmation, so the badge that
+      // can outlive its own meaning is the one left by a write whose answer
+      // never came. The badge comes off — nothing was confirmed and nothing
+      // was refused — and the last confirmed reading is left to go stale on
+      // its own clock, which is the operator seeing "sent", then "do not
+      // trust this".
+      built.link.setNextWriteOutcome(WriteUnknown(
+          cmd, const WriteReason('plc_timeout', message: 'no answer came')));
       await man.write(st101Key, 7);
-      expect(man.read(st101Key)!.quality, Quality.goodWritePending);
+      expect(man.read(st101Key)!.value, 1,
+          reason: 'an unknown outcome must not leave the typed number on the '
+              'screen: nothing upstream agreed to it');
+      expect(man.writePendingKeys, isEmpty,
+          reason: 'the badge means SENT AND WAITING; a write nobody has an '
+              'answer for is not waiting on anything this source will hear');
 
       // A watcher, because the sweep's clock is listener-gated.
       final handle = man.listen(st101Key);

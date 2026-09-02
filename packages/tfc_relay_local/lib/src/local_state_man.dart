@@ -73,6 +73,7 @@ import 'fanin.dart';
 import 'freshness_sweep.dart';
 import 'ingest.dart';
 import 'key_router.dart';
+import 'local_browse.dart';
 import 'pipe_health.dart';
 import 'upstream_link.dart';
 import 'write_translation.dart';
@@ -89,8 +90,12 @@ final class LocalStateMan implements StateManApi {
     this.writeDeadline = const Duration(seconds: 5),
     this.writeOutcomeTtl = const Duration(minutes: 10),
     this.maxWriteOutcomes = 4096,
+    Map<String, UpstreamAddressSpace> browseSpaces =
+        const <String, UpstreamAddressSpace>{},
     DateTime Function()? now,
   })  : links = List<UpstreamLink>.unmodifiable(links),
+        browseSpaces =
+            Map<String, UpstreamAddressSpace>.unmodifiable(browseSpaces),
         _now = now ?? DateTime.now {
     _startedMs = _now().millisecondsSinceEpoch;
     // Allocation only. Nothing here opens a socket, starts a clock or spawns a
@@ -123,6 +128,10 @@ final class LocalStateMan implements StateManApi {
       onFirstWatcher: () => _sweep.start(),
       onLastWatcher: () => _sweep.stop(),
     );
+    // Seeded here for the same reason the per-link keys are: an indicator that
+    // reads unknown until the first fault tells an operator nothing at the
+    // moment they most need telling.
+    _publishPlantConnected();
   }
 
   /// The configured links, in the order the router offers keys to them.
@@ -137,6 +146,15 @@ final class LocalStateMan implements StateManApi {
 
   /// Which link owns a key, or which named refusal it earns.
   final KeyRouter router;
+
+  /// The live address space behind each browsable alias.
+  ///
+  /// Empty by default, and an empty map is a working gateway: browse is a
+  /// capability and not a duty. An alias whose link says
+  /// [UpstreamLink.supportsBrowse] but has no entry here is a *configuration*
+  /// gap — the tree stops at that root and the reason lands in
+  /// [LocalBrowse.incidents] rather than in an exception.
+  final Map<String, UpstreamAddressSpace> browseSpaces;
 
   /// How long a value may go unheard-of before it must stop claiming to be
   /// current. 08-05's freshness sweep is what notices; see `freshness_sweep.dart`.
@@ -265,6 +283,11 @@ final class LocalStateMan implements StateManApi {
       // null-under-errorConfig, which is "nobody has asked" — a different
       // statement from a link known to be down, and the one the seed makes.
       _health.onLinkEvent(link);
+      // Re-derived after every connect, not only from the state stream: a link
+      // that was already connected when this source was built emits no
+      // transition at all, and `PIPE.connected` would then sit at the value
+      // the constructor guessed for the rest of the process.
+      _publishPlantConnected();
     }
   }
 
@@ -340,29 +363,40 @@ final class LocalStateMan implements StateManApi {
   Stream<DynamicValue> subscribe(String key) {
     _touch(key);
     final node = _store.node(key);
-    late final StreamController<DynamicValue> controller;
-    void push() {
-      if (!controller.isClosed) controller.add(node.value);
-    }
+    // `Stream.multi` and not a plain `StreamController`, since 08-11: two
+    // widgets watching one key is the ORDINARY case, and a single-subscription
+    // stream refuses the second one with a `Bad state` — which is a broken
+    // page, not a refcount. It is also not a broadcast controller, because
+    // that would fire `onListen` for the first listener only and leave every
+    // later one with no initial value and no refcount of its own.
+    //
+    // `Stream.multi` gives each listener its own controller, so the refcount
+    // moves on EVERY listen and back on every cancel — a stream nobody
+    // listened to still costs the PLC nothing, and two panels sharing one
+    // stream object are two clients because that is what they are.
+    return Stream<DynamicValue>.multi((controller) {
+      void push() {
+        if (!controller.isClosed) controller.add(node.value);
+      }
 
-    controller = StreamController<DynamicValue>(
-      onListen: () {
-        node.addListener(push);
-        // The refcount moves on LISTEN, not on the call to subscribe: a stream
-        // nobody listened to is not a subscription and must not cost the PLC
-        // anything. Single-subscription rather than broadcast so onListen and
-        // onCancel are exactly one client each — a broadcast controller fires
-        // onListen only for the first of its listeners, and the refcount would
-        // then be wrong by however many panels shared the stream.
-        _fanIn.attach(key);
-        push();
-      },
-      onCancel: () {
+      node.addListener(push);
+      _fanIn.attach(key);
+      controller.onCancel = () {
         node.removeListener(push);
         _fanIn.detach(key);
-      },
-    );
-    return controller.stream;
+      };
+      // The current value goes out on a microtask and not synchronously inside
+      // the listen. Two reasons, and the second is the one a test found:
+      //
+      //  * a synchronous `add` during `onListen` is re-entrancy into whatever
+      //    was building the widget, and
+      //  * the value a new listener wants is the one the source has when the
+      //    event is DELIVERED, not the one it had at the instant `listen` was
+      //    called. `subscribe()` immediately followed by an arriving batch is
+      //    the ordinary startup order, and a synchronous push there hands the
+      //    listener the placeholder and calls it the first value.
+      scheduleMicrotask(push);
+    });
   }
 
   /// The last known value for [key], or null when nothing is known yet.
@@ -599,11 +633,13 @@ final class LocalStateMan implements StateManApi {
     }
     final outcome =
         await _settle(key: key, value: value, expect: expect, cmd: id);
-    if (outcome is WriteApplied) {
-      // Staged only on applied, and only here: a write that was refused or
-      // lost has nothing in flight to badge.
-      _markWritePending(key);
-    }
+    // The badge and the readback are BOTH applied at the one crossing into the
+    // plant ([_crossIntoThePlant]) rather than here, since 08-11. Staging the
+    // badge after the outcome made the in-flight window unobservable — a write
+    // held open by a stalled PLC never reached this line, so the operator saw
+    // nothing at exactly the moment the badge exists for — and applying the
+    // readback nowhere at all meant a clamped setpoint left the mimic showing
+    // the number that was typed, labelled confirmed.
     _recordOutcome(outcome);
     return outcome;
   }
@@ -685,9 +721,22 @@ final class LocalStateMan implements StateManApi {
     required DynamicValue value,
     required String cmd,
   }) async {
+    // The last confirmed reading, kept so a refused or lost write can put it
+    // back: the badge means "sent", and a write that was not sent must not
+    // leave one on.
+    final confirmed = _store.peek(ref.key);
+    // Before the crossing, not after it. Over a slow link the pending badge is
+    // the only thing telling an operator their press was registered, and an
+    // operator who sees nothing presses again — which on a jog is a second
+    // actuation nobody asked for.
+    _markWritePending(ref.key);
     try {
-      return await link.write(ref, value, cmd: cmd, deadline: writeDeadline);
+      final outcome =
+          await link.write(ref, value, cmd: cmd, deadline: writeDeadline);
+      _confirmWrite(ref.key, sent: value, outcome: outcome, confirmed: confirmed);
+      return outcome;
     } catch (error) {
+      _unbadge(ref.key, confirmed);
       // `UpstreamLink.write` is contracted never to throw, so this is a bug in
       // an adapter rather than news about a plant — and the honest report of a
       // bug on the write path is still "nobody knows", because the request may
@@ -844,6 +893,71 @@ final class LocalStateMan implements StateManApi {
     });
   }
 
+  /// Applies what the device came back holding — or takes the badge off.
+  ///
+  /// **Readback is the only confirmation this system accepts**, and this is
+  /// where that sentence becomes a value on a screen. A PLC clamping a setpoint
+  /// to its configured maximum is ordinary; a mimic that shows 5000 while the
+  /// machine runs at 1500 has told the operator the plant is doing something it
+  /// is not, and told it *by the confirmation*, which is the one message they
+  /// had no reason to doubt.
+  ///
+  /// The quality comes from what was **sent**, not from a fresh `good`: a
+  /// non-finite write is sanitized to null under [Quality.badNonFinite] at the
+  /// boundary, and re-labelling its readback good would put a blank box on the
+  /// page that reads as an unbound tag rather than as a fault.
+  void _confirmWrite(
+    String key, {
+    required DynamicValue sent,
+    required WriteResult outcome,
+    required DynamicValue? confirmed,
+  }) {
+    if (outcome is! WriteApplied) {
+      _unbadge(key, confirmed);
+      return;
+    }
+    // **The badge comes OFF, and the readback is why.** 08-06 kept it on until
+    // a later upstream sample, on the rule that readback is the only
+    // confirmation. It still is — but a `WriteApplied` IS a readback:
+    // `upstream_link.dart` says "applied means applied *and read back*, because
+    // readback is the only confirmation this system accepts". The confirmation
+    // has arrived, carrying the number the device actually holds. A badge left
+    // on past it is a permanent amber box the operator learns to ignore, which
+    // is what `checkWritePendingIsVisibleWhileInFlight` fails on and it is
+    // right to: the window has to CLOSE for it to mean anything while it is
+    // open.
+    //
+    // A quality that was already bad when it was sent survives — a non-finite
+    // write is sanitized to null under `badNonFinite` at the boundary, and
+    // re-labelling its readback good would put a blank box on the page that
+    // reads as an unbound tag rather than as a fault.
+    final quality = sent.quality.isGood ? Quality.good : sent.quality;
+    final cached = _store.peek(key);
+    // The same band guard the badge uses. An applied write must not make a
+    // dead tag look alive: stamping a good-band readback over a comm fault
+    // would turn a write into a way of reviving a value nobody has heard from.
+    if (cached != null && cached.quality.band > quality.band) return;
+    // Through `_degrade` and not `applyUpstreamBatch`: nothing arrived from the
+    // plant of its own accord, so the freshness clock must keep running. A
+    // readback that reset it would leave the operator looking at "sent a
+    // moment ago" on a value nobody has heard about for a minute.
+    _degrade(<String, DynamicValue>{
+      key: DynamicValue(value: outcome.readback, quality: quality),
+    });
+  }
+
+  /// Puts [confirmed] back if the badge is still the only thing on the value.
+  ///
+  /// Guarded on the badge still being there: an upstream sample that arrived
+  /// while the write was out is news and must not be overwritten by a reading
+  /// from before it.
+  void _unbadge(String key, DynamicValue? confirmed) {
+    final cached = _store.peek(key);
+    if (cached == null || cached.quality != Quality.goodWritePending) return;
+    if (confirmed == null) return;
+    _degrade(<String, DynamicValue>{key: confirmed});
+  }
+
   /// Crockford base32, the alphabet `newUlid` encodes with.
   static const String _ulidAlphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
@@ -962,27 +1076,42 @@ final class LocalStateMan implements StateManApi {
     }
   }
 
-  // ----------------------------------------------------------- not this plan
+  // ---------------------------------------------------- the live address space
 
+  /// Browse over the configured links, one level at a time.
+  ///
+  /// The same instance every time it is asked for, not a fresh one: a
+  /// [LocalBrowse] accumulates [LocalBrowse.incidents], and a getter that
+  /// rebuilt would throw away the record of the level that did not arrive at
+  /// the moment somebody went looking for it.
+  ///
+  /// Keys and browse answer different questions — see `local_browse.dart`. A
+  /// link with no [UpstreamLink.supportsBrowse] is absent from the tree and
+  /// present in the keymapping, which is the honest description of an M2400.
   @override
-  BrowseApi get browse =>
-      throw UnimplementedError('08-11 owes LocalStateMan.browse — the live '
-          'address space per alias, behind UpstreamLink.supportsBrowse');
+  BrowseApi get browse => _browse;
+  late final LocalBrowse _browse = LocalBrowse(
+    links: links,
+    spaces: browseSpaces,
+    deadline: readDeadline,
+  );
+
+  // ----------------------------------------------------------- not this phase
 
   @override
   TimeseriesApi get timeseries =>
-      throw UnimplementedError('08-11 owes LocalStateMan.timeseries — Phase 10 '
+      throw UnimplementedError('10-01 owes LocalStateMan.timeseries — Phase 10 '
           'consumes what Phase 8 collects; 08-11 sets supportsDataServices '
           'false on the contract leg until it does');
 
   @override
   HistoryViewApi get historyViews =>
-      throw UnimplementedError('08-11 owes LocalStateMan.historyViews — as '
+      throw UnimplementedError('10-01 owes LocalStateMan.historyViews — as '
           'timeseries, and from the same database seam');
 
   @override
   PreferencesApi get preferences =>
-      throw UnimplementedError('08-11 owes LocalStateMan.preferences — Phase '
+      throw UnimplementedError('10-01 owes LocalStateMan.preferences — Phase '
           '10 owns the stored preferences, and no method here may request '
           'secret material');
 
@@ -1002,7 +1131,29 @@ final class LocalStateMan implements StateManApi {
   /// Records a refusal as a value, so a widget bound to a mistyped key sees a
   /// fault rather than an eternity of "not yet known".
   DynamicValue _refuse(RefusedRoute route) {
-    final value = DynamicValue(value: null, quality: Quality.errorConfig);
+    // **`unmapped` is NOT a configuration error, and the other four are.**
+    // `value_store.dart:35-39` draws the line: `errorConfig` is the one
+    // non-transient code, and labelling a transient state with it "would tell
+    // the operator to go fix a page that is fine, and would teach them that
+    // the one non-transient error code heals on its own". A gateway's
+    // keymapping is live-editable — `KeyRouter.applyKeyMappings` re-points
+    // keys without a restart — so "nothing here knows this name" is a state
+    // that genuinely heals, and the enum already says so in as many words
+    // (`RouteRefusal.aliasDisabled` is "deliberately distinguishable from
+    // unmapped"). A reserved prefix, an unsubstituted `$var`, a switched-off
+    // alias and an ambiguous alias are all somebody-go-fix-the-config; those
+    // keep `errorConfig`.
+    //
+    // And `unmapped` splits again, on whether the KEYMAPPING knows the name:
+    // a key the file carries that no link claimed is a mapping pointing at a
+    // server that is not there, which is somebody-go-fix-the-config; a key the
+    // file has never heard of is the transient one. Without that second split
+    // a tag deleted upstream — which the adapters model by ceasing to resolve
+    // it — would downgrade from "go fix the page" to "wait a moment".
+    final value =
+        route.reason == RouteRefusal.unmapped && !router.keys.contains(route.key)
+            ? notYetKnown
+            : DynamicValue(value: null, quality: Quality.errorConfig);
     // Through _degrade and not applyUpstreamBatch: nothing arrived. A refusal
     // that reset the freshness clock would be a key that is never stale and
     // never true either.
@@ -1165,7 +1316,36 @@ final class LocalStateMan implements StateManApi {
         break;
     }
     _health.onLinkEvent(link);
+    _publishPlantConnected();
     announceLinkState(link);
+  }
+
+  /// `PIPE.connected` — the plant side is up, as one bit.
+  ///
+  /// True when **every** configured link is connected, false when any of them
+  /// is not. The conjunction and not a disjunction: this is the indicator an
+  /// operator glances at before trusting the rest of the screen, and a gateway
+  /// that reported "connected" while one of its four PLCs was dark would make
+  /// the glance worse than useless.
+  ///
+  /// `PipeKeys.connected` is documented as the pipe-wide bit and the *session*
+  /// overlay owns the socket half of it (08-CONTEXT ruling 9 splits per-client
+  /// facts from per-plant ones). This is the per-plant half, and it lives here
+  /// because this is the object that knows what a link's state is. There is no
+  /// second producer for it in `tfc_relay_server`.
+  ///
+  /// Written through [_degrade] and not [applyUpstreamBatch]: a health key is
+  /// outside freshness accounting (HLTH-02), and stamping an arrival on it
+  /// would put the gateway's own bookkeeping into the clock that decides
+  /// whether plant values are current.
+  void _publishPlantConnected() {
+    final up = links.isNotEmpty &&
+        links.every((link) => link.state == UpstreamLinkState.connected);
+    final cached = _store.peek(PipeKeys.connected);
+    if (cached != null && cached.value == up && cached.quality.isGood) return;
+    _degrade(<String, DynamicValue>{
+      PipeKeys.connected: DynamicValue(value: up, quality: Quality.good),
+    });
   }
 
   /// Degrades every key [alias] serves, in **one** [ValueStore.applyBatch].

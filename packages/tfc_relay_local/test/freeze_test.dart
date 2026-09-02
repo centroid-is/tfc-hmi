@@ -176,6 +176,17 @@ const int declaredRetainedTimers = 1;
 ///    present on the others. The epoch is the detector for a server that
 ///    changed underneath our handles; a detector that can hang is not one.
 ///
+///  * **08-11 added the eighth:** `OpcUaAddressSpace.detailOf`'s
+///    `client.read(nodeId)`, the browse panel's detail read, bounded by that
+///    address space's own `deadline`. It arrived unbounded and **this sweep is
+///    what caught it** — `LocalBrowse` already wrapped the level in a
+///    `.timeout`, which bounds what the caller waits for and leaves the
+///    binding's future pending against a dead PLC. A caller-side bound is not
+///    a seam-side bound, and the difference is precisely T-08-10. (The
+///    sibling `client.browse` call is bounded on the same argument; the sweep
+///    matches `connect`/`read`/`write` and does not see it, which is the same
+///    structural gap recorded below.)
+///
 /// **A site exists that this sweep structurally cannot see, and that
 /// is a finding rather than an oversight.**
 /// `OpcUaUpstreamLink._reopenSessionIfNeeded` dials
@@ -190,7 +201,7 @@ const int declaredRetainedTimers = 1;
 /// re-count every site in `local_state_man.dart` under a rule 08-05 and 08-06
 /// did not agree to, so it is **recorded for 08-13's gate** rather than done
 /// here on the way past.
-const int declaredUpstreamAwaitSites = 7;
+const int declaredUpstreamAwaitSites = 8;
 
 /// Lines under `lib/` that call `.write(` on an upstream.
 ///
@@ -233,15 +244,28 @@ const String contractKitPackage = 'tfc_stateman_contract';
 ///  * **0 owed by 08-06** — `write`, `writeStatus` and `holdToRun` are all
 ///    written, and the count came down with each of them in the commit that
 ///    closed it.
-///  * **4 owed by 08-11** — `browse`, `timeseries`, `historyViews`,
-///    `preferences`. 08-11 sets `supportsDataServices: false` on the contract
-///    leg and decides which of the four the gateway answers at all; the three
-///    data services are Phase 10's to fill.
+///  * **0 owed by 08-11** — `browse` landed with `local_browse.dart`, and the
+///    count came down with it in the same commit.
+///  * **3 owed by 10-01** — `timeseries`, `historyViews`, `preferences`.
+///
+/// **Why this is 3 and not 0.** 08-11's plan asked for zero on the argument
+/// that "the data-services members are answered by the capability flag rather
+/// than by an implementation", and gave the escape clause in the same
+/// paragraph: *"if they cannot be answered without throwing, say so and keep
+/// the ledger honest rather than zeroing it by fiat."* They cannot.
+/// `supportsDataServices: false` removes the seven data-services **cases** from
+/// the contract leg; it does not give `LocalStateMan.timeseries` anything to
+/// return, and there is no historian behind this package at all until Phase 10
+/// builds one. Zeroing the count would have meant either three getters
+/// returning empty stubs — a chart that silently draws nothing is worse than
+/// one that says it has no source — or three members deleted from a ledger
+/// that is the only written record of what is owed. The number is what it is,
+/// and it has an owner.
 ///
 /// The plan that closes each member decrements this in the same commit. A
 /// member that quietly starts working without this number moving is a member
 /// nobody decided to ship.
-const int declaredUnimplementedMembers = 4;
+const int declaredUnimplementedMembers = 3;
 
 /// A forwarder is forbidden in the composer, by name.
 ///
@@ -297,6 +321,7 @@ void main() {
       expect(retryShapedWrites(empty), isEmpty);
       expect(unimplementedMemberSites(empty), isEmpty);
       expect(forwarderSites(empty), isEmpty);
+      expect(harnessLeverSites(empty), isEmpty);
       expect(literalPortLines(empty), isEmpty,
           reason: 'pointed at an empty directory a sweep that reports an '
               'occurrence is inventing rather than measuring, and nothing it '
@@ -403,11 +428,30 @@ void main() {
 
     test('every unimplemented member names an owning plan', () {
       final anonymous = unimplementedMemberSites(libSrc)
-          .where((site) => !RegExp(r'08-\d\d').hasMatch(site))
+          // `\d\d-\d\d` and not `08-\d\d` since 08-11: the three members still
+          // owed are owed by a LATER PHASE, and a regex that only recognises
+          // this phase's plan ids would force a member with a real owner to be
+          // spelled with a fake one. The property being defended is "an
+          // UnimplementedError names a plan", not "it names one of ours".
+          .where((site) => !RegExp(r'\d\d-\d\d').hasMatch(site))
           .toList();
       expect(anonymous, isEmpty,
           reason: 'an UnimplementedError with no plan id in it is a TODO, and '
               'a TODO is a thing nobody owns');
+    });
+
+    test('no lever from the test-only control surface is declared in lib/', () {
+      expect(harnessLeverSites(libSrc), isEmpty,
+          reason: 'a `StateManHarness` lever is declared on a production '
+              'class. Those six members exist to make a value appear or a link '
+              'fall over, and on a class a connected session can reach they '
+              'are an unauthenticated write path into every operator\'s '
+              'screen: setValue on a speed tag is a stopped conveyor reading '
+              'as running, minted by the gateway itself and indistinguishable '
+              'from a real sample (T-08-42). They belong on the test-only '
+              'wrapper in test/support/, and 08-11 added this sweep because '
+              'the shortest path to a green contract leg is to put them here '
+              'and nothing else was watching');
     });
 
     test('no file under lib/ forwards with noSuchMethod', () {
@@ -592,6 +636,47 @@ List<String> unimplementedMemberSites(Directory directory) {
       final line = lines[i];
       if (_isAnyComment(line)) continue;
       if (!line.contains('UnimplementedError(')) continue;
+      sites.add('${file.path}:${i + 1}: ${line.trim()}');
+    }
+  }
+  return sites;
+}
+
+/// The six `StateManHarness` levers, as they would be spelled in a class body.
+///
+/// **Six and not nine.** `staleAfter`, `roundTrips` and `statusNotifications`
+/// are the surface's three *observables*, and two of them are already
+/// legitimate members of `LocalStateMan` — `staleAfter` is the deadline this
+/// source declares and `statusNotifications` is 08-09's binding, forwarded by
+/// the harness rather than invented by it. Reading a count is not a way to move
+/// a plant. The six below are.
+const List<String> harnessLevers = <String>[
+  'setValue',
+  'setValues',
+  'setQuality',
+  'dropKey',
+  'disconnectUpstream',
+  'reconnectUpstream',
+];
+
+/// Every non-comment line under [directory] declaring one of [harnessLevers].
+///
+/// Matches a **declaration**, not a call: `lib/` may perfectly well call
+/// something named `setValue` on a client it wraps, and forbidding the word
+/// would be a sweep nobody could keep green. What must not exist is a member
+/// with one of these names on a class a session can reach.
+List<String> harnessLeverSites(Directory directory) {
+  final declaration = RegExp(
+      r'^\s*(?:@override\s+)?(?:void|Future<void>|set)\s+(' +
+          harnessLevers.join('|') +
+          r')\s*[(=]');
+  final sites = <String>[];
+  for (final file in dartFilesIn(directory)) {
+    final lines = file.readAsLinesSync();
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      if (_isAnyComment(line)) continue;
+      if (!declaration.hasMatch(line)) continue;
       sites.add('${file.path}:${i + 1}: ${line.trim()}');
     }
   }
