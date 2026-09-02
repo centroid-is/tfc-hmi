@@ -336,16 +336,24 @@ const int declaredUnimplementedMembers = 3;
 
 /// Files under `lib/` allowed to import the database layer — the wrap seam.
 ///
-/// **Zero, and 8b-02 raises it to exactly one** by naming
-/// `collect/timescale_sink.dart` here in the same commit that creates it.
-/// The point of the seam is that the rest of the package cannot reach past
-/// it: `Database` starts a flush timer in its constructor and retries its
-/// connect until it opens, and a second import site is a second place those
-/// behaviours leak onto the gateway's value path. The sweep also flags an
-/// unrestricted `tfc_dart/tfc_dart.dart` barrel import, because the barrel
-/// re-exports the database layer wholesale — a `show` clause is what keeps
-/// a barrel import from being a back door.
-const int declaredSeamImportFiles = 0;
+/// **One, raised from zero by 8b-02 in the same commit that created the
+/// import site it names: `collect/timescale_sink.dart`**, the TimescaleDB
+/// adapter behind the seam. The point of the seam is that the rest of the
+/// package cannot reach past it: `Database` starts a flush timer in its
+/// constructor and retries its connect until it opens, and a second import
+/// site is a second place those behaviours leak onto the gateway's value
+/// path. The sweep also flags an unrestricted `tfc_dart/tfc_dart.dart`
+/// barrel import, because the barrel re-exports the database layer wholesale
+/// — a `show` clause is what keeps a barrel import from being a back door.
+///
+/// (`package:postgres` is deliberately NOT in the sweep's needles: the
+/// driver's types are not `Database`, and the advisory lock's dedicated
+/// out-of-pool connection needs them without inheriting the flush timer or
+/// the connect ladder this seam exists to contain.)
+const int declaredSeamImportFiles = 1;
+
+/// The one file [declaredSeamImportFiles] permits, by path fragment.
+const String seamImportFile = 'collect/timescale_sink.dart';
 
 /// Files under `lib/` spelling the literal `'gw_'` — exactly one.
 ///
@@ -655,14 +663,19 @@ void main() {
               'the shape this sweep exists to stop');
     });
 
-    test('the wrap seam is one file — pinned at ZERO until 8b-02', () {
-      expect(seamImportFiles(libRoot), hasLength(declaredSeamImportFiles),
+    test('the wrap seam is one file, and it is the named one', () {
+      final files = seamImportFiles(libRoot);
+      expect(files, hasLength(declaredSeamImportFiles),
           reason: 'the point of the seam is that the rest of the package '
               'cannot reach past it: Database starts a flush timer in its '
               'constructor and retries its connect until it opens, and an '
               'import site outside collect/timescale_sink.dart puts both '
-              'on the gateway\'s value path. 8b-02 raises this to one, '
-              'naming that file, in the commit that creates it');
+              'on the gateway\'s value path. 8b-02 raised this to one, '
+              'naming that file, in the commit that created it');
+      expect(files.single, contains(seamImportFile),
+          reason: 'one import site somewhere else is not the seam — it is '
+              'a second adapter nobody decided on, holding a Database with '
+              'its own flush timer');
     });
 
     test('the prefix has one spelling', () {
