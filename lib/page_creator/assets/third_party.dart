@@ -59,6 +59,17 @@ enum ThirdPartyEquipmentKind {
   /// operator-facing label reads "Batch aligner"; the floor name survives as a
   /// search keyword on [ThirdPartyEquipmentConfig.searchKeywords].
   fishAligner,
+
+  /// The Optimar robotic palletising stations for white boxes — Ph-1.
+  ///
+  /// Named after the supplier like every other kind whose make we know:
+  /// Optimar drawing 10-N1230-1 is the source for the layout, and that
+  /// drawing's own notice block reads "Find us at optimar.no". The 6-axis arm
+  /// standing on the pad is somebody else's machine and the foundation
+  /// drawing does not name it — a gap in what we know about the ARM, not
+  /// about the station, so it is recorded on the painter rather than as a
+  /// TODO here.
+  optimarPalletiser,
 }
 
 /// Operator-facing metadata for each kind. Kept out of the enum so the
@@ -78,21 +89,32 @@ extension ThirdPartyEquipmentKindInfo on ThirdPartyEquipmentKind {
         return 'Afak / StrapX strapping line';
       case ThirdPartyEquipmentKind.fishAligner:
         return 'Batch aligner';
+      case ThirdPartyEquipmentKind.optimarPalletiser:
+        return 'Optimar palletising station';
     }
   }
 
-  /// Label including the model variant, where the head count picks a real
-  /// model number. Used for the side-pane title.
-  String labelFor({int strapMachines = 3}) =>
-      this == ThirdPartyEquipmentKind.strappingLine
-          ? 'Strapping line — ${strapMachines.clamp(1, 3)} x StrapX'
-          : label;
+  /// Label including the model variant, where a unit count picks a real model
+  /// number or tells the cells apart. Used for the side-pane title.
+  String labelFor({int strapMachines = 3, int robotStations = 2}) {
+    switch (this) {
+      case ThirdPartyEquipmentKind.strappingLine:
+        return 'Strapping line — ${strapMachines.clamp(1, 3)} x StrapX';
+      case ThirdPartyEquipmentKind.optimarPalletiser:
+        final n = robotStations.clamp(1, 3);
+        return 'Optimar palletising — $n '
+            '${n == 1 ? 'station' : 'stations'}';
+      default:
+        return label;
+    }
+  }
 
   /// Real machine footprint, shown in the side pane. See the source notes at
   /// the top of `third_party_painter.dart` for where each figure comes from.
   ///
-  /// [strapMachines] only affects the strapping line.
-  String footprint({int strapMachines = 3}) {
+  /// [strapMachines] only affects the strapping line, [robotStations] only
+  /// the palletising robot.
+  String footprint({int strapMachines = 3, int robotStations = 2}) {
     switch (this) {
       case ThirdPartyEquipmentKind.multivac:
         return '~5437 x 1002 mm (R 245)';
@@ -102,6 +124,17 @@ extension ThirdPartyEquipmentKindInfo on ThirdPartyEquipmentKind {
         return 'tall and narrow — per site CAD';
       case ThirdPartyEquipmentKind.fishAligner:
         return 'near square — per site CAD';
+      case ThirdPartyEquipmentKind.optimarPalletiser:
+        // Off Optimar drawing 10-N1230-1. The 3500 mm pitch is EXACT — it is
+        // the dimension chain between the three Ph-1 robot centres — so
+        // unlike the strapping line's shortened variants this figure is not
+        // guesswork at any station count. The depth is not dimensioned on the
+        // drawing and is scaled off that pitch, so the total reads as
+        // approximate.
+        final n = robotStations.clamp(1, 3);
+        return '~${kPalletiserWidthMm(n)} x $kPalletiserDepthMm mm '
+            '($n ${n == 1 ? 'station' : 'stations'} at '
+            '$kPalletiserPitchMm mm pitch)';
       case ThirdPartyEquipmentKind.strappingLine:
         // Only the 3-strapper line length is published. A shorter line is the
         // same line with strappers removed, so its length is estimated at one
@@ -123,7 +156,7 @@ extension ThirdPartyEquipmentKindInfo on ThirdPartyEquipmentKind {
   ///
   /// Sizing an asset well away from its kind's ratio squashes the layout — the
   /// Multivac especially, at 5.4:1. Used for the editor preview.
-  double aspectRatio({int strapMachines = 3}) {
+  double aspectRatio({int strapMachines = 3, int robotStations = 2}) {
     switch (this) {
       case ThirdPartyEquipmentKind.multivac:
         return 5437 / 1002;
@@ -140,12 +173,43 @@ extension ThirdPartyEquipmentKindInfo on ThirdPartyEquipmentKind {
       case ThirdPartyEquipmentKind.fishAligner:
         // Close to square in the site CAD.
         return 0.93;
+      case ThirdPartyEquipmentKind.optimarPalletiser:
+        // Portrait at one station, landscape from two — the row grows
+        // sideways as stations are added, exactly like the strapping line
+        // grows with strappers.
+        return kPalletiserWidthMm(robotStations.clamp(1, 3)) /
+            kPalletiserDepthMm;
     }
   }
 
   /// Whether the head-count control applies to this kind.
   bool get hasStrapMachines => this == ThirdPartyEquipmentKind.strappingLine;
+
+  /// Whether the station-count control applies to this kind.
+  bool get hasRobotStations =>
+      this == ThirdPartyEquipmentKind.optimarPalletiser;
 }
+
+/// Pitch between palletising stations, in mm.
+///
+/// EXACT: Optimar drawing 10-N1230-1 dimensions the three Ph-1 robot centres
+/// at 5210, 8710 and 12210 off the building datum — 3500 mm apart.
+const int kPalletiserPitchMm = 3500;
+
+/// Front-to-back depth of the palletising area, in mm.
+///
+/// APPROXIMATE. The drawing does not dimension this axis, so it is scaled off
+/// the exact [kPalletiserPitchMm] pitch: a ~3.9 m pallet lane plus the
+/// transfer rail along the front. Scaling the same way reproduces the robot
+/// base plate at ~1300 mm against its labelled Ø1250, so this is good to a
+/// few percent and no better.
+const int kPalletiserDepthMm = 4900;
+
+/// Width of the palletising area for [stations] stations, in mm.
+///
+/// One pitch per station — each station's cabinet stands within its own pitch,
+/// so the row adds nothing on the end.
+int kPalletiserWidthMm(int stations) => kPalletiserPitchMm * stations;
 
 // ---------------------------------------------------------------------------
 // Child assets inside the box
@@ -348,6 +412,14 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
   /// the other kinds.
   int strapMachines;
 
+  /// Palletising stations standing in the Optimar row — Ph-1 is three.
+  /// Ignored by the other kinds.
+  ///
+  /// Its own field rather than sharing [strapMachines]: the two counts mean
+  /// different things on different machines, and a page carrying both a
+  /// strapping line and a palletiser must be able to set them apart.
+  int robotStations;
+
   /// Live assets placed inside the dotted box (conveyors driven by real drive
   /// frequencies, sensors, readouts, and so on).
   @JsonKey(fromJson: _childrenFromJson, toJson: _childrenToJson)
@@ -437,6 +509,7 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
     this.showTag = false,
     this.notes,
     this.strapMachines = 3,
+    this.robotStations = 2,
     this.childTextAngle = 0.0,
     this.acceptWindowMinutes = 30,
     this.acceptBarsClockAligned = true,
@@ -1163,6 +1236,19 @@ const Map<ThirdPartyEquipmentKind, List<StructStatusBit>> kStructStatusBits = {
 bool isStructBacked(ThirdPartyEquipmentKind kind) =>
     kStructStatusBits.containsKey(kind);
 
+/// Whether this kind publishes ANY handshake the Status section can read —
+/// struct or prefix.
+///
+/// False for a machine the PLC does not talk to at all. The Optimar
+/// palletising row is the first of those: it is on the mimic so the operator
+/// can see it, and the run LED is fed by whatever contact the row offers, but
+/// there is no permit vocabulary to point a status key at. A false here means
+/// the editor offers no status key — a field feeding nothing is worse than no
+/// field — and the pane draws no Status section unless the instance declares
+/// its own [ExtraStatusBit]s, which read complete keys of their own.
+bool hasStatusTable(ThirdPartyEquipmentKind kind) =>
+    isStructBacked(kind) || kEquipmentStatusBits.containsKey(kind);
+
 /// Every member this kind's Status section reads, in display order — for the
 /// editor's help text and for tests.
 ///
@@ -1184,6 +1270,7 @@ String equipmentShortName(ThirdPartyEquipmentKind kind) => switch (kind) {
       ThirdPartyEquipmentKind.boxErector => 'box erector',
       ThirdPartyEquipmentKind.strappingLine => 'strapping machine',
       ThirdPartyEquipmentKind.fishAligner => 'batch aligner',
+      ThirdPartyEquipmentKind.optimarPalletiser => 'palletising station',
     };
 
 /// One diode in a non-SpeedBatcher machine's Status section.
@@ -1666,6 +1753,7 @@ ThirdPartyMachinePainter thirdPartyPainterFor(
   required Color color,
   required double strokeWidth,
   int strapMachines = 3,
+  int robotStations = 2,
 }) {
   switch (kind) {
     case ThirdPartyEquipmentKind.multivac:
@@ -1682,6 +1770,13 @@ ThirdPartyMachinePainter thirdPartyPainterFor(
       );
     case ThirdPartyEquipmentKind.fishAligner:
       return FishAlignerPainter(color: color, strokeWidth: strokeWidth);
+    case ThirdPartyEquipmentKind.optimarPalletiser:
+      return OptimarPalletiserPainter(
+        color: color,
+        strokeWidth: strokeWidth,
+        stations:
+            robotStations.clamp(1, OptimarPalletiserPainter.maxStations),
+      );
   }
 }
 
@@ -2471,9 +2566,13 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     return SidePane(
       title: config.tag?.isNotEmpty == true
           ? config.tag!
-          : config.kind.labelFor(strapMachines: config.strapMachines),
+          : config.kind.labelFor(
+              strapMachines: config.strapMachines,
+              robotStations: config.robotStations),
       subtitle: config.tag?.isNotEmpty == true
-          ? config.kind.labelFor(strapMachines: config.strapMachines)
+          ? config.kind.labelFor(
+              strapMachines: config.strapMachines,
+              robotStations: config.robotStations)
           : 'Third-party equipment',
       icon: Icons.precision_manufacturing,
       status: status,
@@ -2508,7 +2607,9 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
                   PaneDetailRow(
                     label: 'Machine',
                     value: config.kind
-                        .labelFor(strapMachines: config.strapMachines),
+                        .labelFor(
+                            strapMachines: config.strapMachines,
+                            robotStations: config.robotStations),
                   ),
                   // No separate head-count row: the Machine line above already
                   // ends in "N x StrapX", and the pane read the same number
@@ -2677,6 +2778,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
                 color: config.outlineColor.resolve(context),
                 strokeWidth: config.strokeWidth,
                 strapMachines: config.strapMachines,
+                robotStations: config.robotStations,
               ),
               paintSize: paintSize,
               ledColor: ledColor,
@@ -2896,7 +2998,10 @@ class _ThirdPartyEquipmentConfigEditorState
     // to a portrait SpeedBatcher, and clamping either axis would squash one
     // of them — which is exactly the distortion this preview exists to avoid.
     final previewSize = _fitPreview(
-      config.kind.aspectRatio(strapMachines: config.strapMachines),
+      config.kind.aspectRatio(
+        strapMachines: config.strapMachines,
+        robotStations: config.robotStations,
+      ),
     );
 
     return Container(
@@ -2913,6 +3018,7 @@ class _ThirdPartyEquipmentConfigEditorState
                   color: config.outlineColor.resolve(context),
                   strokeWidth: config.strokeWidth,
                   strapMachines: config.strapMachines,
+                  robotStations: config.robotStations,
                 ),
                 paintSize: previewSize,
                 // Preview always shows the running colour — the operator is
@@ -2975,6 +3081,27 @@ class _ThirdPartyEquipmentConfigEditorState
               const SizedBox(height: 16),
             ],
 
+            // -- Palletising stations in the row --
+            // Same control as the strapper count, and for the same reason:
+            // it changes both what is drawn and the row's proportions, so the
+            // preview above redraws as it is turned.
+            if (config.kind.hasRobotStations) ...[
+              Text('Palletising stations in the row',
+                  style: Theme.of(context).textTheme.bodySmall),
+              const SizedBox(height: 4),
+              SegmentedButton<int>(
+                segments: const [
+                  ButtonSegment(value: 1, label: Text('1')),
+                  ButtonSegment(value: 2, label: Text('2')),
+                  ButtonSegment(value: 3, label: Text('3')),
+                ],
+                selected: {config.robotStations.clamp(1, 3)},
+                onSelectionChanged: (selection) =>
+                    setState(() => config.robotStations = selection.first),
+              ),
+              const SizedBox(height: 16),
+            ],
+
             // -- Run status key --
             KeyField(
               label: 'Run Status Key',
@@ -2996,42 +3123,49 @@ class _ThirdPartyEquipmentConfigEditorState
             const SizedBox(height: 16),
 
             // -- Status key --
-            // Every kind's pane has a Status section, so every kind gets the
-            // field — without it the diodes can never leave the unknown
-            // state. A struct kind reads members of one node; the prefix kinds
-            // read separate bools, so their key is a prefix and the help text
-            // spells out the suffixes the pane appends.
-            KeyField(
-              label: isStructBacked(config.kind)
-                  ? 'Status Struct Key'
-                  : 'Status Key Prefix',
-              initialValue: config.statusKey,
-              onChanged: (v) => setState(() => config.statusKey = v),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              isStructBacked(config.kind)
-                  ? 'Struct with the '
-                      '${structMembersOf(config.kind).join(', ')} '
-                      'members — one subscription feeds every diode in the side '
-                      'pane\'s Status section.'
-                  : 'Feeds the diodes in the side pane\'s Status section: '
-                      '${(kEquipmentStatusBits[config.kind] ?? const []).map((b) => '.${b.suffix}').join(', ')} '
-                      'are appended to this prefix.'
-                      // The other three keys off this prefix are named here
-                      // or nowhere: none is a diode, so an engineer reading the
-                      // list above would never learn they exist, and the
-                      // features they carry (the run badge, the link gate, the
-                      // trend) would just quietly not appear.
-                      '${config.kind == ThirdPartyEquipmentKind.boxErector ? ' Three more ride it without being diodes: '
-                          '.$kBoxErectorRunSuffix drives the run lamp and the '
-                          'pane header, .$kBoxErectorCommsSuffix greys the pane '
-                          'out when the machine stops answering, and '
-                          '.$kBoxErectorBpmSuffix draws the throughput trend '
-                          'when it is collected.' : ''}',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 16),
+            // Every kind with a diode table gets the field — without it those
+            // diodes can never leave the unknown state. A struct kind reads
+            // members of one node; the prefix kinds read separate bools, so
+            // their key is a prefix and the help text spells out the suffixes
+            // the pane appends.
+            //
+            // A kind with NO table — the Optimar palletising row — gets no
+            // field. It would feed nothing: the pane draws no Status section
+            // for such a kind, and the extra loose diodes below read complete
+            // keys of their own rather than anything appended to this one.
+            if (hasStatusTable(config.kind)) ...[
+              KeyField(
+                label: isStructBacked(config.kind)
+                    ? 'Status Struct Key'
+                    : 'Status Key Prefix',
+                initialValue: config.statusKey,
+                onChanged: (v) => setState(() => config.statusKey = v),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                isStructBacked(config.kind)
+                    ? 'Struct with the '
+                        '${structMembersOf(config.kind).join(', ')} '
+                        'members — one subscription feeds every diode in the side '
+                        'pane\'s Status section.'
+                    : 'Feeds the diodes in the side pane\'s Status section: '
+                        '${(kEquipmentStatusBits[config.kind] ?? const []).map((b) => '.${b.suffix}').join(', ')} '
+                        'are appended to this prefix.'
+                        // The other three keys off this prefix are named here
+                        // or nowhere: none is a diode, so an engineer reading the
+                        // list above would never learn they exist, and the
+                        // features they carry (the run badge, the link gate, the
+                        // trend) would just quietly not appear.
+                        '${config.kind == ThirdPartyEquipmentKind.boxErector ? ' Three more ride it without being diodes: '
+                            '.$kBoxErectorRunSuffix drives the run lamp and the '
+                            'pane header, .$kBoxErectorCommsSuffix greys the pane '
+                            'out when the machine stops answering, and '
+                            '.$kBoxErectorBpmSuffix draws the throughput trend '
+                            'when it is collected.' : ''}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 16),
+            ],
 
             // -- Extra loose status diodes --
             // Permits that are neither a member of the kind's handshake struct

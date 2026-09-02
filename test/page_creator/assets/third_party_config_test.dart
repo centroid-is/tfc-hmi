@@ -768,6 +768,174 @@ void main() {
     });
   });
 
+  group('Pallet stations', () {
+    test('station count round-trips', () {
+      final json = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.optimarPalletiser,
+        robotStations: 3,
+      ).toJson();
+      expect(ThirdPartyEquipmentConfig.fromJson(json).robotStations, 3);
+    });
+
+    test('a page saved before the field defaults to two stations', () {
+      final json = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.optimarPalletiser,
+      ).toJson()
+        ..remove('robotStations');
+      expect(ThirdPartyEquipmentConfig.fromJson(json).robotStations, 2);
+    });
+
+    test('the two counts are separate fields, not one shared number', () {
+      // A page can carry a strapping line AND a palletiser; setting the
+      // strapper count must not move the pallet stations with it.
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.optimarPalletiser,
+        strapMachines: 1,
+        robotStations: 3,
+      );
+      final restored =
+          ThirdPartyEquipmentConfig.fromJson(config.toJson());
+      expect(restored.strapMachines, 1);
+      expect(restored.robotStations, 3);
+    });
+
+    test('the painter draws one station per count', () {
+      for (final n in const [1, 2, 3]) {
+        expect(OptimarPalletiserPainter.robotCentresFor(n), hasLength(n));
+      }
+    });
+
+    test('station centres stay inside the row and in order', () {
+      for (final n in const [1, 2, 3]) {
+        final centres = OptimarPalletiserPainter.robotCentresFor(n);
+        expect(centres.first, greaterThan(0.0));
+        expect(centres.last, lessThan(1.0));
+        for (int i = 1; i < centres.length; i++) {
+          expect(centres[i], greaterThan(centres[i - 1]));
+        }
+      }
+    });
+
+    test('stations tile the row without overlapping or leaving a gap', () {
+      // Each station owns exactly one pitch, so the lanes must never cross a
+      // neighbour's boundary — the failure that would draw one row's robot
+      // reaching into the next station's lane.
+      for (final n in const [1, 2, 3]) {
+        final w = OptimarPalletiserPainter.stationWidthFor(n);
+        expect(w * n, closeTo(1.0, 1e-9));
+        for (int i = 0; i < n; i++) {
+          final sx = OptimarPalletiserPainter.stationLeftFor(i, n);
+          final lane = OptimarPalletiserPainter.laneRectFor(i, n);
+          expect(lane.left, greaterThanOrEqualTo(sx));
+          expect(lane.right, lessThanOrEqualTo(sx + w));
+        }
+      }
+    });
+
+    test('the robot stands beside its lane, not on it', () {
+      // The whole point of the layout: the arm reaches SIDEWAYS across the
+      // lane. A robot centre inside the lane rect would draw the pad on top
+      // of the pallets.
+      for (final n in const [1, 2, 3]) {
+        final centres = OptimarPalletiserPainter.robotCentresFor(n);
+        for (int i = 0; i < n; i++) {
+          final lane = OptimarPalletiserPainter.laneRectFor(i, n);
+          expect(centres[i], greaterThan(lane.right),
+              reason: '$n stations: robot $i sits on its own lane.');
+        }
+      }
+    });
+
+    test('every lane sits inside the fenced row, clear of the rail', () {
+      for (final n in const [1, 2, 3]) {
+        for (int i = 0; i < n; i++) {
+          final lane = OptimarPalletiserPainter.laneRectFor(i, n);
+          expect(lane.top, greaterThanOrEqualTo(OptimarPalletiserPainter.rowTop));
+          expect(lane.bottom,
+              lessThanOrEqualTo(OptimarPalletiserPainter.rowBottom));
+          expect(lane.bottom, lessThan(OptimarPalletiserPainter.railTop),
+              reason: 'the transfer rail runs OUTSIDE the guarding.');
+        }
+      }
+    });
+
+    test('the base plate is smaller than the pad it stands on', () {
+      // Ø1250 plate on a Ø1800 pad. Equal radii would draw one thick ring and
+      // lose the foundation the drawing is actually about.
+      expect(OptimarPalletiserPainter.plateRadius,
+          lessThan(OptimarPalletiserPainter.padRadius));
+      expect(
+          OptimarPalletiserPainter.plateRadius /
+              OptimarPalletiserPainter.padRadius,
+          closeTo(1250 / 1800, 1e-9));
+    });
+
+    test('label and footprint follow the station count', () {
+      const kind = ThirdPartyEquipmentKind.optimarPalletiser;
+      expect(kind.labelFor(robotStations: 1), contains('1 station'));
+      expect(kind.labelFor(robotStations: 3), contains('3 stations'));
+      expect(kind.labelFor(robotStations: 2), contains('Optimar'));
+      // The pitch is dimensioned on the drawing, so it is quoted as a fact
+      // and travels with the footprint at every count.
+      for (final n in const [1, 2, 3]) {
+        expect(kind.footprint(robotStations: n), contains('3500 mm pitch'));
+      }
+      // Ph-1 as built: three stations at 3500 mm.
+      expect(kind.footprint(robotStations: 3), contains('10500 x 4900'));
+    });
+
+    test('the pitch is the drawing dimension, not a guess', () {
+      // 5210 / 8710 / 12210 are the three Ph-1 robot centres off the building
+      // datum. If this constant ever drifts, the footprint stops matching the
+      // drawing it claims to come from.
+      expect(kPalletiserPitchMm, 8710 - 5210);
+      expect(kPalletiserPitchMm, 12210 - 8710);
+      expect(kPalletiserWidthMm(3), kPalletiserPitchMm * 3);
+    });
+
+    test('more stations means a wider cell', () {
+      const kind = ThirdPartyEquipmentKind.optimarPalletiser;
+      expect(kind.aspectRatio(robotStations: 1),
+          lessThan(kind.aspectRatio(robotStations: 2)));
+      expect(kind.aspectRatio(robotStations: 2),
+          lessThan(kind.aspectRatio(robotStations: 3)));
+    });
+
+    test('an out-of-range station count is clamped, not asserted on', () {
+      // Persisted pages are not trusted input.
+      for (final n in const [0, 99, -1]) {
+        expect(
+            () => thirdPartyPainterFor(
+                ThirdPartyEquipmentKind.optimarPalletiser,
+                color: Colors.black,
+                strokeWidth: 2,
+                robotStations: n),
+            returnsNormally,
+            reason: '$n stations must clamp.');
+      }
+    });
+
+    test('the station row has no handshake to point a status key at', () {
+      // Deliberate, and the reason the editor hides the field: the PLC
+      // publishes no permit vocabulary for this cell. If one ever appears it
+      // arrives as a line in kStructStatusBits and this test changes with it.
+      const kind = ThirdPartyEquipmentKind.optimarPalletiser;
+      expect(isStructBacked(kind), isFalse);
+      expect(hasStatusTable(kind), isFalse);
+      expect(structMembersOf(kind), isEmpty);
+    });
+
+    test('the painter cites the drawing it was taken from', () {
+      // This kind is the only one drawn from a real supplier drawing rather
+      // than from photos and spec sheets. If the citation goes, the next
+      // person has no way back to the source that fixes the geometry.
+      final source = File('lib/page_creator/assets/third_party_painter.dart')
+          .readAsStringSync();
+      expect(source, contains('10-N1230-1'));
+      expect(source, contains('optimar.no'));
+    });
+  });
+
   group('Registry wiring', () {
     test('parse round-trips the asset out of a page JSON blob', () {
       final config = ThirdPartyEquipmentConfig(
