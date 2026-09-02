@@ -17,7 +17,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../core/system_clock.dart';
-import '../theme.dart';
 import 'panes/pane_chrome.dart';
 import 'panes/standard_dialog.dart';
 
@@ -323,22 +322,23 @@ class _SystemClockSectionState extends State<SystemClockSection> {
   }
 }
 
-/// Colour and wording for a sync verdict, from the theme's state palette
-/// rather than raw colours.
-({Color color, IconData icon, String label}) _healthAppearance(
-    BuildContext context, TimeSyncHealth health) {
-  final states = Theme.of(context).extension<HmiStateColors>() ??
-      HmiStateColors.solarizedLight;
+/// The sync verdict as a [PaneStatus], so this chip reads the same as the
+/// connection chips on the IP settings page next door.
+PaneStatus _healthStatus(TimeSyncHealth health) {
   switch (health) {
     case TimeSyncHealth.synchronized:
-      return (color: states.green, icon: Icons.check_circle, label: 'Synchronized');
+      // PaneStatus.running's green, but a tick rather than a play glyph —
+      // a clock is not "running" in the equipment sense.
+      return const PaneStatus(
+          label: 'Synchronized', color: Colors.green, icon: Icons.check_circle);
     case TimeSyncHealth.notSynchronized:
-      // Not a fault — it is the normal state for the first minute after boot.
-      return (color: states.yellow, icon: Icons.sync_problem, label: 'Not synchronized');
+      // Warning, not fault: this is also the normal state for the first
+      // minute after boot.
+      return const PaneStatus.warning('Not synchronized');
     case TimeSyncHealth.disabled:
-      return (color: states.grey, icon: Icons.sync_disabled, label: 'Network time off');
+      return const PaneStatus.stopped('Network time off');
     case TimeSyncHealth.unavailable:
-      return (color: states.violet, icon: Icons.help_outline, label: 'Unavailable');
+      return const PaneStatus.unknown('Unavailable');
   }
 }
 
@@ -356,7 +356,6 @@ class _ClockCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final appearance = _healthAppearance(context, health);
 
     return Container(
       decoration: BoxDecoration(
@@ -384,11 +383,7 @@ class _ClockCard extends StatelessWidget {
               ],
             ),
           ),
-          Chip(
-            avatar: Icon(appearance.icon, size: 18, color: appearance.color),
-            label: Text(appearance.label),
-            side: BorderSide(color: appearance.color),
-          ),
+          PaneStatusChip(status: _healthStatus(health)),
         ],
       ),
     );

@@ -307,6 +307,12 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
     await _loadSaved();
   }
 
+  /// Whether [device] has a connection profile at all — an active one, or a
+  /// saved one bound to its interface.
+  bool _hasProfile(NetworkManagerDevice device) =>
+      device.activeConnection?.connection != null ||
+      _savedConnections.any((c) => c.interfaceName == device.interface);
+
   /// Renames the profile behind an interface's active connection.
   ///
   /// Reached from the interface card, because the saved-connections list only
@@ -592,8 +598,12 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
                                         NetworkManagerDeviceType.bond
                                     ? () => _deleteBond(device)
                                     : null,
-                                onRenameConnection: () =>
-                                    _renameDeviceConnection(device),
+                                // Only when there is a profile to rename:
+                                // offering it on a bare port would open a
+                                // dialog that can only fail.
+                                onRenameConnection: _hasProfile(device)
+                                    ? () => _renameDeviceConnection(device)
+                                    : null,
                               ),
                             if (inactive.isNotEmpty) ...[
                               Padding(
