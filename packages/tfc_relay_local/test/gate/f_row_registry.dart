@@ -262,11 +262,6 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     owner: '09-07',
     clause: 'the stall harness, the announcement and the staleness clauses (F22a/b/d); the reaper half ("synchronized false disconnect") is 09-08\'s RED and fix, and the historian half ("historian marks the gap") is 09-09\'s db-tagged arm',
   ),
-  'F25': Outstanding(
-    kind: OutstandingKind.partial,
-    owner: '09-04',
-    clause: 'F25a (the lever\'s injection) has landed; still owed: ROADMAP criterion 3\'s own scenario from data_age_ms — badStale with sourceTime frozen, the climb observed by repeated reads on the read path, the neighbour alias flowing, no lever at all (F25b)',
-  ),
   'F26': Outstanding(
     kind: OutstandingKind.missing,
     owner: '09-05',
@@ -386,11 +381,20 @@ const List<Deviation> gateDeviations = <Deviation>[
     source: 'injection',
     reason: 'no shipped gateway can produce this injection: '
         'TickEngine._writeTick stamps one wallMs as evaluatedAt for every '
-        'subscription of every session (tick_engine.dart:376-396), so the '
-        'field is a statement about the tick, not about the subscription. The '
+        'subscription of every session (tick_engine.dart:400-420; the range '
+        'was :376-396 before upstream growth), so the field is a statement '
+        'about the tick, not about the subscription. The '
         'row uses a test-only lever and says so in writing; a second arm '
         'asserts ROADMAP criterion 3\'s own scenario from Phase 8 machinery '
         '(data_age_ms climbing, badStale per key) with no lever at all. '
+        'Measured (09-04, dead_subscription_gate_test): the per-subscription '
+        'limit read from the client\'s own config was 3000 ms '
+        '(max(50 ms tick x 30, 3 s link deadline)) and the lever-frozen '
+        'verdict flipped 3051 ms after freeze(); with no lever, data_age_ms '
+        'crossed the 2000 ms staleAfter at ~2.4 s of silence and climbed '
+        'monotonically to 4007 ms under repeated read-path reads while the '
+        'subscriber-cached gauge held its last-pushed 0 ms throughout — the '
+        'frozen-age blind spot the lever narrates is real and measured. '
         'Deriving evaluatedAt from real per-subscription source evaluation is '
         'the costed follow-up — it changes a per-tick hot path that '
         'tick_test.dart pins.',

@@ -47,8 +47,12 @@
 @TestOn('vm')
 library;
 
+import 'dart:async';
+
 import 'package:test/test.dart';
 import 'package:tfc_relay_client/tfc_relay_client.dart';
+import 'package:tfc_relay_protocol/tfc_relay_protocol.dart'
+    show PipeKeys, Quality;
 import 'package:tfc_relay_server/tfc_relay_server.dart' show ServerConfig;
 
 import '../support/frozen_sub_lever.dart' hide visibleForTesting;
@@ -56,10 +60,7 @@ import '../support/gate_b_fixture.dart';
 
 void main() {
   test(
-      // Lettered F25a the moment F25b lands (task 2, same file): the
-      // manifest's gapless-letters arm requires a row's only case to carry
-      // no letter.
-      'F25: one subscription stops being evaluated — the lever\'s injection '
+      'F25a: one subscription stops being evaluated — the lever\'s injection '
       '— and the client flags exactly that subscription stale while the '
       'neighbour keeps updating', () async {
     final serverConfig = ServerConfig(tick: ServerConfig.minTick);
@@ -234,5 +235,219 @@ void main() {
     expect(healthyLever.droppedUpdates, 0,
         reason: 'as above: the healthy neighbour\'s updates must all have '
             'reached it');
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test(
+      'F25b: upstream stops updating while the link stays up — ROADMAP '
+      'criterion 3\'s scenario from the shipped product, with no lever at '
+      'all', () async {
+    // F25a is the catalogue's injection reached through a lever; this arm is
+    // ROADMAP criterion 3's wording reached through the product, and the row
+    // is only honest with both. Everything below is Phase 8 machinery:
+    // 08-05's freshness sweep, 08-09's PIPE.upstream.<alias> producer.
+    const staleAfter = Duration(seconds: 2);
+    final fixture = await gateBFixture(
+      panels: 1,
+      keysPerAlias: 10,
+      staleAfter: staleAfter,
+      serverConfig: ServerConfig(tick: ServerConfig.minTick),
+    );
+    final panel = fixture.panel.client;
+
+    // The plant is hand-driven from here: the fixture's own driver sweeps
+    // every alias or none, and this row's injection is one alias going
+    // silent while its neighbour keeps talking. Values advance and carry an
+    // advancing sourceTime, because "sourceTime not advancing" on the frozen
+    // alias is only a statement if the flowing alias's demonstrably does.
+    fixture.driver.cancel();
+    final st101 = fixture.linkFor('ST101');
+    final st201 = fixture.linkFor('ST201');
+    final pages = {
+      st101: gateBPage('ST101', 10),
+      st201: gateBPage('ST201', 10),
+    };
+    final silenced = <String>{};
+    var sweeps = 0;
+    final sweeper = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      sweeps++;
+      final at = DateTime.now();
+      for (final entry in pages.entries) {
+        if (silenced.contains(entry.key.alias)) continue;
+        for (final key in entry.value) {
+          entry.key.inner.setValue(key, 5000 + sweeps, sourceTime: at);
+        }
+      }
+    });
+    addTearDown(sweeper.cancel);
+
+    const st101Key = 'ST101.CN01.MOT01.setpoint';
+    const st201Key = 'ST201.CN01.MOT01.setpoint';
+    final dataAgeKey = PipeKeys.upstreamDataAgeMs('ST101');
+
+    // The gauge, on the READ path: post-CR-02 the stored value is pushed
+    // only on link events and arrivals, and judge() re-derives the age
+    // synchronously on read (pipe_health.dart:210-216) — so the climb below
+    // is observed by repeated reads inside until() windows, never by
+    // subscribing.
+    int? readAge() {
+      final value = fixture.plant.read(dataAgeKey)?.value;
+      return value is int ? value : null;
+    }
+
+    // The subscriber contrast, end to end: a real panel subscribed to the
+    // gauge sees only what is pushed, and during a silent freeze that is a
+    // frozen last-pushed age. Printed beside the climbing read-path series.
+    final gaugeWatcher = RemoteStateMan(
+      uri: Uri.parse('ws://127.0.0.1:${fixture.port}'),
+      config: ClientConfig(),
+      keys: {dataAgeKey, st201Key},
+    );
+    addTearDown(gaugeWatcher.dispose);
+    await until(
+      'the gauge watcher holding a pushed data_age_ms',
+      () => gaugeWatcher.isReady && gaugeWatcher.read(dataAgeKey) != null,
+      budget: const Duration(seconds: 30),
+    );
+
+    // Anti-vacuity: data_age_ms low and both aliases' keys good and moving
+    // before the injection.
+    await until(
+      'both aliases flowing with good quality and a low ST101 data_age_ms '
+      'before the injection',
+      () {
+        final age = readAge();
+        final a = panel.read(st101Key);
+        final b = panel.read(st201Key);
+        return a?.quality == Quality.good &&
+            b?.quality == Quality.good &&
+            (a?.value as int? ?? 0) > 5000 &&
+            (b?.value as int? ?? 0) > 5000 &&
+            age != null &&
+            age < staleAfter.inMilliseconds ~/ 2;
+      },
+    );
+
+    // The injection: ST101's values stop moving. Its link stays connected,
+    // its socket stays up, nothing is disconnected — which is the entire
+    // point of the row.
+    final sweepsAtInjection = sweeps;
+    silenced.add('ST101');
+    var st101EverNotConnected = false;
+    bool linkLied() {
+      final connected = panel.read(PipeKeys.upstreamConnected('ST101'))?.value;
+      final state = panel.read(PipeKeys.upstreamState('ST101'))?.value;
+      return connected != true || state != 'connected';
+    }
+
+    final series = <int>[];
+    final st101Page = pages[st101]!;
+    await until(
+      'every ST101 key degrading to badStale while the link still reports '
+      'connected and the neighbour keeps flowing',
+      () {
+        st101EverNotConnected = st101EverNotConnected || linkLied();
+        final age = readAge();
+        if (age != null) series.add(age);
+        return st101Page
+            .every((key) => panel.read(key)?.quality == Quality.badStale);
+      },
+      budget: staleAfter * 3 + const Duration(seconds: 3),
+    );
+
+    // No arrival can reach ST101 from here on, so these are post-event
+    // consistency facts: the last-delivered source times, the last-pushed
+    // gauge at the subscriber.
+    final frozenSourceTimes = {
+      for (final key in st101Page) key: panel.read(key)?.sourceTime,
+    };
+    expect(frozenSourceTimes.values, everyElement(isNotNull),
+        reason: 'anti-vacuity: a badStale key with no sourceTime at all '
+            'never carried a delivered value, so "sourceTime not advancing" '
+            'below would be vacuously true');
+    final pushedAgeAtFreeze = gaugeWatcher.read(dataAgeKey)?.value;
+    final st201SourceAtFreeze =
+        panel.read(st201Key)?.sourceTime?.millisecondsSinceEpoch;
+
+    // The climb, continued past double the deadline: strictly non-decreasing
+    // under repeated reads, while the stored gauge a subscriber sees stays
+    // exactly where the last arrival pushed it.
+    final climbing = <int>[];
+    await until(
+      'ST101\'s data_age_ms climbing past twice the staleAfter deadline '
+      'under repeated reads on the read path',
+      () {
+        st101EverNotConnected = st101EverNotConnected || linkLied();
+        final age = readAge();
+        if (age != null) climbing.add(age);
+        return age != null && age > staleAfter.inMilliseconds * 2;
+      },
+      budget: staleAfter * 4 + const Duration(seconds: 3),
+    );
+    print('F25b data_age_ms on the read path, injection -> badStale: '
+        '$series');
+    print('F25b data_age_ms on the read path, badStale -> past 2x deadline: '
+        '$climbing');
+    final sortedClimb = [...climbing]..sort();
+    expect(climbing, sortedClimb,
+        reason: 'after the last ST101 arrival the age is two readings of one '
+            'monotonic counter minus a constant, so any decrease in this '
+            'series means an arrival happened during the freeze — the '
+            'injection leaked');
+    expect(climbing.last, greaterThan(staleAfter.inMilliseconds * 2),
+        reason: 'the climb must demonstrably continue past the deadline, not '
+            'merely reach it');
+
+    // The neighbour, across the entire injection: values and source times
+    // advancing, sweeps counted.
+    final st201After = panel.read(st201Key);
+    final st201SourceAfter = st201After?.sourceTime?.millisecondsSinceEpoch;
+    print('F25b neighbour ST201 source-time advance across the freeze: '
+        '$st201SourceAtFreeze -> $st201SourceAfter '
+        '(sweeps $sweepsAtInjection -> $sweeps, quality '
+        '${st201After?.quality})');
+    expect(st201SourceAfter, isNotNull);
+    expect(st201SourceAfter! > st201SourceAtFreeze!, isTrue,
+        reason: 'the neighbour alias\'s keys must keep flowing with '
+            'advancing source times — a frozen neighbour means the injection '
+            'silenced the plant, not one alias, and the isolation claim is '
+            'vacuous');
+    expect(sweeps, greaterThan(sweepsAtInjection + 5),
+        reason: 'anti-vacuity: the hand sweeper must have kept the plant '
+            'busy throughout the freeze');
+    expect(st201After?.quality, Quality.good,
+        reason: 'the flowing neighbour must never degrade: one silent PLC '
+            'costs its own alias, nothing else');
+
+    // The frozen alias: badStale with sourceTime not advancing.
+    for (final key in st101Page) {
+      expect(panel.read(key)?.sourceTime, frozenSourceTimes[key],
+          reason: 'a badStale key whose sourceTime moved received an arrival '
+              'during the freeze — the degrade would then be the sweep '
+              'racing the plant rather than the plant going silent');
+      expect(panel.read(key)?.quality, Quality.badStale,
+          reason: 'post-event consistency: no arrival can have reached this '
+              'alias since the degrade, so the quality cannot have recovered');
+    }
+
+    // The link never reports itself disconnected, because it is not.
+    expect(st101EverNotConnected, isFalse,
+        reason: 'PIPE.upstream.ST101.connected and .state were sampled '
+            'through every window above: the socket is up, the link is '
+            'connected, and only the values stopped — reporting a disconnect '
+            'here would send an electrician to a healthy cable');
+
+    // The subscriber contrast: the pushed gauge stood still while the read
+    // path climbed.
+    final pushedAgeAfter = gaugeWatcher.read(dataAgeKey)?.value;
+    print('F25b subscriber-cached data_age_ms across the freeze: '
+        '$pushedAgeAtFreeze -> $pushedAgeAfter (pushed only on link events '
+        'and arrivals; the read path above climbed to ${climbing.last} ms '
+        'meanwhile)');
+    expect(pushedAgeAfter, pushedAgeAtFreeze,
+        reason: 'the stored gauge is pushed only on link events and arrivals '
+            '(08-REVIEW CR-02), and ST101 had neither during the freeze — a '
+            'moved value here means something pushed the gauge during '
+            'silence, which is the timer this package deliberately does not '
+            'have');
   }, timeout: const Timeout(Duration(minutes: 3)));
 }
