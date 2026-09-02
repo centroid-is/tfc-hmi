@@ -271,6 +271,17 @@ final class LocalStateMan implements StateManApi {
   /// a second roster.
   List<String> healthKeysFor(String alias) => PipeHealth.keysFor(alias);
 
+  /// The collection historian's health producer (8b-03).
+  ///
+  /// The runner publishes the six `PIPE.collect.*` keys through this, so
+  /// they arrive in the same store by the same route as the per-link ones —
+  /// subscribable like a temperature, outside freshness accounting, judged
+  /// on the read path. Exposed as the producer's own narrow type rather
+  /// than by giving the runner the store: the store is this class's one
+  /// private map, and handing it out would be an unpoliced write path into
+  /// every key the gateway serves.
+  CollectHealth get collectHealth => _health.collect;
+
   /// Which keys have already been complained about, so a struct failing at
   /// 10 Hz costs one log line rather than the log file.
   final IngestLog _ingestLog = IngestLog();

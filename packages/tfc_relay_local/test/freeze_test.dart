@@ -75,11 +75,13 @@ final Directory libCollect = Directory('lib/src/collect');
 ///    the second list is the reconciliation.
 ///  * 08-07's `runIterate` driver — **landed**, entry below.
 ///
-/// **Final for Phase 8, checked by 08-13's gate.** The composition root added
-/// none: it has no cadence of its own, and 08-12's per-session overlay
-/// deliberately recomputes on the read path rather than on a clock. If a later
-/// phase wants `data_age_ms` pushed on a cadence, the honest place is the tick
-/// engine's existing timer in `tfc_relay_server` — not a third entry here.
+/// **Final for Phase 8, checked by 08-13's gate** — and moved to four total
+/// entries by 8b-03, which is a new phase making the decision the sentence
+/// below demands, not a drift past it. The composition root added none: it
+/// has no cadence of its own, and 08-12's per-session overlay deliberately
+/// recomputes on the read path rather than on a clock. If a later phase wants
+/// `data_age_ms` pushed on a cadence, the honest place is the tick engine's
+/// existing timer in `tfc_relay_server` — not a fifth entry here.
 const Map<String, String> periodicTimerAllowList = <String, String>{
   // 08-05, task 3. Listener-gated: started when the store gains its first
   // watcher and stopped when it loses its last, so with nobody watching there
@@ -96,6 +98,16 @@ const Map<String, String> periodicTimerAllowList = <String, String>{
   // and nothing that stops. Errors here go to a list a test reads and to an
   // injected callback (T-08-27).
   'opcua_upstream_link.dart': '08-07 — the supervised runIterate driver',
+  // 8b-03, task 1. The per-entry sample timers behind `sample_interval` —
+  // one `Timer.periodic(` spelling, one timer per interval entry, held in a
+  // named map so each is reachable and cancellable. UNLIKE the freshness
+  // sweep and the fan-in linger these are NOT listener-gated, and that is
+  // the justification, not an oversight: historisation is the process's own
+  // job and nobody is watching by definition — the gate is the lifecycle
+  // (start()/stop()), never a subscriber count. Carries collector.dart:297's
+  // cancel-the-previous guard so a re-collect after a mapping edit does not
+  // leave the first timer inserting alongside its replacement.
+  'collection_runner.dart': '8b-03 — the per-entry sample timers',
 };
 
 /// Files permitted to hold a **retained one-shot** `Timer(`, each naming the
@@ -130,11 +142,13 @@ const Map<String, String> literalPortAllowList = <String, String>{};
 
 /// `Timer.periodic(` occurrences under `lib/src`.
 ///
-/// **Two:** 08-05 task 3's freshness sweep, and 08-07 task 2's supervised
-/// `runIterate` driver. Moves when a plan on [periodicTimerAllowList] lands,
-/// and only then. A timer that appears without its allow-list entry is caught
-/// by the offender case rather than by this number, which is why both exist.
-const int declaredPeriodicTimers = 2;
+/// **Three:** 08-05 task 3's freshness sweep, 08-07 task 2's supervised
+/// `runIterate` driver, and 8b-03 task 1's sample timers (one spelling in
+/// `collection_runner.dart`, however many entries carry an interval). Moves
+/// when a plan on [periodicTimerAllowList] lands, and only then. A timer that
+/// appears without its allow-list entry is caught by the offender case rather
+/// than by this number, which is why both exist.
+const int declaredPeriodicTimers = 3;
 
 /// Retained one-shot `Timer(` occurrences under `lib/src`.
 ///

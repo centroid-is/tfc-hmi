@@ -15,6 +15,10 @@ import 'dart:io';
 
 import 'package:logger/logger.dart';
 import 'package:tfc_dart/core/state_man.dart' show KeyMappings;
+// The adapter is deliberately not on the package barrel (the seam type
+// `TimeseriesSink` is the public surface); the composition root reaches it by
+// its src path, exactly as 8b-02 recorded.
+import 'package:tfc_relay_local/src/collect/timescale_sink.dart';
 import 'package:tfc_relay_local/tfc_relay_local.dart';
 
 Future<void> main(List<String> args) async {
@@ -73,6 +77,39 @@ Future<void> main(List<String> args) async {
   // file announced nothing: it belongs to `buildGateway`, beside everything
   // else the composition owns, and `Gateway.stop` cancels it.
   await gateway.plant.start();
+
+  // Collection: built only when the config's deliberate two-field act says
+  // so — no block, or enabled: false, means no database object exists at all.
+  TimescaleSink? sink;
+  CollectionRunner? runner;
+  final collection = config.collection;
+  if (collection != null && collection.enabled) {
+    sink = TimescaleSink(collection, publisherId: config.server.publisherId);
+    // `unroutable:` is the router ingest's own verdict — the keys whose
+    // mappings were refused at the door. Passed rather than re-derived, so
+    // the plan cannot drift from `KeyRouter`'s rules; `Gateway.refusedKeys`
+    // is NOT a substitute (it holds only the PIPE-prefix squatters).
+    final plan = CollectionPlan.from(
+      mappings,
+      collection,
+      unroutable: gateway.plant.router.lastIngest.rejected.keys.toSet(),
+    );
+    await sink.start();
+    runner = CollectionRunner(
+      plan: plan,
+      stateMan: gateway.plant,
+      sink: sink,
+      health: gateway.plant.collectHealth,
+    );
+    await runner.start();
+    // ONE line, 08-13's rule: a gateway whose startup is forty lines is one
+    // whose real problem is invisible.
+    log.i('collecting ${plan.entries.length} keys into '
+        '"${collection.tablePrefix}"-prefixed tables '
+        '(${plan.rejected.length} rejected, ${plan.adjusted.length} '
+        'retention-adjusted, ${runner.entryFailures.length} failed to start)');
+  }
+
   await gateway.server.start();
 
   for (final link in config.links) {
@@ -91,7 +128,19 @@ Future<void> main(List<String> args) async {
   // Announcements off, then the server, then the links: see [Gateway.stop] for
   // what the reverse order serves a panel.
   final shutdown = gatewayShutdown(
-    stop: gateway.stop,
+    // Collection is torn down FIRST, with the plant side it subscribes to,
+    // for 08-13's shutdown-ordering reason read from the historian's side:
+    // the runner is a consumer of the plant's store and a holder of database
+    // buffers, so it must stop sampling before the links it samples are
+    // disposed, and its last rows must be flushed while the sink still owns
+    // a connection. Then `Gateway.stop` does what it always did: the server
+    // (so panels see a closed socket, not confident stale numbers), then the
+    // plant and its links.
+    stop: () async {
+      await runner?.stop();
+      await sink?.close();
+      await gateway.stop();
+    },
     stopped: stopped,
     onSignal: (signal) => log.i('$signal: stopping'),
     onError: (error, stack) =>

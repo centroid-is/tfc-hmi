@@ -91,9 +91,20 @@ final class PipeHealth {
           for (final link in links) link.alias: link,
         },
         _store = store,
-        _elapsedMs = elapsedMs {
+        _elapsedMs = elapsedMs,
+        // The historian's six keys are seeded by the same producer, at the
+        // same moment, for the same reason as the per-link ones: every key
+        // exists before anything can subscribe, and a gateway that does not
+        // collect serves them as null under errorConfig — never false,
+        // never zero (8b-03).
+        collect = CollectHealth(store: store, elapsedMs: elapsedMs) {
     _seed();
   }
+
+  /// The collection historian's keys, published through this producer so
+  /// they arrive by the same route as the upstream ones (8b-03). The
+  /// collection runner drives it; nothing else writes these keys.
+  final CollectHealth collect;
 
   final Map<String, UpstreamLink> _links;
   final ValueStore _store;
@@ -208,6 +219,11 @@ final class PipeHealth {
   /// why that one is different. It does not write, so a poll costs no
   /// notifications.
   DynamicValue judge(String key, DynamicValue cached) {
+    // The historian's counters are gauges recomputed on the read path, the
+    // same treatment `data_age_ms` gets below and for the same reason: the
+    // stored value is written on a deadline, so a poll between two deadline
+    // publishes must still answer the current number without writing.
+    if (CollectHealth.owns(key)) return collect.judge(key, cached);
     final alias = PipeKeys.aliasOf(key);
     if (alias == null) return cached;
     if (key != PipeKeys.upstreamDataAgeMs(alias)) return cached;
@@ -278,4 +294,156 @@ final class PipeHealth {
     // it back inside the freshness accounting it is excluded from.
     _store.applyBatch(batch);
   }
+}
+
+/// The collection historian's six `PIPE.collect.*` keys (8b-03).
+///
+/// Owned by [PipeHealth] and driven by the collection runner. The same three
+/// rules as the per-link producer, restated because each one is load-bearing
+/// here too:
+///
+///  * **Seeded at construction.** All six exist as null under
+///    [Quality.errorConfig] before anything can subscribe. A gateway that
+///    does not collect answers "not configured" — never `false` (an engineer
+///    sent to a database that is fine) and never `0` (a historian that has
+///    apparently written nothing since forever).
+///  * **News is pushed, gauges ride a deadline.** `enabled` flipping, the
+///    sink's connection moving and `last_error` changing are events and
+///    publish immediately (they are the priority lane's keys). The three
+///    counters are recomputed **on a deadline from paths that already run**
+///    — the runner's insert path calls [update] and this class publishes at
+///    most once per [refreshInterval] — the `refreshIfDue()` shape
+///    (`session_health_state_man.dart:263`), chosen because this package's
+///    timer count is a pinned number and a counter does not need a clock of
+///    its own.
+///  * **The read path re-derives.** [judge] answers the *current* counters
+///    synchronously without writing, exactly the way `data_age_ms` is
+///    handled above, so a poll between two deadline publishes is still
+///    correct and a read is still not an event.
+///
+/// `last_error` is served **verbatim**: the sink redacts before it stores
+/// (T-8b-14), and a second pass here would hide a sink that forgot.
+final class CollectHealth {
+  CollectHealth({
+    required ValueStore store,
+    required int Function() elapsedMs,
+    this.refreshInterval = const Duration(milliseconds: 250),
+  })  : _store = store,
+        _elapsedMs = elapsedMs {
+    _seed();
+  }
+
+  final ValueStore _store;
+  final int Function() _elapsedMs;
+
+  /// The most a counter publish may lag the counter. Small enough that a
+  /// chart of `rows_written` moves visibly, large enough that a 430-entry
+  /// plant sampling at once does not turn every insert into a store write.
+  final Duration refreshInterval;
+
+  /// The six, in one list — built from [PipeKeys], nothing spelled here.
+  static const List<String> ownKeys = <String>[
+    PipeKeys.collectEnabled,
+    PipeKeys.collectConnected,
+    PipeKeys.collectRowsWritten,
+    PipeKeys.collectRowsDropped,
+    PipeKeys.collectQueuedRows,
+    PipeKeys.collectLastError,
+  ];
+
+  /// Whether [key] is one of the six.
+  static bool owns(String key) => ownKeys.contains(key);
+
+  bool _enabled = false;
+  bool? _connected;
+  int _rowsWritten = 0;
+  int _rowsDropped = 0;
+  int _rowsQueued = 0;
+  String? _lastError;
+
+  /// Whether the runner has ever reported. Until it has, every key stays at
+  /// the seed and [judge] is the identity — "not configured" must not decay
+  /// into a plausible zero because somebody polled.
+  bool _asked = false;
+
+  int _publishedAtMs = 0;
+
+  /// Collection started: `enabled` flips true. News — published immediately.
+  void markEnabled() {
+    _asked = true;
+    _enabled = true;
+    _publish();
+  }
+
+  /// The sink's connection state moved. News — published immediately.
+  void noteConnected(bool up) {
+    _asked = true;
+    _connected = up;
+    _publish();
+  }
+
+  /// The runner's insert path reporting the current numbers.
+  ///
+  /// Deadline-gated: a changed `lastError` is news and publishes at once,
+  /// anything else waits for [refreshInterval] since the last publish. The
+  /// fields are always taken, so [judge] answers current numbers even while
+  /// the store still holds the previous publish.
+  void update({
+    required int rowsWritten,
+    required int rowsDropped,
+    required int rowsQueued,
+    String? lastError,
+  }) {
+    _asked = true;
+    final errorChanged = lastError != _lastError;
+    _rowsWritten = rowsWritten;
+    _rowsDropped = rowsDropped;
+    _rowsQueued = rowsQueued;
+    _lastError = lastError;
+    if (!errorChanged &&
+        _elapsedMs() - _publishedAtMs < refreshInterval.inMilliseconds) {
+      return;
+    }
+    _publish();
+  }
+
+  /// What [key] should read as right now — the current counter for the three
+  /// gauges, the cached value for everything else. Does not write.
+  DynamicValue judge(String key, DynamicValue cached) {
+    if (!_asked) return cached;
+    return switch (key) {
+      PipeKeys.collectRowsWritten => _known(_rowsWritten),
+      PipeKeys.collectRowsDropped => _known(_rowsDropped),
+      PipeKeys.collectQueuedRows => _known(_rowsQueued),
+      _ => cached,
+    };
+  }
+
+  void _publish() {
+    _publishedAtMs = _elapsedMs();
+    _store.applyBatch(<String, DynamicValue>{
+      PipeKeys.collectEnabled: _known(_enabled),
+      // The sink has not said anything yet: the honest absence of a reading,
+      // not a plausible false.
+      PipeKeys.collectConnected:
+          _connected == null ? _unknown() : _known(_connected),
+      PipeKeys.collectRowsWritten: _known(_rowsWritten),
+      PipeKeys.collectRowsDropped: _known(_rowsDropped),
+      PipeKeys.collectQueuedRows: _known(_rowsQueued),
+      // Null under good once asked: the gateway looked, and the answer is
+      // "nothing" — PipeHealth's rule, unchanged.
+      PipeKeys.collectLastError: _known(_lastError),
+    });
+  }
+
+  void _seed() {
+    _store.applyBatch(<String, DynamicValue>{
+      for (final key in ownKeys) key: _unknown(),
+    });
+  }
+
+  static DynamicValue _known(Object? value) => DynamicValue(value: value);
+
+  static DynamicValue _unknown() =>
+      DynamicValue(value: null, quality: Quality.errorConfig);
 }
