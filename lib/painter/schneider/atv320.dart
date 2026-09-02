@@ -19,6 +19,92 @@ class ATV320 extends CustomPainter {
     this.topLabel = '',
   }); // Add topLabel parameter
 
+  /// Maximum characters drawn per inline-label line.
+  static const int maxLabelCharsPerLine = 14;
+
+  /// Splits [topLabel] into the (at most two) lines drawn on the drive body.
+  ///
+  /// Two or more non-blank lines separated by "\n" are honoured verbatim, so
+  /// the operator can render "CN01\nFD01" as "CN01" over "FD01". More than two
+  /// are capped at two, with an ellipsis on the second. Anything that does not
+  /// yield two lines that way — including a label carrying only a stray or
+  /// trailing newline — falls back to the historical behaviour: split on
+  /// spaces into at most two lines of [maxLabelCharsPerLine] characters,
+  /// truncating with "..." on overflow.
+  @visibleForTesting
+  static List<String> splitTopLabel(String topLabel) {
+    const int maxCharsPerLine = maxLabelCharsPerLine;
+
+    String clip(String line) => line.length > maxCharsPerLine
+        ? '${line.substring(0, maxCharsPerLine)}...'
+        : line;
+
+    // Truncate so that line + "..." still fits within the line budget.
+    String ellipsise(String line) => line.length > maxCharsPerLine - 3
+        ? '${line.substring(0, maxCharsPerLine - 3)}...'
+        : '$line...';
+
+    // Explicit newlines take precedence over the space-splitting heuristic.
+    final explicitLines = topLabel
+        .split('\n')
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toList();
+    if (explicitLines.length > 1) {
+      return [
+        clip(explicitLines.first),
+        // Capped at two lines: ellipsis on the second says more was dropped.
+        explicitLines.length > 2
+            ? ellipsise(explicitLines[1])
+            : clip(explicitLines[1]),
+      ];
+    }
+
+    // Only one line survived, so there is no operator line break to honour.
+    // A trailing newline left behind by the multiline Label field must not
+    // cost a multi-word label its second line, so run the heuristic on that
+    // surviving line rather than on the raw label.
+    final label = topLabel.contains('\n')
+        ? (explicitLines.isEmpty ? '' : explicitLines.first)
+        : topLabel;
+    if (label.isEmpty) return const [];
+
+    final words = label.trim().split(' ');
+    if (words.length > 1) {
+      // Split into 2 lines with character limit
+      String line1 = '';
+      String line2 = '';
+      bool hasMoreWords = false; // Flag to track if there are more words
+
+      for (final word in words) {
+        if (line1.length + word.length + 1 <= maxCharsPerLine &&
+            line2.isEmpty) {
+          line1 += (line1.isEmpty ? '' : ' ') + word;
+        } else if (line2.length + word.length + 1 <= maxCharsPerLine) {
+          line2 += (line2.isEmpty ? '' : ' ') + word;
+        } else {
+          // Both lines are full, but we still have more words
+          hasMoreWords = true;
+          break;
+        }
+      }
+
+      // Add "..." to lines that are truncated
+      if (hasMoreWords && line2.isNotEmpty) {
+        line2 = ellipsise(line2);
+      }
+
+      // A first word wider than the line budget leaves both lines empty; draw
+      // it truncated rather than leaving the drive unlabelled.
+      if (line1.isEmpty) return [clip(words.first)];
+
+      return [line1, if (line2.isNotEmpty) line2];
+    }
+
+    // Single line - truncate if too long (kept untrimmed, as before).
+    return [clip(label)];
+  }
+
 // Segment order: [top, top-right, bottom-right, bottom, bottom-left, top-left, middle]
   static const Map<String, List<bool>> sevenSegmentMap = {
     // Numbers
@@ -279,42 +365,14 @@ class ATV320 extends CustomPainter {
 
     // Add customizable label on top of the device
     if (topLabel.isNotEmpty) {
-      // Simple approach: limit to max characters and use monospace font
-      const int maxCharsPerLine = 14; // Adjust this number as needed
-      final words = topLabel.trim().split(' ');
+      final lines = splitTopLabel(topLabel);
 
-      if (words.length > 1) {
-        // Split into 2 lines with character limit
-        String line1 = '';
-        String line2 = '';
-        bool hasMoreWords = false; // Flag to track if there are more words
-
-        for (final word in words) {
-          if (line1.length + word.length + 1 <= maxCharsPerLine &&
-              line2.isEmpty) {
-            line1 += (line1.isEmpty ? '' : ' ') + word;
-          } else if (line2.length + word.length + 1 <= maxCharsPerLine) {
-            line2 += (line2.isEmpty ? '' : ' ') + word;
-          } else {
-            // Both lines are full, but we still have more words
-            hasMoreWords = true;
-            break;
-          }
-        }
-
-        // Add "..." to lines that are truncated
-        if (hasMoreWords) {
-          if (line2.isNotEmpty) {
-            line2 = '${line2.substring(0, maxCharsPerLine - 3)}...';
-          }
-        }
-
-        // Draw both lines
-        final line1Painter = TextPainter(
+      for (int i = 0; i < lines.length; i++) {
+        final linePainter = TextPainter(
           textDirection: TextDirection.ltr,
           textAlign: TextAlign.center,
           text: TextSpan(
-            text: line1,
+            text: lines[i],
             style: const TextStyle(
               color: Colors.white,
               fontSize: 20.0,
@@ -323,59 +381,13 @@ class ATV320 extends CustomPainter {
             ),
           ),
         );
-        line1Painter.layout();
+        linePainter.layout();
 
-        final line2Painter = TextPainter(
-          textDirection: TextDirection.ltr,
-          textAlign: TextAlign.center,
-          text: TextSpan(
-            text: line2,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 20.0,
-              fontWeight: FontWeight.bold,
-              fontFamily: 'Courier', // Monospace font
-            ),
-          ),
-        );
-        line2Painter.layout();
-
-        final double line1Y = top + (8.0 * pxPerMm);
-        final double line2Y = top + (15.0 * pxPerMm);
-
-        final double line1X =
-            left + (widthPixels / 2.0) - (line1Painter.width / 2.0);
-        final double line2X =
-            left + (widthPixels / 2.0) - (line2Painter.width / 2.0);
-
-        line1Painter.paint(canvas, Offset(line1X, line1Y));
-        line2Painter.paint(canvas, Offset(line2X, line2Y));
-      } else {
-        // Single line - truncate if too long
-        String displayLabel = topLabel;
-        if (topLabel.length > maxCharsPerLine) {
-          displayLabel = '${topLabel.substring(0, maxCharsPerLine)}...';
-        }
-
-        final labelTextPainter = TextPainter(
-          textDirection: TextDirection.ltr,
-          textAlign: TextAlign.center,
-          text: TextSpan(
-            text: displayLabel,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 20.0,
-              fontWeight: FontWeight.bold,
-              fontFamily: 'Courier', // Monospace font
-            ),
-          ),
-        );
-        labelTextPainter.layout();
-
-        final double labelX =
-            left + (widthPixels / 2.0) - (labelTextPainter.width / 2.0);
-        final double labelY = top + (8.0 * pxPerMm);
-        labelTextPainter.paint(canvas, Offset(labelX, labelY));
+        // Line 1 sits 8mm from the top of the drive, line 2 at 15mm.
+        final double lineY = top + ((i == 0 ? 8.0 : 15.0) * pxPerMm);
+        final double lineX =
+            left + (widthPixels / 2.0) - (linePainter.width / 2.0);
+        linePainter.paint(canvas, Offset(lineX, lineY));
       }
     }
 

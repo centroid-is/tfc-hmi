@@ -380,6 +380,26 @@ void main() {
         expect(json['patch'], equals({'runKey': 'SB1.Running'}));
       });
 
+      test('newline in a patch string survives verbatim', () async {
+        await setupWithAutoConfirm();
+
+        // Operators break the ATV320 inline label onto a second line with
+        // an explicit "\n" -- JSON must carry it through untouched.
+        final result = await client.callTool('update_asset', {
+          'page_key': '/',
+          'asset_type': 'SchneiderATV320Config',
+          'title': 'CN01.FD01',
+          'patch': {'label': 'CN01\nFD01'},
+        });
+
+        expect(result.isError, isNot(true));
+        final text = (result.content.first as TextContent).text;
+        final json = jsonDecode(text) as Map<String, dynamic>;
+        expect(json['_proposal_type'], equals('asset_update'));
+        expect(json['patch'], equals({'label': 'CN01\nFD01'}));
+        expect((json['patch'] as Map)['label'], contains('\n'));
+      });
+
       test('child_id is passed through in the target', () async {
         await setupWithAutoConfirm();
 

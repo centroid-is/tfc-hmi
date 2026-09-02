@@ -109,7 +109,15 @@ class _ATV320ConfigContentState extends State<_ATV320ConfigContent> {
         TextFormField(
           initialValue: widget.config.label,
           onChanged: (value) => widget.config.label = value,
-          decoration: const InputDecoration(labelText: 'Label'),
+          // Multiline so the operator can press Enter to break the inline
+          // label onto a second line (the drive draws at most two).
+          keyboardType: TextInputType.multiline,
+          minLines: 1,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            labelText: 'Label',
+            helperText: 'Enter breaks the label onto a new line (max 2 shown)',
+          ),
         ),
         const SizedBox(height: 16),
         KeyField(
