@@ -25,6 +25,12 @@
 /// interface each of them invented separately.
 library;
 
+// Phase 8b: what the gateway would historise, and under whose ownership.
+// Pure decisions — the config with its side-by-side refusals and the plan
+// derived from the keymappings. The sink SEAM joins them in this directory;
+// the TimescaleDB adapter behind it is 8b-02's, and it is the only file in
+// this package allowed to import the database layer (freeze_test.dart).
+export 'src/collect/collection_config.dart';
 export 'src/epoch.dart';
 export 'src/fanin.dart';
 export 'src/freshness_sweep.dart';

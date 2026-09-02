@@ -43,6 +43,7 @@ import 'package:tfc_dart/core/state_man.dart'
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_relay_server/tfc_relay_server.dart';
 
+import 'collect/collection_config.dart';
 import 'key_router.dart';
 import 'local_browse.dart';
 import 'local_state_man.dart';
@@ -259,6 +260,7 @@ final class GatewayConfig {
     required this.keyMappingsPath,
     this.staleAfter = const Duration(seconds: 5),
     this.linger = Duration.zero,
+    this.collection,
   }) {
     // T-08-50, and the reason it is here rather than at first use: the router
     // offers a key to every link in order and takes the first claim
@@ -324,6 +326,10 @@ final class GatewayConfig {
         staleAfter:
             Duration(milliseconds: json['stale_after_ms'] as int? ?? 5000),
         linger: Duration(milliseconds: json['linger_ms'] as int? ?? 0),
+        collection: json['collection'] == null
+            ? null
+            : CollectionConfig.fromJson(
+                (json['collection'] as Map).cast<String, dynamic>()),
       );
 
   /// Reads and parses [path]. Not a constructor, because a factory that does
@@ -353,6 +359,17 @@ final class GatewayConfig {
   /// (SRV-07). Zero is the correct gateway default.
   final Duration linger;
 
+  /// Whether this gateway historises, and under whose ownership.
+  ///
+  /// **Nullable, and null is the default in every fixture.** Absent is not
+  /// the same as present-and-disabled: absent means the gateway has never
+  /// been told about a database at all, and a gateway with no block here
+  /// constructs no database object anywhere. The refusals — the empty-prefix
+  /// guard, enabled-with-nowhere-to-write — happen in [CollectionConfig]'s
+  /// own constructor, at the same moment the duplicate-alias refusal above
+  /// does.
+  final CollectionConfig? collection;
+
   /// The per-alias encoding table, derived from [links] rather than configured
   /// twice. A second list of aliases is a second list to get out of step.
   StringEncodingConfig get stringEncodings => StringEncodingConfig(byAlias: {
@@ -371,6 +388,8 @@ final class GatewayConfig {
         'key_mappings': keyMappingsPath,
         'stale_after_ms': staleAfter.inMilliseconds,
         'linger_ms': linger.inMilliseconds,
+        if (collection != null)
+          'collection': collection!.toJson(includeSecrets: includeSecrets),
       };
 }
 
