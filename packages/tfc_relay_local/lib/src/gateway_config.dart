@@ -410,7 +410,7 @@ void Function(Object, StackTrace, String) _logServerError(Logger log) =>
 
 /// One running gateway: the plant, the front end, and the order they stop in.
 final class Gateway {
-  Gateway._(this.plant, this.server, this.links, this.refusedKeys);
+  Gateway._(this.plant, this.server, this.links, this.refusedKeys, this._status);
 
   /// The `StateManApi` the server is a projection of.
   final LocalStateMan plant;
@@ -425,6 +425,22 @@ final class Gateway {
   /// What the keymapping file claimed inside the `PIPE.` prefix and did not get.
   final Set<String> refusedKeys;
 
+  /// The plant's announcements, on the server's notification path.
+  ///
+  /// **Held here rather than left to the caller, and that is a fix rather than
+  /// a preference.** It was `main`'s to wire, one line after `buildGateway`
+  /// returned, and the end-to-end leg found what that costs: a `Gateway` built
+  /// by anything other than that one `main` — every test in this package, and
+  /// any deployment that embeds the composition — served panels that never
+  /// heard a word about a PLC going down. The health keys still flipped, so
+  /// nothing looked broken; SRV-08's announcement was simply absent, which is
+  /// the failure mode that is hardest to notice and easiest to ship.
+  ///
+  /// A composition root that returns a half-composed object is not a
+  /// composition root. It is cancelled in [stop], before the server closes, so
+  /// no frame is emitted into a session that is already draining.
+  final StreamSubscription<StatusParams> _status;
+
   var _stopped = false;
 
   /// **Server first, then the plant.** The reverse order is the bug: a link
@@ -438,6 +454,7 @@ final class Gateway {
   Future<void> stop() async {
     if (_stopped) return;
     _stopped = true;
+    await _status.cancel();
     await server.close();
     await plant.dispose();
   }
@@ -483,7 +500,16 @@ Future<Gateway> buildGateway(
     config: config.server,
     onError: onError ?? _logServerError(log),
   );
-  return Gateway._(plant, server, links, refused);
+  return Gateway._(
+    plant,
+    server,
+    links,
+    refused,
+    // SRV-08's last connection, made HERE and not by the caller — see
+    // [Gateway._status] for what leaving it to the caller cost.
+    wireStatusNotifications(plant, server,
+        publisherId: config.server.publisherId),
+  );
 }
 
 /// One configured link, built.

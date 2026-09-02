@@ -54,14 +54,10 @@ Future<void> main(List<String> args) async {
         'served: ${gateway.refusedKeys.join(', ')}');
   }
 
-  // SRV-08's last two lines. The DTO crosses whole and is never rebuilt as a
-  // map — `relay_server.dart:702-712`'s recorded bug, where a hand-built
-  // `{'fatal': ...}` under the `status` method threw inside a conforming
-  // client's `StatusParams.fromJson`, on the notification path, where nothing
-  // catches.
-  final status = wireStatusNotifications(gateway.plant, gateway.server,
-      publisherId: config.server.publisherId);
-
+  // SRV-08's status wiring is NOT here. It was, for exactly as long as it took
+  // the end-to-end leg to notice that a gateway composed by anything but this
+  // file announced nothing: it belongs to `buildGateway`, beside everything
+  // else the composition owns, and `Gateway.stop` cancels it.
   await gateway.plant.start();
   await gateway.server.start();
 
@@ -78,9 +74,8 @@ Future<void> main(List<String> args) async {
   Future<void> shutdown(ProcessSignal signal) async {
     if (stopped.isCompleted) return;
     log.i('$signal: stopping');
-    await status.cancel();
-    // Server first, then the links — see [Gateway.stop] for what the reverse
-    // order serves a panel.
+    // Announcements off, then the server, then the links — see [Gateway.stop]
+    // for what the reverse order serves a panel.
     await gateway.stop();
     stopped.complete();
   }
