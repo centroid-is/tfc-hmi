@@ -97,8 +97,8 @@ void main() {
 
       expect(find.text('Freezer door'), findsOneWidget);
       expect(find.text('Still active'), findsOneWidget);
-      expect(find.text('Activated: 29-08-2026 08:15:00'), findsOneWidget);
-      expect(find.text('Deactivated: 29-08-2026 06:30:00'), findsOneWidget,
+      expect(find.text('Activated: 29.08.26 08:15:00'), findsOneWidget);
+      expect(find.text('Deactivated: 29.08.26 06:30:00'), findsOneWidget,
           reason: 'the ended alarm keeps its deactivation time');
     });
 
