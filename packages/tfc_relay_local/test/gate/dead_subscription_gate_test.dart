@@ -334,9 +334,17 @@ void main() {
     silenced.add('ST101');
     var st101EverNotConnected = false;
     bool linkLied() {
-      final connected = panel.read(PipeKeys.upstreamConnected('ST101'))?.value;
-      final state = panel.read(PipeKeys.upstreamState('ST101'))?.value;
-      return connected != true || state != 'connected';
+      // Value AND quality: a health key the freshness machinery has greyed
+      // is a health key an operator must not trust, so "the link reports
+      // itself connected" means a good-quality true — this is also the arm
+      // that catches HLTH-02's trap, a sweep greying `PIPE.` keys by their
+      // own once-a-shift accounting.
+      final connected = panel.read(PipeKeys.upstreamConnected('ST101'));
+      final state = panel.read(PipeKeys.upstreamState('ST101'));
+      return connected?.value != true ||
+          connected?.quality != Quality.good ||
+          state?.value != 'connected' ||
+          state?.quality != Quality.good;
     }
 
     final series = <int>[];
