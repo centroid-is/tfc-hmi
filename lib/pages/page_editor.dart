@@ -859,6 +859,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// Snapshot of pages before proposal was applied (for reject/revert).
   Map<String, AssetPage>? _preProposalPages;
 
+  /// Watches operator decisions made on surfaces that never ask this editor.
+  ///
+  /// The banner's per-row reject and the chat batch card's reject-all only
+  /// drop the proposal from [proposalStateProvider]; they know nothing about
+  /// the copy this editor staged into [_temporaryPages]. See
+  /// [_onProposalFeedback] for what happens on such a decision.
+  StreamSubscription<ProposalFeedback>? _feedbackSub;
+
   /// The asset whose configuration pane is docked open, if any. The pane is
   /// non-modal, so the canvas keeps taking taps and drags while it is up and
   /// tapping another asset just re-points the pane at it.
@@ -914,6 +922,22 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     // hint was the Save button having turned orange. The navigation chrome
     // asks this guard before it beams away.
     LeaveGuard.set(_confirmLeave);
+    // A decision can land on a surface that never asks this editor: the
+    // banner's per-row reject and the chat batch card's reject-all only drop
+    // the proposal from state. The staged assets stayed on the canvas, and
+    // the operator's next save wrote them as if they had been accepted
+    // (2026-09-02: a rejected 35-asset "ST101 cabinet layout" proposal
+    // persisted to /+ST101). Every decision surface reports to the feedback
+    // stream, so it is what un-stages here -- see [_onProposalFeedback].
+    try {
+      _feedbackSub = ref
+          .read(proposalFeedbackProvider)
+          .stream
+          .listen(_onProposalFeedback);
+    } catch (_) {
+      // Provider unavailable in tests -- outside decisions cannot reach a
+      // staged batch there.
+    }
     ref.read(pageManagerProvider.future).then((pageManager) {
       setState(() {
         _temporaryPages = pageManager.copyWith().pages;
@@ -1100,6 +1124,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   void dispose() {
     LeaveGuard.clear(_confirmLeave);
     HardwareKeyboard.instance.removeHandler(_onShortcutKey);
+    // Not awaited: awaiting a StreamSubscription.cancel() from State code
+    // silently stalls widget tests, and a broadcast cancel has nothing to
+    // flush anyway.
+    _feedbackSub?.cancel();
+    _feedbackSub = null;
     // The banner holds these closures over this State; left set they
     // would fire into a disposed State after navigating away -- nothing
     // saved, the proposals still pending, and an uncaught async error.
@@ -1741,6 +1770,95 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     });
     _commitSlot?.state = null;
     _discardSlot?.state = null;
+  }
+
+  /// Un-stages staged proposals the operator rejected or dismissed on a
+  /// surface that never asks this editor.
+  ///
+  /// [_discardProposal] handles the banner's whole-queue discard, but the
+  /// banner's per-row reject and the chat batch card's reject-all go straight
+  /// to [ProposalStateNotifier]: the proposal vanishes from the banner while
+  /// the assets it staged stay in [_temporaryPages], and the operator's next
+  /// save writes them exactly as an accept would have. That is how a rejected
+  /// 35-asset proposal ended up persisted to its page (2026-09-02).
+  ///
+  /// The staged batch shares one pre-proposal snapshot, so the revert is
+  /// all-or-nothing: restore [_preProposalPages], then restage whatever is
+  /// still pending. A decision on one row of a batch therefore keeps the
+  /// other rows staged -- rebuilt onto the restored snapshot rather than
+  /// peeled out of the patched pages, which is the only way back an
+  /// `asset_update` leaves.
+  ///
+  /// Decisions this editor made itself come through here too, a microtask
+  /// after [_discardProposal] or [_saveToPrefs] reported them -- by then the
+  /// ids are in [_consumedProposalIds] (both record them before reporting),
+  /// so they are skipped below.
+  void _onProposalFeedback(ProposalFeedback event) {
+    if (!mounted) return;
+    if (event.action != 'rejected' && event.action != 'dismissed') return;
+    final undone = {
+      for (final p in event.proposals)
+        if (_proposalIds.contains(p.id) &&
+            !_consumedProposalIds.contains(p.id))
+          p.id,
+    };
+    if (undone.isEmpty) return;
+    // Recorded before anything else, the same order [_discardProposal]
+    // keeps: the restage below walks pending state, and a decided id must
+    // never come back through it.
+    _consumedProposalIds.addAll(undone);
+    setState(() {
+      if (_preProposalPages != null) {
+        _temporaryPages = _preProposalPages!;
+        _preProposalPages = null;
+        if (_currentPage == null ||
+            !_temporaryPages.containsKey(_currentPage)) {
+          _currentPage = _temporaryPages.keys.firstOrNull;
+        }
+      }
+      _isProposal = false;
+      _proposalTitle = null;
+      _proposalIds.clear();
+      _proposedAssets = {};
+      _updateCurrentJson();
+      _savedJson = _currentJson;
+    });
+    _commitSlot?.state = null;
+    _discardSlot?.state = null;
+    // Survivors of a partial decision go back onto the canvas. By the time a
+    // feedback event is delivered the decided rows are already out of state,
+    // so pending is exactly what must stay staged.
+    List<PendingProposal> pending = const [];
+    try {
+      pending = ref.read(proposalStateProvider).proposals.toList();
+    } catch (_) {
+      // Provider gone -- nothing left to restage.
+    }
+    final assetKinds = pending
+        .where((p) =>
+            p.proposalType == 'asset' || p.proposalType == 'asset_update')
+        .toList();
+    final split = _partitionAssetProposals(assetKinds, _currentPage);
+    if (split.onPage.isNotEmpty && _applyAssetBatch(split.onPage) > 0) {
+      setState(() {
+        _updateCurrentJson();
+        _savedJson = ''; // Still a staged proposal -- still unsaved.
+      });
+    } else if (!_isProposal) {
+      final pageOnly =
+          pending.where((p) => p.proposalType == 'page').toList();
+      if (pageOnly.isNotEmpty) {
+        setState(() {
+          _applyProposalData(pageOnly.first.proposalJson);
+          _updateCurrentJson();
+          _savedJson = _isProposal ? '' : _currentJson;
+        });
+      }
+    }
+    // With nothing restaged, whatever payload this editor was opened with is
+    // spent -- the same bookkeeping [_discardProposal] does, so a later
+    // mount handed the same route data does not stage it again.
+    if (!_isProposal) _markRoutePayloadResolved();
   }
 
   Future<void> _saveToPrefs() async {
