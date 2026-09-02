@@ -10,6 +10,7 @@ hits in practice.
 """
 
 import base64
+import collections
 import hashlib
 import json
 import os
@@ -448,6 +449,333 @@ class MainIsolateTest(unittest.TestCase):
                 service.main_isolate()
         finally:
             service.close()
+
+
+#: What `getVM` reports on a station: one `main`, one worker, and seven OPC UA
+#: clients that all answer to the same name. The numbers are 64-bit randoms,
+#: copied in shape from 10.104.60.81 — which is exactly why the labels index
+#: rather than number.
+_STATION_NUMBERS = [
+    "5607576650870723",
+    "3975690221634659",
+    "3292723241152127",
+    "3709576604754131",
+    "5433281937290743",
+    "534454051032775",
+    "241244344469503",
+    "7879263934861371",
+    "1156428723197779",
+]
+_STATION_NAMES = ["main", "PdfrxEngineWorker"] + ["_isolateEntryPoint"] * 7
+STATION_ISOLATES = [
+    {"id": f"isolates/{number}", "name": name, "number": number}
+    for name, number in zip(_STATION_NAMES, _STATION_NUMBERS)
+]
+
+
+class SelectIsolatesTest(unittest.TestCase):
+    def test_nothing_selected_is_main_as_it_always_was(self):
+        chosen = hp.select_isolates(STATION_ISOLATES, None)
+        self.assertEqual([i["name"] for i in chosen], ["main"])
+
+    def test_blank_selector_is_also_main(self):
+        self.assertEqual(hp.select_isolates(STATION_ISOLATES, "  ")[0]["name"], "main")
+
+    def test_main_falls_back_to_the_first_isolate(self):
+        isolates = [{"id": "isolates/5", "name": "worker", "number": "5"}]
+        self.assertEqual(hp.select_isolates(isolates, None)[0]["id"], "isolates/5")
+
+    def test_all_takes_every_isolate_in_vm_order(self):
+        chosen = hp.select_isolates(STATION_ISOLATES, "all")
+        self.assertEqual([i["id"] for i in chosen], [i["id"] for i in STATION_ISOLATES])
+
+    def test_a_name_substring_takes_all_seven_clients(self):
+        chosen = hp.select_isolates(STATION_ISOLATES, "entryPoint")
+        self.assertEqual(len(chosen), 7)
+        self.assertEqual({i["name"] for i in chosen}, {"_isolateEntryPoint"})
+
+    def test_a_bare_integer_is_the_vm_isolate_number_not_the_index(self):
+        chosen = hp.select_isolates(STATION_ISOLATES, _STATION_NUMBERS[1])
+        self.assertEqual(chosen[0]["name"], "PdfrxEngineWorker")
+        # ...and a small integer that is nobody's number is an error, not
+        # a quietly-reinterpreted index.
+        with self.assertRaises(hp.ProfilerError):
+            hp.select_isolates(STATION_ISOLATES, "1")
+
+    def test_hash_is_the_index_into_the_vm_list(self):
+        chosen = hp.select_isolates(STATION_ISOLATES, "#1")
+        self.assertEqual(chosen[0]["number"], _STATION_NUMBERS[1])
+        self.assertEqual(hp.isolate_label(chosen[0]), "PdfrxEngineWorker#1")
+
+    def test_a_full_isolate_id_matches(self):
+        chosen = hp.select_isolates(STATION_ISOLATES, f"isolates/{_STATION_NUMBERS[4]}")
+        self.assertEqual(hp.isolate_label(chosen[0]), "_isolateEntryPoint#4")
+
+    def test_terms_union_in_the_order_given_without_repeating(self):
+        chosen = hp.select_isolates(STATION_ISOLATES, "main,all,main")
+        self.assertEqual(chosen[0]["name"], "main")
+        self.assertEqual(len(chosen), len(STATION_ISOLATES))
+
+    def test_no_match_names_what_is_available(self):
+        with self.assertRaises(hp.ProfilerError) as caught:
+            hp.select_isolates(STATION_ISOLATES, "raster")
+        self.assertIn("PdfrxEngineWorker", str(caught.exception))
+
+    def test_an_index_past_the_end_is_an_error(self):
+        with self.assertRaises(hp.ProfilerError):
+            hp.select_isolates(STATION_ISOLATES, "#99")
+
+    def test_no_isolates_is_an_error(self):
+        with self.assertRaises(hp.ProfilerError):
+            hp.select_isolates([], "all")
+
+    def test_labels_disambiguate_the_seven_that_share_a_name(self):
+        labels = [hp.isolate_label(i) for i in hp.index_isolates(STATION_ISOLATES)]
+        self.assertEqual(len(set(labels)), len(labels))
+        self.assertIn("_isolateEntryPoint#5", labels)
+
+    def test_a_label_without_an_index_or_number_is_just_the_name(self):
+        self.assertEqual(hp.isolate_label({"name": "main"}), "main")
+
+    def test_describing_a_subset_keeps_the_indices_you_would_type(self):
+        chosen = hp.select_isolates(STATION_ISOLATES, "entryPoint")
+        described = hp.describe_isolates(chosen)
+        self.assertIn("_isolateEntryPoint#2", described)
+        self.assertIn("_isolateEntryPoint#8", described)
+        self.assertNotIn("#0", described)
+
+
+class OneIsolateTest(unittest.TestCase):
+    def test_a_single_match_passes_through(self):
+        self.assertEqual(
+            hp.isolate_label(hp.one_isolate(STATION_ISOLATES, "#3", "report")),
+            "_isolateEntryPoint#3",
+        )
+
+    def test_an_ambiguous_selector_is_refused_rather_than_guessed(self):
+        with self.assertRaises(hp.ProfilerError) as caught:
+            hp.one_isolate(STATION_ISOLATES, "entryPoint", "report")
+        message = str(caught.exception)
+        self.assertIn("matched 7", message)
+        self.assertIn("report", message)
+
+    def test_the_default_is_still_main(self):
+        self.assertEqual(hp.one_isolate(STATION_ISOLATES, None, "watch")["name"], "main")
+
+
+class ClipSamplesTest(unittest.TestCase):
+    def payload(self, stamps):
+        return {"samples": [{"timestamp": s, "stack": [0]} for s in stamps]}
+
+    def test_samples_after_the_window_are_dropped(self):
+        # The trailing one is the profiler's own getCpuSamples RPC.
+        clipped, dropped = hp.clip_samples(self.payload([100, 200, 5_000]), (50, 300))
+        self.assertEqual(dropped, 1)
+        self.assertEqual([s["timestamp"] for s in clipped["samples"]], [100, 200])
+
+    def test_samples_before_the_window_are_dropped(self):
+        clipped, dropped = hp.clip_samples(self.payload([10, 100]), (50, 300))
+        self.assertEqual(dropped, 1)
+
+    def test_no_window_keeps_everything(self):
+        payload = self.payload([1, 2, 3])
+        clipped, dropped = hp.clip_samples(payload, None)
+        self.assertEqual(dropped, 0)
+        self.assertIs(clipped, payload)
+
+    def test_a_sample_with_no_timestamp_is_kept_not_silently_deleted(self):
+        payload = {"samples": [{"stack": [0]}]}
+        clipped, dropped = hp.clip_samples(payload, (50, 300))
+        self.assertEqual(dropped, 0)
+        self.assertEqual(len(clipped["samples"]), 1)
+
+    def test_the_original_payload_is_not_mutated(self):
+        payload = self.payload([100, 5_000])
+        hp.clip_samples(payload, (50, 300))
+        self.assertEqual(len(payload["samples"]), 2)
+
+
+class MultiIsolateCpuTest(unittest.TestCase):
+    """`cpu --isolate all` end to end, against the loopback VM."""
+
+    ISOLATES = [
+        {"id": "isolates/1", "name": "main", "number": "1"},
+        {"id": "isolates/2", "name": "_isolateEntryPoint", "number": "2"},
+        {"id": "isolates/3", "name": "_isolateEntryPoint", "number": "3"},
+    ]
+
+    def serve_vm(self, samples_by_isolate, clock=(1_000_000, 3_000_000)):
+        self.cleared = []
+        self.sampled = []
+        clock_values = list(clock)
+
+        def handler(server):
+            while True:
+                request = server.recv_json()
+                method = request["method"]
+                params = request.get("params", {})
+                if method == "getVM":
+                    result = {"isolates": self.ISOLATES}
+                elif method == "getVMTimelineMicros":
+                    result = {"timestamp": clock_values.pop(0) if clock_values else 0}
+                elif method == "clearCpuSamples":
+                    self.cleared.append(params["isolateId"])
+                    result = {"type": "Success"}
+                elif method == "getCpuSamples":
+                    self.sampled.append(params["isolateId"])
+                    result = {
+                        "samplePeriod": 250,
+                        "functions": SAMPLE_FUNCTIONS,
+                        "samples": samples_by_isolate[params["isolateId"]],
+                    }
+                else:
+                    result = {"type": "Success"}
+                server.send_json({"jsonrpc": "2.0", "id": request["id"], "result": result})
+
+        server = serve(handler)
+        return hp.VmService.connect(server.url)
+
+    def test_one_window_covers_every_isolate_and_costs_them_separately(self):
+        inside = 2_000_000
+        service = self.serve_vm(
+            {
+                "isolates/1": [{"timestamp": inside, "stack": [1]}] * 4,
+                "isolates/2": [{"timestamp": inside, "stack": [0]}] * 8,
+                # The trailing sample is this isolate answering our own RPC:
+                # a nameless native leaf, taken after the window closed.
+                "isolates/3": [{"timestamp": inside, "stack": [0]}] * 2
+                + [{"timestamp": 9_000_000, "stack": [2]}] * 40,
+            }
+        )
+        try:
+            isolates = hp.select_isolates(service.isolates(), "all")
+            collected = hp.collect_cpu_multi(service, isolates, 0.0, 250, top=5)
+        finally:
+            service.close()
+
+        # Every isolate is cleared before the sleep, none after.
+        self.assertEqual(self.cleared, [i["id"] for i in self.ISOLATES])
+        self.assertEqual(self.sampled, [i["id"] for i in self.ISOLATES])
+        # The raw rings are folded and released as we go; a 512 MB sidecar
+        # cannot hold nine of a station's at once.
+        self.assertNotIn("payload", collected["entries"][0])
+
+        summary = hp.summarise_isolate_cpu(collected)
+        by_label = {row["label"]: row for row in summary["isolates"]}
+        self.assertEqual(
+            sorted(by_label), ["_isolateEntryPoint#1", "_isolateEntryPoint#2", "main#0"]
+        )
+        self.assertEqual(by_label["_isolateEntryPoint#1"]["samples"], 8)
+        # 40 self-observation samples clipped, 2 real ones left.
+        self.assertEqual(by_label["_isolateEntryPoint#2"]["samples"], 2)
+        self.assertEqual(by_label["_isolateEntryPoint#2"]["dropped_samples"], 40)
+        self.assertEqual(summary["total_samples"], 14)
+        self.assertAlmostEqual(by_label["main#0"]["share_percent"], 100 * 4 / 14.0)
+        # 8 samples x 250 µs = 2 ms of CPU.
+        self.assertAlmostEqual(by_label["_isolateEntryPoint#1"]["cpu_ms"], 2.0)
+
+    def test_idle_samples_are_counted_but_never_folded(self):
+        # An idle isolate's stack is the futex its thread is parked in. Left
+        # in, it is 67 % of a station OPC UA isolate's "self time".
+        busy = {"timestamp": 2_000_000, "vmTag": "Dart", "stack": [0]}
+        idle = {"timestamp": 2_000_000, "vmTag": "Idle", "stack": [2]}
+        service = self.serve_vm(
+            {
+                "isolates/1": [busy] * 4,
+                "isolates/2": [busy] * 1 + [idle] * 9,
+                "isolates/3": [idle] * 8,
+            }
+        )
+        try:
+            isolates = hp.select_isolates(service.isolates(), "all")
+            collected = hp.collect_cpu_multi(service, isolates, 0.0, 250)
+        finally:
+            service.close()
+        rows = {r["label"]: r for r in hp.summarise_isolate_cpu(collected)["isolates"]}
+
+        parked = rows["_isolateEntryPoint#1"]
+        self.assertEqual(parked["samples"], 10)
+        self.assertEqual(parked["idle_samples"], 9)
+        self.assertEqual(parked["busy_samples"], 1)
+        self.assertAlmostEqual(parked["idle_percent"], 90.0)
+        # memcpy is the idle stack's leaf here; it must not reach any table.
+        self.assertNotIn(
+            "memcpy", [row["name"] for row in parked["folded"]["self"]]
+        )
+        self.assertEqual(parked["vm_tags"], {"Idle": 9, "Dart": 1})
+
+        # A wholly idle isolate costs nothing and says so.
+        self.assertEqual(rows["_isolateEntryPoint#2"]["cpu_ms"], 0.0)
+        self.assertEqual(rows["_isolateEntryPoint#2"]["core_percent"], 0.0)
+        # Shares are of busy time, so idle cannot dilute anybody.
+        self.assertAlmostEqual(rows["main#0"]["share_percent"], 80.0)
+
+    def test_a_vm_that_reports_no_tag_loses_nothing(self):
+        payload = {"samples": [{"stack": [0]}] * 3}
+        self.assertEqual(hp.fold_vm_tags(payload), {"unknown": 3})
+
+    def test_the_rendered_section_says_how_much_was_slept_through(self):
+        entry = self.entry(hp.index_isolates(self.ISOLATES)[0], samples=4)
+        entry["samples"] = 10
+        entry["vm_tags"] = collections.Counter({"Idle": 6, "Dart": 4})
+        body = hp.render_isolate_cpu(
+            hp.summarise_isolate_cpu({"elapsed_s": 1.0, "entries": [entry]})
+        )
+        self.assertIn("10 samples, 6 of them idle", body)
+        self.assertIn("Idle 6", body)
+
+    @staticmethod
+    def entry(isolate, samples, period=250, dropped=0):
+        """The shape [collect_cpu_multi] hands to [summarise_isolate_cpu]."""
+        payload = {
+            "samplePeriod": period,
+            "functions": SAMPLE_FUNCTIONS,
+            "samples": [{"stack": [0]}] * samples,
+        }
+        return {
+            "isolate": isolate,
+            "label": hp.isolate_label(isolate),
+            "id": isolate["id"],
+            "sample_period_us": period,
+            "dropped_samples": dropped,
+            "folded": hp.fold_cpu_samples(payload),
+            "tree": hp.build_call_tree(SAMPLE_FUNCTIONS, payload["samples"]),
+        }
+
+    def test_the_core_percentage_divides_by_the_measured_window(self):
+        collected = {
+            "elapsed_s": 2.0,
+            "entries": [self.entry(self.ISOLATES[0], samples=1000, period=1000)],
+        }
+        row = hp.summarise_isolate_cpu(collected)["isolates"][0]
+        # 1000 samples x 1000 µs = 1 s of CPU in a 2 s window.
+        self.assertAlmostEqual(row["core_percent"], 50.0)
+
+    def test_an_empty_window_does_not_divide_by_zero(self):
+        collected = {"elapsed_s": 0.0, "entries": []}
+        summary = hp.summarise_isolate_cpu(collected)
+        self.assertEqual(summary["total_samples"], 0)
+        self.assertEqual(summary["isolates"], [])
+
+    def test_the_rendered_table_names_each_isolate_and_the_clipping(self):
+        indexed = hp.index_isolates(self.ISOLATES)
+        collected = {
+            "elapsed_s": 1.0,
+            "entries": [
+                self.entry(iso, samples=1, dropped=3 if iso["vm_index"] == 2 else 0)
+                for iso in indexed
+            ],
+        }
+        body = hp.render_isolate_cpu(hp.summarise_isolate_cpu(collected))
+        self.assertIn("_isolateEntryPoint#1", body)
+        self.assertIn("_isolateEntryPoint#2", body)
+        self.assertIn("3 samples fell outside the window", body)
+        self.assertIn("ConveyorPainter.paint", body)
+
+    def test_a_single_isolate_gets_no_summary_table(self):
+        collected = {"elapsed_s": 1.0, "entries": [self.entry(self.ISOLATES[0], samples=1)]}
+        body = hp.render_isolate_cpu(hp.summarise_isolate_cpu(collected))
+        self.assertNotIn("### Isolates", body)
 
 
 # --------------------------------------------------------------------------
@@ -1305,6 +1633,13 @@ class ParserTest(unittest.TestCase):
     def test_every_command_is_wired_up(self):
         for name in hp.COMMANDS:
             self.assertEqual(hp.build_parser().parse_args([name]).command, name)
+
+    def test_isolate_defaults_to_none_which_means_main(self):
+        self.assertIsNone(hp.build_parser().parse_args(["cpu"]).isolate)
+
+    def test_isolate_is_taken_verbatim_for_select_isolates_to_parse(self):
+        args = hp.build_parser().parse_args(["cpu", "--isolate", "main,#3"])
+        self.assertEqual(args.isolate, "main,#3")
 
 
 if __name__ == "__main__":
