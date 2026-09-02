@@ -19,6 +19,7 @@ void main() {
         PipeKeys.upstreamEpoch(alias),
         PipeKeys.upstreamBirthCount(alias),
         PipeKeys.upstreamLastDeathAt(alias),
+        PipeKeys.upstreamDataAgeMs(alias),
       ];
 
   group('the reserved namespace', () {
@@ -78,6 +79,8 @@ void main() {
           PipeKeys.upstreamBirthCount('st101'), 'PIPE.upstream.st101.birth_count');
       expect(PipeKeys.upstreamLastDeathAt('st101'),
           'PIPE.upstream.st101.last_death_at');
+      expect(PipeKeys.upstreamDataAgeMs('st101'),
+          'PIPE.upstream.st101.data_age_ms');
     });
 
     test('round-trip the alias through aliasOf', () {
@@ -162,6 +165,11 @@ void main() {
         PipeKeys.eventLoopLagMs,
         PipeKeys.droppedHoldTicks,
         PipeKeys.certDaysToExpiry,
+        // 08-09's addition. It needed no edit to the suffix rule and that is
+        // the point of the rule: a gauge added later is filed on the conflated
+        // lane by the shape of its name, and putting it on the never-conflated
+        // one would have made a fast-moving number into a queue.
+        PipeKeys.upstreamDataAgeMs('ST201'),
       ]) {
         expect(PipeKeys.ridesPriorityLane(key), isFalse, reason: key);
       }
@@ -243,6 +251,29 @@ void main() {
 
     test('the prefix is the one the reference implementation reserves', () {
       expect(PipeKeys.prefix, 'PIPE.');
+    });
+
+    test('a field spelled at two scopes is spelled the same way at both', () {
+      // Three fields exist twice: once about the pipe (`PIPE.connected`) and
+      // once about one PLC (`PIPE.upstream.st101.connected`). They are
+      // different facts and both are wanted — but they are the same *word*,
+      // and this file's whole argument is that a word has one spelling. A
+      // client-side `data_age_ms` beside a per-link `dataAgeMs` would compile,
+      // keep every suite green, and read as two unrelated fields on a page
+      // that shows both.
+      //
+      // 08-09 added the seventh builder and this arm is what stops it drifting
+      // from the client-side key of the same name.
+      const alias = 'st101';
+      for (final pair in <(String, String)>[
+        (PipeKeys.connected, PipeKeys.upstreamConnected(alias)),
+        (PipeKeys.epoch, PipeKeys.upstreamEpoch(alias)),
+        (PipeKeys.dataAgeMs, PipeKeys.upstreamDataAgeMs(alias)),
+      ]) {
+        expect(pair.$2.split('.').last, pair.$1.split('.').last,
+            reason: '${pair.$1} and ${pair.$2} name the same field at two '
+                'scopes and must end in the same word');
+      }
     });
   });
 }
