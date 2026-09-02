@@ -149,9 +149,15 @@ String kAccessRoleSummary(Set<AccessGroup> groups, int? holders) {
   return '$grants — held by ${_accounts(holders)}';
 }
 
-/// Beside the protected row's name, so the row is legible as the anonymous
-/// identity rather than merely as the row with no controls.
-const String kAccessRoleAnonymousTag = 'Logged-out panels';
+/// Rendered immediately after the protected row's name, so the row reads as
+/// "Operator (Anonymous)".
+///
+/// A parenthetical rather than a separate chip: the point is that this role IS
+/// the anonymous identity, not that it has a property. "Logged-out panels" said
+/// the same thing but read as a label attached to a role, which invited the
+/// question this wording forecloses -- which role anonymous points at. It does
+/// not point anywhere; it is this row.
+const String kAccessRoleAnonymousTag = '(Anonymous)';
 
 /// Shown in the create dialog. A role with no groups grants nothing, and saying
 /// so beats somebody moving an account onto it and wondering why every control
@@ -554,9 +560,9 @@ class _RoleTileState extends ConsumerState<_RoleTile> {
             children: [
               Flexible(child: Text(role.name)),
               if (_protected) ...[
-                const SizedBox(width: 8),
-                Icon(Icons.no_accounts_outlined,
-                    size: 14, color: theme.colorScheme.onSurfaceVariant),
+                // The parenthetical sits against the name -- the icon moved
+                // after it, because an icon between the two broke the phrase
+                // the reader is meant to see as one thing.
                 const SizedBox(width: 4),
                 Text(
                   kAccessRoleAnonymousTag,
@@ -564,6 +570,9 @@ class _RoleTileState extends ConsumerState<_RoleTile> {
                   style: theme.textTheme.labelSmall
                       ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                 ),
+                const SizedBox(width: 6),
+                Icon(Icons.no_accounts_outlined,
+                    size: 14, color: theme.colorScheme.onSurfaceVariant),
               ],
             ],
           ),
