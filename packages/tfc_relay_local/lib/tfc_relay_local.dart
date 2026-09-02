@@ -33,6 +33,7 @@ library;
 export 'src/collect/collection_config.dart';
 export 'src/collect/collection_plan.dart';
 export 'src/collect/collection_runner.dart';
+export 'src/collect/sample_gate.dart';
 export 'src/collect/timeseries_sink.dart';
 export 'src/epoch.dart';
 export 'src/fanin.dart';

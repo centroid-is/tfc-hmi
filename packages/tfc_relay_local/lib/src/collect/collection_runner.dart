@@ -69,6 +69,7 @@ import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import '../pipe_health.dart';
 import '../value_shaping.dart';
 import 'collection_plan.dart';
+import 'sample_gate.dart';
 import 'timeseries_sink.dart';
 
 /// Drives [CollectionPlan.entries] from the value path into the sink.
@@ -106,6 +107,11 @@ final class CollectionRunner {
   /// existence; the map is what makes each one reachable, cancellable, and
   /// replaceable by a re-collect without orphaning its predecessor.
   final Map<String, Timer> _sampleTimers = <String, Timer>{};
+
+  /// The per-entry sampling conditions, by key (task 2). A gate holds its
+  /// own variable subscriptions, so it is torn down with the entry it
+  /// gates and with [stop].
+  final Map<String, SampleGate> _gates = <String, SampleGate>{};
 
   final Map<String, String> _entryFailures = <String, String>{};
 
@@ -167,6 +173,7 @@ final class CollectionRunner {
   Future<void> collectEntry(CollectionEntry entry) async {
     if (_stopped) return;
     await _subscriptions.remove(entry.key)?.cancel();
+    await _gates.remove(entry.key)?.stop();
 
     // Retention is registered once per table, before the first insert can
     // create the table untyped. An entry 8b-01 marked `adjusted` carries a
@@ -186,6 +193,33 @@ final class CollectionRunner {
     var awaitingReplay = true;
     var heldIsArrival = false;
     DynamicValue? latest;
+
+    // The gate is built and started BEFORE the value subscription, so a
+    // rejected expression — the parse failure or the templated $variable —
+    // leaves nothing of this entry running. Its variables ride the ordinary
+    // subscribe path too.
+    SampleGate? gate;
+    final expression = entry.sampleExpression;
+    if (expression != null) {
+      final built = SampleGate(
+        expression: expression,
+        stateMan: _stateMan,
+        onTransition: (open) {
+          // The gate going true samples the value the entry is holding —
+          // the app's gated collector does the same (its gate stream
+          // `take(1)`s the data stream, whose first event is the replayed
+          // current value). The quality gate still applies: an untrusted
+          // held value stays a gap.
+          if (!open || interval != null) return;
+          final held = latest;
+          if (held == null || held.quality.band != 0) return;
+          _insert(entry, held);
+        },
+      );
+      built.start();
+      _gates[entry.key] = built;
+      gate = built;
+    }
 
     final subscription = _stateMan.subscribe(entry.key).listen(
       (value) {
@@ -219,7 +253,15 @@ final class CollectionRunner {
           _countSkip();
           return;
         }
+        if (gate != null && !gate.isOpen) {
+          // The condition is not (evaluably) true: the change is held, not
+          // written. Not a counted loss — a closed gate is the operator's
+          // configuration doing its job, not a row the historian failed.
+          latest = sample;
+          return;
+        }
         _insert(entry, sample);
+        latest = sample;
       },
       onError: (Object error, StackTrace stack) {
         // One key's stream error costs that key's sample, never the batch —
@@ -238,6 +280,9 @@ final class CollectionRunner {
         // writes nothing and counts nothing — a row that never existed is
         // not a lost row.
         if (held == null) return;
+        // A closed gate stops the tick from sampling at all — the operator
+        // said "only while", and while is not now.
+        if (gate != null && !gate.isOpen) return;
         if (held.quality.band == 0) {
           _insert(entry, held);
           return;
@@ -272,6 +317,10 @@ final class CollectionRunner {
       await subscription.cancel();
     }
     _subscriptions.clear();
+    for (final gate in _gates.values.toList()) {
+      await gate.stop();
+    }
+    _gates.clear();
     await _connectionSub?.cancel();
     _connectionSub = null;
     await _sink.flush();
