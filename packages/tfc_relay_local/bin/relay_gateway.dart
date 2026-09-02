@@ -85,14 +85,18 @@ Future<void> main(List<String> args) async {
       'TLS ${config.server.tls == null ? 'OFF' : 'on'}');
 
   final stopped = Completer<void>();
-  Future<void> shutdown(ProcessSignal signal) async {
-    if (stopped.isCompleted) return;
-    log.i('$signal: stopping');
-    // Announcements off, then the server, then the links — see [Gateway.stop]
-    // for what the reverse order serves a panel.
-    await gateway.stop();
-    stopped.complete();
-  }
+  // The handler is a named function in `lib/` — see [gatewayShutdown] for the
+  // two ways the version that lived here failed, and for why "a bin/ file is
+  // not addressable by any package: URI" is the reason nothing caught them.
+  // Announcements off, then the server, then the links: see [Gateway.stop] for
+  // what the reverse order serves a panel.
+  final shutdown = gatewayShutdown(
+    stop: gateway.stop,
+    stopped: stopped,
+    onSignal: (signal) => log.i('$signal: stopping'),
+    onError: (error, stack) =>
+        log.e('stop failed; exiting anyway', error: error, stackTrace: stack),
+  );
 
   final sigint = ProcessSignal.sigint.watch().listen(shutdown);
   // SIGTERM is what a container runtime sends, and it is not deliverable on

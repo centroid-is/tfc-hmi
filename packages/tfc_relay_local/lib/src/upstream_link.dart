@@ -384,6 +384,14 @@ abstract interface class UpstreamLink {
 /// and the redacted forms still say *what kind* of thing was removed. The
 /// unredacted string stays available to the gateway's own log, which is not a
 /// key.
+///
+/// **Over-broad still has an edge, and it is written down.** 08-REVIEW WR-11
+/// added IPv6 literals and the `address = <token>` shapes — the latter being
+/// the only rule that can catch a DNS hostname, which names a PLC and a site
+/// as plainly as an address does and which no literal pattern will ever match.
+/// The IPv6 rules stop short of two-colon runs on purpose: `09:49:57` is a
+/// timestamp, and a redactor that ate every clock time would make this key
+/// unreadable in exchange for nothing.
 String? redactUpstreamError(String? raw) {
   if (raw == null) return null;
   var out = raw;
@@ -410,9 +418,39 @@ String? redactUpstreamError(String? raw) {
           caseSensitive: false),
       (m) => '${m[1]}=<redacted>');
 
+  // The shapes `dart:io` writes a peer in: `address = <token>`,
+  // `host = <token>`. This one comes BEFORE the literal patterns below because
+  // it is the only one that can catch a **DNS hostname** — `st101.svn.local`
+  // names the PLC and the site as plainly as an address does, and no literal
+  // pattern will ever match it (08-REVIEW WR-11). The label is kept so the
+  // message still reads.
+  out = out.replaceAllMapped(
+      RegExp(r'\b(address|host|hostname|remoteAddress|peer)\s*[=:]\s*([^\s,;)]+)',
+          caseSensitive: false),
+      (m) => '${m[1]} = <host>');
+
   // Bare hosts: an IPv4 literal with an optional port.
   out = out.replaceAll(
       RegExp(r'\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b'), '<host>');
+
+  // IPv6 literals, in the two shapes that actually occur (08-REVIEW WR-11).
+  //
+  // **The bracketed form first**, because it carries the port inside a
+  // structure the bare patterns would only half-eat.
+  out = out.replaceAll(
+      RegExp(r'\[[0-9A-Fa-f:]{2,}\](?::\d+)?'), '<host>');
+
+  // Then the two bare forms. The threshold is not arbitrary and it is where
+  // "deliberately over-broad" has to stop: a compressed address is recognised
+  // by its `::`, and an uncompressed one by having **at least three** colons.
+  // Two colons is `09:49:57`, and redacting every timestamp in every message
+  // would make `last_error` unreadable for the sake of nothing.
+  out = out.replaceAll(
+      RegExp(r'(?<![\w:])[0-9A-Fa-f]{0,4}::[0-9A-Fa-f:]*[0-9A-Fa-f](?::\d+)?'),
+      '<host>');
+  out = out.replaceAll(
+      RegExp(r'(?<![\w:])[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){3,}(?![\w:])'),
+      '<host>');
 
   // A key value is read on a screen. An unbounded error string is also an
   // unbounded thing to fan out to every subscriber of that key.

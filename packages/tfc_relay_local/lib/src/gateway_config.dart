@@ -607,6 +607,53 @@ Future<ua.ClientApi?> _opcUaClient(UpstreamLinkConfig config) async {
         );
 }
 
+/// The shutdown handler both signals share.
+///
+/// **In `lib/` and not in `main`, for the same reason [gatewayUsage] is**: a
+/// `bin/` file is not addressable by any `package:` URI, so logic that lives
+/// there is logic nothing can assert on — and 08-REVIEW WR-12 is two defects
+/// that lived there for exactly that long.
+///
+///  * **The latch was the completer.** `if (stopped.isCompleted) return;` was
+///    checked at the top and `stopped.complete()` reached only *after*
+///    `gateway.stop()` finished, so a second SIGTERM arriving during teardown
+///    passed the guard. `Gateway.stop` has its own `_stopped` latch, so the
+///    second call returned at once — and then completed an already-complete
+///    `Completer`, which throws `StateError` out of a stream callback where
+///    nothing catches. A container runtime sending SIGTERM and then SIGTERM
+///    again is ordinary, and so is a shell where somebody presses Ctrl-C
+///    twice.
+///  * **A throwing `stop()` hung the process forever.** `stopped` was never
+///    completed, so `await stopped.future` never returned — with the socket
+///    already closed. The gateway would sit there, serving nothing, until it
+///    was killed.
+///
+/// So: latch on entry, and complete in a `finally`. A failed stop is logged
+/// and the process still exits, because a gateway that cannot tear down
+/// cleanly must still tear down.
+Future<void> Function(ProcessSignal) gatewayShutdown({
+  required Future<void> Function() stop,
+  required Completer<void> stopped,
+  required void Function(ProcessSignal signal) onSignal,
+  required void Function(Object error, StackTrace stack) onError,
+}) {
+  var stopping = false;
+  return (ProcessSignal signal) async {
+    if (stopping) return;
+    stopping = true;
+    onSignal(signal);
+    try {
+      await stop();
+    } catch (error, stack) {
+      onError(error, stack);
+    } finally {
+      // Guarded even under the latch: belt and braces on the one line whose
+      // failure mode is an uncatchable throw out of a signal handler.
+      if (!stopped.isCompleted) stopped.complete();
+    }
+  };
+}
+
 /// Wires the plant's link-state announcements onto the server's status
 /// notification path — the last piece of SRV-08.
 ///

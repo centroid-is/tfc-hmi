@@ -19,6 +19,9 @@
 @TestOn('vm')
 library;
 
+import 'dart:async';
+import 'dart:io';
+
 import 'package:tfc_dart/core/state_man.dart' show KeyMappings, KeyMappingEntry;
 import 'package:tfc_relay_local/tfc_relay_local.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
@@ -40,6 +43,7 @@ Map<String, dynamic> oneLinkJson({String alias = 'ST101'}) => <String, dynamic>{
     };
 
 void main() {
+  wr12Shutdown();
   group('the config deserializes what the plant already has', () {
     test('a one-link config round-trips through JSON', () {
       final config = GatewayConfig.fromJson(oneLinkJson());
@@ -210,6 +214,67 @@ void main() {
     test('usage names the config path', () {
       expect(gatewayUsage, contains('--config'));
       expect(gatewayUsage, contains('relay_gateway'));
+    });
+  });
+}
+
+/// WR-12: the two ways `main`'s shutdown handler could fail, both of which
+/// left a process nobody could stop.
+void wr12Shutdown() {
+  group('WR-12: a second signal, and a stop() that throws', () {
+    test('a second signal during teardown does not start a second stop, and '
+        'does not complete the completer twice', () async {
+      var stops = 0;
+      final stopped = Completer<void>();
+      final signals = <ProcessSignal>[];
+      final shutdown = gatewayShutdown(
+        stop: () async {
+          stops++;
+          await Future<void>.delayed(const Duration(milliseconds: 40));
+        },
+        stopped: stopped,
+        onSignal: signals.add,
+        onError: (error, stack) => fail('nothing threw: $error'),
+      );
+
+      // Both raised while the first teardown is still running, which is what a
+      // container runtime escalating SIGTERM looks like — and what Ctrl-C
+      // twice looks like.
+      final first = shutdown(ProcessSignal.sigterm);
+      final second = shutdown(ProcessSignal.sigterm);
+      await Future.wait(<Future<void>>[first, second]);
+
+      expect(stops, 1,
+          reason: 'the latch was the completer, and the completer was only '
+              'completed AFTER stop() finished — so the second signal sailed '
+              'through the guard');
+      expect(signals, hasLength(1));
+      expect(stopped.isCompleted, isTrue);
+      // The original reached `stopped.complete()` twice, which throws
+      // StateError out of a stream callback where nothing catches.
+    });
+
+    test('a stop() that throws still completes the completer, so the process '
+        'exits instead of hanging with its socket closed', () async {
+      final stopped = Completer<void>();
+      Object? reported;
+      final shutdown = gatewayShutdown(
+        stop: () async => throw StateError('a link refused to close'),
+        stopped: stopped,
+        onSignal: (_) {},
+        onError: (error, stack) => reported = error,
+      );
+
+      await shutdown(ProcessSignal.sigint);
+
+      expect(stopped.isCompleted, isTrue,
+          reason: 'main awaits stopped.future. Never completing it hangs the '
+              'process forever with the socket already closed — a gateway '
+              'serving nothing, until somebody kills it');
+      expect(reported, isA<StateError>(),
+          reason: 'and the failure is reported rather than swallowed: a stop '
+              'that did not work is a thing an operator needs to know about '
+              'even though the process is leaving anyway');
     });
   });
 }

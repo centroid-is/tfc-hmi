@@ -96,6 +96,51 @@ void main() {
           isNot(contains('10.104.29.71')));
     });
 
+    test('WR-11: takes an IPv6 literal out, in both of the shapes dart:io '
+        'writes them', () {
+      // The plant's own addressing. `dart:io` puts the peer into its
+      // SocketException messages, and 08-09 turns lastError into
+      // PIPE.upstream.<alias>.last_error — a key any unprivileged panel may
+      // subscribe to. Plant topology is what T-08-08 is about.
+      for (final raw in <String>[
+        'SocketException: connect failed, address = fd00::10:104:29:11',
+        'SocketException: connect failed, address = [fd00:1:2:3:4:5:6:7]:4840',
+        'no route to ::1',
+      ]) {
+        final out = redactUpstreamError(raw)!;
+        expect(out, isNot(contains('fd00')), reason: raw);
+        expect(out, isNot(contains('::1')), reason: raw);
+        expect(out, contains('<host>'), reason: raw);
+      }
+    });
+
+    test('WR-11: takes a DNS hostname out, which is a name for a machine as '
+        'much as an address is', () {
+      // No port literal in the sample: freeze 5 sweeps test files for
+      // hard-coded ports and cannot tell a listening port from a word in a
+      // string, and the hostname is what this case is about.
+      final out = redactUpstreamError(
+          'SocketException: Failed host lookup, address = st101.svn.local')!;
+
+      expect(out, isNot(contains('st101.svn.local')),
+          reason: 'a hostname names the PLC and the site as clearly as its '
+              'address does, and the redactor is documented as deliberately '
+              'over-broad — missing one costs plant topology on a key every '
+              'panel can read');
+      expect(out, contains('<host>'));
+      expect(out, contains('Failed host lookup'),
+          reason: 'and the part that says what went wrong survives, or the '
+              'key is useless to the engineer it exists for');
+    });
+
+    test('WR-11: a clock time is not an IPv6 address', () {
+      // The over-broad rule still has to stop somewhere: `09:49:57` is two
+      // colons and a lot of hex digits, and redacting every timestamp would
+      // make last_error unreadable for the sake of nothing.
+      final out = redactUpstreamError('at 09:49:57 the session dropped')!;
+      expect(out, contains('09:49:57'));
+    });
+
     test('takes a credential out even without a scheme in front of it', () {
       final out =
           redactUpstreamError('rejected (username=admin password=s3cr3t)');
