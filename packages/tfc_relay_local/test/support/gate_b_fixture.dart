@@ -320,6 +320,31 @@ final class GateBPlantDriver {
   int _sweeps = 0;
   int _pageSize = 0;
 
+  final Map<GateBLink, Map<String, Object?>> _rawOverrides =
+      <GateBLink, Map<String, Object?>>{};
+  final Map<GateBLink, Map<String, List<int>>> _byteOverrides =
+      <GateBLink, Map<String, List<int>>>{};
+
+  /// From the next poll cycle on, [key] arrives from the plant as [raw] —
+  /// every cycle, through `emitRaw`, exactly where the ingest guard lives.
+  ///
+  /// This is what an open-circuit 4–20 mA input or a divide-by-zero in a
+  /// weigher rate calc actually looks like: the device does not poison one
+  /// sample and recover, it keeps reporting the poison until somebody fixes
+  /// the loop. A one-shot injection would also race the sweep — the pipe
+  /// conflates, so a poison published between two sweeps can be superseded
+  /// before a tick carries it, and the row would flake about the scheduler.
+  void overrideRaw(GateBLink link, String key, Object? raw) {
+    _rawOverrides.putIfAbsent(link, () => <String, Object?>{})[key] = raw;
+  }
+
+  /// From the next poll cycle on, [key] arrives from the plant as [bytes],
+  /// decoded under the link's configured encoding — the 08-10 seam, every
+  /// cycle, for the same persistence reason as [overrideRaw].
+  void overrideBytes(GateBLink link, String key, List<int> bytes) {
+    _byteOverrides.putIfAbsent(link, () => <String, List<int>>{})[key] = bytes;
+  }
+
   /// How many times the whole plant has been moved.
   int get sweeps => _sweeps;
 
@@ -336,8 +361,23 @@ final class GateBPlantDriver {
     _sweeps++;
     _pageSize = 0;
     for (final entry in pages.entries) {
+      final link = entry.key;
+      final raws = _rawOverrides[link] ?? const <String, Object?>{};
+      final bytes = _byteOverrides[link] ?? const <String, List<int>>{};
       _pageSize += entry.value.length;
-      entry.key.setValues({for (final key in entry.value) key: value});
+      // One poll cycle: the clean keys as one batch, then the overridden
+      // keys through the raw seams — per key, which is the guard 08-05
+      // pins ("one poisoned tag costs one tag, never a poll cycle").
+      link.setValues({
+        for (final key in entry.value)
+          if (!raws.containsKey(key) && !bytes.containsKey(key)) key: value,
+      });
+      for (final poisoned in raws.entries) {
+        link.inner.emitRaw(poisoned.key, poisoned.value);
+      }
+      for (final poisoned in bytes.entries) {
+        link.emitPlantBytes(poisoned.key, poisoned.value);
+      }
     }
   }
 

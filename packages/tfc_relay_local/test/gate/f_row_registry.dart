@@ -282,11 +282,6 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     owner: '09-06',
     clause: 'fifty keys on four aliases degrade with exactly one status notification and bounded log growth; five panels, one absent throughout, converge on identical values and qualities',
   ),
-  'F28': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '09-02',
-    clause: 'one poisoned batch end to end: the frame encodes, poisoned keys carry badNonFinite/uncertainEncoding, every other key keeps flowing, the session stays up',
-  ),
 };
 
 /// Every catalogue clause the phase's green will **not** cover.
