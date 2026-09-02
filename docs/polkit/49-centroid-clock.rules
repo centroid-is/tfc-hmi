@@ -1,25 +1,26 @@
 /* Let the HMI set the host clock and NTP servers.
  *
- * Install on the station as /etc/polkit-1/rules.d/49-centroid-clock.rules.
+ * Provisioned by ansible-playbook.yml in centroid-is/debos-conf, alongside
+ * 50-networkmanager-container.rules. This copy is the reference.
  *
- * Without this the Date & Time section on the About Linux page renders its
+ * Without it the Date & Time section on the About Linux page renders its
  * status fine -- reading timedate1 and timesync1 needs no authorisation --
  * but every setter fails. systemd ships all four timedate1 actions and
- * timesync1's set-runtime-servers as `auth_admin_keep`, and the HMI container
- * has no polkit agent to answer the prompt with, so the reply is
+ * timesync1's set-runtime-servers as `auth_admin_keep`, and the HMI
+ * container has no polkit agent to answer the prompt with, so the reply is
  * `org.freedesktop.DBus.Error.InteractiveAuthorizationRequired`.
  *
- * This mirrors, deliberately, the rule Debian already ships for
- * NetworkManager at /usr/share/polkit-1/rules.d/org.freedesktop.NetworkManager.rules
- * -- same groups, same local+active requirement -- which is why the IP
- * settings page has always been able to write and this one could not.
+ * The subject test is `subject.user`, deliberately, and NOT the
+ * `subject.local && subject.active && isInGroup(...)` form Debian uses for
+ * NetworkManager. The HMI runs in a container: its process sits in
+ * /system.slice/docker-<id>.scope with no logind session, so it is neither
+ * local nor active as far as polkit is concerned and a rule of that shape
+ * would never fire. Verified on a station by running
  *
- * Verify with, as the centroid user:
+ *   pkcheck --action-id <id> --process $(docker inspect -f '{{.State.Pid}}' flutter)
  *
- *   pkcheck --action-id org.freedesktop.timedate1.set-ntp --process $$
- *
- * Exit 0 means granted; exit 2 with "Authorization requires authentication"
- * means the rule is not in effect.
+ * which returns 0 for the NetworkManager actions -- granted by the sibling
+ * user-based rule -- and 2 for these until this file is installed.
  */
 polkit.addRule(function(action, subject) {
     var allowed = [
@@ -30,9 +31,7 @@ polkit.addRule(function(action, subject) {
         "org.freedesktop.timesync1.set-runtime-servers"
     ];
 
-    if (allowed.indexOf(action.id) !== -1 &&
-        subject.local && subject.active &&
-        (subject.isInGroup("sudo") || subject.isInGroup("netdev"))) {
+    if (allowed.indexOf(action.id) !== -1 && subject.user == "centroid") {
         return polkit.Result.YES;
     }
 });

@@ -3,18 +3,31 @@
 Rules the HMI needs on the host it manages over D-Bus. They are **not**
 installed by this repo — the app ships in a container that mounts only
 `/var/run/dbus/system_bus_socket`, so it cannot write to the host's `/etc`.
-Install them through station provisioning (the `dockers` repo).
+They are provisioned by `ansible-playbook.yml` in
+[centroid-is/debos-conf](https://github.com/centroid-is/debos-conf); the
+files here are the reference copies.
 
 | File | Grants | Needed by |
 |---|---|---|
 | `49-centroid-clock.rules` | `timedate1.set-time`, `set-timezone`, `set-local-rtc`, `set-ntp`, `timesync1.set-runtime-servers` | Date & Time on the About Linux page |
 
-NetworkManager needs no rule from us: Debian's `network-manager` package
-already ships `org.freedesktop.NetworkManager.rules`, granting
+NetworkManager already has one — `50-networkmanager-container.rules`, from
+the same playbook. That is why the IP settings page has always been able to
+write and this one could not.
+
+## Why `subject.user`, not `local && active`
+
+Debian's own `org.freedesktop.NetworkManager.rules` grants
 `settings.modify.system` to `local && active` members of `sudo` or `netdev`.
-That is why the IP settings page has always been able to write.
+Copying that shape here would not work. The HMI runs in a container: its
+process sits in `/system.slice/docker-<id>.scope` with no logind session, so
+polkit sees it as neither local nor active. That is exactly why the
+NetworkManager rule in the playbook tests `subject.user == "centroid"`
+instead, and these rules match it.
 
 ## Installing
+
+Normally: run the debos-conf playbook. To try one on a station by hand,
 
 ```sh
 sudo install -m 0644 49-centroid-clock.rules /etc/polkit-1/rules.d/
@@ -24,16 +37,21 @@ polkit picks rules up without a restart.
 
 ## Checking
 
-As the user the HMI container runs as (`centroid`, uid 1000):
+Check the **container's** process, not a shell — a login shell has a session
+and the container does not, so a shell can answer differently from the thing
+that actually makes the call:
 
 ```sh
-pkcheck --action-id org.freedesktop.timedate1.set-ntp --process $$
+pkcheck --action-id org.freedesktop.timedate1.set-ntp \
+        --process $(docker inspect -f '{{.State.Pid}}' flutter)
 echo $?
 ```
 
 `0` means granted. `2`, with `Authorization requires authentication and -u
-wasn't passed`, means the rule is not in effect — which is the state every
-station is in before these are installed.
+wasn't passed`, means the rule is not in effect — the state every station is
+in before these are installed. For contrast,
+`org.freedesktop.NetworkManager.settings.modify.system` should already
+return `0`.
 
 ## Why a rule rather than a polkit agent
 
