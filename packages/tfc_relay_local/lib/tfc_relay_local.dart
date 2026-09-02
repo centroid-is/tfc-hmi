@@ -31,7 +31,19 @@ export 'src/freshness_sweep.dart';
 export 'src/ingest.dart';
 export 'src/key_router.dart';
 export 'src/local_state_man.dart';
+export 'src/m2400_upstream_link.dart';
+export 'src/modbus_upstream_link.dart';
 export 'src/opcua_upstream_link.dart';
 export 'src/pipe_health.dart';
+export 'src/string_encoding.dart';
 export 'src/upstream_link.dart';
 export 'src/value_shaping.dart';
+// The write vocabulary the two DeviceClient adapters name in their own public
+// signatures: `protocolFor` returns an `UpstreamProtocol` and
+// `classifyWriteError` a `WriteAnswer`. Leaving this internal would make two
+// members of an exported class unnameable outside the package — and
+// `notWritableReason` is the gateway's single spelling of the read-only
+// refusal, which a caller has to be able to compare against rather than
+// re-spell. 08-06 anticipated this line ("the plan that first needs it from
+// outside adds the export"); 08-10 is that plan.
+export 'src/write_translation.dart';
