@@ -22,6 +22,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc_dart/core/database.dart';
 
+import '../helpers/golden_tolerance.dart';
 import 'history_view_harness.dart';
 
 const Size _viewport = Size(1400, 900);
@@ -118,6 +119,10 @@ Future<void> _expectGolden(WidgetTester tester, String name) =>
     expectLater(find.byType(MaterialApp), matchesGoldenFile('goldens/$name'));
 
 void main() {
+  // Full-app-surface frames (1400×900): more room for cross-machine
+  // rasterisation drift than the 0.01% default allows for.
+  useTolerantGoldenComparator(tolerance: 0.002);
+
   testWidgets('full page — historical graph with three keys', (tester) async {
     await _pump(
       tester,
