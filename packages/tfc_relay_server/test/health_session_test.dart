@@ -111,7 +111,8 @@ void main() {
   }
 
   /// A connected station on [server], past the handshake.
-  Future<rpc.Client> station(RelayServer server, {String? root}) async {
+  Future<rpc.Client> station(RelayServer server,
+      {String? root, bool hello = true}) async {
     final opened = server.sessions.opened.first;
     final ws = IOWebSocketChannel.connect(
       Uri.parse('${root == null ? 'ws' : 'wss'}://localhost:${server.port}'),
@@ -128,6 +129,7 @@ void main() {
       await ws.sink.close().catchError((Object _) {});
     });
     await opened.timeout(const Duration(seconds: 5));
+    if (!hello) return peer;
     await peer
         .sendRequest(
             Methods.hello,
@@ -276,22 +278,44 @@ void main() {
       final plant = FakeStateMan()..setValue(_speedKey, 1450);
       final server = buildServer(plant: plant);
       await server.start();
-      final panel = await station(server);
+      final panel = await station(server, hello: false);
       final session = server.sessions.sessions.single;
 
-      // A hold tick naming a hold this session never engaged: the handler
-      // half. `ValueHandlers.droppedHoldTicks` counts it.
+      // **The half the handler never sees.** A hold tick sent before the
+      // handshake is refused by the gate and never reaches `ValueHandlers`,
+      // so it is counted on the session as an ungated notification. It is
+      // still a tick that reached a handler and did nothing, which is what
+      // every other entry in this count is — and a health key with a hole in
+      // it exactly where the unauthenticated peers go is a number an operator
+      // would read as "nothing is being dropped" (05-REVIEW WR-03,
+      // relay_session.dart:470-478).
+      panel.sendNotification(Methods.holdTick, {'hold': 'never-engaged'});
+      await pumpEventQueue();
+      await panel
+          .sendRequest(
+              Methods.hello,
+              HelloParams(
+                protocol: protocolVersion,
+                supported: const [protocolVersion],
+                client: const PeerInfo('panel-under-test', '0.1.0'),
+              ).toJson())
+          .timeout(_dialBudget);
+
+      // And one after it, which the handler does see: the key is the sum, not
+      // either half.
       panel.sendNotification(Methods.holdTick, {'hold': 'never-engaged'});
       await pumpEventQueue();
 
-      expect(session.droppedHoldTicks, greaterThan(0),
-          reason: 'the fixture has to actually drop one for this case to '
-              'mean anything');
+      expect(session.droppedHoldTicks, 2,
+          reason: 'one refused by the gate and one refused by the handler — '
+              'the fixture has to produce both for this case to mean '
+              'anything');
       final wire = WireValue.fromJson(
           asMap((await read(panel, PipeKeys.droppedHoldTicks))['value']));
-      expect(wire.v, session.droppedHoldTicks,
-          reason: 'the health key must not have a hole in it where the '
-              'unauthenticated peers go (relay_session.dart:470-478)');
+      expect(wire.v, 2,
+          reason: 'the health key is the sum of both halves; reporting only '
+              'the handler\'s would read 1 and hide the peer that never '
+              'authenticated');
     });
 
     test('a policy that hides a health key hides it here too', () async {
