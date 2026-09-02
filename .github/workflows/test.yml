@@ -392,6 +392,50 @@ jobs:
       working-directory: centroid-hmi/windows/runner/test
       run: ctest --test-dir build --build-config Debug --output-on-failure
 
+  # The eLinux video output plugin (packages/media_kit_video_elinux) only
+  # builds against an embedder, but the parts worth testing — dimension
+  # parsing, the render budget, the libmpv symbol table — are plain C++ and
+  # build anywhere. Same shape as windows-runner-cpp-test above.
+  elinux-video-plugin-cpp-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure
+      working-directory: packages/media_kit_video_elinux
+      run: cmake -S elinux/test -B build/test -DCMAKE_BUILD_TYPE=Debug
+
+    - name: Build
+      working-directory: packages/media_kit_video_elinux
+      run: cmake --build build/test --config Debug
+
+    - name: Test
+      working-directory: packages/media_kit_video_elinux
+      shell: bash
+      run: |
+        ctest --test-dir build/test --build-config Debug --verbose \
+          --output-on-failure 2>&1 | tee test-output.txt
+
+    # A harness this small could stop registering cases and still exit 0; the
+    # floor is what makes "green" mean something.
+    - name: Verify the suite actually ran
+      if: always()
+      shell: bash
+      working-directory: packages/media_kit_video_elinux
+      run: |
+        [ -f test-output.txt ] || { echo "::error::the test step produced no output"; exit 1; }
+        ran=$(grep -c 'RUN  ' test-output.txt || true)
+        echo "eLinux video plugin tests reported: $ran"
+        # 16 cases as of this commit.
+        if [ "$ran" -lt 16 ]; then
+          echo "::error::ran only $ran cases, expected >=16 — check the test registration"
+          exit 1
+        fi
+
   # tools/ is python and had no CI job, so tools/hmi_profiler.py — the thing we
   # point at a station when someone says the HMI feels sluggish — would rot the
   # first time nobody ran it. Stdlib only, so this needs no install step and

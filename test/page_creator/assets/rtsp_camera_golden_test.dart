@@ -33,8 +33,10 @@ class _GoldenPlayback implements RtspCameraPlayback {
   Future<void> dispose() async {}
 }
 
-/// The four states an operator can meet, side by side at tile size:
-/// unconfigured, connecting, live, and no signal.
+/// The five states an operator can meet, side by side at tile size:
+/// unconfigured, connecting, live, no signal, and unavailable — the last one
+/// being the platform having no video output at all, not the camera being
+/// down.
 Widget buildFilmstrip({bool dark = false}) {
   final (light, darkTheme) = solarized();
   final theme = dark ? darkTheme : light;
@@ -72,6 +74,8 @@ Widget buildFilmstrip({bool dark = false}) {
                 tile(RtspCameraConfig(url: 'rtsp://c/2'), 'live'),
                 const SizedBox(width: 12),
                 tile(RtspCameraConfig(url: 'rtsp://c/3'), 'no signal'),
+                const SizedBox(width: 12),
+                tile(RtspCameraConfig(url: 'rtsp://c/4'), 'unavailable'),
               ],
             ),
           ),
@@ -116,6 +120,7 @@ void main() {
             switch (config.url) {
               'rtsp://c/1' => RtspCameraStatus.connecting,
               'rtsp://c/2' => RtspCameraStatus.live,
+              'rtsp://c/4' => RtspCameraStatus.unavailable,
               _ => RtspCameraStatus.noSignal,
             },
           );
@@ -130,14 +135,14 @@ void main() {
     }
 
     testWidgets('state filmstrip (light)', (tester) async {
-      tester.view.physicalSize = const Size(1100, 300);
+      tester.view.physicalSize = const Size(1180, 300);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
       await capture(tester, 'rtsp_camera_states');
     });
 
     testWidgets('state filmstrip (dark)', (tester) async {
-      tester.view.physicalSize = const Size(1100, 300);
+      tester.view.physicalSize = const Size(1180, 300);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
       await capture(tester, 'rtsp_camera_states_dark', dark: true);
