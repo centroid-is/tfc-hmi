@@ -164,6 +164,7 @@ library;
 
 import 'package:tfc_access/tfc_access.dart';
 
+import 'models/menu_item.dart';
 import 'route_registry.dart';
 
 /// The Server Config route — the one exemption while the access repository is
@@ -230,6 +231,42 @@ bool routeAllowedWhenRepositoryUnavailable(String? path) {
 void installRaisedRoutes([RouteRegistry? registry]) {
   final target = registry ?? RouteRegistry();
   kRaisedRoutes.forEach(target.declareRouteGroup);
+}
+
+/// Declares the groups the operator set on pages and sections in the page
+/// editor, resolving section inheritance as it walks.
+///
+/// A page's effective group is its own [MenuItem.requiredGroup], else the
+/// nearest ancestor section's, else nothing. **Nothing means nothing is
+/// written**, not that `operate` is written: `/advanced/page-editor` and the
+/// rest of [kRaisedRoutes] are declared by [installRaisedRoutes], and a
+/// customer page that happens to sit at the same path must not silently
+/// unraise them. Declaring is idempotent, so call this after
+/// [installRaisedRoutes] and it layers on top.
+///
+/// Sections are not routes and get no declaration of their own. A section
+/// disappears from the menu when every page beneath it is hidden, which
+/// inheritance already arranges -- see `NavDropdownState.buildFlatMenu`.
+void declareMenuRouteGroups(
+  Iterable<MenuItem> items, [
+  RouteRegistry? registry,
+]) {
+  final target = registry ?? RouteRegistry();
+
+  void walk(MenuItem item, AccessGroup? inherited) {
+    final effective = item.requiredGroup ?? inherited;
+    final path = item.path;
+    if (!item.isNavigationSection && path != null && effective != null) {
+      target.declareRouteGroup(path, effective);
+    }
+    for (final child in item.children) {
+      walk(child, effective);
+    }
+  }
+
+  for (final item in items) {
+    walk(item, null);
+  }
 }
 
 /// The group [path] needs, read from the registry.

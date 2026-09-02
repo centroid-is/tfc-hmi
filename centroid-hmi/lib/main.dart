@@ -450,6 +450,13 @@ RoutesLocationBuilder createLocationBuilder(
   // and the route table cannot disagree about which entries are locked.
   installRaisedRoutes();
 
+  // Then layer the groups the operator published pages and sections for, which
+  // resolves section inheritance as it walks. AFTER installRaisedRoutes, never
+  // before: declaring is idempotent and last-writer-wins, and a customer page
+  // must be able to raise its own path while a page that declares nothing
+  // leaves a built-in route's group exactly as installRaisedRoutes left it.
+  declareMenuRouteGroups(RouteRegistry().menuItems);
+
   // Wraps a raised route's child in its gate. Two things here are deliberate:
   //
   //  - The `!`. A path missing from kRaisedRoutes throws when the route is
