@@ -14,6 +14,7 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         McpToolToggles,
         NodeBrowser,
         ProposalCallback,
+        ScreenCapturer,
         ProposalFeedbackBus;
 
 /// Hosts an MCP server using Streamable HTTP transport.
@@ -43,6 +44,9 @@ class McpSseServer {
     PlcCodeIndex? plcCodeIndex,
     TechDocIndex? techDocIndex,
     NodeBrowser? nodeBrowser,
+
+    /// Renders the live UI to a PNG for the screenshot tools.
+    ScreenCapturer? screenCapturer,
     ProposalCallback? onProposal,
 
     /// Shared across every session: the operator decides once, and each
@@ -62,6 +66,7 @@ class McpSseServer {
           plcCodeIndex: plcCodeIndex,
           techDocIndex: techDocIndex,
           nodeBrowser: nodeBrowser,
+          screenCapturer: screenCapturer,
           toggles: toggles,
           onProposal: onProposal,
           feedbackBus: feedbackBus,

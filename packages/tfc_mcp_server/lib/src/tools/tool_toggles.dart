@@ -115,6 +115,7 @@ class McpToolToggles {
   final bool plcCodeEnabled;
   final bool proposalsEnabled;
   final bool techDocsEnabled;
+  final bool screenshotsEnabled;
 
   const McpToolToggles({
     this.tagsEnabled = true,
@@ -125,6 +126,7 @@ class McpToolToggles {
     this.plcCodeEnabled = true,
     this.proposalsEnabled = true,
     this.techDocsEnabled = true,
+    this.screenshotsEnabled = true,
   });
 
   /// All groups enabled (default for new installations).
@@ -140,7 +142,8 @@ class McpToolToggles {
       other.trendsEnabled == trendsEnabled &&
       other.plcCodeEnabled == plcCodeEnabled &&
       other.proposalsEnabled == proposalsEnabled &&
-      other.techDocsEnabled == techDocsEnabled;
+      other.techDocsEnabled == techDocsEnabled &&
+      other.screenshotsEnabled == screenshotsEnabled;
 
   @override
   int get hashCode => Object.hash(
@@ -152,6 +155,7 @@ class McpToolToggles {
         plcCodeEnabled,
         proposalsEnabled,
         techDocsEnabled,
+        screenshotsEnabled,
       );
 
   // ── JSON field names (used in the consolidated McpConfig blob) ──────
@@ -164,6 +168,7 @@ class McpToolToggles {
   static const _kPlcCode = 'plcCode';
   static const _kProposals = 'proposals';
   static const _kTechDocs = 'techDocs';
+  static const _kScreenshots = 'screenshots';
 
   // ── Legacy preference key constants (pre-consolidation) ─────────────
 
@@ -175,6 +180,7 @@ class McpToolToggles {
   static const kPlcCodeEnabled = 'mcp_tools_plc_code_enabled';
   static const kProposalsEnabled = 'mcp_tools_proposals_enabled';
   static const kTechDocsEnabled = 'mcp_tools_tech_docs_enabled';
+  static const kScreenshotsEnabled = 'mcp_tools_screenshots_enabled';
 
   /// All legacy preference keys for migration.
   static const legacyKeys = [
@@ -186,6 +192,7 @@ class McpToolToggles {
     kPlcCodeEnabled,
     kProposalsEnabled,
     kTechDocsEnabled,
+    kScreenshotsEnabled,
   ];
 
   /// All JSON field names for the toggles sub-object.
@@ -198,6 +205,7 @@ class McpToolToggles {
     _kPlcCode,
     _kProposals,
     _kTechDocs,
+    _kScreenshots,
   ];
 
   /// Create toggles from a JSON map (within the McpConfig blob).
@@ -213,6 +221,7 @@ class McpToolToggles {
       plcCodeEnabled: json[_kPlcCode] as bool? ?? true,
       proposalsEnabled: json[_kProposals] as bool? ?? true,
       techDocsEnabled: json[_kTechDocs] as bool? ?? true,
+      screenshotsEnabled: json[_kScreenshots] as bool? ?? true,
     );
   }
 
@@ -226,6 +235,7 @@ class McpToolToggles {
         _kPlcCode: plcCodeEnabled,
         _kProposals: proposalsEnabled,
         _kTechDocs: techDocsEnabled,
+        _kScreenshots: screenshotsEnabled,
       };
 
   /// Create toggles from a map of legacy preference keys to boolean values.
@@ -242,6 +252,7 @@ class McpToolToggles {
       plcCodeEnabled: map[kPlcCodeEnabled] ?? true,
       proposalsEnabled: map[kProposalsEnabled] ?? true,
       techDocsEnabled: map[kTechDocsEnabled] ?? true,
+      screenshotsEnabled: map[kScreenshotsEnabled] ?? true,
     );
   }
 
@@ -256,6 +267,8 @@ class McpToolToggles {
       plcCodeEnabled: jsonKey == _kPlcCode ? value : plcCodeEnabled,
       proposalsEnabled: jsonKey == _kProposals ? value : proposalsEnabled,
       techDocsEnabled: jsonKey == _kTechDocs ? value : techDocsEnabled,
+      screenshotsEnabled:
+          jsonKey == _kScreenshots ? value : screenshotsEnabled,
     );
   }
 
@@ -278,6 +291,8 @@ class McpToolToggles {
         return proposalsEnabled;
       case _kTechDocs:
         return techDocsEnabled;
+      case _kScreenshots:
+        return screenshotsEnabled;
       default:
         return true;
     }
@@ -327,6 +342,11 @@ class McpToolToggles {
       key: _kTechDocs,
       title: 'Tech Docs',
       description: 'Reference equipment manuals and datasheets during diagnostics',
+    ),
+    (
+      key: _kScreenshots,
+      title: 'Screen Capture',
+      description: 'Let the AI see the HMI screen, so it can judge a layout by eye',
     ),
   ];
 }

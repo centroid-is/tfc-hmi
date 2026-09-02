@@ -63,7 +63,7 @@ void main() {
       expect(McpConfig.legacyKeys, contains('mcp_server_port'));
       expect(McpConfig.legacyKeys, contains('mcp_tools_tags_enabled'));
       expect(McpConfig.legacyKeys, contains('mcp_tools_alarms_enabled'));
-      expect(McpConfig.legacyKeys, hasLength(11)); // 3 + 8 toggle keys
+      expect(McpConfig.legacyKeys, hasLength(12)); // 3 + 9 toggle keys
     });
   });
 
@@ -89,11 +89,12 @@ void main() {
       expect(McpToolToggles.allEnabled.plcCodeEnabled, isTrue);
       expect(McpToolToggles.allEnabled.proposalsEnabled, isTrue);
       expect(McpToolToggles.allEnabled.techDocsEnabled, isTrue);
+      expect(McpToolToggles.allEnabled.screenshotsEnabled, isTrue);
     });
 
-    test('legacyKeys contains exactly 8 keys matching mcp_tools_*_enabled pattern',
+    test('legacyKeys contains exactly 9 keys matching mcp_tools_*_enabled pattern',
         () {
-      expect(McpToolToggles.legacyKeys, hasLength(8));
+      expect(McpToolToggles.legacyKeys, hasLength(9));
       for (final key in McpToolToggles.legacyKeys) {
         expect(key, startsWith('mcp_tools_'));
         expect(key, endsWith('_enabled'));
@@ -163,8 +164,8 @@ void main() {
       expect(toggles.getByKey('unknown'), isTrue);
     });
 
-    test('toolGroupMeta contains 8 entries with key, title, description', () {
-      expect(McpToolToggles.toolGroupMeta, hasLength(8));
+    test('toolGroupMeta contains 9 entries with key, title, description', () {
+      expect(McpToolToggles.toolGroupMeta, hasLength(9));
       for (final meta in McpToolToggles.toolGroupMeta) {
         expect(meta.key, isNotEmpty);
         expect(meta.title, isNotEmpty);
