@@ -116,6 +116,12 @@ void _registerCreateAlarm({
               'Only one alarm per group can be bound.',
           defaultValue: false,
         ),
+        'counts_as_stop': JsonSchema.boolean(
+          description: 'Whether an activation of this alarm counts as '
+              'downtime in the stop analysis. Default true; set false for '
+              'advisory alarms that never halt the line.',
+          defaultValue: true,
+        ),
         'rules': JsonSchema.array(
           description: 'Alarm rules with severity and expression',
           items: JsonSchema.object(
@@ -149,6 +155,7 @@ void _registerCreateAlarm({
               .toList() ??
           const <String>[];
       final bindToGroup = arguments['bind_to_group'] as bool? ?? false;
+      final countsAsStop = arguments['counts_as_stop'] as bool? ?? true;
       final rawRules = arguments['rules'] as List<dynamic>;
 
       // Validate all expressions before building proposal
@@ -175,6 +182,7 @@ void _registerCreateAlarm({
         // Binding to the root is meaningless -- there is no group to be --
         // so it is dropped rather than stored as a flag that does nothing.
         'bindToGroup': bindToGroup && group.isNotEmpty,
+        'countsAsStop': countsAsStop,
       };
       if (key != null) {
         proposal['key'] = key;
@@ -188,6 +196,7 @@ void _registerCreateAlarm({
         if (group.isNotEmpty) 'group': group.join(' > '),
         if (bindToGroup && group.isNotEmpty)
           'bindToGroup': 'this alarm IS the group',
+        if (!countsAsStop) 'countsAsStop': 'not counted as a stop',
         'rules': rules
             .map((r) =>
                 '${r['level']}: ${r['expression']['value']['formula']}')
@@ -247,6 +256,10 @@ void _registerUpdateAlarm({
         'bind_to_group': JsonSchema.boolean(
           description: 'True when this alarm IS its group rather than one '
               'alarm inside it. Omit to leave unchanged.',
+        ),
+        'counts_as_stop': JsonSchema.boolean(
+          description: 'Whether an activation counts as downtime in the '
+              'stop analysis. Omit to leave unchanged.',
         ),
         'rules': JsonSchema.array(
           description: 'Updated alarm rules (replaces all existing rules)',
@@ -313,6 +326,8 @@ void _registerUpdateAlarm({
           : existingGroup;
       final newBindToGroup = arguments['bind_to_group'] as bool? ??
           (existing['bindToGroup'] as bool? ?? false);
+      final newCountsAsStop = arguments['counts_as_stop'] as bool? ??
+          (existing['countsAsStop'] as bool? ?? true);
 
       List<Map<String, dynamic>> newRules;
       if (arguments.containsKey('rules') && arguments['rules'] != null) {
@@ -352,6 +367,7 @@ void _registerUpdateAlarm({
         'group': newGroup,
         // Binding to the root is meaningless -- there is no group to be.
         'bindToGroup': newBindToGroup && newGroup.isNotEmpty,
+        'countsAsStop': newCountsAsStop,
       };
       if (newKey != null) {
         proposal['key'] = newKey;
@@ -373,6 +389,10 @@ void _registerUpdateAlarm({
       if (newBindToGroup != (existing['bindToGroup'] as bool? ?? false)) {
         changes['bindToGroup'] =
             '${existing['bindToGroup'] ?? false} -> $newBindToGroup';
+      }
+      if (newCountsAsStop != (existing['countsAsStop'] as bool? ?? true)) {
+        changes['countsAsStop'] =
+            '${existing['countsAsStop'] ?? true} -> $newCountsAsStop';
       }
       if (newKey != existing['key']) {
         changes['key'] = '${existing['key']} -> $newKey';

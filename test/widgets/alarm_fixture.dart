@@ -78,7 +78,8 @@ class AlarmFixture implements AlarmMan {
 
 /// The alarm list in a column [width] wide, the way the Alarm View page hands
 /// it 2/5 of the window.
-Widget alarmList(AlarmFixture alarms, {double width = 520, bool dark = false}) {
+Widget alarmList(AlarmFixture alarms,
+    {double width = 520, bool dark = false}) {
   final (light, darkTheme) = solarized();
   return ProviderScope(
     overrides: [alarmManProvider.overrideWith((ref) async => alarms)],

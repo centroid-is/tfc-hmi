@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:tfc_dart/core/alarm.dart' show AlarmLevel;
 import 'package:tfc_dart/core/alarm_interval.dart';
 
-import '../../theme.dart';
+import '../theme.dart';
 import 'stop_timeline_geometry.dart';
 
 /// The severity colours, taken from [AlarmColors] so this asset never invents

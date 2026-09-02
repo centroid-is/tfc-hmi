@@ -179,6 +179,7 @@ void main() {
       List<Map<String, dynamic>> rules = const [],
       List<String>? group,
       bool? bindToGroup,
+      bool? countsAsStop,
     }) =>
         {
           'uid': uid,
@@ -188,6 +189,7 @@ void main() {
           'rules': rules,
           if (group != null) 'group': group,
           if (bindToGroup != null) 'bindToGroup': bindToGroup,
+          if (countsAsStop != null) 'countsAsStop': countsAsStop,
         };
 
     /// Reads back the stored alarm config, to prove a tool did not write it.
@@ -384,6 +386,23 @@ void main() {
         expect(json['bindToGroup'], isTrue);
       });
 
+      test('create_alarm carries counts_as_stop into the proposal',
+          () async {
+        await setupWithAutoConfirm();
+        final result = await client.callTool('create_alarm', {
+          'title': 'Door open',
+          'description': 'Advisory only',
+          'counts_as_stop': false,
+          'rules': [
+            {'level': 'warning', 'formula': 'door.open == true'},
+          ],
+        });
+        final proposal =
+            jsonDecode((result.content.first as TextContent).text)
+                as Map<String, dynamic>;
+        expect(proposal['countsAsStop'], isFalse);
+      });
+
       test('a new alarm with no group is ungrouped, not missing the field',
           () async {
         await setupWithAutoConfirm();
@@ -482,6 +501,56 @@ void main() {
                 as Map<String, dynamic>;
         expect(boundJson['group'], equals(['Line 3', 'Multivac']));
         expect(boundJson['bindToGroup'], isTrue);
+      });
+
+      test('an update keeps an alarm excluded from the stop analysis '
+          'excluded', () async {
+        // Same failure shape as the group test above: the proposal replaces
+        // the stored alarm wholesale, so a title-only update that did not
+        // carry countsAsStop would silently turn an advisory alarm back
+        // into downtime.
+        await setupWithAutoConfirm();
+
+        await seedAlarms([
+          alarmJson(
+            uid: 'alarm-1',
+            title: 'Door open',
+            description: 'The cabinet door is open',
+            countsAsStop: false,
+          ),
+        ]);
+
+        final renamed = await client.callTool('update_alarm', {
+          'alarm_uid': 'alarm-1',
+          'title': 'Cabinet door open',
+        });
+        final proposal =
+            jsonDecode((renamed.content.first as TextContent).text)
+                as Map<String, dynamic>;
+        expect(proposal['title'], equals('Cabinet door open'));
+        expect(proposal['countsAsStop'], isFalse);
+      });
+
+      test('a stored alarm from before countsAsStop existed updates to '
+          'counting as a stop', () async {
+        await setupWithAutoConfirm();
+
+        await seedAlarms([
+          alarmJson(
+            uid: 'alarm-1',
+            title: 'Jam',
+            description: 'Belt jammed',
+          ),
+        ]);
+
+        final renamed = await client.callTool('update_alarm', {
+          'alarm_uid': 'alarm-1',
+          'title': 'Belt jam',
+        });
+        final proposal =
+            jsonDecode((renamed.content.first as TextContent).text)
+                as Map<String, dynamic>;
+        expect(proposal['countsAsStop'], isTrue);
       });
 
       test('merges over the stored config, not a cached copy of it', () async {

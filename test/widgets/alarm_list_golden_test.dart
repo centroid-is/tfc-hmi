@@ -114,5 +114,6 @@ void main() {
         matchesGoldenFile('goldens/alarm_list_all_levels_selected.png'),
       );
     });
+
   });
 }

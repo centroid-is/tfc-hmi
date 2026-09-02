@@ -489,6 +489,7 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
   late List<AlarmRule> _rules;
   late String _group;
   late bool _bindToGroup;
+  late bool _countsAsStop;
 
   @override
   void initState() {
@@ -498,6 +499,7 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
     _rules = widget.initialConfig?.rules.toList() ?? [];
     _group = formatAlarmGroup(widget.initialConfig?.group ?? const []);
     _bindToGroup = widget.initialConfig?.bindToGroup ?? false;
+    _countsAsStop = widget.initialConfig?.countsAsStop ?? true;
   }
 
   /// Groups that already exist, so the operator picks an existing name
@@ -572,6 +574,18 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
               value: _bindToGroup,
               onChanged: widget.editable && parseAlarmGroup(_group).isNotEmpty
                   ? (v) => setState(() => _bindToGroup = v)
+                  : null,
+            ),
+            SwitchListTile(
+              key: const ValueKey('alarm-form-counts-as-stop'),
+              title: const Text('Counts as a stop'),
+              subtitle: const Text(
+                  'On by default: an activation is downtime in the stop '
+                  'analysis. Turn off for advisory alarms that never halt '
+                  'the line.'),
+              value: _countsAsStop,
+              onChanged: widget.editable
+                  ? (v) => setState(() => _countsAsStop = v)
                   : null,
             ),
             const SizedBox(height: 16),
@@ -686,6 +700,7 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
                             rules: _rules,
                             group: group,
                             bindToGroup: _bindToGroup && group.isNotEmpty,
+                            countsAsStop: _countsAsStop,
                           );
                           widget.onSubmit?.call(config);
                         }

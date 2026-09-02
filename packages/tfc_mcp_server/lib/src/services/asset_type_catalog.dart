@@ -717,37 +717,6 @@ class AssetTypeCatalog {
       ],
     ),
     AssetTypeInfo(
-      assetName: 'StopTimelineConfig',
-      displayName: 'Stop Analysis',
-      category: 'Visualization',
-      description:
-          'A stop-analysis timeline: the alarm system on a time axis. Rows '
-          'are the alarm tree itself, grouped by AlarmConfig.group, so a '
-          'collapsed group shows when anything under it was standing and '
-          'expanding it reaches the alarm that says what was actually '
-          'wrong. Bars are alarm activations coloured by severity; an alarm '
-          'that has not cleared runs to the live edge. Drag to pan, scroll '
-          'to zoom.',
-      properties: [
-        AssetPropertyInfo(
-            name: 'groups',
-            type: 'List<List<String>>',
-            description: 'Which alarm groups to show, each an address read '
-                'outermost first -- [["Line 3", "Multivac"]]. Empty shows '
-                'the whole alarm tree. Call get_alarm_tree to see what '
-                'group names exist.'),
-        AssetPropertyInfo(
-            name: 'period_hours',
-            type: 'int',
-            description: 'How much history to load, and the span the '
-                'overview strip covers (default 12)'),
-        AssetPropertyInfo(
-            name: 'header_text',
-            type: 'String?',
-            description: 'Header text, or null for "Stop analysis"'),
-      ],
-    ),
-    AssetTypeInfo(
       assetName: 'GraphAssetConfig',
       displayName: 'Graph',
       category: 'Visualization',
