@@ -28,6 +28,11 @@ library;
 export 'src/epoch.dart';
 export 'src/fanin.dart';
 export 'src/freshness_sweep.dart';
+// The composition root's data and its builders. Exported because `bin/` is
+// not addressable by any `package:` URI, so anything a case has to reach —
+// the config, the duplicate-alias refusal, the reserved-name sweep, the usage
+// text — has to live under `lib/`.
+export 'src/gateway_config.dart';
 export 'src/ingest.dart';
 export 'src/key_router.dart';
 // Browse over the live address space. Exported alongside the composer because

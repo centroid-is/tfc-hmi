@@ -94,6 +94,14 @@ dev_dependencies:
   # The suite runner. Never a production dependency here for the same reason it
   # is not one in tfc_relay_server.
   test: ^1.25.0
+  # The panel, for the end-to-end leg and for nothing else. **A dev dependency,
+  # deliberately**: the gateway does not depend on the panel — the edge runs
+  # local -> server, and a production edge to the client would make every
+  # gateway build carry the client's WebSocket stack and its TLS pinning. The
+  # end-to-end test needs a REAL RemoteStateMan over a REAL socket, because a
+  # hand-rolled client would be this package asserting against its own idea of
+  # what a panel does. Same shape as tfc_relay_client holding tfc_relay_server.
+  tfc_relay_client: {path: ../tfc_relay_client}
   # The shared StateManApi contract suite, run against LocalStateMan over real
   # DeviceClients. It binds ports and pulls package:test into whatever solve
   # names it, so dev-only is not negotiable.
