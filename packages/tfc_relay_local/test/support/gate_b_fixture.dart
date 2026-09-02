@@ -163,12 +163,18 @@ final class GateBLink implements UpstreamLink {
   bool _reprogramming = false;
   int _reBrowses = 0;
   int _suppressedSweeps = 0;
+  int _deadLinkSweeps = 0;
 
   /// How many re-browses have run. Exactly one per bump is F24's clause.
   int get reBrowses => _reBrowses;
 
   /// Sweeps [setValues] dropped while the reprogram latch was up.
   int get suppressedSweeps => _suppressedSweeps;
+
+  /// Sweeps [setValues] dropped because the link was disconnected — F27's
+  /// injection window, counted so a case can prove the plant stayed busy
+  /// while the link stayed silent.
+  int get deadLinkSweeps => _deadLinkSweeps;
 
   /// A PLC program download, as the panel would see one.
   ///
@@ -216,9 +222,27 @@ final class GateBLink implements UpstreamLink {
 
   /// The plant driver's entry: dropped, and counted, while a reprogram is in
   /// flight — a PLC mid-download delivers no samples.
+  ///
+  /// **A disconnected PLC delivers no samples either** (F27, 09-06). The
+  /// plain fake publishes whatever a lever hands it regardless of its own
+  /// `state` — a lever is the hand of god, on purpose — but the *driver's*
+  /// sweep stands in for the PLC's own poll cycle, and a dead PLC does not
+  /// poll. Without this drop, the sweep after `disconnectUpstream()` would
+  /// republish fifty good values into a dead link and silently heal the very
+  /// degrade the row injects, so the fixture would be lying about its own
+  /// injection. Guarded on [UpstreamLink.birthCount] so the seed sweep —
+  /// which runs before `plant.start()` connects anything — still lands.
+  /// The raw seams ([GateBPlantDriver.overrideRaw], [emitPlantBytes]) are
+  /// deliberately not gated: an override is a per-key hand of god, and F27a
+  /// leans on its poison persisting across the outage.
   void setValues(Map<String, Object?> values) {
     if (_reprogramming) {
       _suppressedSweeps++;
+      return;
+    }
+    if (inner.birthCount > 0 &&
+        inner.state == UpstreamLinkState.disconnected) {
+      _deadLinkSweeps++;
       return;
     }
     inner.setValues(values);
