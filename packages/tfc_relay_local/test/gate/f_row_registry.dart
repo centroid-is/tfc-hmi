@@ -262,11 +262,6 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     owner: '09-07',
     clause: 'the stall harness, the announcement and the staleness clauses (F22a/b/d); the reaper half ("synchronized false disconnect") is 09-08\'s RED and fix, and the historian half ("historian marks the gap") is 09-09\'s db-tagged arm',
   ),
-  'F23': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '09-03',
-    clause: 'gateway memory and the upstream create-delta flat across 200 kill cycles, with the twenty-session control arm',
-  ),
   'F25': Outstanding(
     kind: OutstandingKind.missing,
     owner: '09-04',
@@ -352,7 +347,12 @@ const List<Deviation> gateDeviations = <Deviation>[
         '(state_man.dart:848-861), so 08-PLAN-INDEX freeze 7 pins '
         'upstreamSubscriptionsCreated as a delta of creates, never a balance. '
         'The row asserts a flat create-delta across 200 kill cycles instead '
-        'of a count returning to a number nothing in the binding can compute.',
+        'of a count returning to a number nothing in the binding can compute. '
+        'Measured (09-03, ghost_session_gate_test F23a): baseline 20 creates '
+        'from twenty held panels, delta 0 at every checkpoint '
+        '(+10/+50/+100/+200, 0.00 per cycle, linger 0 ms); the refcount '
+        'sabotage that releases under live watchers moved it to 2.50 per '
+        'cycle, so the flat delta is measured, not assumed.',
     followUp: 'none — accepted',
   ),
   Deviation(
