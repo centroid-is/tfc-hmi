@@ -1046,6 +1046,10 @@ final class RelaySession {
           // data under a healthy-looking link.
           resumed: false,
           serverTime: _now(),
+          // Read from the config this session was built with, never a
+          // literal, and omitted from `toJson` when null — so a deployment
+          // that configures none sends the frame it always sent.
+          publisherId: config.publisherId,
         ).toJson();
       case GateClose(:final closeCode, :final supported, :final requested):
         _requestClose(closeCode, 'no common protocol version');
@@ -1083,6 +1087,63 @@ final class RelaySession {
   Future<Object?> _ping(rpc.Parameters _) async {
     _health?.refreshIfDue();
     return {'serverTime': _now()};
+  }
+
+  /// One last `tick` naming where each subscription got to, into the priority
+  /// lane, for a **planned** drain only.
+  ///
+  /// ## What it is for
+  ///
+  /// [CloseCodes.serverDraining] means "reconnect, do not alarm", and until
+  /// this existed that was all it meant: a panel coming back after a deploy
+  /// could not tell a sequence it missed from one that never happened, so it
+  /// could not say whether the numbers still on its screen were the last ones
+  /// this gateway evaluated. That is T-08-48 — a client left unable to account
+  /// for what it missed — and the fix is one frame naming the last `seq` per
+  /// subscription.
+  ///
+  /// ## Planned only
+  ///
+  /// A heartbeat timeout, a backpressure eviction, a dead socket and a client
+  /// that walked away all reach [_teardown] too, and none of them may produce
+  /// this frame: a tick after an abrupt drop is a claim about state nobody
+  /// verified, sent down a link the gateway has just decided it cannot trust.
+  /// The `code == serverDraining` test is the whole of the distinction.
+  ///
+  /// ## Its own frame, and never the close reason
+  ///
+  /// Into the priority lane, where `_Connection.closeSocket`'s existing flush
+  /// puts it on the wire *before* `sink.close`. That ordering is already
+  /// load-bearing for the refusals that explain a close, so this rides a seam
+  /// that is tested rather than inventing one.
+  ///
+  /// **It must never be spliced into the close reason.** RFC 6455 caps a
+  /// reason at 123 UTF-8 bytes and `package:web_socket` enforces the cap with
+  /// an `ArgumentError` that lands inside `closeSocket`'s `try` and is
+  /// swallowed as "the far end is already gone" — so the close a gateway
+  /// believes it sent was never sent, and the session lives on. Phase 6 paid
+  /// for that discovery once. A sequence number in the reason would put every
+  /// planned drain one long station name away from paying for it again.
+  ///
+  /// Built through [TickParams] rather than concatenated, unlike
+  /// `TickEngine._writeTick`: that one runs for every subscription of every
+  /// session on every tick and the encode is the cost being avoided. This runs
+  /// once per session, ever.
+  void _writeFinalTick() {
+    final subs = subscriptions.subscriptions;
+    if (subs.isEmpty) return;
+    final at = _now();
+    buffer.putPriority(jsonEncode({
+      'jsonrpc': '2.0',
+      'method': Methods.tick,
+      'params': TickParams(
+        serverTime: at,
+        subs: {
+          for (final state in subs)
+            state.sub: SubTick(seq: state.seq, evaluatedAt: at),
+        },
+      ).toJson(),
+    }));
   }
 
   /// Records [code] and schedules the teardown for after the answer.
@@ -1162,6 +1223,9 @@ final class RelaySession {
     _closed = true;
     if (code != null) _sentCloseCode ??= code;
     _onClosing?.call(this);
+    // Before `subscriptions.clear()` below, because it is the subscriptions
+    // that are being named. See [_writeFinalTick].
+    if (code == CloseCodes.serverDraining) _writeFinalTick();
     // In the synchronous half, and beside `subscriptions.clear()` because it
     // is the same kind of debt: a listener still attached pushes values at a
     // panel that is gone, and a hold still engaged pushes a *counter* at a

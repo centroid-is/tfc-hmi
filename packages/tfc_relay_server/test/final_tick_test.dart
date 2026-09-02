@@ -256,15 +256,7 @@ void main() {
       // move, and an added key is exactly what would move it.
       expect(
           raw.keys.toSet(),
-          {
-            'protocol',
-            'server',
-            'capabilities',
-            'sessionId',
-            'epoch',
-            'resumed',
-            'serverTime',
-          },
+          {'protocol', 'server', 'capabilities', 'session', 'clock'},
           reason: 'additive means additive: an unconfigured deployment must '
               'pay nothing for a field it did not ask for, and `publisherId: '
               'null` on the wire is a payment');
@@ -281,11 +273,18 @@ void main() {
       // `StatusParams`, so the one frame whose job is to explain a fatal
       // wiring failure was the one frame a conforming client could not read.
       final plant = FakeStateMan()..setValue(_speedKey, 1450);
+      // Armed only after the bind: `WriteOutcomeLog` samples the clock in
+      // `RelayServer`'s own constructor, and a gateway that could not be built
+      // at all would never reach the seam this case is about.
+      var armed = false;
       final server = buildServer(
           plant: plant,
           publisherId: 'gw-north',
-          now: () => throw StateError('the clock is broken'));
+          now: () => armed
+              ? throw StateError('the clock is broken')
+              : DateTime.now().millisecondsSinceEpoch);
       await server.start();
+      armed = true;
 
       final ws = IOWebSocketChannel.connect(
         Uri.parse('ws://localhost:${server.port}'),

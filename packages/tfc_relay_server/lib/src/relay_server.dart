@@ -725,6 +725,10 @@ final class RelayServer {
             state: 'unhealthy',
             error: 'the server could not build a session for this connection: '
                 '$error',
+            // A fault report with no return address is one nobody can
+            // attribute when two gateways serve one plant. Omitted when null,
+            // so an unconfigured deployment's frame is unchanged.
+            publisherId: config.publisherId,
           ).toJson(),
         }),
       );
