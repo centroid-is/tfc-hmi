@@ -338,7 +338,12 @@ abstract class DeviceClientUpstreamLink implements UpstreamLink {
   UpstreamProtocol protocolFor(UpstreamRef ref);
 
   /// The refusal this link owes before anything is sent, or null.
-  WriteResult? writeGuard(UpstreamRef ref, String cmd) => null;
+  ///
+  /// [hasExpect] is the composer's compare-and-set bit, carried down for the
+  /// same reason the OPC UA adapter takes it — see `UpstreamLink.write`.
+  WriteResult? writeGuard(UpstreamRef ref, String cmd,
+          {bool hasExpect = false}) =>
+      null;
 
   /// Sends one write. May throw; [write] classifies whatever comes out.
   Future<void> performWrite(UpstreamRef ref, DynamicValue value) =>
@@ -359,6 +364,7 @@ abstract class DeviceClientUpstreamLink implements UpstreamLink {
     DynamicValue value, {
     required String cmd,
     required Duration deadline,
+    bool hasExpect = false,
   }) async {
     if (!supportsWrites) {
       return WriteRejected(cmd, notWritableReason,
@@ -376,7 +382,7 @@ abstract class DeviceClientUpstreamLink implements UpstreamLink {
         at: DateTime.now().millisecondsSinceEpoch,
       );
     }
-    final refusal = writeGuard(ref, cmd);
+    final refusal = writeGuard(ref, cmd, hasExpect: hasExpect);
     if (refusal != null) return refusal;
     _roundTrips++;
     // ONE crossing into the plant, and no retry shape anywhere near it.
@@ -754,13 +760,16 @@ class ModbusUpstreamLink extends DeviceClientUpstreamLink {
   /// silently, and the loser is whoever read first. A named refusal is a
   /// page-editor bug report; a silent overwrite is a plant incident.
   ///
-  /// `hasExpect: false` unconditionally because compare-and-set has no carrier
-  /// on this path yet — `write` takes a value and a cmd. When it gains one, the
-  /// flag is what this reads.
+  /// The carrier arrived in 08-REVIEW WR-02: [hasExpect] is the composer's
+  /// compare-and-set bit, evaluated against the last value the gateway heard
+  /// and carried down through `write`. Under a comparison the read-modify-
+  /// write may run, which is what `guardArrayElementWrite`'s own doc has
+  /// always said and what nothing could reach while the flag was a literal.
   @override
-  WriteResult? writeGuard(UpstreamRef ref, String cmd) =>
+  WriteResult? writeGuard(UpstreamRef ref, String cmd,
+          {bool hasExpect = false}) =>
       _bitMasked.contains(ref.key)
-          ? guardArrayElementWrite(cmd: cmd, hasExpect: false)
+          ? guardArrayElementWrite(cmd: cmd, hasExpect: hasExpect)
           : null;
 
   /// A typed [UmasException] is the device declining **by name**.

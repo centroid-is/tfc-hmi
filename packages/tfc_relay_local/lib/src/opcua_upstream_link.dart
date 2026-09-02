@@ -597,6 +597,7 @@ final class OpcUaUpstreamLink implements UpstreamLink {
     DynamicValue value, {
     required String cmd,
     required Duration deadline,
+    bool hasExpect = false,
   }) async {
     if (!supportsWrites) {
       return WriteRejected(cmd, notWritableReason,
@@ -623,7 +624,11 @@ final class OpcUaUpstreamLink implements UpstreamLink {
     // from that entry, so it is the layer that can see the `array_index`, and
     // the refusal happens before anything is sent.
     if (_arrayIndices.containsKey(ref.key)) {
-      final refusal = guardArrayElementWrite(cmd: cmd, hasExpect: false);
+      // The flag is the composer's, carried down (08-REVIEW WR-02). It used to
+      // be the literal `false`, which made the documented compare-and-set
+      // escape unreachable and told an operator who HAD supplied `expect` to
+      // supply `expect`.
+      final refusal = guardArrayElementWrite(cmd: cmd, hasExpect: hasExpect);
       if (refusal != null) return refusal;
     }
     final client = _client;

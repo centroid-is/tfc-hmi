@@ -668,7 +668,9 @@ final class BatchCountingLink implements UpstreamLink {
   DynamicValue? peek(UpstreamRef ref) => _inner.peek(ref);
   @override
   Future<WriteResult> write(UpstreamRef ref, DynamicValue value,
-      {required String cmd, required Duration deadline}) {
+      {required String cmd,
+      required Duration deadline,
+      bool hasExpect = false}) {
     // Counted BEFORE anything can short-circuit: a refusal is still an
     // attempt, and a counter that only saw the successes could not tell a
     // re-sent write from a slow one — which is the whole reason the observable

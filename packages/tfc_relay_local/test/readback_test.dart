@@ -197,6 +197,8 @@ void main() {
     });
   });
 
+  wr02();
+
   group('CR-01: the deadman tick does not buy a read per tick', () {
     test('a hold publishes no null-under-good, and costs one crossing per tick '
         'and not two', () async {
@@ -233,6 +235,51 @@ void main() {
             reason: 'the tick took the same readback-less path, so it wrote a '
                 'good-quality blank onto the deadman tag ten times a second');
       }
+    });
+  });
+}
+
+/// WR-02's other half: the bit is computed by the composer, so the composer is
+/// where the end-to-end claim has to be made.
+///
+/// The adapter arm in `modbus_link_test.dart` proves the guard honours the
+/// flag. This one proves the flag arrives — that `LocalStateMan._settle`,
+/// which is the only layer that can evaluate `expect` against the last value
+/// the gateway heard, carries the fact of having done so down to the adapter
+/// rather than dropping it at `_crossIntoThePlant`.
+void wr02() {
+  group('WR-02: the compare-and-set bit reaches the adapter', () {
+    test('an array-element write with a matching expect applies, and without '
+        'one is refused by name', () async {
+      final link = DrivableModbusLink(alias: alias);
+      final man = LocalStateMan(
+        links: <UpstreamLink>[link],
+        router: KeyRouter.overLinks(
+          <UpstreamLink>[link],
+          mappings: KeyMappings(nodes: <String, KeyMappingEntry>{
+            key: registerEntry(key, bitMask: 0x0004, bitShift: 2),
+          }),
+        ),
+        staleAfter: const Duration(seconds: 30),
+      );
+      addTearDown(man.dispose);
+      await man.start();
+
+      // The comparison is against the last value THIS side heard, which is why
+      // it can only happen here.
+      man.applyUpstreamBatch(
+          <String, DynamicValue>{key: DynamicValue(value: false)});
+
+      final refused = await man.write(key, true);
+      expect(refused, isA<WriteRejected>());
+      expect((refused as WriteRejected).reason.kind,
+          'array_element_requires_expect');
+
+      final guarded = await man.write(key, true, expect: false);
+      expect(guarded, isA<WriteApplied>(),
+          reason: 'the operator did the thing the refusal asked for. Before '
+              'WR-02 they got the same refusal back, because the bit stopped '
+              'at _settle and the adapter was handed a literal false');
     });
   });
 }

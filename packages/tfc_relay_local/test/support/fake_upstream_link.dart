@@ -268,6 +268,7 @@ final class FakeUpstreamLink implements UpstreamLink, UpstreamLinkDriver {
     DynamicValue value, {
     required String cmd,
     required Duration deadline,
+    bool hasExpect = false,
   }) async {
     _roundTrips++;
 

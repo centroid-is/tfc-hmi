@@ -761,7 +761,17 @@ final class LocalStateMan implements StateManApi {
                   message: redactUpstreamError(error.toString())),
               at: at);
         }
-        return _crossIntoThePlant(link: link, ref: ref, value: payload, cmd: cmd);
+        return _crossIntoThePlant(
+            link: link,
+            ref: ref,
+            value: payload,
+            cmd: cmd,
+            // Carried down (08-REVIEW WR-02). The comparison itself happened
+            // above and against the last value THIS side heard, which is the
+            // only place it can happen; what an adapter needs is the one bit,
+            // so that the array-element ruling can allow the read-modify-write
+            // its own doc says a comparison makes safe.
+            hasExpect: expect != null);
     }
   }
 
@@ -783,6 +793,7 @@ final class LocalStateMan implements StateManApi {
     required DynamicValue value,
     required String cmd,
     bool confirmByReading = true,
+    bool hasExpect = false,
   }) async {
     // The last confirmed reading, kept so a refused or lost write can put it
     // back: the badge means "sent", and a write that was not sent must not
@@ -794,8 +805,12 @@ final class LocalStateMan implements StateManApi {
     // actuation nobody asked for.
     _markWritePending(ref.key);
     try {
-      final outcome =
-          await link.write(ref, value, cmd: cmd, deadline: writeDeadline);
+      // Deliberately one line, over the usual width: `freeze_test.dart`'s
+      // unbounded-await sweep reads LINES, so a call whose `deadline:` sits on
+      // a continuation line reads to it as an unbounded upstream await. The
+      // sweep is right to be literal — a bound it cannot see is a bound the
+      // next reader cannot see either.
+      final outcome = await link.write(ref, value, cmd: cmd, deadline: writeDeadline, hasExpect: hasExpect);
       await _confirmWrite(
         link: link,
         ref: ref,

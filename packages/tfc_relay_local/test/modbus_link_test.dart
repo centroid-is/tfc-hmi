@@ -335,6 +335,26 @@ void main() {
           reason: 'the refusal happens BEFORE anything is sent');
     });
 
+    test('WR-02: and it APPLIES with one, which is the escape the refusal '
+        'message tells the operator to take', () async {
+      final ref = link.resolve(
+          setpointKey, registerEntry(setpointKey, bitMask: 0x0004, bitShift: 2))!;
+
+      final result = await link.write(ref, DynamicValue.of(true),
+          cmd: 'cmd-bit-expect', deadline: generous, hasExpect: true);
+
+      expect(result, isA<WriteApplied>(),
+          reason: 'guardArrayElementWrite documents "with an expect present '
+              'the read-modify-write may run, with the comparison as its '
+              'guard", and the one call site passed the literal false. The '
+              'result was fail-safe, but the documented capability was '
+              'unreachable and the refusal told an operator who HAD supplied '
+              'expect to supply expect — a message that sends them hunting a '
+              'mistake they did not make');
+      expect(link.fake.writes, hasLength(1),
+          reason: 'and the guarded write genuinely reaches the device');
+    });
+
     test('a plain register write applies and reaches the adapter once',
         () async {
       final ref = link.resolve(setpointKey, registerEntry(setpointKey))!;

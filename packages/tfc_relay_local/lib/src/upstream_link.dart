@@ -274,11 +274,29 @@ abstract interface class UpstreamLink {
   /// a retry the operator's decision, and readback is the only confirmation.
   /// A well-meaning wrapper that re-sends an unknown write is exactly what the
   /// no-retry seam sweep in `freeze_test.dart` is pointed at.
+  /// [hasExpect] says whether the caller supplied a compare-and-set value that
+  /// `LocalStateMan._settle` has **already evaluated and matched**.
+  ///
+  /// It is not the `expect` itself, and deliberately so: the comparison is
+  /// against the last value the gateway heard, which only the composer knows.
+  /// What an adapter needs is the one bit — *was this write guarded* — and the
+  /// only thing that reads it today is the array-element ruling
+  /// ([guardArrayElementWrite]), where a read-modify-write is safe under a
+  /// comparison and a silent overwrite of another operator's setpoint without
+  /// one.
+  ///
+  /// 08-REVIEW WR-02: the bit existed on the guard and the one call site
+  /// passed the literal `false`, because `_crossIntoThePlant` was not carrying
+  /// it. The result was fail-safe but the parameter was dead, the documented
+  /// escape was unreachable, and an operator who supplied `expect` correctly
+  /// was told by name to supply `expect` — a message that sends them looking
+  /// for a mistake they did not make.
   Future<WriteResult> write(
     UpstreamRef ref,
     DynamicValue value, {
     required String cmd,
     required Duration deadline,
+    bool hasExpect = false,
   });
 
   /// Whether this link can write at all.
