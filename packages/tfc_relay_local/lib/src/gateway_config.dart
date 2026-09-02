@@ -537,6 +537,12 @@ Future<UpstreamLink> buildUpstreamLink(
         // `Client` from the server's credentials and hands it over — and it is
         // why the adapter takes a `client:` seam at all. An anonymous server
         // gets no injection, so nothing is allocated before `connect`.
+        //
+        // **Handed over, not lent** (08-REVIEW WR-03): the link owns it from
+        // here and deletes it in `dispose`, which is what `Gateway.stop`
+        // reaches through `plant.dispose()`. Nothing in this file may touch it
+        // afterwards, and nothing does — at `useIsolate: true` it is a spawned
+        // isolate, and an undeleted one keeps the VM alive past `stop()`.
         client: await _opcUaClient(config),
       );
     case UpstreamProtocol.modbus:

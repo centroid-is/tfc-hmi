@@ -369,6 +369,13 @@ final class OpcUaUpstreamLink implements UpstreamLink {
 
   final Map<String, _MonitoredKey> _monitors = <String, _MonitoredKey>{};
 
+  /// Streams handed to subscribes taken out against a superseded epoch.
+  ///
+  /// Held so [dispose] can close them and never fed a value again — the
+  /// Modbus base's `_staleFeeds`, which this adapter was missing (WR-09).
+  final List<StreamController<DynamicValue>> _staleFeeds =
+      <StreamController<DynamicValue>>[];
+
   // ------------------------------------------------------------ diagnostics
 
   /// Driver ticks so far.
@@ -471,6 +478,11 @@ final class OpcUaUpstreamLink implements UpstreamLink {
           value: null,
           quality: Quality.badCommFault,
           sourceTime: DateTime.now().toUtc()));
+      // Tracked so [dispose] can close it. It is not in `_monitors` and
+      // nothing else walks it, so without this line every stale-handle
+      // subscribe leaked a controller (08-REVIEW WR-09) — on the path that
+      // runs once per key after a PLC download.
+      _staleFeeds.add(controller);
       return controller.stream;
     }
     final existing = _monitors[ref.key];
@@ -658,14 +670,56 @@ final class OpcUaUpstreamLink implements UpstreamLink {
         typeId: value.value is int ? ua.NodeId.int32 : null,
       );
 
+  /// Opens the session, **bounded by [deadline] over the whole method**.
+  ///
+  /// Two things changed here in 08-REVIEW, and they are the same two hazards
+  /// wearing different hats.
+  ///
+  /// **WR-04: it is tracked, and the disposal flag is re-read across every
+  /// await.** [_inFlight] and [_reBrowseInFlight] exist because
+  /// `client.delete()` frees the native client and a `connect` or a
+  /// `subscriptionCreate` still crossing FFI against it walks freed memory and
+  /// SEGVs the VM rather than failing — and `connect` itself, the method that
+  /// *does both of those things*, was neither tracked nor re-guarded. It read
+  /// `_disposed` once, before the first await, and `dispose()` knew nothing
+  /// about its future. `LocalStateMan.start()` awaits one link at a time and a
+  /// failing PLC holds it for tens of seconds, so a caller tearing down during
+  /// start reached it; `bin/relay_gateway.dart` is safe today only because it
+  /// registers its signal handlers after `start()` returns, which is not a
+  /// property any other embedder owes.
+  ///
+  /// A separate field rather than sharing [_inFlight] with
+  /// `_reopenSessionIfNeeded`: sharing is safe under the `_reopening` guard,
+  /// and it is exactly the kind of safe-if-you-trace-it that stops being true
+  /// when somebody adds a third writer.
+  ///
+  /// **WR-05: one budget, spent across the phases.** The single `deadline`
+  /// argument used to be applied separately to `client.connect`, to
+  /// `subscriptionCreate` and then handed whole to `_refreshEpoch`, which
+  /// spent it three more times on its own reads — about five times the number
+  /// a deployment typed, multiplied again by the link count in
+  /// `LocalStateMan.start`. See [DeadlineBudget].
   @override
-  Future<void> connect({required Duration deadline}) async {
+  Future<void> connect({required Duration deadline}) {
     if (_disposed) throw StateError('$alias: connect after dispose');
+    return _connectInFlight = _connect(deadline);
+  }
+
+  Future<void> _connect(Duration deadline) async {
+    final budget = DeadlineBudget(deadline);
     final client = _injectedClient ??
         (useIsolate
             ? await ua.ClientIsolate.create(
                 logLevel: ua.LogLevel.UA_LOGLEVEL_ERROR)
             : ua.Client(logLevel: ua.LogLevel.UA_LOGLEVEL_ERROR));
+    if (_disposed) {
+      // Disposed while the client was being created. It is not in [_client],
+      // so `dispose` cannot see it to release it, and an undeleted
+      // `ClientIsolate` is a live worker isolate keeping the VM alive — WR-03's
+      // failure, reached the other way round.
+      await client.delete();
+      return;
+    }
     _client = client;
     final wrapper = ClientWrapper(client, _config);
     _wrapper = wrapper;
@@ -676,12 +730,14 @@ final class OpcUaUpstreamLink implements UpstreamLink {
     // activated, and the session cannot activate unless somebody is turning
     // the crank.
     _startIterate();
-    await client.connect(_endpoint).timeout(deadline);
+    await client.connect(_endpoint).timeout(budget.remaining);
+    if (_disposed) return;
     _subscriptionId = await client
         .subscriptionCreate(
             requestedPublishingInterval: _config.publishingInterval,
             requestedMaxKeepAliveCount: 30)
-        .timeout(deadline);
+        .timeout(budget.remaining);
+    if (_disposed) return;
     // The heartbeat is `ClientWrapper`'s, and it is the reason this class
     // wraps rather than rebuilds: a session that dies quietly still ages out
     // of `connected` because a clock says so, not because an event arrived.
@@ -690,7 +746,7 @@ final class OpcUaUpstreamLink implements UpstreamLink {
     // a first connect this ADOPTS an identity rather than bumping one — see
     // [_refreshEpoch] decision 3 — so no `reprogrammed` is announced for the
     // ordinary act of finding out who we are talking to.
-    await _refreshEpoch(deadline: deadline);
+    await _refreshEpoch(deadline: budget.remaining);
     // **`connect` returning is deliberately NOT the same as being connected.**
     // The state comes from `ClientWrapper.effectiveStatus` and nowhere else,
     // and until the first heartbeat tick that is `connecting` — a live session
@@ -1234,6 +1290,10 @@ final class OpcUaUpstreamLink implements UpstreamLink {
   /// future is bounded where the work is rather than where the waiting is.
   Future<void>? _inFlight;
 
+  /// The [connect] currently running, if any. Awaited by [dispose] for
+  /// [_inFlight]'s reason — see [connect]'s doc for why it is its own field.
+  Future<void>? _connectInFlight;
+
   /// How often a disconnected link may dial.
   static const Duration _reopenFloor = Duration(seconds: 1);
 
@@ -1283,6 +1343,15 @@ final class OpcUaUpstreamLink implements UpstreamLink {
       // A failed reopen is not a disposal failure.
     }
     try {
+      // And an in-flight `connect`, which does a `connect`, a
+      // `subscriptionCreate` and three epoch reads across the FFI boundary and
+      // was not covered by either of the other two fields (08-REVIEW WR-04).
+      await _connectInFlight;
+    } catch (_) {
+      // Neither is a connect that never landed. `start()` reports that as a
+      // link state; it is not this method's news.
+    }
+    try {
       // And the same for a re-browse started by a bump that nobody awaited
       // (`debugBumpEpoch`). Same hazard, same reason: `subscriptionCreate` is
       // FFI, and deleting the client under it is a SEGV rather than an error.
@@ -1295,11 +1364,35 @@ final class OpcUaUpstreamLink implements UpstreamLink {
       await monitored.controller.close();
     }
     _monitors.clear();
+    // The one-shot feeds handed to stale-handle subscribes. 08-REVIEW WR-09:
+    // these were never tracked and `_monitors` cannot see them, so each one
+    // leaked an unclosed controller — on the path that runs *exactly* when a
+    // PLC has just been reprogrammed and every held handle is stale, which is
+    // potentially once per subscribed key. The Modbus base got this right one
+    // file over and the two adapters had no business differing on it.
+    for (final feed in _staleFeeds) {
+      await feed.close();
+    }
+    _staleFeeds.clear();
     await _statusSub?.cancel();
     _wrapper?.dispose();
     final client = _client;
     _client = null;
-    if (client != null && _injectedClient == null) {
+    // **An injected client is owned by the link**, and 08-REVIEW WR-03 is why
+    // the `_injectedClient == null` guard is gone. `buildUpstreamLink` injects
+    // a client whenever the config names a username/password or a certificate
+    // pair, and at the default `useIsolate: true` that is a spawned
+    // `ClientIsolate`. Nothing deleted it, so the worker isolate was still
+    // alive when `main` completed `stopped.future` — a live isolate keeps the
+    // VM alive, so a credentialed gateway logged "stopping", finished `stop()`
+    // and then simply did not exit, until the container runtime escalated to
+    // SIGKILL. The anonymous case was unaffected precisely because the adapter
+    // built its own and therefore released it.
+    //
+    // Ownership follows "who is responsible for dispose", which
+    // `upstream_link.dart:305-309` already says is the caller of `connect` —
+    // and that is this class. The seam's doc now says so.
+    if (client != null) {
       await client.delete();
     }
     if (!_states.isClosed) await _states.close();

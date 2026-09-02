@@ -305,6 +305,44 @@ String _fnv1a64(String text) {
 
 // -------------------------------------------------------------------- the IO
 
+/// One deadline, spent across the phases of a multi-step operation.
+///
+/// **08-REVIEW WR-05.** The pattern this replaces handed the same `deadline` to
+/// each phase in turn, so a bound that read as five seconds admitted five
+/// seconds *per phase*: `connect` spent it on the session, again on the
+/// subscription and again on the epoch, and the epoch reader spent it three
+/// more times on its own three reads — about `5 × connectDeadline` for one
+/// link, and `LocalStateMan.start` walks its links sequentially, so four dark
+/// PLCs kept the socket unbound for over three minutes on the defaults.
+///
+/// A deployment sizing a deadline is sizing how long it is willing to wait,
+/// and the number it types has to be that. Each phase gets what is left.
+///
+/// [minimumSlice] is what a phase gets once the budget is spent, and it is not
+/// zero on purpose: a `.timeout(Duration.zero)` fires before the call it wraps
+/// can even start, which turns "we ran out of time" into "this operation is
+/// impossible" and loses the distinction in the error. One millisecond expires
+/// immediately in practice and still lets the call be made.
+final class DeadlineBudget {
+  DeadlineBudget(this.total) : _spent = Stopwatch()..start();
+
+  /// What the caller asked for, over everything.
+  final Duration total;
+
+  /// Monotonic, for 07-REVIEW CR-01's reason: a budget aged on the wall clock
+  /// is a budget an NTP correction can hand back or take away.
+  final Stopwatch _spent;
+
+  /// The floor under [remaining].
+  static const Duration minimumSlice = Duration(milliseconds: 1);
+
+  /// What is left of [total], never less than [minimumSlice].
+  Duration get remaining {
+    final left = total - _spent.elapsed;
+    return left > minimumSlice ? left : minimumSlice;
+  }
+}
+
 /// How an epoch reading is obtained, so a test can supply one.
 ///
 /// The link takes one of these rather than calling [readEpochInputs] directly:
@@ -330,16 +368,24 @@ typedef EpochInputsReader = Future<EpochInputs> Function(
 ///
 /// [deadline] is required and has no default, for `UpstreamLink.read`'s reason:
 /// an unbounded upstream await must not be writable by omission.
+/// **[deadline] bounds the whole reading, not each of the three reads.**
+/// 08-REVIEW WR-05: each `_readOrNull` used to carry the full deadline, so
+/// three sequential reads against a dark PLC cost three times what the caller
+/// asked for — and `connect` then added its own two phases on top, and
+/// `LocalStateMan.start` multiplied the lot by the link count. A budget that
+/// means five seconds has to mean five seconds.
 Future<EpochInputs> readEpochInputs(
   ua.ClientApi client, {
   required Duration deadline,
   ua.NodeId? buildStampNode,
 }) async {
-  final started = await _readOrNull(client, startTimeNode, deadline);
-  final namespaces = await _readOrNull(client, namespaceArrayNode, deadline);
+  final budget = DeadlineBudget(deadline);
+  final started = await _readOrNull(client, startTimeNode, budget.remaining);
+  final namespaces =
+      await _readOrNull(client, namespaceArrayNode, budget.remaining);
   final stamp = buildStampNode == null
       ? null
-      : await _readOrNull(client, buildStampNode, deadline);
+      : await _readOrNull(client, buildStampNode, budget.remaining);
   return EpochInputs(
     startTime: _asDateTime(started),
     namespaceArrayHash:

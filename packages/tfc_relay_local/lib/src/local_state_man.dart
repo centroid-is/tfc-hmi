@@ -291,6 +291,20 @@ final class LocalStateMan implements StateManApi {
   /// cannot be reached does not stop the others: [UpstreamLink.connect] is
   /// bounded by [connectDeadline] and a gateway that refused to start because
   /// one PLC was in a download would take the other three off the screens too.
+  ///
+  /// **What that bounds, exactly** (08-REVIEW WR-05). [connectDeadline] bounds
+  /// *one link*, and because the walk is sequential the worst case for this
+  /// method is `connectDeadline × links.length` — four dark PLCs on the
+  /// default is forty seconds before the socket is bound, not ten. That is the
+  /// honest number and it is the price of the sequential walk; what it is
+  /// **not** any more is five times that again, which is what it was while
+  /// each phase inside `connect` re-spent the whole deadline.
+  ///
+  /// A deployment that cannot afford the multiplication should size
+  /// [connectDeadline] against its link count. Connecting concurrently would
+  /// trade it away but would also start every PLC's session at once on a
+  /// gateway whose whole design is one process pacing the plant, so it is a
+  /// decision for evidence rather than a tidy-up.
   Future<void> start() async {
     for (final link in links) {
       // Subscribed BEFORE the connect, so the link coming up is an event this

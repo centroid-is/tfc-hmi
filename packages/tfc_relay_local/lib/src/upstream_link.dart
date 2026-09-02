@@ -314,6 +314,19 @@ abstract interface class UpstreamLink {
   /// No `.timeout` on this path (project memory: no `.timeout` in dispose
   /// paths — a dispose that gives up half way leaves the thing it was
   /// disposing in a state nobody owns).
+  ///
+  /// **"Everything it holds" includes a protocol client handed in through a
+  /// constructor seam.** An injected client was *handed over*, not lent: the
+  /// composition root builds it because only the composition root knows the
+  /// credentials, and it has nowhere to keep it afterwards. 08-REVIEW WR-03 is
+  /// what that ambiguity cost — the OPC UA adapter released only the clients
+  /// it had built itself, so a credentialed gateway left a spawned
+  /// `ClientIsolate` alive, and a live isolate keeps the VM alive: the process
+  /// logged "stopping", finished `stop()`, and hung until the container
+  /// runtime escalated to SIGKILL.
+  ///
+  /// An implementation with a client seam must therefore delete what it was
+  /// given, and a caller must not use an injected client after handing it over.
   Future<void> dispose();
 
   /// Monotonic count of subscriptions this link has asked the server to
