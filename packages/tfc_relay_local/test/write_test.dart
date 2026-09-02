@@ -871,4 +871,116 @@ void main() {
       expect(answers[1], isA<WriteUnknown>());
     });
   });
+
+  // ------------------------------------------------------------ 08-REVIEW
+  group('CR-03: the TTL path forgets out loud, exactly as the cap path does',
+      () {
+    test('a cmd minted on a panel whose clock runs AHEAD is unknown after the '
+        'TTL, never not_received', () async {
+      final clock = MovableClock();
+      final built = buildWriteFixture(
+          now: clock.now, writeOutcomeTtl: const Duration(minutes: 10));
+      await built.man.start();
+      addTearDown(built.man.dispose);
+
+      // The panel's clock is thirty seconds ahead of the gateway's, which is
+      // an ordinary amount of skew on a plant where not everything runs NTP.
+      // The cmd is minted THERE (`value_handlers.dart:677` passes request.cmd
+      // straight through), and the outcome is settled HERE.
+      const skew = Duration(seconds: 30);
+      final cmd = newUlid(nowMs: clock.ms + skew.inMilliseconds);
+      final applied = await built.man.write(st101Key, 1, cmd: cmd);
+      expect(applied, isA<WriteApplied>());
+
+      // Far enough that the entry ages out on the GATEWAY's clock, and not so
+      // far that the cmd's own ULID looks old: this is the whole window.
+      clock.advance(const Duration(minutes: 10, milliseconds: 1));
+      final answer = (await built.man.writeStatus(<String>[cmd])).single;
+
+      expect(built.man.writeOutcomeCount, 0,
+          reason: 'anti-vacuity: the entry must actually have been pruned, or '
+              'this case is reading a held outcome');
+      expect(answer, isA<WriteUnknown>(),
+          reason: 'the gateway performed this write. not_received is '
+              'documented as the one answer that tells an operator a re-send '
+              'is safe, and a re-send here is a second unrequested actuation');
+      expect(answer.isSafeToResend, isFalse);
+      expect((answer as WriteUnknown).reason.kind, 'outcome_forgotten',
+          reason: 'the TTL path has to move the same watermark the cap path '
+              'moves — "the log has to remember that it forgot" holds for '
+              'both ways of forgetting, not just the tidy one');
+    });
+
+    test('and a cmd the gateway genuinely never saw is STILL not_received',
+        () async {
+      final clock = MovableClock();
+      final built = buildWriteFixture(
+          now: clock.now, writeOutcomeTtl: const Duration(minutes: 10));
+      await built.man.start();
+      addTearDown(built.man.dispose);
+
+      // One settled write ages out and moves the watermark to its own mint
+      // time...
+      final old = newUlid(nowMs: clock.ms);
+      await built.man.write(st101Key, 1, cmd: old);
+      clock.advance(const Duration(minutes: 10, milliseconds: 1));
+      await built.man.writeStatus(<String>[old]);
+
+      // ...and a cmd minted AFTER that watermark, which this gateway has never
+      // heard of, keeps the positive-evidence answer. Widening the watermark
+      // into a blanket "everything is unknown" would cost the operator the one
+      // answer that makes a re-send safe, which is the Phase 4 rule.
+      final fresh = newUlid(nowMs: clock.ms);
+      final answer = (await built.man.writeStatus(<String>[fresh])).single;
+
+      expect(answer, isA<WriteNotReceived>(),
+          reason: 'not_received still requires positive evidence and still '
+              'gets it: datable, minted after this source started recording, '
+              'not in the future, inside the TTL, and after everything the '
+              'log admits to having forgotten');
+      expect(answer.isSafeToResend, isTrue);
+    });
+  });
+
+  group('WR-08: the minted-id set is bounded like the log it guards', () {
+    test('ids age out with the outcomes they belong to', () async {
+      final clock = MovableClock();
+      final built = buildWriteFixture(
+          now: clock.now, writeOutcomeTtl: const Duration(minutes: 10));
+      await built.man.start();
+      addTearDown(built.man.dispose);
+
+      for (var i = 0; i < 20; i++) {
+        await built.man.write(st101Key, i, cmd: newUlid(nowMs: clock.ms));
+        clock.advance(const Duration(seconds: 1));
+      }
+      expect(built.man.mintedCmdCount, 20,
+          reason: 'anti-vacuity: they are all inside the window so far');
+
+      clock.advance(const Duration(minutes: 11));
+      await built.man.writeStatus(const <String>[]);
+
+      expect(built.man.mintedCmdCount, 0,
+          reason: 'a gateway runs for months. An unbounded set of every '
+              '26-character id it has ever seen is the same leak _outcomes is '
+              'capped to avoid, without even an audit trail to show for it');
+      expect(built.man.writeOutcomeCount, 0);
+    });
+
+    test('and it is capped by count too, for an id no ULID time can be read '
+        'out of', () async {
+      final built = buildWriteFixture(maxWriteOutcomes: 4);
+      await built.man.start();
+      addTearDown(built.man.dispose);
+
+      for (var i = 0; i < 12; i++) {
+        await built.man.write(st101Key, i);
+      }
+
+      expect(built.man.mintedCmdCount, lessThanOrEqualTo(4),
+          reason: 'the TTL drop cannot see an id that is not a datable ULID, '
+              'so the cap is what makes the bound unconditional');
+      expect(built.man.writeOutcomeCount, 4);
+    });
+  });
 }

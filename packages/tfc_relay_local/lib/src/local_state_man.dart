@@ -659,8 +659,12 @@ final class LocalStateMan implements StateManApi {
           'upstream links are both gone, so no outcome reported here could be '
           'true. This is a lifecycle bug in the caller, not a write outcome.');
     }
-    final id = cmd ?? newUlid(nowMs: _now().millisecondsSinceEpoch);
-    if (!_mintedCmds.add(id)) {
+    final nowMs = _now().millisecondsSinceEpoch;
+    final id = cmd ?? newUlid(nowMs: nowMs);
+    // `containsKey` and not `putIfAbsent`'s return value: two writes under one
+    // id in the same millisecond would compare equal and slip through, and the
+    // same millisecond is exactly when a double-press arrives.
+    if (_mintedCmds.containsKey(id)) {
       throw ArgumentError.value(
           id,
           'cmd',
@@ -669,6 +673,9 @@ final class LocalStateMan implements StateManApi {
               'actuation reported under the first one\'s outcome, which is '
               'the failure the id exists to make impossible');
     }
+    // Recorded against THIS source's clock, before the crossing, so a re-use
+    // is caught while the first write is still in flight.
+    _mintedCmds[id] = nowMs;
     final outcome =
         await _settle(key: key, value: value, expect: expect, cmd: id);
     // The badge and the readback are BOTH applied at the one crossing into the
@@ -869,9 +876,24 @@ final class LocalStateMan implements StateManApi {
   /// what makes "drop the oldest" one line rather than a sort.
   final Map<String, _LoggedOutcome> _outcomes = <String, _LoggedOutcome>{};
 
-  /// Every id this source has seen, so a re-use is caught while the first
-  /// write is still in flight — not only after it settles.
-  final Set<String> _mintedCmds = <String>{};
+  /// Every id this source has seen recently, so a re-use is caught while the
+  /// first write is still in flight — not only after it settles.
+  ///
+  /// **Bounded, on the same two rules as [_outcomes]** — see
+  /// [_pruneMintedCmds]. The value is the instant *this source first saw the
+  /// id*, on its own clock, and deliberately not the id's ULID time: the id is
+  /// minted by a client, so its ULID can be ancient, skewed or not a date at
+  /// all, and none of those are facts about how long this gateway has been
+  /// holding it. That is the same distinction `_LoggedOutcome` draws between
+  /// `at` and the mint time, for the same reason.
+  ///
+  /// A `LinkedHashMap` by insertion, which is what makes "drop the oldest" one
+  /// line rather than a sort.
+  final Map<String, int> _mintedCmds = <String, int>{};
+
+  /// How many minted ids the duplicate guard is holding. A diagnostic, and the
+  /// observable that makes WR-08's bound falsifiable.
+  int get mintedCmdCount => _mintedCmds.length;
 
   /// The instant this source started recording. Evidence, not decoration: a
   /// command minted before it is one this source could never have heard about.
@@ -905,15 +927,65 @@ final class LocalStateMan implements StateManApi {
     }
   }
 
-  /// Drops outcomes past [writeOutcomeTtl].
+  /// Drops outcomes past [writeOutcomeTtl], **and remembers that it did**.
   ///
-  /// It does **not** move [_forgottenBeforeMs]: an expiry is answerable on the
-  /// command's own age (`outcome_expired`), so there is no need for a
-  /// watermark that would then swallow younger commands as well.
+  /// It moves [_forgottenBeforeMs], and 08-REVIEW CR-03 is why. The argument
+  /// for not moving it was that an expiry is answerable on the command's own
+  /// age (`outcome_expired`), and that argument holds only while
+  /// `mintedAt <= at` — but the cmd is minted by the **client**
+  /// (`value_handlers.dart:677` passes `request.cmd` straight through), and a
+  /// panel's clock may run ahead of the gateway's.
+  ///
+  /// With a panel `s` milliseconds fast, an entry settled at gateway time `T`
+  /// carried `at = T` and a ULID reading `T + s`. It was pruned once
+  /// `now - T > ttl`; a query one millisecond later found no held outcome, a
+  /// mint time inside the TTL on its own age, and a watermark nothing had
+  /// moved — so it fell through to `WriteNotReceived` for a write the gateway
+  /// had performed. `not_received` is documented at the field above as the one
+  /// answer that tells an operator a re-send is safe, and a re-send there is a
+  /// second unrequested actuation.
+  ///
+  /// The cap path was always safe by contrast — an evicted ULID contributed
+  /// its own mint time — so this makes the two ways of forgetting behave the
+  /// same. It does not widen anything else: a cmd minted after the watermark
+  /// still earns `not_received` on the same four pieces of positive evidence.
   void _pruneWriteOutcomes() {
-    if (_outcomes.isEmpty) return;
     final cutoff = _now().millisecondsSinceEpoch - writeOutcomeTtl.inMilliseconds;
-    _outcomes.removeWhere((_, entry) => entry.at < cutoff);
+    _outcomes.removeWhere((cmd, entry) {
+      if (entry.at >= cutoff) return false;
+      final minted = _ulidMs(cmd) ?? 0;
+      if (minted > _forgottenBeforeMs) _forgottenBeforeMs = minted;
+      return true;
+    });
+    _pruneMintedCmds(cutoff);
+  }
+
+  /// Keeps [_mintedCmds] bounded, on the same two rules that bound
+  /// [_outcomes].
+  ///
+  /// 08-REVIEW WR-08: the set had nothing removing from it, so a plant where
+  /// anything writes on a schedule grew it monotonically for months — the leak
+  /// [maxWriteOutcomes] exists to prevent, without even an audit trail to show
+  /// for it. The asymmetry was semantic too: an id that had fallen out of
+  /// `_outcomes` was answered `outcome_expired` but was still in here, so
+  /// re-using a very old id threw `ArgumentError` instead of being answered.
+  ///
+  /// **Dropping an id is safe because the log has already forgotten its
+  /// outcome.** The duplicate-id refusal exists so that one id is one operator
+  /// action while that action is still answerable; past the TTL it is not
+  /// answerable by anything, and [_statusOf] now says so through the watermark
+  /// this prune moves.
+  ///
+  /// Two rules and not one, because they cover different holes: an id seen
+  /// inside the window is never dropped however many arrive behind it, and the
+  /// insertion-order cap bounds a burst that all arrives inside one window.
+  /// Neither can reach the newest id, so a write in flight cannot have its own
+  /// id evicted out from under it.
+  void _pruneMintedCmds(int cutoff) {
+    _mintedCmds.removeWhere((_, seenAt) => seenAt < cutoff);
+    while (_mintedCmds.length > maxWriteOutcomes) {
+      _mintedCmds.remove(_mintedCmds.keys.first);
+    }
   }
 
   /// Puts the in-flight badge on [key]'s current value.
