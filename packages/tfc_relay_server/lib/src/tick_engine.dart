@@ -82,6 +82,7 @@ import 'lag_monitor.dart';
 import 'relay_server.dart' show SessionRegistry;
 import 'relay_session.dart';
 import 'server_config.dart';
+import 'subscription_registry.dart' show SubscriptionState;
 
 /// The `reason` a stalled gateway announces itself under.
 ///
@@ -193,6 +194,23 @@ final class TickEngine {
   int get ticks => _ticks;
   int _ticks = 0;
 
+  /// How late the last tick arrived, in milliseconds past the configured
+  /// period, or null before there have been two ticks.
+  ///
+  /// **The number `PIPE.event_loop_lag_ms` publishes** (HLTH-01). It is
+  /// measured here rather than asked of [lag] because [LagMonitor] answers a
+  /// *verdict* — a stall or not — and a health gauge that only ever read the
+  /// stall threshold or nothing would tell an engineer that the isolate is
+  /// fine right up until the moment it is not. Never negative: a tick that
+  /// arrived early is not negative lag, it is zero lag and a timer with
+  /// jitter.
+  ///
+  /// Null before the second tick, for the same reason `effective_hz` is: no
+  /// measurement is not the same statement as a measurement of nothing.
+  int? get lastLagMs => _lastLagMs;
+  int? _lastLagMs;
+  int? _prevTickMs;
+
   /// Whether the periodic timer is running.
   bool get running => _timer != null;
 
@@ -218,6 +236,12 @@ final class TickEngine {
   /// injected timestamp rather than a sleep on a hosted runner.
   void tickOnce(int nowMs) {
     _ticks++;
+    final prev = _prevTickMs;
+    if (prev != null) {
+      final excess = (nowMs - prev) - config.tick.inMilliseconds;
+      _lastLagMs = excess < 0 ? 0 : excess;
+    }
+    _prevTickMs = nowMs;
     encoder.beginTick();
     final drift = lag.poll(nowMs);
     // `registry.sessions` is a copy, and the copy is the point: a session torn
@@ -471,18 +495,84 @@ final class TickEngine {
       // handed one more frame for it, and there is no seq to advance.
       if (state == null) return;
       if (!state.dueAt(nowMs)) {
+        final news = _takeNews(session, pending);
+        if (news != null) _push(session, state, news, nowMs);
         _defer(session, sub, pending);
         return;
       }
       state.markPushed(nowMs);
-      session.emit(encoder.updateFrame(
-        sub: state.literal(encoder.subLiteral),
-        seq: state.nextSeq(),
-        t: wallAt(nowMs),
-        generation: state.generation,
-        body: encoder.bodyFor(
-            pending.changes, pending.qualities, pending.removed),
-      ));
+      _push(session, state, pending, nowMs);
     });
+  }
+
+  /// Takes the never-conflated half out of [pending], or null when there is
+  /// none of it.
+  ///
+  /// **The lane split, decided by key and at the put side** (HLTH-02, 08-12).
+  /// `PipeKeys.ridesPriorityLane` owns the partition — it lives in the
+  /// protocol package because the client mints half the namespace and the
+  /// gateway the other half, and a second decision point here would be the
+  /// place the two drift apart. This engine asks; it does not decide.
+  ///
+  /// **And the tension, written down so the next person does not undo it.**
+  /// The priority lane is documented as never conflated — *"a degraded link
+  /// must still deliver the news that it is degraded"* (`send_buffer.dart`).
+  /// That sentence is about the **news**, not the telemetry. Somebody will
+  /// eventually want `rtt_ms` here because it feels important, and the answer
+  /// is no: an unconflated fast-moving gauge is a queue, a queue is what the
+  /// core value forbids outright, and telemetry that arrives one tick late has
+  /// cost nobody anything. `connected` arriving a tick late during the
+  /// congestion it is reporting is the failure this split exists to prevent —
+  /// the loss announcement dropped by the very backlog it was announcing.
+  ///
+  /// A key outside the `PIPE.` namespace is never promoted, however it is
+  /// spelled: an ordinary plant tag ending in `.connected` is telemetry, and
+  /// putting plant telemetry on the unconflated lane is how that lane becomes
+  /// the queue.
+  PendingSub? _takeNews(RelaySession session, PendingSub pending) {
+    bool isNews(int handle) {
+      final key = session.handles.keyOf(handle);
+      // A handle with no key is one the table has never minted, which cannot
+      // happen through `subscribe` — and guessing on its behalf would promote
+      // an unknown to the lane that must stay small.
+      return key != null && PipeKeys.ridesPriorityLane(key);
+    }
+
+    final changes = <int, WireValue>{};
+    for (final handle in pending.changes.keys.where(isNews).toList()) {
+      changes[handle] = pending.changes.remove(handle) as WireValue;
+    }
+    final qualities = <int, Quality>{};
+    for (final handle in pending.qualities.keys.where(isNews).toList()) {
+      qualities[handle] = pending.qualities.remove(handle) as Quality;
+    }
+    final removed = pending.removed.where(isNews).toList();
+    pending.removed.removeWhere(isNews);
+
+    if (changes.isEmpty && qualities.isEmpty && removed.isEmpty) return null;
+    return PendingSub(changes, qualities, removed);
+  }
+
+  /// One `u` frame for [state], out of [pending].
+  ///
+  /// Shared by the ordinary due-tick path and the lane split's early
+  /// delivery so the two cannot produce differently-shaped frames. The seq
+  /// advances either way — a push is a push, and a client that saw a gap it
+  /// could not account for would resync — but the rate limiter's clock is
+  /// **not** touched here: `markPushed` stays at the due-tick call site,
+  /// because news slipping past a `maxRateHz` must not also reset the window
+  /// the client asked for.
+  void _push(
+      RelaySession session, SubscriptionState state, PendingSub pending,
+      int nowMs) {
+    session.noteServedTick(nowMs);
+    session.emit(encoder.updateFrame(
+      sub: state.literal(encoder.subLiteral),
+      seq: state.nextSeq(),
+      t: wallAt(nowMs),
+      generation: state.generation,
+      body:
+          encoder.bodyFor(pending.changes, pending.qualities, pending.removed),
+    ));
   }
 }

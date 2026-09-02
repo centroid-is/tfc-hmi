@@ -229,6 +229,26 @@ final class ServerConfig {
   /// without agreeing on a number.
   final int port;
 
+  /// What this gateway calls itself on the wire, or null to say nothing.
+  ///
+  /// The Sparkplug `publisherId` adoption (07-RESEARCH-PUBSUB). A plant that
+  /// runs two gateways has two things called `ST201` — the same alias, two
+  /// different processes watching it — and a captured frame that does not say
+  /// which one produced it is a frame nobody can attribute during the incident
+  /// it was captured for.
+  ///
+  /// **Advisory, and additive.** Nothing routes on it: it rides at the top
+  /// level of `HelloResult` and on `StatusParams`, both of which omit the key
+  /// entirely when it is null. So a deployment that configures none sends
+  /// exactly the bytes it sent before this field existed, which is what
+  /// `final_tick_test.dart`'s captured literal pins — a `publisherId: null` on
+  /// the wire would be a payment extracted from every deployment that did not
+  /// ask for the feature.
+  ///
+  /// Null by default for the same reason [tls] and [auth] are: the default is
+  /// deliberately not the deployment.
+  final String? publisherId;
+
   /// The tick band's lower bound (SRV-03).
   static const Duration minTick = Duration(milliseconds: 50);
 
@@ -261,6 +281,7 @@ final class ServerConfig {
     this.writeOutcomeTtl = const Duration(seconds: 60),
     this.tls,
     this.auth,
+    this.publisherId,
     InternetAddress? address,
     this.port = 0,
   }) : address = address ?? InternetAddress.loopbackIPv4 {

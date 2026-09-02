@@ -37,7 +37,7 @@ import 'auth/identity.dart';
 import 'error_codes.dart';
 import 'error_reporter.dart';
 import 'handle_table.dart';
-import 'health/cert_health_state_man.dart';
+import 'health/session_health_state_man.dart';
 import 'policy/key_policy.dart';
 import 'policy/policy_state_man.dart';
 import 'server_config.dart';
@@ -145,7 +145,7 @@ final class RelaySession {
     void Function(RelaySession session)? onClosing,
     RelayErrorHandler? onError,
     int Function()? now,
-    CertHealthStateMan? certHealth,
+    SessionHealthStateMan? health,
   }) {
     final clock = now ?? () => DateTime.now().millisecondsSinceEpoch;
     final lastSeen = _LastSeen(clock);
@@ -183,18 +183,25 @@ final class RelaySession {
       mintGeneration,
     )
       .._onError = onError
-      .._certHealth = certHealth
+      .._health = health
       .._start();
   }
 
-  /// The gateway's certificate-health overlay, or null on a plaintext gateway.
+  /// This session's health overlay, or null on a session built by hand.
   ///
   /// Held so [_ping] can touch its deadline. Assigned in the cascade above
   /// rather than taken through the positional constructor, in [_onError]'s
   /// style: it is a wiring detail of the server, not part of what a session
   /// *is*, and every case in this package that builds a session by hand leaves
   /// it null.
-  CertHealthStateMan? _certHealth;
+  ///
+  /// **Renamed from `certHealth` in 08-12**, when the per-server certificate
+  /// overlay was replaced by a per-session one in the same chain slot. The
+  /// parameter was renamed rather than kept beside a second because nothing
+  /// but `relay_server.dart` ever passed it — every by-hand session in this
+  /// package's suite leaves it null — so keeping the old spelling would have
+  /// bought a name that lies about what it holds and nothing else.
+  SessionHealthStateMan? _health;
 
   /// Refuses one inbound frame that is over the ingress ceiling, before
   /// anything decodes it.
@@ -394,7 +401,97 @@ final class RelaySession {
   /// The tick engine's write seam, and the only way out of a session that does
   /// not go through the buffer first — because by the time the engine calls
   /// this, the buffer is what the frame came *out* of.
-  void emit(String frame) => _emitFrame?.call(frame);
+  ///
+  /// It is also where [egressKbps] is metered, because it is the one place
+  /// every byte this gateway says to this client passes through. A second
+  /// meter anywhere else would be a second number that nearly agrees.
+  void emit(String frame) {
+    _egressBytes += frame.length;
+    _egressLastMs = _now();
+    _egressFirstMs ??= _egressLastMs;
+    _emitFrame?.call(frame);
+  }
+
+  // ---------------------------------------------------------------------------
+  // The per-session health measurements (HLTH-01, 08-12).
+  //
+  // Counters on the session rather than in the overlay, because the overlay is
+  // built before the session exists and because these are properties of the
+  // connection: an overlay swapped out would take the panel's history with it.
+  // Nothing here holds a timer — every number is a subtraction over values
+  // recorded by paths that already run.
+  // ---------------------------------------------------------------------------
+
+  /// Bytes this gateway has written to this client, as [emit] measured them.
+  ///
+  /// The frame's `String.length`, not its UTF-8 size: for the plant's ASCII
+  /// tag names the two are the same number, and a frame full of Icelandic
+  /// þ/ð/æ is under-counted by a few percent. Encoding every outbound frame a
+  /// second time to be exact would put a whole encode back on the hot path
+  /// this design spent Finding 3 taking off it, for a gauge measured in
+  /// kilobits.
+  int get egressBytes => _egressBytes;
+  int _egressBytes = 0;
+  int? _egressFirstMs;
+  int? _egressLastMs;
+
+  /// Kilobits per second through this session's sink, or null before there is
+  /// a span to divide by.
+  ///
+  /// Null and not zero: a session that has said nothing yet has an *unknown*
+  /// egress, where zero is the claim that the pipe has stopped.
+  double? get egressKbps {
+    final first = _egressFirstMs;
+    final last = _egressLastMs;
+    if (first == null || last == null || last <= first) return null;
+    return (_egressBytes * 8) / (last - first);
+  }
+
+  /// Ticks on which the tick engine actually fanned telemetry out to this
+  /// session.
+  ///
+  /// **Ticks delivered, not ticks that happened.** The engine ticks the whole
+  /// registry at one cadence, so a counter of those would read the configured
+  /// rate for every session on the gateway and could never distinguish a panel
+  /// that is being served from one that is not — which is the entire question
+  /// `effective_hz` exists to answer. A subscription held back by its own
+  /// `maxRateHz`, or by the lane split's deferral, is genuinely not being
+  /// delivered to on that tick.
+  int get servedTicks => _servedTicks;
+  int _servedTicks = 0;
+  int? _servedFirstMs;
+  int? _servedLastMs;
+
+  /// Records that this session was served on the tick at [monotonicMs].
+  ///
+  /// Idempotent within a tick: the engine calls it once per due subscription
+  /// and a session watching forty pages is not being served forty times as
+  /// fast as one watching a single page.
+  ///
+  /// [monotonicMs] is the **engine's** clock — a monotonic uptime `Stopwatch`,
+  /// not the session's wall clock — and that is deliberate: a rate is a
+  /// measurement of arrivals, and an NTP step must not show up as a burst or a
+  /// gap. It is never mixed with the wall-clock numbers beside it; see
+  /// `tick_engine.dart:169-187` for the same split made for the wire clock.
+  void noteServedTick(int monotonicMs) {
+    if (_servedLastMs == monotonicMs) return;
+    _servedTicks++;
+    _servedFirstMs ??= monotonicMs;
+    _servedLastMs = monotonicMs;
+  }
+
+  /// Ticks delivered to this session per second, or null before there have
+  /// been two.
+  ///
+  /// Null and not zero before the first span: `effective_hz` reading 0 means
+  /// "the pipe has stopped", which is a different and considerably more
+  /// alarming claim than "nothing has been measured yet".
+  double? get effectiveHz {
+    final first = _servedFirstMs;
+    final last = _servedLastMs;
+    if (first == null || last == null || last <= first) return null;
+    return ((_servedTicks - 1) * 1000) / (last - first);
+  }
 
   /// Acts on one [verdict] from this session's send buffer. Returns whether
   /// the session survived it.
@@ -949,6 +1046,10 @@ final class RelaySession {
           // data under a healthy-looking link.
           resumed: false,
           serverTime: _now(),
+          // Read from the config this session was built with, never a
+          // literal, and omitted from `toJson` when null — so a deployment
+          // that configures none sends the frame it always sent.
+          publisherId: config.publisherId,
         ).toJson();
       case GateClose(:final closeCode, :final supported, :final requested):
         _requestClose(closeCode, 'no common protocol version');
@@ -984,8 +1085,65 @@ final class RelaySession {
   /// `writeStatus` sweep after a reconnect. That is a night shift, not an
   /// untrafficked gateway, so the heartbeat carries the check.
   Future<Object?> _ping(rpc.Parameters _) async {
-    _certHealth?.refreshIfDue();
+    _health?.refreshIfDue();
     return {'serverTime': _now()};
+  }
+
+  /// One last `tick` naming where each subscription got to, into the priority
+  /// lane, for a **planned** drain only.
+  ///
+  /// ## What it is for
+  ///
+  /// [CloseCodes.serverDraining] means "reconnect, do not alarm", and until
+  /// this existed that was all it meant: a panel coming back after a deploy
+  /// could not tell a sequence it missed from one that never happened, so it
+  /// could not say whether the numbers still on its screen were the last ones
+  /// this gateway evaluated. That is T-08-48 — a client left unable to account
+  /// for what it missed — and the fix is one frame naming the last `seq` per
+  /// subscription.
+  ///
+  /// ## Planned only
+  ///
+  /// A heartbeat timeout, a backpressure eviction, a dead socket and a client
+  /// that walked away all reach [_teardown] too, and none of them may produce
+  /// this frame: a tick after an abrupt drop is a claim about state nobody
+  /// verified, sent down a link the gateway has just decided it cannot trust.
+  /// The `code == serverDraining` test is the whole of the distinction.
+  ///
+  /// ## Its own frame, and never the close reason
+  ///
+  /// Into the priority lane, where `_Connection.closeSocket`'s existing flush
+  /// puts it on the wire *before* `sink.close`. That ordering is already
+  /// load-bearing for the refusals that explain a close, so this rides a seam
+  /// that is tested rather than inventing one.
+  ///
+  /// **It must never be spliced into the close reason.** RFC 6455 caps a
+  /// reason at 123 UTF-8 bytes and `package:web_socket` enforces the cap with
+  /// an `ArgumentError` that lands inside `closeSocket`'s `try` and is
+  /// swallowed as "the far end is already gone" — so the close a gateway
+  /// believes it sent was never sent, and the session lives on. Phase 6 paid
+  /// for that discovery once. A sequence number in the reason would put every
+  /// planned drain one long station name away from paying for it again.
+  ///
+  /// Built through [TickParams] rather than concatenated, unlike
+  /// `TickEngine._writeTick`: that one runs for every subscription of every
+  /// session on every tick and the encode is the cost being avoided. This runs
+  /// once per session, ever.
+  void _writeFinalTick() {
+    final subs = subscriptions.subscriptions;
+    if (subs.isEmpty) return;
+    final at = _now();
+    buffer.putPriority(jsonEncode({
+      'jsonrpc': '2.0',
+      'method': Methods.tick,
+      'params': TickParams(
+        serverTime: at,
+        subs: {
+          for (final state in subs)
+            state.sub: SubTick(seq: state.seq, evaluatedAt: at),
+        },
+      ).toJson(),
+    }));
   }
 
   /// Records [code] and schedules the teardown for after the answer.
@@ -1065,6 +1223,9 @@ final class RelaySession {
     _closed = true;
     if (code != null) _sentCloseCode ??= code;
     _onClosing?.call(this);
+    // Before `subscriptions.clear()` below, because it is the subscriptions
+    // that are being named. See [_writeFinalTick].
+    if (code == CloseCodes.serverDraining) _writeFinalTick();
     // In the synchronous half, and beside `subscriptions.clear()` because it
     // is the same kind of debt: a listener still attached pushes values at a
     // panel that is gone, and a hold still engaged pushes a *counter* at a

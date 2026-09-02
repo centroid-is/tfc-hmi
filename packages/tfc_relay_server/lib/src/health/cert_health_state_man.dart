@@ -1,484 +1,67 @@
-/// The one health key the gateway produces about *itself*: how many days are
-/// left on the certificate it is serving `wss` from.
+/// What is left of the Phase 6 certificate overlay after Phase 8 replaced it:
+/// two names, and the argument for why the file did not simply go away.
 ///
-/// **Source: 06-RESEARCH §G**, SEC-04, and 06-CONTEXT decision 3 (a one-year
-/// leaf, alarmed at thirty days). The shape is copied from
-/// `tfc_relay_client/test/support/client_harness.dart:208-268`'s
-/// `_PlantAddressSpace`: a [StateManApi] decorator that overrides the couple of
-/// members it answers for and delegates the rest, member by member.
+/// ## The merge was a replacement, not a deletion
 ///
-/// ## Why this is a key and not a method
+/// 06-09's handoff said "deleting this file is the whole of the merge", and
+/// that was true of the *certificate* job — `PIPE.cert.days_to_expiry` is one
+/// number for the process and the class that produced it did nothing else.
+/// What Phase 8 discovered is that the **chain slot** the overlay held is
+/// needed for something the shared source cannot do at all:
+/// `PIPE.link_degraded`, `PIPE.effective_hz`, `PIPE.egress_kbps` and
+/// `PIPE.pending_keys` are facts about *one socket*, and `LocalStateMan` is
+/// one instance serving every panel in the plant.
 ///
-/// "**There is no health method.** `PIPE.*` keys are subscribable like any
-/// plant tag … `listen('PIPE.connected')` is the health API" —
-/// `state_man_api.dart:45-49`, repeated in the contract kit's own barrel doc
-/// (`:52-57`) and pinned by `api_surface_test.dart:48-51` at 49 interface
-/// members. So the producer has to be an api-level overlay: it adds a key,
-/// never a member, and the frozen 49 cannot move because of anything in this
-/// file.
+/// So [SessionHealthStateMan] took the slot, kept the certificate measurement
+/// verbatim — the served-versus-on-disk subtlety (06-09 WR-01), the
+/// truncation, the never-zero rule — and grew the six keys only a session
+/// knows. The class that used to live here is now that class in *server mode*:
+/// one instance, built by `RelayServer.start`, owning the certificate and its
+/// store, with every session's overlay forwarding the key to it so that one
+/// `refresh()` pushes to every subscriber rather than to one store per panel.
 ///
-/// (The kit is named here by role rather than by package: `handler_table_test
-/// .dart:278-287` greps every line under `lib/` for that package's name,
-/// comments included, because an import of a dev-dependency test kit from
-/// production code would ship the fakes to the plant.)
+/// ## Why the file stayed
 ///
-/// ## What breaks in the plant without it
+/// [CertHealthStateMan] is what `RelayServer.certHealth` is typed as and what
+/// `health_cert_test.dart` — 06-09's sixteen socket-level cases, which this
+/// phase is required to leave standing — imports and names. An alias keeps
+/// every one of those spellings meaning exactly what it meant, while there is
+/// still only one class and only one certificate producer. A rename that
+/// touched sixteen passing cases would have been a rewrite of the evidence
+/// rather than of the code, and a rewritten fixture is how a suite quietly
+/// stops testing what it used to.
 ///
-/// The leaf lasts a year. On the morning it lapses, every panel in the plant
-/// stops connecting at once and they all stop for the same reason, loudly and
-/// simultaneously — `tls_test.dart`'s expired arm is that failure seen from
-/// the panel's side, and it is deliberately loud, because a gateway that
-/// downgraded instead would be worse. What this file buys is *notice*: the
-/// number is an ordinary subscribable tag, AlarmMan can alarm on it like any
-/// other, and re-issuing the leaf becomes a Tuesday ticket instead of a
-/// Saturday outage.
-///
-/// ## A second decorator, chained — not a second job on the first
-///
-/// `PolicyStateMan` is built per session because identity is a property of the
-/// session. A certificate is a property of the *server*. So this one is built
-/// once by [RelayServer.start] and shared, and the chain is **policy over
-/// health over source**: `canSee` then filters a key list that already
-/// contains the health key, which is what a future hiding policy would need,
-/// and Phase 8 can delete this file without touching the policy.
-///
-/// ## The Phase 8 merge note
-///
-/// This overlay exists because Phase 6 needed one health key and **Phase 8
-/// owns the `PIPE.*` producer**. When `LocalStateMan` grows the real `PIPE.*`
-/// namespace, the `days_to_expiry` computation moves there and this overlay's
-/// *health* job goes away. Its *policy* job does not — there is none;
-/// `canSee`/`canWrite` stay per session and stay in `PolicyStateMan`, because
-/// identity is a property of the session while `LocalStateMan` is one shared
-/// instance. Deleting this file is the whole of the merge.
-///
-/// The obligation runs the other way too: [certDaysToExpiryKey] must be on
-/// **Phase 8's HLTH-03 reserved list from the start**.
-/// `freshness_contract.dart:60-64` treats `PIPE.` as a reserved *prefix* and
-/// Phase 8 will reject a plant keymapping claiming a name inside it. A
-/// keymapping that claimed this one would surface as an alarm reading a
-/// conveyor speed in days.
-///
-/// ## Why there is no timer here, and where the hourly cadence actually lives
-///
-/// 06-09's plan called for an hourly `Timer.periodic` in this file. There is
-/// none, and the reason is executable: `teardown_test.dart:523-560` — "the
-/// package holds no per-session timer" — walks every file under `lib/src`,
-/// treats a non-comment `Timer.periodic(` outside `tick_engine.dart` as an
-/// offence and pins the package's repeating-timer count at exactly **1**
-/// (03-RESEARCH Finding 8: "a timer that captures a session closure is exactly
-/// the ghost 03-11's kill-cycle test hunts").
-///
-/// So the recompute is on a **deadline, not on a timer** — which is the shape
-/// Finding 8 itself chose over per-session timers: a `lastSeenMs` field plus a
-/// check on a path that already runs. [refreshIfDue] is called from every read
-/// surface below, and in particular from [keys], which `value_handlers.dart`
-/// consults on `read`, `readFresh`, `readMany` and `write` and
-/// `session_handlers.dart` consults on `subscribe`.
-///
-/// **Which requests are deadline checks, named rather than generalised.** The
-/// claim used to be "every request on the gateway is a deadline check" and it
-/// was false for the traffic that matters most. Four of the nine registered
-/// methods never read `api.keys`: `hello`, `unsubscribe`, `writeStatus` — and
-/// `ping`, which is what an established, otherwise-idle panel produces all
-/// shift. `relay_session.dart`'s `_ping` therefore calls [refreshIfDue]
-/// directly, so the heartbeat — the one request guaranteed to keep arriving —
-/// carries the check. `hello`, `unsubscribe` and `writeStatus` still do not,
-/// and do not need to: none of them is the only thing a connected panel sends.
-///
-/// Three consequences worth stating rather than discovering:
-///
-///  * **The value is computed once at [RelayServer.start]**, before anything
-///    can subscribe, for the same reason `fake_state_man.dart:93-107` seeds the
-///    other five health keys at construction — "a health indicator that reads
-///    unknown until the first fault is no indicator at all".
-///  * **It is never recomputed more often than [period]**, so an idle-loop of
-///    `read` calls cannot turn a health key into a file-system benchmark.
-///  * **A gateway with no session at all does not recompute.** That is the
-///    honest residual of having no timer, and it costs nothing: with no
-///    session there is nobody to push to, and the first request after the hour
-///    recomputes before it is answered. A deployment that wants the number
-///    moved on a schedule of its own calls [refresh] — the same seam
-///    `RelayServer.reloadTokens` documents for the credential file, and for
-///    the same reason ("the reload cadence is a deployment's business rather
-///    than a gateway's").
-///
-/// ## `inDays` truncates, and an alarm at 30 fires when the value reads 29
-///
-/// The value is `notAfter.difference(now).inDays`. `Duration.inDays` truncates
-/// toward zero, so a certificate with 16.9 days left reads **16** — measured
-/// (06-RESEARCH §G.2): a leaf minted `notAfter: now + 17 days` reads back 16.
-/// Whoever configures the thirty-day threshold should know that it fires on
-/// the day the value first reads 29, not 30. We ship the number; the threshold
-/// is AlarmMan's.
-///
-/// ## Quality, never a zero
-///
-/// A missing or unparseable chain reads [Quality.errorConfig] with a **null**
-/// value. Never 0. A 0 reads as "expires today" and would fire the thirty-day
-/// alarm for a misspelled path, sending somebody out to re-issue a certificate
-/// that is perfectly fine — and the next real expiry warning is the one they
-/// ignore. `errorConfig` is 770, narrowed in Phase 1 to "the source
-/// affirmatively said the tag is gone"; the reading here is the same class of
-/// statement — the gateway looked, and there is no certificate at that path to
-/// report on. Negative values, by contrast, are *readings*: an already-lapsed
-/// leaf reads `-3` under good quality, because "three days past" is exactly
-/// what an engineer needs to know.
+/// The same argument applies to [certDaysToExpiryKey], which has been an alias
+/// for `PipeKeys.certDaysToExpiry` since 08-02 for the reason that file
+/// records: a key name is matched by AlarmMan configuration out in the plant,
+/// so a second spelling does not fail a test — it compiles, it keeps every
+/// suite green, and it quietly stops matching every deployment.
 library;
 
-import 'dart:async';
-import 'dart:io';
-
-import 'package:basic_utils/basic_utils.dart' show X509Utils;
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
+
+import 'session_health_state_man.dart';
+
+export 'session_health_state_man.dart' show SessionHealthStateMan;
+
+/// The Phase 6 name for the overlay that measures the gateway's own leaf.
+///
+/// A `typedef` and not a subclass: there is one class, and `isA` and `as`
+/// against this name are the same test they always were. See this library's
+/// doc for why the name survived the class.
+typedef CertHealthStateMan = SessionHealthStateMan;
 
 /// How many whole days are left on the gateway's leaf.
 ///
-/// In the reserved `PIPE.` namespace (`fake_state_man.dart:93`,
-/// `freshness_contract.dart:60-64`) because it is the pipe reporting on
-/// itself. Named as a constant rather than spelled at each site so Phase 8's
+/// In the reserved `PIPE.` namespace because it is the pipe reporting on
+/// itself. Named as a constant rather than spelled at each site so HLTH-03's
 /// reserved list and this producer cannot drift apart by a typo.
 ///
 /// Since 08-02 the *name* lives in the protocol package with the rest of the
 /// `PIPE.` vocabulary, which by then had producers in three packages at once;
 /// this stays as the alias every existing caller already imports. The
-/// *producer* — the file below — deliberately did not move with it (ruling 9
-/// as amended): it is judged by socket-level cases here, and relocating it
-/// would have put an upstream package's native build in front of this suite
-/// for the sake of one string.
+/// *producer* deliberately did not move with it (ruling 9 as amended, argued
+/// in full in `session_health_state_man.dart`): it is judged by socket-level
+/// cases here, and relocating it would have put an upstream package's native
+/// build in front of this suite for the sake of one string.
 const certDaysToExpiryKey = PipeKeys.certDaysToExpiry;
-
-/// The shared source, plus one key the gateway knows and the plant does not.
-///
-/// Implements [StateManApi] and **adds no interface member**, which is how the
-/// frozen 49 stays frozen. Written as explicit member-by-member delegation
-/// rather than `noSuchMethod` forwarding, for the reason
-/// `policy_state_man.dart:80-87` gives: a forwarder would silently absorb a
-/// member added in a later phase, and here a new member is a compile error and
-/// therefore a decision.
-final class CertHealthStateMan implements StateManApi {
-  CertHealthStateMan({
-    required this.source,
-    required this.chainPath,
-    int Function()? nowMs,
-    this.period = const Duration(hours: 1),
-  })  : _nowMs = nowMs ?? _wallClock,
-        _servedNotAfter = _notAfterOf(chainPath);
-
-  static int _wallClock() => DateTime.now().millisecondsSinceEpoch;
-
-  /// The shared source every session on this gateway is served from.
-  final StateManApi source;
-
-  /// The mounted leaf, by path — the same string `TlsConfig.chainPath` holds
-  /// and `SecurityContext.useCertificateChain` was given.
-  ///
-  /// A path and not bytes, deliberately: 06-03's SEC-01 sweep asserts that no
-  /// key material is reachable from the configuration, and an overlay that
-  /// cached the PEM would be a second copy of the chain living in a long-lived
-  /// object for the life of the process. Re-reading a ~1 kB file once an hour
-  /// is not a cost worth optimising against that.
-  final String chainPath;
-
-  /// How stale the number may get before the next reader pays for a recompute.
-  ///
-  /// One hour: 06-CONTEXT's "once an hour is plenty" for a value measured in
-  /// days, and it is a knob either way. Injectable so a case can drive the
-  /// deadline without waiting one out.
-  final Duration period;
-
-  /// Wall-clock epoch milliseconds.
-  ///
-  /// [RelayServer] passes its own `now`, so the certificate clock and the
-  /// write-outcome log's clock are the same injectable one and a case can move
-  /// the gateway forward in time with arithmetic rather than a sleep.
-  final int Function() _nowMs;
-
-  /// One node, one batch entry point — the same store the real
-  /// implementations use, so `listen` notifies through production code rather
-  /// than through something written for a test (`fake_state_man.dart:110`).
-  final _store = ValueStore();
-
-  /// Closers for the streams [subscribe] has handed out that are still open.
-  final _closeHandedOutStreams = <Future<void> Function()>{};
-
-  /// The `notAfter` of the leaf the running gateway is actually presenting,
-  /// read once when this overlay was built.
-  ///
-  /// **Why the number cannot be the file alone.** `SecurityContext
-  /// .useCertificateChain` reads [chainPath] once, inside
-  /// `RelayServer.start()`, and the running `HttpServer` presents that leaf
-  /// until the process is replaced. [_measure] re-reads the file on every
-  /// recompute. So the yearly re-issue — mount the new leaf, defer the restart
-  /// because restarting takes the plant off its screens — would have this key
-  /// jump from 29 days to 365 while every panel keeps validating the old leaf
-  /// and counting down to its original `notAfter`. The alarm clears, the
-  /// ticket is closed, and the plant stops on the original date with no
-  /// warning at all.
-  ///
-  /// This overlay is built by `start()` from the same [TlsConfig], one line
-  /// after the `SecurityContext`, so what it reads here is the file the
-  /// handshake is presenting.
-  ///
-  /// **The operational consequence, stated so nobody has to discover it:** a
-  /// rotation needs a restart, and this key keeps counting the old leaf down
-  /// until it gets one. It is deliberately not cert hot-reload — swapping the
-  /// certificate under a live `HttpServer` is not something dart:io offers,
-  /// and inventing it on the certificate path is not a Phase 6 change.
-  ///
-  /// Null when the chain could not be read at construction, in which case the
-  /// file is the only answer available.
-  final DateTime? _servedNotAfter;
-
-  /// When the value was last computed, in epoch ms, or null before the first.
-  int? _computedAtMs;
-
-  /// The last computed reading, for [read] and for the notification compare.
-  DynamicValue? get value => _store.peek(certDaysToExpiryKey);
-
-  /// Recomputes now, whatever the deadline says.
-  ///
-  /// Called once by [RelayServer.start] so the value exists before the first
-  /// subscribe, and available to a deployment that wants the number moved on a
-  /// cadence of its own. Only a genuine change notifies — that is
-  /// [ValueStore.applyBatch]'s contract — so an hourly recompute on a value
-  /// that ticks once a day pushes once a day.
-  void refresh() {
-    _computedAtMs = _nowMs();
-    _store.applyBatch({certDaysToExpiryKey: _measure()});
-  }
-
-  /// Recomputes if [period] has elapsed since the last one.
-  ///
-  /// On every read surface, and on the heartbeat — `relay_session.dart`'s
-  /// `_ping` calls it, which is why this is public. See this library's doc for
-  /// why a deadline and not a timer, and for the four methods that would
-  /// otherwise never check one.
-  void refreshIfDue() {
-    final last = _computedAtMs;
-    if (last != null && _nowMs() - last < period.inMilliseconds) return;
-    refresh();
-  }
-
-  /// The days left on the *earlier* of the leaf being served and the leaf on
-  /// disk.
-  ///
-  /// The file is still re-read on every recompute, because the missing and
-  /// unparseable answers depend on it and because a mount that went away is a
-  /// thing an operator needs told. What the file cannot do on its own is
-  /// answer the question this key asks — see [_servedNotAfter]. Taking the
-  /// earlier of the two is right in both directions: a rotation that has not
-  /// been restarted into keeps counting the certificate the panels are
-  /// validating, and a shorter leaf mounted for a restart that is coming is a
-  /// deadline reported the moment it exists rather than the moment it bites.
-  DynamicValue _measure() {
-    final onDisk = _notAfterOf(chainPath);
-    // Deliberately every failure, and deliberately not rethrown: a missing
-    // mount, a directory where a file should be, a PEM the parser rejects and
-    // a permission error are all the same statement to an operator — this
-    // gateway cannot tell you when its certificate runs out — and none of
-    // them is a reason to fail the request that happened to be first through
-    // the door after the deadline.
-    if (onDisk == null) return _unreadable;
-    final served = _servedNotAfter;
-    final soonest =
-        served == null || onDisk.isBefore(served) ? onDisk : served;
-    final now = DateTime.fromMillisecondsSinceEpoch(_nowMs());
-    return DynamicValue.of(soonest.difference(now).inDays);
-  }
-
-  /// The `notAfter` of the leaf in the PEM at [path], or null when there is no
-  /// answer to give.
-  ///
-  /// `validity` is non-nullable while `tbsCertificate` is nullable — the
-  /// upstream field names in `X509CertificateData` are a known trap (trap 14,
-  /// and `subjectAlternativNames` is misspelled next door). The null branch is
-  /// spelled out rather than `!`-ed so a chain the parser accepts but cannot
-  /// describe reads as unknown instead of crashing whichever request happened
-  /// to trigger the recompute.
-  static DateTime? _notAfterOf(String path) {
-    try {
-      final pem = File(path).readAsStringSync();
-      return X509Utils.x509CertificateFromPem(pem).tbsCertificate?.validity
-          .notAfter;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// The answer that is not a number. Never `0` — see this library's doc.
-  static final _unreadable =
-      DynamicValue.of(null, quality: Quality.errorConfig);
-
-  // -------------------------------------------------------------------------
-  // StateManApi — the thirteen members plus dispose.
-  // -------------------------------------------------------------------------
-
-  /// The plant's keys, plus this gateway's one.
-  ///
-  /// A union, not a replacement. This is also the broadest recompute trigger
-  /// in the class: `value_handlers.dart` consults it on `read`, `readFresh`,
-  /// `readMany` and `write`, and `session_handlers.dart` on `subscribe`. The
-  /// heartbeat calls [refreshIfDue] itself; see this library's doc for the
-  /// three methods that check no deadline and why that is enough.
-  @override
-  List<String> get keys {
-    refreshIfDue();
-    return <String>{...source.keys, certDaysToExpiryKey}.toList();
-  }
-
-  @override
-  ValueListenable<DynamicValue> listen(String key) {
-    if (key != certDaysToExpiryKey) return source.listen(key);
-    refreshIfDue();
-    return _store.node(certDaysToExpiryKey);
-  }
-
-  /// A broadcast view of the same node, never a second source of truth — the
-  /// shape and the argument are `fake_state_man.dart:224-261`'s.
-  @override
-  Stream<DynamicValue> subscribe(String key) {
-    if (key != certDaysToExpiryKey) return source.subscribe(key);
-    refreshIfDue();
-    final node = _store.node(certDaysToExpiryKey);
-    late final StreamController<DynamicValue> controller;
-    void push() => controller.add(node.value);
-    late final Future<void> Function() close;
-    close = () async {
-      _closeHandedOutStreams.remove(close);
-      await controller.close();
-    };
-    controller = StreamController<DynamicValue>.broadcast(
-      onListen: () {
-        node.addListener(push);
-        _closeHandedOutStreams.add(close);
-      },
-      onCancel: () {
-        node.removeListener(push);
-        _closeHandedOutStreams.remove(close);
-      },
-    );
-    _closeHandedOutStreams.add(close);
-    return controller.stream;
-  }
-
-  @override
-  DynamicValue? read(String key) {
-    if (key != certDaysToExpiryKey) return source.read(key);
-    refreshIfDue();
-    return value;
-  }
-
-  /// A forced round trip is a forced recompute.
-  ///
-  /// `readFresh` is the method a diagnostics page calls precisely *because* it
-  /// doubts the cache (`value_handlers.dart:244-262`), so honouring the
-  /// deadline here would answer the doubt with the cached number. Re-reading a
-  /// small file is what a round trip costs for this key.
-  @override
-  Future<DynamicValue> readFresh(String key) async {
-    if (key != certDaysToExpiryKey) return source.readFresh(key);
-    refresh();
-    return value ?? _unreadable;
-  }
-
-  /// One round trip for the plant's keys, plus this one answered from here.
-  ///
-  /// The delegate is skipped entirely when nothing but the health key was
-  /// asked for: `readMany` counts round trips as an observable
-  /// (`fake_state_man.dart:432-435`), and a round trip nobody needed would be
-  /// a number a test is entitled to be surprised by.
-  @override
-  Future<Map<String, DynamicValue>> readMany(List<String> keys) async {
-    if (!keys.contains(certDaysToExpiryKey)) return source.readMany(keys);
-    refreshIfDue();
-    final rest = [
-      for (final key in keys)
-        if (key != certDaysToExpiryKey) key,
-    ];
-    final answers = rest.isEmpty
-        ? <String, DynamicValue>{}
-        : {...await source.readMany(rest)};
-    answers[certDaysToExpiryKey] = value ?? _unreadable;
-    return answers;
-  }
-
-  /// Refused: it is a reading of the world, not a setpoint.
-  ///
-  /// The refusal **reuses the read-only shape** a device gives rather than
-  /// inventing one — `not_writable` / `Bad_NotWritable`, byte for byte what
-  /// `fake_state_man.dart:835-842` answers for a read-only tag — so nothing on
-  /// the panel side needs a special case for a health key, and an operator
-  /// gets the sentence they already know. A write that *moved* this value
-  /// would let somebody silence the expiry alarm by typing a number into it.
-  ///
-  /// The id follows the source's own rule (`fake_state_man.dart:659`): the
-  /// caller's `cmd` when there is one, a fresh ULID when there is not, because
-  /// a `WriteResult` with no id is one `writeStatus` could never match.
-  @override
-  Future<WriteResult> write(String key, Object? value,
-      {Object? expect, String? cmd}) async {
-    if (key != certDaysToExpiryKey) {
-      return source.write(key, value, expect: expect, cmd: cmd);
-    }
-    return _refuseWrite(cmd);
-  }
-
-  static WriteResult _refuseWrite(String? cmd) => WriteRejected(
-      cmd ?? newUlid(),
-      const WriteReason('not_writable',
-          message: 'the gateway\'s certificate expiry is a reading, not a '
-              'setpoint',
-          status: 'Bad_NotWritable'));
-
-  @override
-  Future<List<WriteResult>> writeStatus(List<String> cmds) =>
-      source.writeStatus(cmds);
-
-  /// Refused the same way [write] is, through the same shape.
-  ///
-  /// An inert handle rather than a throw: `hold_handle.dart:100-109` makes a
-  /// handle whose engagement is a [WriteRejected] un-held and un-feedable, and
-  /// `value_handlers.dart:654` already knows not to record one. So the hold
-  /// path inherits the refusal with no arm of its own.
-  @override
-  Future<HoldHandle> holdToRun(String key) async {
-    if (key != certDaysToExpiryKey) return source.holdToRun(key);
-    return HoldHandle(
-      key: key,
-      engagement: _refuseWrite(null),
-      onTick: (_) {},
-      onRelease: (_) async => _refuseWrite(null),
-    );
-  }
-
-  @override
-  BrowseApi get browse => source.browse;
-
-  @override
-  TimeseriesApi get timeseries => source.timeseries;
-
-  @override
-  HistoryViewApi get historyViews => source.historyViews;
-
-  @override
-  PreferencesApi get preferences => source.preferences;
-
-  /// Releases this overlay's own store, then delegates.
-  ///
-  /// Nothing in `RelayServer.close()` calls it, and nothing should — the
-  /// source is one instance shared by every session
-  /// (`relay_server.dart:216`), so a per-session dispose would take the whole
-  /// plant off the air when one panel goes home. The delegation exists for an
-  /// embedder that built one of these by hand. What this overlay owns and does
-  /// release is its store's listeners and any stream it handed out; it owns no
-  /// timer, which is the point of the argument above.
-  @override
-  Future<void> dispose() async {
-    for (final close in _closeHandedOutStreams.toList()) {
-      await close();
-    }
-    _store.dispose();
-    await source.dispose();
-  }
-}

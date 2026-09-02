@@ -41,6 +41,7 @@ import 'auth/file_token_validator.dart';
 import 'error_reporter.dart';
 import 'handle_table.dart';
 import 'health/cert_health_state_man.dart';
+import 'health/session_health_state_man.dart';
 import 'policy/key_policy.dart';
 import 'relay_session.dart';
 import 'server_config.dart';
@@ -273,8 +274,13 @@ final class RelayServer {
   /// Public because a deployment may want the number recomputed on a cadence
   /// of its own — `certHealth?.refresh()` — the same seam and the same
   /// argument [reloadTokens] carries for the credential file. It holds no
-  /// timer; see `cert_health_state_man.dart` for why, and for the Phase 8
-  /// merge note that ends with this getter being deleted.
+  /// timer; see `session_health_state_man.dart` for why.
+  ///
+  /// **Still per server, and still the only certificate producer** after
+  /// 08-12's merge. What changed is that it is no longer the thing in the
+  /// chain slot: each session's own overlay sits there and forwards this key
+  /// here, so one `refresh()` still pushes to every panel subscribed to it
+  /// rather than to one store per panel.
   CertHealthStateMan? get certHealth => _certHealth;
   CertHealthStateMan? _certHealth;
 
@@ -375,7 +381,7 @@ final class RelayServer {
     // applied to the sixth.
     _certHealth = tls == null
         ? null
-        : (CertHealthStateMan(
+        : (SessionHealthStateMan(
             source: api,
             chainPath: tls.chainPath,
             nowMs: _now,
@@ -603,16 +609,44 @@ final class RelayServer {
       final connection = _Connection(ws: ws, buffer: buffer, sink: sink);
       _connections.add(connection);
 
+      // **Built here, per connection, and that is the whole point** (08-12,
+      // threat T-08-45). `link_degraded`, `effective_hz`, `egress_kbps` and
+      // `pending_keys` are facts about *this* socket; [api] is one instance
+      // shared by every panel in the plant. An overlay built once in `start()`
+      // would serve whichever client last moved a number to everybody, so a
+      // quiet panel would show the busiest panel's degradation and an engineer
+      // would go and look at the wrong machine. It is the same argument the
+      // per-session `PolicyStateMan` rests on, about a different fact.
+      //
+      // The probe reads the session *late*: the overlay has to exist before
+      // `serve` in order to be handed to it, so the session it reports on is
+      // assigned one statement later. That is the `identityOf` idiom
+      // `PolicyStateMan` uses, for the same reason.
+      final probe = _SessionProbe(buffer: buffer, engine: () => _engine);
+      final health = SessionHealthStateMan(
+        source: api,
+        // Forwarded, never re-measured: one process, one certificate, one
+        // store — so `certHealth!.refresh()` still pushes to every panel
+        // subscribed to the key rather than to one store per panel. Null on a
+        // plaintext gateway, which is what keeps the key absent there.
+        cert: _certHealth,
+        probe: probe,
+        nowMs: _now,
+      );
+
       final session = RelaySession.serve(
         channel: channel,
         // **Policy over health over source.** `RelaySession` wraps whatever it
         // is handed in its own per-session `PolicyStateMan`, so handing it the
         // health overlay puts the two decorators in the order 06-09 argues
         // for: `canSee` filters a key list that already contains the health
-        // key, and Phase 8 can delete the inner one without touching the
-        // outer. Read off `this` rather than captured, exactly as `validator`
-        // and `policy` are, because `_onConnect` runs long after `start`.
-        api: _certHealth ?? api,
+        // keys, and a policy that hides one hides it here too. What changed in
+        // 08-12 is *which* overlay sits in the slot — a per-session one rather
+        // than the per-server certificate one, which now sits underneath it as
+        // `cert:` above. The order did not change, and must not: chained the
+        // other way `canSee` would filter a list that does not yet contain the
+        // health keys, and a future hiding policy could never reach them.
+        api: health,
         config: config,
         handles: handles,
         buffer: buffer,
@@ -643,12 +677,13 @@ final class RelayServer {
         // meeting is not a double report.
         onClosing: _sessions.remove,
         onError: onError,
-        // So the heartbeat can touch the certificate deadline. Four of the
-        // nine registered methods read no key, and `ping` is the one an
-        // established panel sends all shift — see `_ping`.
-        certHealth: _certHealth,
+        // So the heartbeat can touch the deadline. Four of the nine registered
+        // methods read no key, and `ping` is the one an established panel
+        // sends all shift — see `_ping`.
+        health: health,
       );
       connection.session = session;
+      probe.session = session;
       _sessions.add(session);
 
       unawaited(session.closed.then((_) => _release(connection)));
@@ -690,6 +725,10 @@ final class RelayServer {
             state: 'unhealthy',
             error: 'the server could not build a session for this connection: '
                 '$error',
+            // A fault report with no return address is one nobody can
+            // attribute when two gateways serve one plant. Omitted when null,
+            // so an unconfigured deployment's frame is unchanged.
+            publisherId: config.publisherId,
           ).toJson(),
         }),
       );
@@ -756,6 +795,76 @@ final class RelayServer {
 
     await _sessions.dispose();
   }
+}
+
+/// Where one session's health overlay gets its numbers from.
+///
+/// The composition root's half of `session_health_state_man.dart`: that
+/// library deliberately knows nothing about sessions, sockets or engines, and
+/// this class is the only thing in the package that knows how to answer all
+/// six questions. It holds no state of its own — every getter is a read of
+/// something that was already being measured, which is what keeps the overlay
+/// free of a timer.
+///
+/// [session] is assigned one statement after construction, because the overlay
+/// must exist before `RelaySession.serve` in order to be handed to it. Until
+/// then the session-derived numbers read as unmeasured, which is the honest
+/// answer for a connection that has not finished being built.
+final class _SessionProbe implements SessionProbe {
+  _SessionProbe({required this.buffer, required TickEngine? Function() engine})
+      : _engine = engine;
+
+  final ConflatingSendBuffer buffer;
+  final TickEngine? Function() _engine;
+
+  RelaySession? session;
+
+  /// The buffer is over a ceiling it will eventually be evicted for crossing.
+  ///
+  /// **The soft ceiling when there is one, and the hard one otherwise.**
+  /// `peakThreshold` is the number `ConflatingSendBuffer.poll` starts a clock
+  /// on: staying above it for `peakWindowMs` continuously *is* "the client
+  /// cannot keep up", so it is exactly the line an operator wants a badge to
+  /// light on. Reporting the hard `maxPending` instead would mean the
+  /// indicator turned amber in the same instant the panel was disconnected,
+  /// which is a log entry rather than a warning.
+  ///
+  /// The byte ceiling is composed in rather than reported separately: from a
+  /// panel's side "this link is shedding" is one fact, and a second boolean
+  /// nobody wired up is a second fact nobody reads.
+  @override
+  bool get linkDegraded {
+    final entries = buffer.pendingCount;
+    final ceiling = buffer.peakThreshold ?? buffer.maxPending;
+    if (entries > ceiling) return true;
+    final byteCeiling = buffer.maxPendingBytes;
+    return byteCeiling != null && buffer.pendingBytes > byteCeiling;
+  }
+
+  @override
+  double? get effectiveHz => session?.effectiveHz;
+
+  @override
+  double? get egressKbps => session?.egressKbps;
+
+  @override
+  int get pendingKeys => buffer.pendingCount;
+
+  /// Both halves, summed — `RelaySession.droppedHoldTicks` is already the sum
+  /// of `ValueHandlers.droppedHoldTicks` and the notifications the hello gate
+  /// refused before a handler was reached. Reporting only the handler's half
+  /// would leave the health key with a hole in it exactly where the
+  /// unauthenticated peers go, which is what `relay_session.dart:470-478` says
+  /// in so many words.
+  @override
+  int get droppedHoldTicks => session?.droppedHoldTicks ?? 0;
+
+  /// Read through the engine getter rather than captured, exactly as
+  /// `validator` and `policy` are: `_onConnect` runs long after `start`, and
+  /// a probe built against a null engine would read unmeasured for the life of
+  /// the connection.
+  @override
+  int? get eventLoopLagMs => _engine()?.lastLagMs;
 }
 
 /// One socket, its buffer, and the two ways a frame gets from one to the

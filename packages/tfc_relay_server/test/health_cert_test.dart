@@ -219,10 +219,19 @@ void main() {
       final panel = await station(server);
 
       final session = server.sessions.sessions.single;
-      expect(session.api.source, same(plant),
-          reason: 'a plaintext gateway has no certificate, so there is '
-              'nothing for an overlay to report on — and an overlay installed '
-              'anyway is a new key on every fixture in the package');
+      // **Amended by 08-12, and this is the one line of this file that
+      // moved.** Through Phase 6 the assertion here was `same(plant)`: the
+      // overlay in the chain slot existed only to report on a certificate, so
+      // a gateway with none installed nothing at all. Phase 8 put a
+      // *per-session* overlay in that slot, and its other six keys —
+      // `link_degraded`, `effective_hz`, `egress_kbps`, `pending_keys`,
+      // `dropped_hold_ticks`, `event_loop_lag_ms` — are facts about a socket,
+      // which a plaintext socket also is. So the overlay is present here and
+      // the property that survived is the one that mattered: **one** overlay,
+      // over the **one** shared source, contributing no certificate key.
+      expect((session.api.source as CertHealthStateMan).source, same(plant),
+          reason: 'one overlay over the one shared source — a second source '
+              'here would be a second place plant state lives');
       expect(session.api.keys, isNot(contains(certDaysToExpiryKey)),
           reason: 'a health key reading errorConfig forever on a gateway that '
               'was never given a certificate is a permanent false alarm, '
