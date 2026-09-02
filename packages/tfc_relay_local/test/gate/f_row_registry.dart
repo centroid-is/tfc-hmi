@@ -263,9 +263,9 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     clause: 'the stall harness, the announcement and the staleness clauses (F22a/b/d); the reaper half ("synchronized false disconnect") is 09-08\'s RED and fix, and the historian half ("historian marks the gap") is 09-09\'s db-tagged arm',
   ),
   'F25': Outstanding(
-    kind: OutstandingKind.missing,
+    kind: OutstandingKind.partial,
     owner: '09-04',
-    clause: 'exactly one subscription flagged stale via the test-only frozen-stamp lever, plus ROADMAP criterion 3\'s own scenario from data_age_ms',
+    clause: 'F25a (the lever\'s injection) has landed; still owed: ROADMAP criterion 3\'s own scenario from data_age_ms — badStale with sourceTime frozen, the climb observed by repeated reads on the read path, the neighbour alias flowing, no lever at all (F25b)',
   ),
   'F26': Outstanding(
     kind: OutstandingKind.missing,
