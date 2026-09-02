@@ -25,6 +25,7 @@ import 'package:tfc_dart/core/umas_types.dart'
         UmasException,
         UmasNotScalarException,
         UmasSessionState,
+        UmasStringDecoder,
         UmasVariable,
         UmasDataTypeRef;
 
@@ -54,6 +55,18 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   /// adapter construction. Mutated by [updateVariableNames] when the
   /// operator edits the key mappings (TD-003 v1.1.x cleanup path).
   Map<String, String?> _variableNames;
+
+  /// How this server's STRING bytes become text, handed to every [UmasClient]
+  /// this adapter builds.
+  ///
+  /// **Optional, and null reproduces exactly what this adapter did before it
+  /// existed.** The caller is what knows the server alias and therefore what
+  /// encoding was configured for it; see
+  /// `packages/tfc_relay_local/lib/src/string_encoding.dart`. Held on the
+  /// adapter rather than passed per call because the client is rebuilt on
+  /// every reconnect and the encoding is a property of the device, not of the
+  /// session.
+  final UmasStringDecoder? decodeString;
 
   /// True when this adapter's server has `umasEnabled == true` in its
   /// [ModbusConfig]. Determines whether variableName-bearing keys can
@@ -187,6 +200,7 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     this.serverAlias,
     Map<String, String?> variableNames = const {},
     this.umasEnabled = false,
+    this.decodeString,
     Map<String, String>? umasPollGroupByKey,
     List<ModbusPollGroupConfig>? pollGroups,
   })  : _specs = Map.unmodifiable(specs),
@@ -949,6 +963,11 @@ class ModbusDeviceClientAdapter implements DeviceClient {
       sendFn: tcp.send,
       unitId: wrapper.unitId,
       useMonitorPlc: _useMonitorPlc,
+      // Re-supplied on every rebuild: the client is recreated on each
+      // reconnect and the encoding is a property of the device, so a decoder
+      // wired only into the first session would produce mojibake after the
+      // first cable pull and nowhere else.
+      decodeString: decodeString,
     );
     _umasClientFor = tcp;
     // F-8 / TD-011: when the UMAS-side CRC watch detects a project
@@ -1434,10 +1453,17 @@ Map<String, String> buildUmasPollGroupsFromKeyMappings(
 ///
 /// Servers with `enabled == false` are skipped entirely — no wrapper, no
 /// poll timers, no per-cycle read failures in the log while the PLC is down.
+/// [decodeStringFor] supplies the per-server string decoder, by alias.
+///
+/// Null — the default — reproduces exactly what this factory did before it
+/// existed. It takes a function rather than a decoder because one call builds
+/// every configured server and each may speak a different encoding: one
+/// Latin-1 weigher does not make the TwinCAT PLC beside it Latin-1.
 List<DeviceClient> buildModbusDeviceClients(
   List<ModbusConfig> modbusConfigs,
-  KeyMappings keyMappings,
-) {
+  KeyMappings keyMappings, {
+  UmasStringDecoder? Function(String? serverAlias)? decodeStringFor,
+}) {
   return modbusConfigs.where((config) => config.enabled).map((config) {
     final specs = buildSpecsFromKeyMappings(
       keyMappings,
@@ -1464,6 +1490,7 @@ List<DeviceClient> buildModbusDeviceClients(
       serverAlias: config.serverAlias,
       variableNames: variableNames,
       umasEnabled: config.umasEnabled,
+      decodeString: decodeStringFor?.call(config.serverAlias),
       umasPollGroupByKey: umasPollGroups,
       pollGroups: config.pollGroups,
     );

@@ -13,7 +13,14 @@ library;
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:jbtm/jbtm.dart' show parseM2400Frame;
+import 'package:jbtm/jbtm.dart'
+    show
+        M2400Field,
+        M2400RecordType,
+        M2400StubServer,
+        parseM2400Frame;
+import 'package:tfc_dart/core/state_man.dart'
+    show KeyMappingEntry, KeyMappings, M2400NodeConfig;
 import 'package:tfc_dart/core/umas_types.dart';
 import 'package:tfc_relay_local/tfc_relay_local.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
@@ -32,6 +39,8 @@ const String weigher = 'weigher1v';
 const String twincat = 'ST101';
 
 void main() {
+  wr01();
+  wr10();
   group('the configuration is per server alias', () {
     test('an unconfigured alias is utf8, which is what the stack does today',
         () {
@@ -253,6 +262,168 @@ void main() {
       expect(parsed.value, 'ök',
           reason: 'the NUL-position trimming that was already there is '
               'untouched — the byte after the terminator is not smuggled in');
+    });
+  });
+}
+
+/// WR-10: `good` on the `latin1` branch means "without loss", not "correct" —
+/// and the one case where this side can tell the difference cheaply.
+void wr10() {
+  group('WR-10: a latin1 alias fed UTF-8 says so', () {
+    test('a UTF-8 buffer on a latin1 alias is uncertainEncoding, and the text '
+        'is still the configured decode', () {
+      // What a TwinCAT server sends for `Þorskflök` — and what a weigher
+      // wrongly configured as latin1 would then render as `ÃžorskflÃ¶k`,
+      // silently, under a good quality.
+      final bytes = utf8.encode('Þorskflök');
+      final decoded =
+          decodePlantString(bytes, encoding: ServerStringEncoding.latin1);
+
+      expect(decoded.quality, Quality.uncertainEncoding,
+          reason: 'latin1 maps all 256 byte values, so it decoded without '
+              'loss — but "without loss" is not "correctly", and a buffer that '
+              'is also valid multi-byte UTF-8 is strong evidence somebody '
+              'typed the wrong encoding into a per-alias config field');
+      expect(decoded.text, isNot('Þorskflök'),
+          reason: 'and the text is the CONFIGURED decode: the config says '
+              'which encoding this server speaks, and this function flags a '
+              'doubt rather than overruling it');
+    });
+
+    test('pure ASCII on a latin1 alias is good, which is the false positive '
+        'that would have made the signal useless', () {
+      final decoded = decodePlantString(utf8.encode('COD FILLET 5KG'),
+          encoding: ServerStringEncoding.latin1);
+      expect(decoded.quality, Quality.good,
+          reason: 'ASCII is valid in both encodings and says nothing about '
+              'either. A quality code that fired on every ordinary product '
+              'name is a quality code an operator learns to ignore');
+    });
+
+    test('genuine Latin-1 is good — an accented letter is not a UTF-8 '
+        'sequence', () {
+      final decoded = decodePlantString(latin1.encode('Þorskflök'),
+          encoding: ServerStringEncoding.latin1);
+      expect(decoded.quality, Quality.good);
+      expect(decoded.text, 'Þorskflök',
+          reason: 'the whole reason this branch exists: every Icelandic '
+              'letter lives inside Latin-1, so this is exact where '
+              'allowMalformed is lossy');
+    });
+  });
+}
+
+/// WR-01: the wire between the mechanism and the plant.
+///
+/// **What 08-10 shipped was a mechanism plus its unit tests, with the wire
+/// between them missing.** `decodePlantString`, `latin1DecoderFor` and
+/// `Quality.uncertainEncoding` had no caller anywhere in `lib/`;
+/// `GatewayConfig.stringEncodings` built a table nothing read;
+/// `buildUpstreamLink` constructed the weigher and the Modbus clients passing
+/// no decoder at all. So a deployment that wrote `"string_encoding": "latin1"`
+/// got the value parsed, validated, echoed back in `toJson` — and
+/// `utf8.decode(…, allowMalformed: true)` at every actual decode, which is the
+/// behaviour the module exists to replace. 08-10's threat register recorded
+/// T-08-37 as "Mitigated", which overstated what shipped.
+///
+/// So this group is deliberately **not** pointed at the helper. It runs bytes
+/// through a real socket into a link built by `buildUpstreamLink` from a real
+/// `UpstreamLinkConfig`, which is the path a plant takes, and the only thing
+/// it varies is the config field.
+void wr01() {
+  group('WR-01: string_encoding reaches the decode through a real adapter', () {
+    late M2400StubServer server;
+
+    setUp(() async {
+      server = M2400StubServer();
+      await server.start();
+    });
+
+    tearDown(() async => server.shutdown());
+
+    /// A STAT record whose product name is encoded in [encoding], framed as
+    /// the device frames it. `sendRawGarbage` is the stub's raw-bytes door —
+    /// its named helpers all encode UTF-8, which is the thing under test.
+    List<int> statFrame(String material, Encoding encoding) => <int>[
+          0x02,
+          ...encoding.encode('(${M2400RecordType.recStat.id}\t'
+              '${M2400Field.weight.id}\t12.37\t'
+              '${M2400Field.material.id}\t$material'),
+          0x03,
+        ];
+
+    Future<DynamicValue> firstMaterial(
+        UpstreamLink link, String key, KeyMappings mappings) async {
+      final ref = link.resolve(key, mappings.nodes[key]!)!;
+      final seen = link.subscribe(ref).first;
+      // The record has to land after the subscription, or the weigher's
+      // event-only stream has nobody listening when it arrives.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      server.sendRawGarbage(statFrame('Þorskflök', latin1));
+      return seen.timeout(const Duration(seconds: 5));
+    }
+
+    const String key = 'weigher1v.material';
+    const String alias = 'weigher1v';
+    final mappings = KeyMappings(nodes: <String, KeyMappingEntry>{
+      key: KeyMappingEntry(
+        m2400Node: M2400NodeConfig(
+          recordType: M2400RecordType.recStat,
+          field: M2400Field.material,
+          serverAlias: alias,
+        ),
+      ),
+    });
+
+    test('latin1 in the config means latin1 at the decode — the Icelandic '
+        'letters arrive intact', () async {
+      final link = await buildUpstreamLink(
+        UpstreamLinkConfig(
+          alias: alias,
+          protocol: UpstreamProtocol.m2400,
+          endpoint: '127.0.0.1:${server.port}',
+          stringEncoding: ServerStringEncoding.latin1,
+        ),
+        mappings: mappings,
+      );
+      addTearDown(link.dispose);
+      await link.connect(deadline: const Duration(seconds: 5));
+
+      final value = await firstMaterial(link, key, mappings);
+
+      expect(value.value, 'Þorskflök',
+          reason: 'every Icelandic letter lives inside Latin-1, so this is '
+              'EXACT where allowMalformed is lossy. Before WR-01 the config '
+              'field was parsed, validated and echoed, and this decode was '
+              'still utf8 with allowMalformed');
+    });
+
+    test('and the default is unchanged: the same bytes on a utf8 alias are '
+        'the mojibake this module exists to make visible', () async {
+      final link = await buildUpstreamLink(
+        UpstreamLinkConfig(
+          alias: alias,
+          protocol: UpstreamProtocol.m2400,
+          endpoint: '127.0.0.1:${server.port}',
+          // Not passed at all: the default, which is what every deployment
+          // that has not thought about encodings gets.
+        ),
+        mappings: mappings,
+      );
+      addTearDown(link.dispose);
+      await link.connect(deadline: const Duration(seconds: 5));
+
+      final value = await firstMaterial(link, key, mappings);
+
+      expect(value.value, isNot('Þorskflök'),
+          reason: 'the contrast is the evidence: same bytes, same code path, '
+              'one config field different. If both branches produced the same '
+              'text this case would be asserting that the decoder does '
+              'nothing');
+      expect(value.value.toString(), contains('\u{FFFD}'),
+          reason: 'and this is what shipped everywhere before ruling 10: a '
+              'replacement character on a packing-hall screen, under a good '
+              'quality, with nothing in any log');
     });
   });
 }

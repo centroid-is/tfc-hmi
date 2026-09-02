@@ -494,6 +494,35 @@ void main() {
     });
   });
 
+  group('freeze 7: ruling 10 stays wired', () {
+    test('latin1DecoderFor has a caller under lib/ that is not its own file',
+        () {
+      // **08-REVIEW WR-01 in one assertion.** What 08-10 shipped was a
+      // mechanism plus its unit tests with the wire between them missing:
+      // decodePlantString, latin1DecoderFor and Quality.uncertainEncoding had
+      // no caller anywhere in lib/, the config field was parsed and echoed,
+      // and every actual decode was still utf8-with-allowMalformed. Nothing
+      // failed, which is exactly why it shipped — and why the threat register
+      // could record T-08-37 as "Mitigated".
+      //
+      // A call-site count is the cheapest thing that can tell "wired" from
+      // "present". The behavioural evidence is in encoding_test.dart, which
+      // runs Latin-1 bytes through a real socket into a link built by
+      // buildUpstreamLink; this pin is what notices the day somebody
+      // simplifies the composition root and takes the argument out with it.
+      final callers = mentionsOf(libRoot, 'latin1DecoderFor')
+          .where((hit) => !hit.contains('string_encoding.dart'))
+          .toList();
+
+      expect(callers, isNotEmpty,
+          reason: 'the per-server encoding is a feature a deployment '
+              'configures and cannot otherwise observe: it fails by producing '
+              'plausible text, not by producing an error. If nothing in lib/ '
+              'calls the decoder factory then "string_encoding" is a field '
+              'the gateway validates, echoes back, and ignores');
+    });
+  });
+
   group('freeze 6: the composer owes what it says it owes', () {
     test('the unimplemented-member count is the declared one', () {
       expect(unimplementedMemberSites(libSrc),

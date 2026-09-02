@@ -1685,7 +1685,13 @@ class MonitorPlcRegistrationTable {
   /// using [parseVariableValue]. Throws [UmasException] on buffer underflow
   /// for fixed-size scalars; STRING-family values decode gracefully even
   /// from a zero-byte slice (JOB-A v1.1: see parseVariableValue comments).
-  List<TypedVariableValue> parseReadAllResponse(Uint8List rawBytes) {
+  /// [decodeString] is threaded to [parseVariableValue] for the same reason
+  /// the ReadVariable path threads it: this is the *other* road a STRING takes
+  /// out of a PLC (MonitorPlc, 0x50, which the M580 prefers), and a decoder
+  /// wired into only one of the two is a per-server encoding that works until
+  /// somebody's controller picks the other path.
+  List<TypedVariableValue> parseReadAllResponse(Uint8List rawBytes,
+      {UmasStringDecoder? decodeString}) {
     final indices = registeredIndices;
     if (indices.isEmpty) return [];
 
@@ -1694,7 +1700,8 @@ class MonitorPlcRegistrationTable {
 
     for (final idx in indices) {
       final type = _types[idx]!;
-      results.add(parseVariableValue(rawBytes, offset, type));
+      results.add(parseVariableValue(rawBytes, offset, type,
+          decodeString: decodeString));
       // Advance by exactly what the reader consumed. [umasOnWireSize] also
       // clamps STRING-family at the remaining bytes, so a PLC that returned
       // fewer-than-clamped bytes (e.g. 1 byte for an empty STRING via 0x22,

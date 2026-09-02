@@ -176,6 +176,17 @@ final class UpstreamLinkConfig {
   final String? privateKeyPath;
 
   /// What this server's strings are encoded in (08-CONTEXT ruling 10).
+  ///
+  /// **In force for `m2400`, `modbus` and `umas` links** — `buildUpstreamLink`
+  /// threads a decoder built from this into the client it constructs, and
+  /// `freeze_test.dart`'s freeze 7 stops that silently coming undone.
+  ///
+  /// **Not in force for `opcua` links**, and that is a stated gap rather than
+  /// an oversight: the binding decodes before Dart sees a byte, so the hook
+  /// has to go in the binding. Setting `latin1` on an OPC UA link is accepted
+  /// and has no effect today. At this plant that costs nothing — the TwinCAT
+  /// servers emit UTF-8 and the Latin-1 devices are the weighers and the
+  /// Saia-over-Modbus box erector, all of which are covered.
   final ServerStringEncoding stringEncoding;
 
   /// The optional PLC build-stamp tag, the third input to the epoch
@@ -473,7 +484,6 @@ Future<Gateway> buildGateway(
 }) async {
   final refused = reservedKeyMappingNames(mappings);
   final links = <UpstreamLink>[];
-  final spaces = <String, UpstreamAddressSpace>{};
   for (final link in config.links) {
     links.add(await buildUpstreamLink(link, mappings: mappings));
   }
@@ -489,7 +499,26 @@ Future<Gateway> buildGateway(
     router: router,
     staleAfter: config.staleAfter,
     linger: config.linger,
-    browseSpaces: spaces,
+    // **Deliberately empty, and 10-01 owes the wiring** (08-REVIEW WR-07).
+    // This used to be a local that was declared, never written to, and passed
+    // anyway — which reads as wired and is not: every gateway built through
+    // here had live browse unreachable, and only a caller constructing
+    // `LocalStateMan` directly (that is, the tests) could see the feature
+    // 08-11 shipped.
+    //
+    // It cannot be filled here as things stand, and that is the substance of
+    // the finding rather than an excuse: `OpcUaAddressSpace` needs a
+    // `ua.ClientApi`, and nothing in this function has one — the adapters
+    // construct their clients inside `connect()`, which is `LocalStateMan.
+    // start()`'s job and happens after this returns. Wiring it means a lazy
+    // per-alias resolution the browse map's `final` field cannot express, so
+    // it belongs to the plan that owns browse rather than to a review fix
+    // smuggling a design change past a scope fence.
+    //
+    // Until then the keymapping tree is browsable and the live one is not,
+    // which `local_state_man.dart` already documents as a *configuration* gap
+    // that lands in `LocalBrowse.incidents` rather than in an exception.
+    browseSpaces: const <String, UpstreamAddressSpace>{},
   );
   final server = RelayServer(
     // **The identity this whole phase exists to make true.** The server's
@@ -555,6 +584,12 @@ Future<UpstreamLink> buildUpstreamLink(
             ..umasEnabled = config.protocol == UpstreamProtocol.umas,
         ],
         mappings,
+        // **Ruling 10, wired** (08-REVIEW WR-01). This function is the only
+        // place that knows both the alias and the client being constructed,
+        // which is precisely why the decoder is threaded from here rather
+        // than reached for inside jbtm or umas_types — neither has a server
+        // alias in scope and neither should.
+        decodeStringFor: (_) => latin1DecoderFor(config.stringEncoding),
       );
       return ModbusUpstreamLink.wrapping(
         clients.single as ModbusDeviceClientAdapter,
@@ -565,7 +600,14 @@ Future<UpstreamLink> buildUpstreamLink(
       return M2400UpstreamLink(
         alias: config.alias,
         client: M2400DeviceClientAdapter(
-          M2400ClientWrapper(host, port),
+          // The weighers are the plant's Latin-1 devices (08-RESEARCH §H.3),
+          // so this is the wire that makes `"string_encoding": "latin1"` mean
+          // something. Before it, the value was parsed, validated, echoed in
+          // toJson — and every actual decode was still
+          // `utf8.decode(allowMalformed: true)`, which is the behaviour the
+          // module exists to replace.
+          M2400ClientWrapper(host, port,
+              decodeBytes: latin1DecoderFor(config.stringEncoding)),
           serverAlias: config.alias,
         ),
       );

@@ -35,16 +35,38 @@
 /// here and the two foreign packages get one additive optional parameter each,
 /// whose default reproduces exactly what they did yesterday.
 ///
-/// ## The OPC UA half, and why it is a completeness item
+/// ## What is wired, and what is not
 ///
-/// Raw bytes are **not reachable** through `ClientApi`: the binding decodes
-/// before Dart sees anything (`extensions.dart:416`,
-/// `types/payloads.dart:235,266`). Adding an encoding hook there is a binding
-/// change, and it is recorded as a named follow-up rather than attempted here.
-/// It is a completeness item and not a plant-visible gap: SVN's OPC UA servers
-/// are TwinCAT, which emits UTF-8, and the plant's likely Latin-1 sources are
-/// the M2400 weighers and the Saia-over-Modbus box erector — both of which this
-/// module covers through the two parameters below.
+/// **Wired end to end, since 08-REVIEW WR-01:** the M2400 weighers and the
+/// Modbus/UMAS devices. `buildUpstreamLink` is the one place that knows both
+/// the alias and the client being constructed, so the decoder is threaded from
+/// there into `M2400ClientWrapper.decodeBytes` and into
+/// `buildModbusDeviceClients`' `decodeStringFor`, which reaches every
+/// `UmasClient` the adapter builds — including the MonitorPlc (0x50) read path
+/// the M580 prefers, because a decoder wired into only one of the two roads a
+/// STRING takes out of a PLC is a per-server encoding that works until
+/// somebody's controller picks the other one. `encoding_test.dart` proves it
+/// over a real socket and `freeze_test.dart`'s freeze 7 pins that a caller
+/// exists.
+///
+/// What shipped in 08-10 was the mechanism plus its unit tests with **no
+/// caller anywhere in `lib/`** — the config field was parsed, validated and
+/// echoed back in `toJson`, and every actual decode was still
+/// `utf8.decode(…, allowMalformed: true)`. That is worth recording because it
+/// is the failure shape this whole module is about: nothing errored, and the
+/// symptom was plausible text.
+///
+/// **Still NOT wired: OPC UA.** Raw bytes are not reachable through
+/// `ClientApi` — the binding decodes before Dart sees anything
+/// (`extensions.dart:416`, `types/payloads.dart:235,266`) — so an encoding
+/// hook there is a change to the binding, not to this package. It stays a
+/// named follow-up. A deployment that sets `string_encoding: latin1` on an
+/// **opcua** link today gets no effect from it, and that is the honest
+/// statement of the remaining gap.
+///
+/// It is a completeness item rather than a plant-visible one: SVN's OPC UA
+/// servers are TwinCAT, which emits UTF-8, and the plant's Latin-1 sources are
+/// the M2400 weighers and the Saia-over-Modbus box erector — both now covered.
 library;
 
 import 'dart:convert';
@@ -111,14 +133,41 @@ typedef PlantStringDecoder = String Function(List<int> bytes);
 ///
 /// Three outcomes, and the middle one is the point:
 ///
-///  * **[Quality.good]** — the bytes were valid in the configured encoding
-///    (and `latin1` always is, so a Latin-1 server never reaches the third
-///    case).
-///  * **[Quality.uncertainEncoding]** — the bytes were *not* valid UTF-8.
-///    Replacement characters were substituted and the value says so. This is
-///    the state that ships today wearing a good quality.
+///  * **[Quality.good]** — the bytes decoded **without loss** in the
+///    configured encoding. On the `utf8` branch that also means they were
+///    valid UTF-8, which is real evidence. On the `latin1` branch it means
+///    only that: Latin-1 maps all 256 byte values, so *every* buffer decodes
+///    without loss and `good` is **not** evidence the text is correct
+///    (08-REVIEW WR-10). The only defence against an alias configured to the
+///    wrong encoding is the configuration.
+///  * **[Quality.uncertainEncoding]** — the bytes were not valid UTF-8 on a
+///    `utf8` alias (replacement characters were substituted), **or** they look
+///    like UTF-8 on a `latin1` alias. See below for the second case; it is the
+///    cheap half of the defence WR-10 asked for.
 ///  * There is no bad/error outcome. A string that will not decode is still a
 ///    reading, and blanking it would throw away the only information there is.
+///
+/// ## The misconfiguration signal, and why it has no false positives
+///
+/// A UTF-8 device wrongly configured as `latin1` used to be *silent*:
+/// `Þorskflök` arrived as `ÃžorskflÃ¶k` under a good quality with nothing
+/// anywhere saying so — the same mojibake this module exists to end, relocated
+/// from "wrong default" to "wrong config", and the more likely mistake now
+/// that the encoding is a per-alias field somebody types.
+///
+/// A buffer that is **also valid multi-byte UTF-8** on a `latin1` alias is
+/// strong evidence of that mistake, because valid multi-byte UTF-8 sequences
+/// do not occur by accident in genuine Latin-1 text: they require a lead byte
+/// in `0xC2–0xF4` followed by exactly the right number of `0x80–0xBF`
+/// continuation bytes, which in Latin-1 reads as `Â`, `Ã`, `Ð` and friends
+/// followed by control characters and punctuation. Pure ASCII cannot trigger
+/// it — the check requires at least one byte above 0x7F — so the ordinary case
+/// is untouched.
+///
+/// The **text is still the Latin-1 decode**: the configuration is what says
+/// which encoding this server speaks, and this function's job is to flag a
+/// doubt rather than to overrule it. A quality an operator can see beats a
+/// guess they cannot.
 ///
 /// S7-style NUL padding is stripped first: a fixed-width `STRING` buffer is
 /// padded to its declared size and the padding is not part of the product name.
@@ -132,8 +181,14 @@ DecodedPlantString decodePlantString(
   switch (encoding) {
     case ServerStringEncoding.latin1:
       // Cannot throw: all 256 byte values map. Exact for every Icelandic
-      // letter, which is the entire reason this branch exists.
-      return (text: latin1.decode(trimmed), quality: Quality.good);
+      // letter, which is the entire reason this branch exists — and it is also
+      // why `good` here cannot mean "correct", only "without loss".
+      return (
+        text: latin1.decode(trimmed),
+        quality: _looksLikeUtf8(trimmed)
+            ? Quality.uncertainEncoding
+            : Quality.good,
+      );
     case ServerStringEncoding.utf8:
       try {
         return (text: utf8.decode(trimmed), quality: Quality.good);
@@ -173,6 +228,28 @@ DynamicValue decodePlantStringValue(
 /// this is for the paths where the framing owns the decode.
 PlantStringDecoder latin1DecoderFor(ServerStringEncoding encoding) =>
     (bytes) => decodePlantString(bytes, encoding: encoding).text;
+
+/// Whether [bytes] are valid **multi-byte** UTF-8 — the wrong-alias signal.
+///
+/// Two conditions, and both are load-bearing (08-REVIEW WR-10):
+///
+///  * at least one byte above 0x7F, so pure ASCII — which is valid in both
+///    encodings and says nothing about either — can never trigger it; and
+///  * the whole buffer decodes as strict UTF-8, so a genuine Latin-1 string
+///    that happens to contain one accented letter does not either.
+///
+/// False negatives are fine and expected: this is a cheap signal, not a
+/// detector. What it must not do is cry wolf on correct Latin-1, because a
+/// quality code an operator learns to ignore is worse than no quality code.
+bool _looksLikeUtf8(List<int> bytes) {
+  if (!bytes.any((b) => b > 0x7f)) return false;
+  try {
+    utf8.decode(bytes);
+    return true;
+  } on FormatException {
+    return false;
+  }
+}
 
 /// Everything before the first NUL, or all of it if there is none.
 List<int> _beforeFirstNul(List<int> bytes) {
