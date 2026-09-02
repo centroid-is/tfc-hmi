@@ -30,6 +30,10 @@ export 'src/fanin.dart';
 export 'src/freshness_sweep.dart';
 export 'src/ingest.dart';
 export 'src/key_router.dart';
+// Browse over the live address space. Exported alongside the composer because
+// `UpstreamAddressSpace` is what a deployment registers per alias — the flag on
+// `UpstreamLink` says a link CAN browse, and this map is how it does.
+export 'src/local_browse.dart';
 export 'src/local_state_man.dart';
 export 'src/m2400_upstream_link.dart';
 export 'src/modbus_upstream_link.dart';

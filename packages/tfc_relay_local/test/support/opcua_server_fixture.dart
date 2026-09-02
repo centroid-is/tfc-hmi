@@ -80,6 +80,8 @@ final class OpcUaServerFixture {
     required this.port,
     required this.valueKeys,
     required this.writeKeys,
+    required this.treePaths,
+    required this.methodPaths,
     required this.logLevel,
     required Server server,
     required Timer driver,
@@ -95,6 +97,32 @@ final class OpcUaServerFixture {
 
   /// Keys served by data-source nodes: writable, countable, failable.
   final List<String> writeKeys;
+
+  /// **08-11.** Dotted paths that get a real *hierarchy*, not a flat node.
+  ///
+  /// [valueKeys] and [writeKeys] put every node directly under ObjectsFolder,
+  /// which is all 08-07 needed: a subscription does not care what a node's
+  /// parent is. Browse does, and it is the whole subject —
+  /// `browse_contract.dart:69-75` exists because *"a source that ignores its
+  /// argument and returns the same list for every parent satisfies every check
+  /// that only ever expands one folder"*, and a flat address space cannot
+  /// demonstrate the difference in either direction. So each path here becomes
+  /// an object node per intermediate segment and a plain variable node at the
+  /// leaf, with `ST101.CN01` and `ST101.CN04` as two genuinely different
+  /// parents.
+  ///
+  /// The node id of every segment is the dotted prefix itself, which is what
+  /// lets `OpcUaAddressSpace` read a gateway key straight off a NodeId instead
+  /// of maintaining a second mapping.
+  final List<String> treePaths;
+
+  /// **08-11.** Dotted paths that become method nodes.
+  ///
+  /// The one node kind that must NOT be expandable, and therefore the one the
+  /// type mapping can be judged on: a folder that fails to expand hides tags,
+  /// and a method that offers to expand invites a click that can only ever
+  /// produce an empty level.
+  final List<String> methodPaths;
 
   /// The server's log level, kept so [restart] can rebuild an identical one.
   final LogLevel logLevel;
@@ -144,11 +172,15 @@ final class OpcUaServerFixture {
   static Future<OpcUaServerFixture> start({
     Iterable<String> valueKeys = const <String>[],
     Iterable<String> writeKeys = const <String>[],
+    Iterable<String> treePaths = const <String>[],
+    Iterable<String> methodPaths = const <String>[],
     bool viaFaultProxy = false,
     LogLevel logLevel = LogLevel.UA_LOGLEVEL_ERROR,
   }) async {
     final values = valueKeys.toList();
     final writes = writeKeys.toList();
+    final tree = treePaths.toList();
+    final methods = methodPaths.toList();
 
     final built = await withFreePort<({Server server, int port})>((port) async {
       final server = Server(port: port, logLevel: logLevel);
@@ -160,6 +192,8 @@ final class OpcUaServerFixture {
       port: built.port,
       valueKeys: values,
       writeKeys: writes,
+      treePaths: tree,
+      methodPaths: methods,
       logLevel: logLevel,
       server: built.server,
       // Armed immediately: the nodes below are added while the crank is
@@ -188,6 +222,7 @@ final class OpcUaServerFixture {
   }
 
   void _addNodes() {
+    _addTree();
     for (final key in valueKeys) {
       final seed = _plainValues[key] ?? fixtureValue(0, name: key);
       _server.addVariableNode(fixtureNodeId(key), seed);
@@ -216,6 +251,61 @@ final class OpcUaServerFixture {
           _writeLog[key]!.add(value);
           _sourceValues[key] = value;
         },
+      );
+    }
+  }
+
+  /// **08-11.** Builds the object chain for [treePaths] and [methodPaths].
+  ///
+  /// Segments are created once and in prefix order, so `ST101.CN01.MOT01` and
+  /// `ST101.CN04.MOT01` share the `ST101` object and diverge below it — which
+  /// is exactly the shape the two-folder arm needs and the shape a flat address
+  /// space cannot produce.
+  void _addTree() {
+    final created = <String>{};
+    void ensureFolder(String path) {
+      if (!created.add(path)) return;
+      final cut = path.lastIndexOf('.');
+      final parent = cut < 0 ? null : path.substring(0, cut);
+      if (parent != null) ensureFolder(parent);
+      _server.addFolderNode(
+        fixtureNodeId(path),
+        path,
+        parentNodeId: parent == null ? null : fixtureNodeId(parent),
+      );
+    }
+
+    for (final path in treePaths) {
+      final cut = path.lastIndexOf('.');
+      if (cut < 0) {
+        throw ArgumentError.value(path, 'treePaths',
+            'a tree path needs at least one parent segment; a leaf directly '
+            'under ObjectsFolder is what valueKeys already gives you');
+      }
+      ensureFolder(path.substring(0, cut));
+      final seed = _plainValues[path] ?? fixtureValue(0, name: path);
+      _server.addVariableNode(
+        fixtureNodeId(path),
+        seed,
+        parentNodeId: fixtureNodeId(path.substring(0, cut)),
+      );
+      _plainValues[path] = seed;
+    }
+    for (final path in methodPaths) {
+      final cut = path.lastIndexOf('.');
+      if (cut < 0) {
+        throw ArgumentError.value(
+            path, 'methodPaths', 'a method path needs a parent segment');
+      }
+      ensureFolder(path.substring(0, cut));
+      _server.addMethodNode(
+        fixtureNodeId(path),
+        browseName: path,
+        // The gateway never calls it. What matters is that the node exists,
+        // that it is reachable by a hierarchical reference, and that it comes
+        // back as UA_NODECLASS_METHOD — the one kind that must not expand.
+        callback: (_) => const <DynamicValue>[],
+        parentNodeId: fixtureNodeId(path.substring(0, cut)),
       );
     }
   }

@@ -73,6 +73,7 @@ import 'fanin.dart';
 import 'freshness_sweep.dart';
 import 'ingest.dart';
 import 'key_router.dart';
+import 'local_browse.dart';
 import 'pipe_health.dart';
 import 'upstream_link.dart';
 import 'write_translation.dart';
@@ -89,8 +90,12 @@ final class LocalStateMan implements StateManApi {
     this.writeDeadline = const Duration(seconds: 5),
     this.writeOutcomeTtl = const Duration(minutes: 10),
     this.maxWriteOutcomes = 4096,
+    Map<String, UpstreamAddressSpace> browseSpaces =
+        const <String, UpstreamAddressSpace>{},
     DateTime Function()? now,
   })  : links = List<UpstreamLink>.unmodifiable(links),
+        browseSpaces =
+            Map<String, UpstreamAddressSpace>.unmodifiable(browseSpaces),
         _now = now ?? DateTime.now {
     _startedMs = _now().millisecondsSinceEpoch;
     // Allocation only. Nothing here opens a socket, starts a clock or spawns a
@@ -137,6 +142,15 @@ final class LocalStateMan implements StateManApi {
 
   /// Which link owns a key, or which named refusal it earns.
   final KeyRouter router;
+
+  /// The live address space behind each browsable alias.
+  ///
+  /// Empty by default, and an empty map is a working gateway: browse is a
+  /// capability and not a duty. An alias whose link says
+  /// [UpstreamLink.supportsBrowse] but has no entry here is a *configuration*
+  /// gap — the tree stops at that root and the reason lands in
+  /// [LocalBrowse.incidents] rather than in an exception.
+  final Map<String, UpstreamAddressSpace> browseSpaces;
 
   /// How long a value may go unheard-of before it must stop claiming to be
   /// current. 08-05's freshness sweep is what notices; see `freshness_sweep.dart`.
@@ -962,27 +976,42 @@ final class LocalStateMan implements StateManApi {
     }
   }
 
-  // ----------------------------------------------------------- not this plan
+  // ---------------------------------------------------- the live address space
 
+  /// Browse over the configured links, one level at a time.
+  ///
+  /// The same instance every time it is asked for, not a fresh one: a
+  /// [LocalBrowse] accumulates [LocalBrowse.incidents], and a getter that
+  /// rebuilt would throw away the record of the level that did not arrive at
+  /// the moment somebody went looking for it.
+  ///
+  /// Keys and browse answer different questions — see `local_browse.dart`. A
+  /// link with no [UpstreamLink.supportsBrowse] is absent from the tree and
+  /// present in the keymapping, which is the honest description of an M2400.
   @override
-  BrowseApi get browse =>
-      throw UnimplementedError('08-11 owes LocalStateMan.browse — the live '
-          'address space per alias, behind UpstreamLink.supportsBrowse');
+  BrowseApi get browse => _browse;
+  late final LocalBrowse _browse = LocalBrowse(
+    links: links,
+    spaces: browseSpaces,
+    deadline: readDeadline,
+  );
+
+  // ----------------------------------------------------------- not this phase
 
   @override
   TimeseriesApi get timeseries =>
-      throw UnimplementedError('08-11 owes LocalStateMan.timeseries — Phase 10 '
+      throw UnimplementedError('10-01 owes LocalStateMan.timeseries — Phase 10 '
           'consumes what Phase 8 collects; 08-11 sets supportsDataServices '
           'false on the contract leg until it does');
 
   @override
   HistoryViewApi get historyViews =>
-      throw UnimplementedError('08-11 owes LocalStateMan.historyViews — as '
+      throw UnimplementedError('10-01 owes LocalStateMan.historyViews — as '
           'timeseries, and from the same database seam');
 
   @override
   PreferencesApi get preferences =>
-      throw UnimplementedError('08-11 owes LocalStateMan.preferences — Phase '
+      throw UnimplementedError('10-01 owes LocalStateMan.preferences — Phase '
           '10 owns the stored preferences, and no method here may request '
           'secret material');
 
