@@ -26,6 +26,15 @@ second is possible because the timeline and the CPU profiler share the VM's
 monotonic clock, so a block's [ts, ts+dur] selects the samples that were taken
 while it ran.
 
+A Flutter app is also not one isolate, and `main` is not where all of the CPU
+is. Ours runs ten: `main`, a `compute()` worker or two, and one open62541 OPC
+UA client per server — seven of them, every one named `_isolateEntryPoint`
+after the function it was spawned on. Every isolate-scoped RPC here takes an
+`isolateId`, so profiling only `main` left that work as an unattributed lump in
+the container's CPU. `--isolate` picks by name substring, VM isolate number,
+`#index`, or `all`; `cpu` and `memory` accept several and sample them over one
+shared window, so the numbers can be compared to each other.
+
 Subcommands
     status     one-shot: version, isolates, heap, uptime.
     frames     collect `Flutter.Frame` events, report jank percentiles.
@@ -55,6 +64,13 @@ Examples
 
     # hunt for hiccups while an operator drives the screen
     docker compose run --rm profiler slow --seconds 20 --repeat
+
+    # every isolate at once, to see which of them owns the container's CPU
+    docker compose run --no-deps --rm profiler cpu --isolate all --seconds 30
+
+    # just the seven OPC UA clients, or just one of them
+    python3 tools/hmi_profiler.py cpu --isolate _isolateEntryPoint
+    python3 tools/hmi_profiler.py cpu --isolate '#4'
 """
 
 from __future__ import annotations
@@ -374,11 +390,27 @@ class VmService:
             return collected
         return [e for e in collected if e.get("extensionKind") in kinds or e.get("kind") in kinds]
 
-    def main_isolate(self):
+    def isolates(self, include_system=False):
+        """Every isolate the VM admits to, in the VM's own order.
+
+        A Flutter app is not one isolate. Ours runs ten: `main`, whatever
+        `compute()` happens to be alive, and one open62541 OPC UA client per
+        server connection — all seven of those named `_isolateEntryPoint`,
+        because that is the name of the function they were spawned on. Work
+        done there is invisible to every RPC that takes an `isolateId` of
+        `main`, which is most of this script's, so it used to show up only as
+        an unattributed lump in the container's CPU.
+        """
         vm = self.call("getVM")
-        isolates = vm.get("isolates", [])
-        if not isolates:
+        found = list(vm.get("isolates") or [])
+        if include_system:
+            found.extend(vm.get("systemIsolates") or [])
+        if not found:
             raise ProfilerError("the VM reports no isolates")
+        return found
+
+    def main_isolate(self):
+        isolates = self.isolates()
         for isolate in isolates:
             if isolate.get("name") == "main":
                 return isolate["id"]
@@ -386,6 +418,134 @@ class VmService:
 
     def close(self):
         self._ws.close()
+
+
+def index_isolates(isolates):
+    """Stamp each isolate with its position in the VM's own list.
+
+    That position is what `--isolate #2` means and what every label below
+    prints, so the two cannot drift apart. The obvious alternative — the VM's
+    `number` — is a 64-bit random on a real station
+    (`_isolateEntryPoint#3292723241152127`), which is unusable as a column and
+    unusable as something a person types.
+    """
+    # Idempotent: an already-stamped list keeps its original positions, so
+    # describing a *subset* still names the indices `--isolate` would take.
+    return [
+        isolate if isolate.get("vm_index") is not None else dict(isolate, vm_index=index)
+        for index, isolate in enumerate(isolates)
+    ]
+
+
+def isolate_label(isolate):
+    """`_isolateEntryPoint#2` — a name alone does not identify an isolate.
+
+    Seven of ours answer to `_isolateEntryPoint`, so every table that prints a
+    name prints its index beside it or the rows are indistinguishable. The
+    full `number`/`id` still appears in each section heading, because the
+    index is only stable for as long as the VM's list is.
+    """
+    name = isolate.get("name") or "?"
+    index = isolate.get("vm_index")
+    if index is not None:
+        return f"{name}#{index}"
+    number = isolate.get("number")
+    return f"{name}#{number}" if number not in (None, "") else name
+
+
+def describe_isolates(isolates):
+    """Every isolate on one line, for an error message or `status`."""
+    return ", ".join(isolate_label(isolate) for isolate in index_isolates(isolates))
+
+
+def select_isolates(isolates, selector):
+    """Resolve a `--isolate` selector against the VM's isolate list.
+
+    Accepted, comma-separated and unioned in the order given:
+
+        (nothing)   the isolate named `main`, or the first one — what every
+                    version of this script did before the flag existed.
+        all         every isolate.
+        #3          the isolate at index 3 of the VM's list — the number the
+                    labels print, and the only one worth typing.
+        3292723241152127
+                    the isolate whose VM *number* that is, or its full id.
+        entryPoint  case-insensitive substring of the name; matches all seven
+                    OPC UA clients at once.
+
+    Index and number are deliberately different syntaxes rather than "try both
+    and take whatever hits". On a station they are wildly different orders of
+    magnitude, and a selector that silently profiled the wrong isolate would
+    produce a plausible, wrong answer instead of an error.
+    """
+    if not isolates:
+        raise ProfilerError("the VM reports no isolates")
+    isolates = index_isolates(isolates)
+    if selector is None or not str(selector).strip():
+        for isolate in isolates:
+            if isolate.get("name") == "main":
+                return [isolate]
+        return [isolates[0]]
+
+    chosen = []
+
+    def take(isolate):
+        if all(isolate.get("id") != seen.get("id") for seen in chosen):
+            chosen.append(isolate)
+
+    for raw in str(selector).split(","):
+        term = raw.strip()
+        if not term:
+            continue
+        if term.lower() == "all":
+            for isolate in isolates:
+                take(isolate)
+            continue
+        matches = []
+        if term.startswith("#") and term[1:].isdigit():
+            index = int(term[1:])
+            if index >= len(isolates):
+                raise ProfilerError(
+                    f"no isolate at index {index}; the VM has {len(isolates)}: "
+                    f"{describe_isolates(isolates)}"
+                )
+            matches = [isolates[index]]
+        else:
+            exact = [
+                isolate
+                for isolate in isolates
+                if str(isolate.get("number")) == term or isolate.get("id") == term
+            ]
+            matches = exact or [
+                isolate
+                for isolate in isolates
+                if term.lower() in str(isolate.get("name") or "").lower()
+            ]
+        if not matches:
+            raise ProfilerError(
+                f"no isolate matches {term!r}. The VM has: {describe_isolates(isolates)}"
+            )
+        for isolate in matches:
+            take(isolate)
+    return chosen
+
+
+def one_isolate(isolates, selector, command):
+    """Same resolution, but for the commands that profile exactly one.
+
+    `report`, `slow` and `watch` correlate the CPU profile against a single
+    timeline; there is no honest way to fold seven isolates into that. Picking
+    the first match silently would mean `--isolate entryPoint` reporting on
+    whichever of the seven the VM happened to list first, so it is an error.
+    """
+    chosen = select_isolates(isolates, selector)
+    if len(chosen) > 1:
+        raise ProfilerError(
+            f"`{command}` profiles one isolate; {selector!r} matched "
+            f"{len(chosen)}: {describe_isolates(chosen)}. Narrow it (`#2`, a "
+            "number, a longer substring) or use `cpu`, which takes many."
+        )
+    return chosen[0]
 
 
 # --------------------------------------------------------------------------
@@ -880,6 +1040,31 @@ def fold_cpu_samples(payload, top=25):
     }
 
 
+#: The VM tag the profiler stamps on a sample it took while the isolate had
+#: nothing to run. Its thread is parked in a futex wait inside libc, which is
+#: where the *stack* says the time went — one nameless native frame, no Dart
+#: caller, and on a station it is the single biggest row in every OPC UA
+#: isolate's self time. It is not CPU. Counting it as CPU turns seven idle
+#: clients into a 19 % "unattributed block" that /proc flatly contradicts.
+IDLE_VM_TAG = "Idle"
+
+
+def fold_vm_tags(payload):
+    """Count samples by the VM tag they were taken under.
+
+    The Dart profiler is a wall-clock sampler: a dedicated thread interrupts
+    every mounted isolate on a fixed period whether or not that isolate is on
+    a CPU. So `samples x period` is the isolate's *elapsed* time, and only the
+    non-`Idle` part of it is time the machine actually spent. This is the
+    field that tells the two apart, and it is why every CPU figure below is
+    reported twice.
+    """
+    tags = collections.Counter()
+    for sample in payload.get("samples") or []:
+        tags[sample.get("vmTag") or "unknown"] += 1
+    return tags
+
+
 def _tree_node(name):
     return {"name": name, "self": 0, "total": 0, "children": {}}
 
@@ -1258,17 +1443,167 @@ def collect_frames(service, seconds):
     return [e.get("extensionData") or {} for e in events]
 
 
-def collect_cpu(service, isolate, seconds, period_us=250):
+def clip_samples(payload, window):
+    """Drop samples taken outside the measured window, and say how many.
+
+    The same self-observation that [in_window] brackets out of the timeline
+    reaches the *samples* too, and gets worse the more isolates you ask for.
+    `clearCpuSamples` and `getCpuSamples` are isolate-scoped: the VM hands
+    them to the target isolate as out-of-band messages, and building the reply
+    walks the whole sample ring in C++ with no Dart frames on the stack. With
+    one isolate that work happens after the last sample we care about. With
+    seven, isolate #2 is still being sampled while isolate #1 spends ~750 ms
+    of CPU answering — so the profiler's own RPC lands in the *other* six
+    profiles as a fat, nameless native leaf that the app never ran.
+
+    Clipping to the bracket the VM's own clock put around the sleep removes
+    it. Samples with no timestamp are kept: an unjudgeable sample is a worse
+    thing to silently delete than to report.
+    """
+    samples = payload.get("samples") or []
+    if not window:
+        return payload, 0
+    from_us, to_us = window
+    kept = []
+    dropped = 0
+    for sample in samples:
+        stamp = sample.get("timestamp")
+        if isinstance(stamp, (int, float)) and (
+            (from_us is not None and stamp < from_us)
+            or (to_us is not None and stamp > to_us)
+        ):
+            dropped += 1
+            continue
+        kept.append(sample)
+    if not dropped:
+        return payload, 0
+    clipped = dict(payload)
+    clipped["samples"] = kept
+    return clipped, dropped
+
+
+def collect_cpu_multi(service, isolates, seconds, period_us=250, top=25):
+    """Sample several isolates over one shared window.
+
+    One window, not one per isolate, for two reasons. Seven sequential
+    15-second windows take nearly two minutes, during which the plant does
+    something else. And numbers from different windows cannot be added up:
+    "which of the seven costs the most" is only answerable if they were all
+    measured against the same wall clock and the same denominator.
+
+    Each isolate's samples are folded and thrown away before the next one is
+    asked for. Holding all of them would be tidier code and it does not fit:
+    the sidecar has a 512 MB budget, a station's ring is tens of MB of JSON
+    per isolate once parsed, and asking for nine at once got the container
+    OOM-killed with no output at all.
+
+    Returns per-isolate folded views plus the *measured* elapsed time. Never
+    `seconds`: everything downstream divides by it, and the RPCs either side
+    of the sleep are not free.
+    """
     # 1000 µs is the VM default; 250 µs gives four times the resolution, which
-    # matters when a paint pass is only a couple of milliseconds long.
+    # matters when a paint pass is only a couple of milliseconds long. The flag
+    # is VM-wide, so it is set once however many isolates were asked for.
     service.try_call("setFlag", {"name": "profile_period", "value": str(period_us)}, timeout=10.0)
-    service.call("clearCpuSamples", {"isolateId": isolate})
+    for isolate in isolates:
+        service.call("clearCpuSamples", {"isolateId": isolate["id"]})
+    started = timeline_now(service)
+    started_at = time.monotonic()
+
     time.sleep(seconds)
-    return service.call(
-        "getCpuSamples",
-        {"isolateId": isolate, "timeOriginMicros": 0, "timeExtentMicros": 10**15},
-        timeout=180.0,
-    )
+
+    elapsed = time.monotonic() - started_at
+    ended = timeline_now(service)
+    window = (started, ended) if (started is not None and ended is not None) else None
+
+    entries = []
+    for isolate in isolates:
+        payload = service.call(
+            "getCpuSamples",
+            {"isolateId": isolate["id"], "timeOriginMicros": 0, "timeExtentMicros": 10**15},
+            timeout=180.0,
+        )
+        payload, dropped = clip_samples(payload, window)
+        functions = payload.get("functions", []) or []
+        samples = payload.get("samples", []) or []
+        tags = fold_vm_tags(payload)
+        # Fold only what the isolate was awake for. An idle sample's stack is
+        # the futex the thread is parked in, and it dominates every table it
+        # is left in — 67 % of one station isolate's "self time" was a libc
+        # offset that no code of ours ever calls. VMs that do not report a tag
+        # lose nothing: `busy` is then every sample, exactly as before.
+        busy = [sample for sample in samples if sample.get("vmTag") != IDLE_VM_TAG]
+        entries.append(
+            {
+                "isolate": isolate,
+                "label": isolate_label(isolate),
+                "id": isolate.get("id"),
+                "sample_period_us": payload.get("samplePeriod") or 0,
+                "dropped_samples": dropped,
+                "samples": len(samples),
+                "vm_tags": tags,
+                "folded": fold_cpu_samples(dict(payload, samples=busy), top),
+                "tree": build_call_tree(functions, busy),
+            }
+        )
+        del payload, functions, samples, busy
+    return {"entries": entries, "elapsed_s": elapsed, "window": window}
+
+
+def summarise_isolate_cpu(collected):
+    """Put a CPU cost on each isolate's fold, and a share on each.
+
+    The sampling profiler fires on a fixed period against whichever thread is
+    running the isolate, so `samples x period` is that isolate's CPU time over
+    the window, and dividing by the window gives its share of one core. That
+    is an *estimate*, and only as good as the VM's honouring of
+    `profile_period` — which is why the period actually used is reported back
+    beside it rather than assumed.
+    """
+    elapsed = collected.get("elapsed_s") or 0.0
+    rows = []
+    total_samples = 0
+    total_busy = 0
+    for entry in collected["entries"]:
+        folded = entry["folded"]
+        period = entry["sample_period_us"] or 0
+        # Counter() rather than the value as given: a summary rendered back
+        # from a `--json` dump arrives with a plain dict here.
+        tags = collections.Counter(entry.get("vm_tags") or {})
+        # `folded` covers the busy samples only; the raw count is what the ring
+        # actually held, and their difference is what the isolate slept through.
+        busy = folded["samples"]
+        taken = entry.get("samples", busy)
+        idle = taken - busy
+        total_samples += taken
+        total_busy += busy
+        rows.append(
+            {
+                "label": entry["label"],
+                "id": entry["id"],
+                "samples": taken,
+                "idle_samples": idle,
+                "busy_samples": busy,
+                "dropped_samples": entry["dropped_samples"],
+                "sample_period_us": period,
+                "vm_tags": dict(tags.most_common()),
+                "elapsed_ms": taken * period / 1000.0,
+                "cpu_ms": busy * period / 1000.0,
+                "core_percent": (100.0 * busy * period / (elapsed * 1e6)) if elapsed else 0.0,
+                "idle_percent": (100.0 * idle / taken) if taken else 0.0,
+                "top_self": folded["self"][0]["name"] if folded["self"] else "-",
+                "folded": folded,
+                "tree": entry["tree"],
+            }
+        )
+    for row in rows:
+        row["share_percent"] = 100.0 * row["busy_samples"] / total_busy if total_busy else 0.0
+    return {
+        "elapsed_s": elapsed,
+        "total_samples": total_samples,
+        "total_busy_samples": total_busy,
+        "isolates": rows,
+    }
 
 
 def collect_timeline(service, seconds):
@@ -1431,7 +1766,7 @@ def render_cpu(folded):
     return "\n".join(lines)
 
 
-def render_hot_paths(folded, tree):
+def render_hot_paths(folded, tree, min_percent=2.0):
     lines = ["### Hot paths\n"]
     if not tree["total"]:
         lines.append("_(no samples — the isolate was idle)_\n")
@@ -1440,9 +1775,80 @@ def render_hot_paths(folded, tree):
     if path:
         lines.append("Heaviest chain:\n")
         lines.append("```\n" + "\n  -> ".join(_compress_chain(path)) + "\n```\n")
-    lines.append("Full tree (>=2% of samples, straight runs collapsed):\n")
-    lines.append("```\n" + render_call_tree(tree) + "```\n")
+    lines.append(f"Full tree (>={min_percent:g}% of samples, straight runs collapsed):\n")
+    lines.append("```\n" + render_call_tree(tree, min_percent=min_percent) + "```\n")
     return "\n".join(lines)
+
+
+def render_isolate_summary(summary):
+    """The across-isolates table: who is actually burning the container's CPU."""
+    lines = ["### Isolates\n"]
+    elapsed = summary["elapsed_s"]
+    lines.append(
+        f"{summary['total_samples']} samples over a measured {elapsed:.1f} s "
+        f"window shared by every isolate below, {summary['total_busy_samples']} "
+        "of them taken while the isolate had something to run.\n"
+    )
+    lines.append(
+        render_table(
+            [
+                "isolate",
+                "samples",
+                "idle %",
+                "CPU ms",
+                "% of a core",
+                "% of busy",
+                "top self function",
+            ],
+            [
+                [
+                    row["label"],
+                    row["samples"],
+                    f"{row['idle_percent']:.0f}",
+                    f"{row['cpu_ms']:.0f}",
+                    f"{row['core_percent']:.1f}",
+                    f"{row['share_percent']:.1f}",
+                    row["top_self"],
+                ]
+                for row in summary["isolates"]
+            ],
+        )
+    )
+    lines.append(
+        "_The Dart profiler is a wall-clock sampler, so a parked isolate is "
+        "sampled as busily as a working one — its stack is one nameless libc "
+        "frame with no Dart caller. `idle %` is the share of samples the VM "
+        "tagged `Idle`; CPU ms and % of a core count only the rest, divided "
+        "by the measured window and never by `--seconds`. Cross-check the "
+        "total against `system`'s per-thread CPU._\n"
+    )
+    dropped = sum(row["dropped_samples"] for row in summary["isolates"])
+    if dropped:
+        lines.append(
+            f"_{dropped} samples fell outside the window and were dropped — "
+            "the profiler's own `getCpuSamples` RPC, which each isolate "
+            "services itself. See [clip_samples]._\n"
+        )
+    return "\n".join(lines)
+
+
+def render_isolate_cpu(summary, tree_min_percent=2.0):
+    """Summary table, then the usual self/inclusive/tree per isolate."""
+    parts = []
+    if len(summary["isolates"]) > 1:
+        parts.append(render_isolate_summary(summary))
+    for row in summary["isolates"]:
+        parts.append(f"## {row['label']} · `{row['id']}`\n")
+        tags = ", ".join(f"{name} {count}" for name, count in row["vm_tags"].items())
+        parts.append(
+            f"{row['samples']} samples, {row['idle_samples']} of them idle. "
+            f"Everything below is the other {row['busy_samples']} — "
+            f"{row['cpu_ms']:.0f} ms of CPU, {row['core_percent']:.1f}% of a core."
+            + (f" VM tags: {tags}.\n" if tags else "\n")
+        )
+        parts.append(render_hot_paths(row["folded"], row["tree"], tree_min_percent))
+        parts.append(render_cpu(row["folded"]))
+    return "\n".join(parts)
 
 
 def render_slow_blocks(slow, functions, samples, tree_min_percent=8.0):
@@ -1704,7 +2110,8 @@ def render_report(data):
     lines = [
         f"# CentroidX profile — {data['collected_at']}",
         "",
-        f"`{data['url']}` · isolate `{data['isolate']}` · "
+        f"`{data['url']}` · isolate "
+        f"`{data.get('isolate_label') or data['isolate']}` · "
         f"{data['seconds']} s window · Dart VM {data.get('vm_version', '?')}",
         "",
         render_actions(data),
@@ -1752,10 +2159,12 @@ def gather(
     proc_match=("centroidx",),
     docker_client=None,
     pg_url=None,
+    isolate_selector=None,
 ):
     """Collect one window. Phases run in sequence so they do not perturb
     each other — a timeline recording distorts the CPU profile."""
-    isolate = service.main_isolate()
+    chosen = one_isolate(service.isolates(), isolate_selector, "report")
+    isolate = chosen["id"]
     version = service.try_call("getVersion") or {}
     # Taken before the window so the thread CPU deltas cover it.
     proc_pid = find_process(proc_root, proc_match)
@@ -1765,6 +2174,7 @@ def gather(
         "collected_at": time.strftime("%Y-%m-%d %H:%M:%S %z"),
         "seconds": seconds,
         "isolate": isolate,
+        "isolate_label": isolate_label(chosen),
         "vm_version": f"{version.get('major', '?')}.{version.get('minor', '?')}",
         "frames": frame_stats([]),
         "cpu": fold_cpu_samples({}),
@@ -1893,7 +2303,9 @@ def cmd_status(service, args):
         "name": vm.get("name"),
         "pid": vm.get("pid"),
         "uptime_s": round(vm.get("startTime", 0) and (time.time() - vm["startTime"] / 1000.0), 1),
-        "isolates": [i.get("name") for i in vm.get("isolates", [])],
+        # Labelled, not just named: seven of ours answer to `_isolateEntryPoint`
+        # and `--isolate` needs something that tells them apart.
+        "isolates": [isolate_label(i) for i in index_isolates(vm.get("isolates") or [])],
         "main_isolate": isolate_id,
         "heap_mb": round(usage.get("heapUsage", 0) / 1e6, 1),
         "external_mb": round(usage.get("externalUsage", 0) / 1e6, 1),
@@ -1908,27 +2320,39 @@ def cmd_frames(service, args):
 
 
 def cmd_cpu(service, args):
-    isolate = service.main_isolate()
-    payload = collect_cpu(service, isolate, args.seconds, args.period)
-    folded = fold_cpu_samples(payload, args.top)
-    tree = build_call_tree(payload.get("functions", []) or [], payload.get("samples", []) or [])
-    folded["hot_path"] = dominant_path(tree)
-    body = render_hot_paths(folded, tree) + "\n" + render_cpu(folded)
-    emit(args, folded, body)
+    """Hot functions, for one isolate or for all ten over one window."""
+    isolates = select_isolates(service.isolates(), args.isolate)
+    collected = collect_cpu_multi(service, isolates, args.seconds, args.period, args.top)
+    summary = summarise_isolate_cpu(collected)
+    for row in summary["isolates"]:
+        row["folded"]["hot_path"] = dominant_path(row["tree"])
+    body = render_isolate_cpu(summary, args.tree_percent)
+    # The call trees are megabytes and mean nothing outside the renderer; the
+    # folded views beside them carry everything a reader acts on.
+    data = {
+        "elapsed_s": summary["elapsed_s"],
+        "total_samples": summary["total_samples"],
+        "isolates": [
+            {key: value for key, value in row.items() if key != "tree"}
+            for row in summary["isolates"]
+        ],
+    }
+    emit(args, data, body)
 
 
 def cmd_slow(service, args):
     """Long-running outlier hunt: keep recording windows, and every time a
     block runs far longer than its own median, print it with the stack that
     was on the CPU while it ran."""
-    isolate = service.main_isolate()
+    isolate = one_isolate(service.isolates(), args.isolate, "slow")["id"]
     while True:
         try:
             window = collect_window(service, isolate, args.seconds, args.period)
         except ConnectionClosed as exc:
             print(f"[{time.strftime('%H:%M:%S')}] lost the VM service: {exc}", file=sys.stderr)
             service.reconnect(args.url, wait=max(args.interval, 30.0))
-            isolate = service.main_isolate()
+            # Isolate ids do not survive a restart: re-resolve, never reuse.
+            isolate = one_isolate(service.isolates(), args.isolate, "slow")["id"]
             continue
         cpu = window["cpu"]
         functions = cpu.get("functions", []) or []
@@ -1969,9 +2393,19 @@ def cmd_timeline(service, args):
 
 
 def cmd_memory(service, args):
-    usage, allocations = collect_memory(service, service.main_isolate())
-    classes = summarise_allocations(allocations, args.top)
-    emit(args, {"usage": usage, "classes": classes}, render_memory(usage, classes))
+    isolates = select_isolates(service.isolates(), args.isolate)
+    sections = []
+    body = []
+    for isolate in isolates:
+        usage, allocations = collect_memory(service, isolate["id"])
+        classes = summarise_allocations(allocations, args.top)
+        label = isolate_label(isolate)
+        sections.append({"isolate": label, "usage": usage, "classes": classes})
+        if len(isolates) > 1:
+            body.append(f"## {label} · `{isolate['id']}`\n")
+        body.append(render_memory(usage, classes))
+    data = sections[0] if len(sections) == 1 else {"isolates": sections}
+    emit(args, data, "\n".join(body))
 
 
 def cmd_system(service, args):
@@ -2027,6 +2461,7 @@ def cmd_report(service, args):
         proc_match=tuple(args.proc_match.split(",")),
         docker_client=None if args.no_docker else DockerClient(args.docker_socket),
         pg_url=None if args.no_database else (args.pg_url or pg_url_from_env()),
+        isolate_selector=args.isolate,
     )
     data["url"] = args.url
     emit(args, data, render_report(data))
@@ -2049,6 +2484,7 @@ def cmd_watch(service, args):
                 proc_match=tuple(args.proc_match.split(",")),
                 docker_client=None if args.no_docker else DockerClient(args.docker_socket),
                 pg_url=None if args.no_database else (args.pg_url or pg_url_from_env()),
+                isolate_selector=args.isolate,
             )
             data["url"] = args.url
             emit(args, data, render_report(data))
@@ -2091,6 +2527,26 @@ def build_parser():
         "--interval", type=float, default=300.0, help="watch: seconds between reports"
     )
     parser.add_argument("--top", type=int, default=25, help="rows per table")
+    parser.add_argument(
+        "--tree-percent",
+        type=float,
+        default=2.0,
+        help=(
+            "cpu: prune call-tree branches below this share of samples "
+            "(default 2). Lower it to find where a cost that the flat tables "
+            "show is real reaches the tree by many small paths."
+        ),
+    )
+    parser.add_argument(
+        "--isolate",
+        default=None,
+        help=(
+            "which isolate(s) to profile: a name substring, a VM isolate "
+            "number, `#index`, `all`, or a comma-separated union of those. "
+            "Default: `main`, as before. `cpu` and `memory` take many; "
+            "`report`, `slow` and `watch` need exactly one. `status` lists them."
+        ),
+    )
     parser.add_argument(
         "--period", type=int, default=250, help="CPU sampling period in microseconds"
     )
