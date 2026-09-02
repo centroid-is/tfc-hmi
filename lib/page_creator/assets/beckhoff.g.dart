@@ -18,7 +18,8 @@ BeckhoffCX5010Config _$BeckhoffCX5010ConfigFromJson(
       ..techDocId = (json['techDocId'] as num?)?.toInt()
       ..plcAssetKey = json['plcAssetKey'] as String?
       ..subdevices =
-          const AssetListConverter().fromJson(json['subdevices'] as List);
+          const AssetListConverter().fromJson(json['subdevices'] as List)
+      ..nameOrId = json['nameOrId'] as String? ?? '';
 
 Map<String, dynamic> _$BeckhoffCX5010ConfigToJson(
         BeckhoffCX5010Config instance) =>
@@ -31,6 +32,7 @@ Map<String, dynamic> _$BeckhoffCX5010ConfigToJson(
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
       'subdevices': const AssetListConverter().toJson(instance.subdevices),
+      'nameOrId': instance.nameOrId,
     };
 
 const _$TextPosEnumMap = {
@@ -53,7 +55,8 @@ BeckhoffCX5340Config _$BeckhoffCX5340ConfigFromJson(
       ..techDocId = (json['techDocId'] as num?)?.toInt()
       ..plcAssetKey = json['plcAssetKey'] as String?
       ..subdevices =
-          const AssetListConverter().fromJson(json['subdevices'] as List);
+          const AssetListConverter().fromJson(json['subdevices'] as List)
+      ..nameOrId = json['nameOrId'] as String? ?? '';
 
 Map<String, dynamic> _$BeckhoffCX5340ConfigToJson(
         BeckhoffCX5340Config instance) =>
@@ -66,6 +69,7 @@ Map<String, dynamic> _$BeckhoffCX5340ConfigToJson(
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
       'subdevices': const AssetListConverter().toJson(instance.subdevices),
+      'nameOrId': instance.nameOrId,
     };
 
 BeckhoffEK1100Config _$BeckhoffEK1100ConfigFromJson(
@@ -80,7 +84,8 @@ BeckhoffEK1100Config _$BeckhoffEK1100ConfigFromJson(
       ..techDocId = (json['techDocId'] as num?)?.toInt()
       ..plcAssetKey = json['plcAssetKey'] as String?
       ..subdevices =
-          const AssetListConverter().fromJson(json['subdevices'] as List);
+          const AssetListConverter().fromJson(json['subdevices'] as List)
+      ..nameOrId = json['nameOrId'] as String? ?? '';
 
 Map<String, dynamic> _$BeckhoffEK1100ConfigToJson(
         BeckhoffEK1100Config instance) =>
@@ -93,6 +98,7 @@ Map<String, dynamic> _$BeckhoffEK1100ConfigToJson(
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
       'subdevices': const AssetListConverter().toJson(instance.subdevices),
+      'nameOrId': instance.nameOrId,
     };
 
 BeckhoffEL1008Config _$BeckhoffEL1008ConfigFromJson(
@@ -208,7 +214,8 @@ BeckhoffEL9187Config _$BeckhoffEL9187ConfigFromJson(
       ..text = json['text'] as String?
       ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
       ..techDocId = (json['techDocId'] as num?)?.toInt()
-      ..plcAssetKey = json['plcAssetKey'] as String?;
+      ..plcAssetKey = json['plcAssetKey'] as String?
+      ..nameOrId = json['nameOrId'] as String? ?? '';
 
 Map<String, dynamic> _$BeckhoffEL9187ConfigToJson(
         BeckhoffEL9187Config instance) =>
@@ -220,6 +227,7 @@ Map<String, dynamic> _$BeckhoffEL9187ConfigToJson(
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
+      'nameOrId': instance.nameOrId,
     };
 
 BeckhoffEL9186Config _$BeckhoffEL9186ConfigFromJson(
@@ -355,7 +363,8 @@ BeckhoffEL6070Config _$BeckhoffEL6070ConfigFromJson(
       ..text = json['text'] as String?
       ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
       ..techDocId = (json['techDocId'] as num?)?.toInt()
-      ..plcAssetKey = json['plcAssetKey'] as String?;
+      ..plcAssetKey = json['plcAssetKey'] as String?
+      ..nameOrId = json['nameOrId'] as String? ?? '';
 
 Map<String, dynamic> _$BeckhoffEL6070ConfigToJson(
         BeckhoffEL6070Config instance) =>
@@ -367,6 +376,7 @@ Map<String, dynamic> _$BeckhoffEL6070ConfigToJson(
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
+      'nameOrId': instance.nameOrId,
     };
 
 BeckhoffEK1110Config _$BeckhoffEK1110ConfigFromJson(
@@ -379,7 +389,8 @@ BeckhoffEK1110Config _$BeckhoffEK1110ConfigFromJson(
       ..text = json['text'] as String?
       ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
       ..techDocId = (json['techDocId'] as num?)?.toInt()
-      ..plcAssetKey = json['plcAssetKey'] as String?;
+      ..plcAssetKey = json['plcAssetKey'] as String?
+      ..nameOrId = json['nameOrId'] as String? ?? '';
 
 Map<String, dynamic> _$BeckhoffEK1110ConfigToJson(
         BeckhoffEK1110Config instance) =>
@@ -391,6 +402,7 @@ Map<String, dynamic> _$BeckhoffEK1110ConfigToJson(
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
+      'nameOrId': instance.nameOrId,
     };
 
 BeckhoffCU2508Config _$BeckhoffCU2508ConfigFromJson(
