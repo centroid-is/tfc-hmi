@@ -86,6 +86,39 @@ reference only. The organizing idea:
   map update and one `ValueNotifier` per changed key; everything else
   (encode-once fan-out, conflation, handles) exists to keep that path flat.
 
+**Amendment, 2026-09-02 (Phase 8): there is a fourth way to run the contract
+suite, and it is the one that catches what the other three cannot.**
+
+The three legs above are all *in-process fakes at the bottom*: leg 1 fakes the
+device clients, legs 2 and 3 fake the plant behind a real socket. Nothing in
+that list ever asks a real PLC anything, which is a gap the design did not
+notice because it assumed a real PLC needs hardware. It does not — this
+repository has been standing an **in-process open62541 `Server`** up in CI on
+ubuntu and macOS on every push since long before this project
+(`tfc_dart/test/subscription_inactivity_test.dart`), and nobody had noticed.
+
+  4. against `LocalStateMan` over a **real in-process OPC UA server**, dialled
+     through a real `opc.tcp` socket, with the byte-level fault proxy available
+     unchanged in front of it (there is no TLS record layer at
+     `MessageSecurityMode.NONE`, so a mid-frame cut measures the right layer).
+
+This is the only leg that can prove a value carries **the PLC's own quality and
+the PLC's own source instant** rather than the gateway's opinion of them, and
+it is the leg the whole `StatusCode`/`sourceTimestamp` branch of the binding was
+made for. Phase 8 runs it two ways: the shared `UpstreamLink` group against the
+adapter, and one end-to-end file (`tfc_relay_local/test/end_to_end_test.dart`)
+that composes `LocalStateMan` under `RelayServer` and reads the result on a real
+`RemoteStateMan`. Measured there: a sample stamped by the server and held on the
+wire for 1500 ms arrives on the panel reporting an instant **1541 ms** in the
+past, identical to the millisecond to the instant the gateway holds. An adapter
+that stamps arrival collapses that to 29 ms, which is how the leg is known to
+bite.
+
+The cost is honest and belongs next to the benefit: this leg needs a native
+build and binds listening ports, so it lives in `tfc_relay_local` — a package
+with its own CI step — and never in `tfc_relay_server`, which keeps zero native
+dependencies precisely so its own suite stays in front of a `pub get`.
+
 ## 2. Transport: WebSocket, and why the alternatives lost
 
 Full matrix in the transport report; scores /65 against the requirements:
@@ -510,6 +543,57 @@ a deletion: the computation moves into `LocalStateMan` and the overlay goes.
 first day, because `PIPE.` is a reserved *prefix* and a plant keymapping
 claiming a name inside it is rejected.
 
+#### The roster as shipped (amended 2026-09-02, Phase 8)
+
+**The merge was not a deletion.** The paragraph above expected one producer;
+there are three, and the reason is that `PIPE.*` names three different kinds of
+fact. A shared instance cannot answer a per-socket question — it would report
+whichever panel last asked — and a per-session overlay cannot answer a
+per-plant one without every panel opening its own PLC subscription. So the
+overlay stayed, in the same chain slot, with a different job.
+
+| Group | Home | Keys | Why there |
+|---|---|---|---|
+| 1 — pipe-wide | `LocalStateMan` (`PIPE.connected` only) | `connected` | The plant half of the bit: true when **every** configured link is connected. `rtt_ms`, `data_age_ms`, `reconnects` and `epoch` remain client-minted facts with no gateway producer — see the note below |
+| 2 — per session | `SessionHealthStateMan`, one instance per connection, in the chain slot the certificate overlay held | `link_degraded`, `effective_hz`, `egress_kbps`, `pending_keys`, `dropped_hold_ticks`, `event_loop_lag_ms` | Every one is a fact about **one socket**: this panel's send buffer, this panel's tick rate, this panel's egress |
+| 3 — per upstream link | `LocalStateMan` | `upstream.<alias>.` × `connected`, `state`, `last_error`, `epoch`, `birth_count`, `last_death_at`, `data_age_ms` | Builders, not constants: the alias comes out of a configuration file, so there is no finite roster of them |
+| 4 — gateway self | `tfc_relay_server` | `cert.days_to_expiry` | See below |
+
+**The certificate key stayed server-side, and that is a deviation from the
+phase's own ruling with a written reason.** It is a property of the leaf *this
+process is serving* — read one line after `useCertificateChain` from the same
+`TlsConfig` — not a property of the plant. Moving it would either strand the
+sixteen socket-level cases that judge it or put an open62541 native build in
+front of a package that has no native dependencies. The **name** is a single
+constant in `PipeKeys`, so there is still exactly one spelling, and the
+reserved-list entry is unaffected.
+
+**The two rosters are disjoint and that is asserted, not assumed.** The
+per-session overlay deliberately does not claim `PIPE.connected`: the socket
+half and the plant half are different facts, and one silently shadowing the
+other in the chain is the failure the disjointness assertion exists to catch.
+Measured over a real socket: six per-session names, eight plant-side names, no
+intersection.
+
+**Both flavours are ordinary keys, over a real socket.** A panel subscribes to
+`PIPE.upstream.<alias>.connected` and to its own `PIPE.link_degraded` in the
+same `subscribe` call it uses for a motor speed; both arrive in the snapshot,
+both appear in `keys`, and there is still no health method on the wire.
+
+**A health key legitimately reads `false` before it reads `true`.** The plant
+publishes its link keys the instant it has *asked* a link to connect, and the
+OPC UA adapter does not report `connected` until the wrapper's heartbeat has
+proved the data plane works. A panel that dials during that window is told the
+truth twice. Anything asserting on these keys reads them inside a window, never
+on the instant.
+
+**HLTH-03 is per key, at boot.** A keymapping entry claiming a name inside the
+prefix is refused, named once in the boot log, and absent from `keys`, from
+`browse` and from `readMany` (which answers `errorConfig` for it, so a
+diagnostics page renders a fault rather than a blank cell). Every other entry
+on the same file is served: a gateway that refused to boot over one bad
+mapping line would be a plant that is dark over one bad mapping line.
+
 ## 5. Backpressure and slow links
 
 Design rule from notes §7.6, confirmed by every precedent (Lightstreamer,
@@ -628,6 +712,29 @@ shortened saturation window — each with its number.
    default `allowMalformed: true`, S7 NUL padding stripped. Fixtures use
    "Þorskflök í raspi", not "test string 1" (locally verified:
    `utf8.decode` throws on Latin-1 þ/ý/æ bytes).
+
+   **Outcome, 2026-09-02 (Phase 8): one half landed, the other is a named
+   follow-up.** The rule was scoped at the discuss gate to "build the
+   Modbus/M2400 half now; the OPC UA half rides the binding branch if cheap,
+   else a documented follow-up". It was not cheap, so:
+
+   * **Landed** — per-server encoding is configured per **alias**
+     (`string_encoding: utf8|latin1` on each link, derived into one table so
+     there is not a second list of aliases to get out of step) and applied to
+     the byte-carrying protocols. A string that cannot be decoded under the
+     configured encoding fails **that one tag** with quality
+     `uncertainEncoding` (260) — never a poll cycle, which is the standing
+     constraint this rule serves.
+   * **Follow-up, binding-side** — the OPC UA half. Raw bytes are not
+     reachable through `ClientApi`: the binding decodes before Dart sees
+     anything (`extensions.dart:416`, `types/payloads.dart:235,266`), and the
+     branch this phase took did not make a hook there cheap. **It is not a
+     plant-visible gap**, which is worth writing down so nobody escalates it:
+     SVN's OPC UA servers are TwinCAT and emit UTF-8, and the plant's likely
+     Latin-1 sources — the M2400 weighers and the Saia-over-Modbus box erector
+     — are both covered by the half that landed. It is filed against the
+     binding rather than worked around here, because a workaround would mean
+     re-encoding a decoded `String` back to bytes and guessing which ones.
 5. **Binary stays available but unused.** If ever needed: CBOR (RFC 8949 +
    typed arrays; the Dart msgpack ecosystem is dead). The measured JSON cost
    — 0.42% of one core at the impossible worst case — says never bother;
