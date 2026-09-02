@@ -295,6 +295,20 @@ final class ConnectionSupervisor {
   /// it hands back from a refused dial.
   String? get lastDownReason => _lastDownReason;
 
+  /// The reason of the last `gateway_stalled` resync this connection was told,
+  /// or null. See [RemoteStateMan.stallReason].
+  ///
+  /// **Stub (09-07 task 2): returns null.** 09-07 task 3 carries the reason and
+  /// duration up through [_resynced] instead of decoding and dropping them, and
+  /// this getter reads the field that fix records. Until then the surface
+  /// exists so the F22b arm compiles and fails for the right reason — the
+  /// gateway told this client the reason and nothing here remembers it.
+  String? get stallReason => null;
+
+  /// The absolute stalledMs of that resync, or null. See
+  /// [RemoteStateMan.stalledMs]. Stub (09-07 task 2): returns null.
+  int? get stalledMs => null;
+
   /// Every delay this supervisor has waited before an attempt, in order.
   ///
   /// The schedule's observable history. `reconnect_test.dart` asserts the band
