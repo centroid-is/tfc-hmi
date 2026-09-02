@@ -639,6 +639,60 @@ class TimelineBlocksTest(unittest.TestCase):
         payload = {"traceEvents": [{"ph": "E", "name": "PAINT", "ts": 9, "pid": 1, "tid": 1}]}
         self.assertEqual(hp.timeline_blocks(payload), [])
 
+    def test_the_profilers_own_getcpusamples_block_is_excluded(self):
+        # The regression this guards: `clearCpuSamples` and `getCpuSamples` are
+        # isolate-scoped RPCs, so the isolate handles them inside a
+        # `DartIsolate::HandleMessage` block. Reported as app behaviour they
+        # look like one ~750 ms isolate stall per run, at any window length.
+        payload = {
+            "traceEvents": [
+                # clearCpuSamples, handled before the window opened.
+                {"ph": "B", "name": "DartIsolate::HandleMessage", "ts": 500, "pid": 1, "tid": 7},
+                {"ph": "E", "name": "DartIsolate::HandleMessage", "ts": 700, "pid": 1, "tid": 7},
+                # A real message inside the window.
+                {"ph": "B", "name": "DartIsolate::HandleMessage", "ts": 2000, "pid": 1, "tid": 7},
+                {"ph": "E", "name": "DartIsolate::HandleMessage", "ts": 2300, "pid": 1, "tid": 7},
+                # getCpuSamples, handled after the window closed.
+                {"ph": "B", "name": "DartIsolate::HandleMessage", "ts": 9500, "pid": 1, "tid": 7},
+                {"ph": "E", "name": "DartIsolate::HandleMessage", "ts": 9500 + 750_000, "pid": 1, "tid": 7},
+            ]
+        }
+        blocks = hp.timeline_blocks(payload, window=(1000, 9000))
+        self.assertEqual([(b["ts"], b["dur"]) for b in blocks], [(2000, 300)])
+
+    def test_no_window_keeps_everything(self):
+        payload = {
+            "traceEvents": [
+                {"ph": "X", "name": "GC", "ts": 5, "dur": 50, "pid": 1, "tid": 7},
+            ]
+        }
+        self.assertEqual(len(hp.timeline_blocks(payload, window=None)), 1)
+
+    def test_complete_events_outside_the_window_are_dropped(self):
+        payload = {
+            "traceEvents": [
+                {"ph": "X", "name": "GC", "ts": 5, "dur": 50, "pid": 1, "tid": 7},
+                {"ph": "X", "name": "GC", "ts": 5000, "dur": 50, "pid": 1, "tid": 7},
+            ]
+        }
+        blocks = hp.timeline_blocks(payload, window=(1000, 9000))
+        self.assertEqual([b["ts"] for b in blocks], [5000])
+
+    def test_a_half_open_window_still_filters(self):
+        # `getVMTimelineMicros` answered once but not the other time.
+        payload = {
+            "traceEvents": [
+                {"ph": "X", "name": "GC", "ts": 5, "dur": 50, "pid": 1, "tid": 7},
+                {"ph": "X", "name": "GC", "ts": 5000, "dur": 50, "pid": 1, "tid": 7},
+            ]
+        }
+        self.assertEqual(
+            [b["ts"] for b in hp.timeline_blocks(payload, window=(1000, None))], [5000]
+        )
+        self.assertEqual(
+            [b["ts"] for b in hp.timeline_blocks(payload, window=(None, 1000))], [5]
+        )
+
 
 class SlowBlockTest(unittest.TestCase):
     def blocks(self, name, durations, tid=1):
@@ -1121,6 +1175,46 @@ class TimelineSummaryTest(unittest.TestCase):
 
     def test_empty_payload(self):
         self.assertEqual(hp.summarise_timeline({}), [])
+
+    def test_a_block_outside_the_window_does_not_reach_the_summary(self):
+        # Same false positive as TimelineBlocksTest, on the aggregate table:
+        # the 750 ms `getCpuSamples` reply must not become the `max ms` column.
+        payload = {
+            "traceEvents": [
+                {"ph": "B", "name": "DartIsolate::HandleMessage", "ts": 2000, "pid": 1, "tid": 7},
+                {"ph": "E", "name": "DartIsolate::HandleMessage", "ts": 2300, "pid": 1, "tid": 7},
+                {"ph": "B", "name": "DartIsolate::HandleMessage", "ts": 9500, "pid": 1, "tid": 7},
+                {"ph": "E", "name": "DartIsolate::HandleMessage", "ts": 9500 + 750_000, "pid": 1, "tid": 7},
+            ]
+        }
+        rows = {r["name"]: r for r in hp.summarise_timeline(payload, window=(1000, 9000))}
+        self.assertEqual(rows["DartIsolate::HandleMessage"]["count"], 1)
+        self.assertEqual(rows["DartIsolate::HandleMessage"]["max_us"], 300)
+
+
+class PostgresSectionTest(unittest.TestCase):
+    def test_every_query_is_rendered(self):
+        # A section added to PG_QUERIES but not to render_postgres's key list
+        # is collected and then silently dropped.
+        rendered_keys = set()
+        for const in hp.render_postgres.__code__.co_consts:
+            if isinstance(const, tuple) and "scans" in const:
+                rendered_keys = set(const)
+        self.assertEqual(set(hp.PG_QUERIES) - rendered_keys, set())
+
+    def test_the_scan_counts_are_labelled_cumulative(self):
+        # The counter is a lifetime total. A title that does not say so was
+        # read as a rate, and the rate that implied was ~8x the real one.
+        self.assertIn("cumulative", hp.PG_QUERIES["scans"][0])
+
+    def test_a_failing_section_does_not_take_the_others_with_it(self):
+        sections = {
+            "scans": {"title": "Scans", "headers": ["t"], "rows": [["alarm_history"]]},
+            "counters": {"title": "Counters", "error": "no such column"},
+        }
+        rendered = hp.render_postgres(sections)
+        self.assertIn("alarm_history", rendered)
+        self.assertIn("no such column", rendered)
 
 
 class AllocationSummaryTest(unittest.TestCase):
