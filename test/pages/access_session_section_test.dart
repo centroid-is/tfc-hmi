@@ -28,10 +28,13 @@ class _RecordingSink implements AuditSink {
 }
 
 ({Widget app, FakeEditorPreferences prefs, _RecordingSink sink})
-    _shell({int? storedMinutes}) {
+    _shell({int? storedMinutes, bool neverExpires = false}) {
   final prefs = FakeEditorPreferences();
   if (storedMinutes != null) {
     prefs.setInt(kAccessInactivityMinutesPrefKey, storedMinutes);
+  }
+  if (neverExpires) {
+    prefs.setBool(kAccessInactivityDisabledPrefKey, true);
   }
   final sink = _RecordingSink();
   final app = ProviderScope(
@@ -116,6 +119,53 @@ void main() {
             'write a value it knows is out of range');
     expect(shell.sink.rows, isEmpty);
     expect(find.text(kAccessSessionRangeError), findsOneWidget);
+  });
+
+  testWidgets('the never-expire switch writes the flag, disables the minutes '
+      'and records the change', (tester) async {
+    final shell = _shell();
+    await tester.pumpWidget(shell.app);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(kAccessSessionNeverExpireSwitchKey));
+    await tester.pumpAndSettle();
+
+    expect(
+        await shell.prefs.getBool(kAccessInactivityDisabledPrefKey), isTrue);
+    final row = shell.sink.rows.single;
+    expect(row.itemKey, kAccessInactivityDisabledPrefKey);
+    expect(row.oldValue, 'false');
+    expect(row.newValue, 'true');
+
+    final field = tester.widget<TextField>(
+        find.byKey(kAccessSessionTimeoutFieldKey));
+    expect(field.enabled, isFalse,
+        reason: 'a minutes value under a disabled expiry is a number that '
+            'does nothing — greying it is what says so');
+  });
+
+  testWidgets('turning never-expire back off restores the minutes',
+      (tester) async {
+    final shell = _shell(storedMinutes: 30, neverExpires: true);
+    await tester.pumpWidget(shell.app);
+    await tester.pumpAndSettle();
+
+    final switchBefore = tester.widget<Switch>(find.descendant(
+        of: find.byKey(kAccessSessionNeverExpireSwitchKey),
+        matching: find.byType(Switch)));
+    expect(switchBefore.value, isTrue, reason: 'seeded from the stored flag');
+
+    await tester.tap(find.byKey(kAccessSessionNeverExpireSwitchKey));
+    await tester.pumpAndSettle();
+
+    expect(
+        await shell.prefs.getBool(kAccessInactivityDisabledPrefKey), isFalse);
+    expect(shell.sink.rows.single.newValue, 'false');
+    final field = tester.widget<TextField>(
+        find.byKey(kAccessSessionTimeoutFieldKey));
+    expect(field.enabled, isTrue);
+    expect(field.controller!.text, '30',
+        reason: 'the stored minutes survive the round trip untouched');
   });
 
   testWidgets('an unchanged value writes nothing', (tester) async {

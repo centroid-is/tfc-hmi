@@ -45,6 +45,10 @@ const Key kAccessSessionTimeoutFieldKey = Key('access-session-timeout-field');
 /// The save affordance.
 const Key kAccessSessionSaveKey = Key('access-session-save');
 
+/// The never-expire switch row.
+const Key kAccessSessionNeverExpireSwitchKey =
+    Key('access-session-never-expire');
+
 /// The card's title.
 const String kAccessSessionTitle = 'Session';
 
@@ -54,6 +58,14 @@ const String kAccessSessionTitle = 'Session';
 const String kAccessSessionExplainer =
     'Signed-in sessions end after this much inactivity — on this station '
     'only. Each station keeps its own value.';
+
+/// The switch's label and its consequence, in one breath. "Until an
+/// explicit sign-out" is the load-bearing half: it is what the panel-PC
+/// commissioning wants and what a shared human panel must hear as a warning.
+const String kAccessSessionNeverExpireLabel = 'Sessions never expire';
+const String kAccessSessionNeverExpireNote =
+    'For panels that live signed in as a station account. Anyone at this '
+    'panel keeps the signed-in permissions until an explicit sign-out.';
 
 /// Shown when the input cannot be saved.
 final String kAccessSessionRangeError =
@@ -71,6 +83,13 @@ final accessSessionAuditProvider =
     audit: RefAuditSink(ref),
   ),
 );
+
+/// The stored minutes, independent of the disable flag: what the field
+/// shows under a greyed expiry, because it is what turning the switch back
+/// off restores.
+final _storedMinutesProvider = FutureProvider<int?>((ref) => ref
+    .watch(localPreferencesProvider)
+    .getInt(kAccessInactivityMinutesPrefKey));
 
 /// One card: the effective timeout in a bounded minutes field, saved on the
 /// button or the keyboard's done action.
@@ -97,6 +116,50 @@ class _AccessSessionSectionState extends ConsumerState<AccessSessionSection> {
     super.dispose();
   }
 
+  Future<void> _setNeverExpires(bool next) async {
+    final prefs = ref.read(localPreferencesProvider);
+    final current =
+        await prefs.getBool(kAccessInactivityDisabledPrefKey) ?? false;
+    if (next == current) return;
+    await prefs.setBool(kAccessInactivityDisabledPrefKey, next);
+    await _recordChange(
+      itemKey: kAccessInactivityDisabledPrefKey,
+      oldValue: current.toString(),
+      newValue: next.toString(),
+    );
+    ref.invalidate(inactivityTimeoutProvider);
+  }
+
+  Future<void> _recordChange({
+    required String itemKey,
+    required String oldValue,
+    required String newValue,
+  }) async {
+    final bridge = ref.read(accessSessionAuditProvider);
+    final session =
+        ref.read(accessSessionProvider).valueOrNull ?? kSessionWhileLoading;
+    try {
+      await bridge.audit.record(AuditRecord(
+        at: DateTime.now(),
+        who: session.user?.username ?? 'anonymous',
+        station: bridge.station,
+        roleName: session.roleName,
+        surface: AccessSurface.pref.wireName,
+        itemKey: itemKey,
+        member: null,
+        oldValue: oldValue,
+        newValue: newValue,
+        groupRequired: AccessGroup.operate.name,
+        allowed: true,
+        actionId: newActionId(),
+      ));
+    } on Object {
+      // A trail that is down is logged loudly elsewhere; it must not undo a
+      // saved change or leave the operator staring at a control that
+      // "failed".
+    }
+  }
+
   Future<void> _save() async {
     final parsed = int.tryParse(_minutes.text.trim());
     if (parsed == null ||
@@ -109,36 +172,27 @@ class _AccessSessionSectionState extends ConsumerState<AccessSessionSection> {
     }
     setState(() => _error = null);
 
+    // Null when expiry is disabled — unreachable from the UI (the field is
+    // greyed) but not from a race; the stored minutes are then the honest
+    // "old".
     final effective = await ref.read(inactivityTimeoutProvider.future);
-    if (parsed == effective.inMinutes) return;
+    final oldMinutes = effective?.inMinutes ??
+        await ref
+            .read(localPreferencesProvider)
+            .getInt(kAccessInactivityMinutesPrefKey) ??
+        kDefaultInactivityTimeout.inMinutes;
+    if (parsed == oldMinutes) return;
 
     final prefs = ref.read(localPreferencesProvider);
     await prefs.setInt(kAccessInactivityMinutesPrefKey, parsed);
 
     // The row before the invalidate, same order the guards use: the evidence
     // of the change must exist even if the re-arm never happens.
-    final bridge = ref.read(accessSessionAuditProvider);
-    final session =
-        ref.read(accessSessionProvider).valueOrNull ?? kSessionWhileLoading;
-    try {
-      await bridge.audit.record(AuditRecord(
-        at: DateTime.now(),
-        who: session.user?.username ?? 'anonymous',
-        station: bridge.station,
-        roleName: session.roleName,
-        surface: AccessSurface.pref.wireName,
-        itemKey: kAccessInactivityMinutesPrefKey,
-        member: null,
-        oldValue: effective.inMinutes.toString(),
-        newValue: parsed.toString(),
-        groupRequired: AccessGroup.operate.name,
-        allowed: true,
-        actionId: newActionId(),
-      ));
-    } on Object {
-      // A trail that is down is logged loudly elsewhere; it must not undo a
-      // saved timeout or leave the operator staring at a field that "failed".
-    }
+    await _recordChange(
+      itemKey: kAccessInactivityMinutesPrefKey,
+      oldValue: oldMinutes.toString(),
+      newValue: parsed.toString(),
+    );
 
     ref.invalidate(inactivityTimeoutProvider);
   }
@@ -148,12 +202,21 @@ class _AccessSessionSectionState extends ConsumerState<AccessSessionSection> {
     final theme = Theme.of(context);
     final effective = ref.watch(inactivityTimeoutProvider);
 
-    if (!_seeded) {
-      final minutes = effective.valueOrNull?.inMinutes;
-      if (minutes != null) {
-        _minutes.text = minutes.toString();
-        _seeded = true;
-      }
+    // Resolved (with a value or the disabled null) versus still loading:
+    // the switch and the field both seed from the answer, not its absence.
+    final resolved = effective.hasValue;
+    final neverExpires = resolved && effective.value == null;
+
+    final stored = ref.watch(_storedMinutesProvider);
+    if (!_seeded && resolved && stored.hasValue) {
+      // Under a disabled expiry the effective answer is null; the field then
+      // shows the STORED minutes — the number the switch restores — and only
+      // a station that never chose one shows the default.
+      final minutes = effective.value?.inMinutes ??
+          stored.value ??
+          kDefaultInactivityTimeout.inMinutes;
+      _minutes.text = minutes.toString();
+      _seeded = true;
     }
 
     return Card(
@@ -174,6 +237,7 @@ class _AccessSessionSectionState extends ConsumerState<AccessSessionSection> {
                   child: TextField(
                     key: kAccessSessionTimeoutFieldKey,
                     controller: _minutes,
+                    enabled: !neverExpires,
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     decoration: InputDecoration(
@@ -187,10 +251,21 @@ class _AccessSessionSectionState extends ConsumerState<AccessSessionSection> {
                 const SizedBox(width: 12),
                 FilledButton.tonal(
                   key: kAccessSessionSaveKey,
-                  onPressed: _save,
+                  onPressed: neverExpires ? null : _save,
                   child: const Text('Save'),
                 ),
               ],
+            ),
+            const SizedBox(height: 8),
+            SwitchListTile(
+              key: kAccessSessionNeverExpireSwitchKey,
+              contentPadding: EdgeInsets.zero,
+              title: Text(kAccessSessionNeverExpireLabel,
+                  style: theme.textTheme.bodyMedium),
+              subtitle: Text(kAccessSessionNeverExpireNote,
+                  style: theme.textTheme.bodySmall),
+              value: neverExpires,
+              onChanged: resolved ? (next) => _setNeverExpires(next) : null,
             ),
           ],
         ),

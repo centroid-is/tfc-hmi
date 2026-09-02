@@ -41,6 +41,16 @@ const String kAccessSessionPrefKey = 'access.session';
 const String kAccessInactivityMinutesPrefKey =
     'access.inactivity_timeout_minutes';
 
+/// The device-local flag that disables the inactivity expiry entirely.
+///
+/// The panel-PC case: a station commissioned to live signed in as its area
+/// account. A **separate boolean**, never an inferred zero — the timeout
+/// provider deliberately clamps a stray `0` up to the one-minute floor so a
+/// hand-edited store cannot accidentally mint immortal sessions; disabling
+/// expiry has to be said out loud.
+const String kAccessInactivityDisabledPrefKey =
+    'access.inactivity_timeout_disabled';
+
 /// Spec §5: fifteen minutes unless the station says otherwise.
 const Duration kDefaultInactivityTimeout = Duration(minutes: 15);
 
@@ -137,8 +147,22 @@ String stationName(Ref ref) {
 /// it clamps — a stray `0` or a fat-fingered `10000` in the preferences file
 /// must not turn into a session that ends instantly or never.
 @Riverpod(keepAlive: true)
-Future<Duration> inactivityTimeout(Ref ref) async {
+Future<Duration?> inactivityTimeout(Ref ref) async {
   final local = ref.watch(localPreferencesProvider);
+
+  // The explicit off-switch, checked first: null means "no expiry at all",
+  // and only this flag may produce it. An unreadable flag falls through to
+  // the minutes — a mangled store must not widen the elevation window.
+  try {
+    if (await local.getBool(kAccessInactivityDisabledPrefKey) ?? false) {
+      return null;
+    }
+  } on Object catch (e) {
+    Logger().w(
+      'Could not read "$kAccessInactivityDisabledPrefKey" — treating the '
+      'expiry as enabled: $e',
+    );
+  }
 
   int? minutes;
   try {
@@ -274,7 +298,8 @@ class AccessSessionController extends _$AccessSessionController {
   /// from a timer callback without reaching back into `ref`.
   String _station = 'unknown';
 
-  Duration _timeout = kDefaultInactivityTimeout;
+  /// Null since the disable flag: no expiry, no monitor, no countdown.
+  Duration? _timeout = kDefaultInactivityTimeout;
 
   PreferencesApi? _local;
 
@@ -306,7 +331,11 @@ class AccessSessionController extends _$AccessSessionController {
     // A fresh monitor per build, because `timeout` is final on it and the
     // configured value may have changed. The previous one is already gone:
     // Riverpod runs `onDispose` before a rebuild.
-    _monitor = InactivityMonitor(timeout: _timeout);
+    final timeout = _timeout;
+    // No monitor at all when expiry is off: _attach guards on `monitor ==
+    // null` the same way it guards on `expiresAt == null`, so nothing arms
+    // and nothing can fire.
+    _monitor = timeout == null ? null : InactivityMonitor(timeout: timeout);
 
     final session = await _restoreOrAnonymous(repo);
 
@@ -474,7 +503,9 @@ class AccessSessionController extends _$AccessSessionController {
     final session = AccessSession(
       user: user,
       groups: role.groups,
-      expiresAt: clock.now().add(_timeout),
+      // Null timeout means a session that never expires — the panel-PC
+      // station account.
+      expiresAt: _timeout == null ? null : clock.now().add(_timeout!),
     );
 
     await _record(AuditRecord.login(
@@ -528,7 +559,9 @@ class AccessSessionController extends _$AccessSessionController {
     final extended = AccessSession(
       user: session.user,
       groups: session.groups,
-      expiresAt: clock.now().add(_timeout),
+      // Null timeout means a session that never expires — the panel-PC
+      // station account.
+      expiresAt: _timeout == null ? null : clock.now().add(_timeout!),
     );
     state = AsyncData(extended);
     unawaited(_persist(extended));
@@ -656,7 +689,9 @@ class AccessSessionController extends _$AccessSessionController {
       roleName: current.roleName,
       actionId: newActionId(),
       at: clock.now(),
-      reason: 'No activity for ${_timeout.inMinutes} minute(s).',
+      // Only reachable from the monitor's expiry, which exists only while a
+      // timeout does.
+      reason: 'No activity for ${_timeout!.inMinutes} minute(s).',
     ));
     await _clearStoredSession();
     await _toAnonymous();

@@ -110,7 +110,7 @@ final stationNameProvider = Provider<String>.internal(
 @Deprecated('Will be removed in 3.0. Use Ref instead')
 // ignore: unused_element
 typedef StationNameRef = ProviderRef<String>;
-String _$inactivityTimeoutHash() => r'ee34f9ed5b04956ab833c747ab766c513ea7aeb9';
+String _$inactivityTimeoutHash() => r'bb2aaa4f6d37bed5dd16e8ebf475494c0f181e7d';
 
 /// How long a quiet panel keeps an elevated session, from device-local
 /// preferences.
@@ -127,7 +127,7 @@ String _$inactivityTimeoutHash() => r'ee34f9ed5b04956ab833c747ab766c513ea7aeb9';
 ///
 /// Copied from [inactivityTimeout].
 @ProviderFor(inactivityTimeout)
-final inactivityTimeoutProvider = FutureProvider<Duration>.internal(
+final inactivityTimeoutProvider = FutureProvider<Duration?>.internal(
   inactivityTimeout,
   name: r'inactivityTimeoutProvider',
   debugGetCreateSourceHash: const bool.fromEnvironment('dart.vm.product')
@@ -139,7 +139,7 @@ final inactivityTimeoutProvider = FutureProvider<Duration>.internal(
 
 @Deprecated('Will be removed in 3.0. Use Ref instead')
 // ignore: unused_element
-typedef InactivityTimeoutRef = FutureProviderRef<Duration>;
+typedef InactivityTimeoutRef = FutureProviderRef<Duration?>;
 String _$firstUserWindowOpenHash() =>
     r'012d3f6639bb65e570675d77fcd0f22bbc122c22';
 
@@ -170,7 +170,7 @@ final firstUserWindowOpenProvider = FutureProvider<bool>.internal(
 // ignore: unused_element
 typedef FirstUserWindowOpenRef = FutureProviderRef<bool>;
 String _$accessSessionControllerHash() =>
-    r'e91ecfbd6316f738b57c494788073d1508a50eec';
+    r'0f098b0b48288af2118f071429fe5fc63085fc8f';
 
 /// Who is standing at this panel, and what they may do.
 ///

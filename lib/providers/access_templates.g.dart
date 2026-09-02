@@ -7,7 +7,7 @@ part of 'access_templates.dart';
 // **************************************************************************
 
 String _$tagBindingResolverHash() =>
-    r'46a07a7abb0bc878c49298b93dbc294fc8bafd61';
+    r'9f34eda9b17e130389de45d82cdd9878bcb3cdde';
 
 /// The one live binding snapshot on the panel.
 ///
@@ -104,14 +104,13 @@ String _$accessTemplatesHash() => r'54b06df06d18a388c7c8b61aaac86d530758ae3c';
 /// write. Both go through [AccessTemplateStore], so there is one trigger and
 /// no listener to leak.
 ///
-/// ## The one place fail-open is refused
+/// ## Why a failed load keeps the previous snapshot
 ///
 /// A store throw — Postgres away mid-read — leaves the **previous snapshot in
-/// place** and only marks it stale. It does not clear it. Everywhere else in
-/// this phase the fail-open direction is the right one: an unbound key is
-/// unrestricted, an unreadable binding source is indistinguishable from no
-/// binding, and a strict default would lock the plant's controls the day the
-/// guards merged.
+/// place** and only marks it stale. It does not clear it. Since the
+/// 2026-09-02 ruling an unreadable binding source degrades to the operate
+/// floor rather than to "unrestricted", which softens the blast radius of a
+/// cleared snapshot — but only to the floor.
 ///
 /// Here it is not. Clearing the snapshot on a blink would silently unrestrict
 /// every bound key on the panel for the duration of a retry — an elevation of

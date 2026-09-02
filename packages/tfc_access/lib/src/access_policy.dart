@@ -139,6 +139,7 @@ const List<PrefAccessRule> kPrefAccessRules = <PrefAccessRule>[
   // continuously.
   (kind: PrefRuleKind.exact, match: 'access.session', group: AccessGroup.operate),
   (kind: PrefRuleKind.exact, match: 'access.inactivity_timeout_minutes', group: AccessGroup.operate),
+  (kind: PrefRuleKind.exact, match: 'access.inactivity_timeout_disabled', group: AccessGroup.operate),
 
   // ---------------------------------------------------------------------
   // exact -> administer. Server, database and machine configuration.

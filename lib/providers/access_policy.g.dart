@@ -44,9 +44,10 @@ String _$accessPolicyHash() => r'64642d9b90de9a53ef5668517cc1bfccedc53c54';
 /// this line from source.
 ///
 /// Until the first load completes the resolver is empty and `groupForTag`
-/// answers null for every key — spec §7b's fail-open half, now a bounded
-/// window rather than the shipped state. `TagBindingSnapshotState.neverLoaded`
-/// is what tells that window apart from a station with nothing bound.
+/// answers the operate floor for every key (2026-09-02 ruling) — a bounded
+/// window during which bindings that raise a key above `operate` are not yet
+/// in force. `TagBindingSnapshotState.neverLoaded` is what tells that window
+/// apart from a station with nothing bound.
 ///
 /// Copied from [accessPolicy].
 @ProviderFor(accessPolicy)

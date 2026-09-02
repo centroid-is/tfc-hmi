@@ -97,7 +97,7 @@ class _Harness {
 const String _kStation = 'test-panel';
 
 Future<_Harness> _harness({
-  Duration timeout = const Duration(minutes: 15),
+  Duration? timeout = const Duration(minutes: 15),
   Map<String, ({String password, String roleName})>? users,
   bool withDatabase = true,
 }) async {
@@ -282,6 +282,26 @@ void main() {
       });
 
       expect(h.session!.expiresAt, pinned.add(const Duration(minutes: 20)));
+    });
+
+    test('with expiry disabled, the session never expires and poke leaves it '
+        'that way', () async {
+      // The panel-PC station account: sign in once at commissioning, live
+      // signed in forever. `expiresAt: null` is the model's own "never" —
+      // `isExpiredAt` already treats it so — and _attach declines to arm a
+      // monitor for it, so there is no countdown to fire.
+      final h = await _harness(timeout: null);
+      await h.settle();
+
+      await h.notifier.signIn('jon', 'correct horse');
+      expect(h.session!.isElevated, isTrue);
+      expect(h.session!.expiresAt, isNull);
+
+      h.notifier.poke();
+      await h.settle();
+      expect(h.session!.expiresAt, isNull,
+          reason: 'an activity extension must not conjure an expiry onto a '
+              'session configured to have none');
     });
 
     test('the stored payload carries no password, hash or salt', () async {

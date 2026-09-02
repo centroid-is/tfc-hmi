@@ -137,6 +137,29 @@ void main() {
       );
     });
 
+    test('the disable flag answers null — no expiry at all', () async {
+      // The panel-PC case: a station that lives signed in as its area
+      // account. Explicitly flagged, never inferred from a zero — the
+      // zero-clamp pins below are what keep a hand-edited store from
+      // accidentally minting immortal sessions.
+      final container = _noDatabaseContainer();
+      await container
+          .read(localPreferencesProvider)
+          .setBool(kAccessInactivityDisabledPrefKey, true);
+      expect(await container.read(inactivityTimeoutProvider.future), isNull);
+    });
+
+    test('the disable flag off leaves the minutes in force', () async {
+      final container = _noDatabaseContainer();
+      final prefs = container.read(localPreferencesProvider);
+      await prefs.setBool(kAccessInactivityDisabledPrefKey, false);
+      await prefs.setInt(kAccessInactivityMinutesPrefKey, 45);
+      expect(
+        await container.read(inactivityTimeoutProvider.future),
+        const Duration(minutes: 45),
+      );
+    });
+
     test('clamps a negative value up to the one-minute floor', () async {
       final container = _noDatabaseContainer();
       await container

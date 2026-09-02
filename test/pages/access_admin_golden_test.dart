@@ -465,7 +465,7 @@ void main() {
     testWidgets('the page, elevated, with the honesty note collapsed',
         (tester) async {
       await withClock(Clock.fixed(_frozen), () async {
-        const size = Size(900, 1000);
+        const size = Size(900, 1120);
         _sizeView(tester, size);
 
         await tester.pumpWidget(_pageHost(
@@ -511,7 +511,7 @@ void main() {
     testWidgets('the Operator editor open, with the warning above the boxes',
         (tester) async {
       await withClock(Clock.fixed(_frozen), () async {
-        const size = Size(900, 1520);
+        const size = Size(900, 1640);
         _sizeView(tester, size);
 
         await tester.pumpWidget(_pageHost(
