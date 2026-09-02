@@ -656,6 +656,55 @@ void main() {
       expect(rows.map((r) => r.itemKey), ['jog']);
     });
 
+    test('an ungated write is hidden by default, like operate', () async {
+      final at = _now.subtract(const Duration(hours: 1));
+      // The convention GuardedStateMan writes for a key nobody has bound:
+      // `group_required` is the empty string, not a group name.
+      await seed(at: at, groupRequired: '', itemKey: 'lights.bathroom.mirror');
+      await seed(at: at, groupRequired: 'configure', itemKey: 'recipe');
+
+      final rows = await run(const AuditTrailFilters());
+
+      expect(rows.map((r) => r.itemKey), ['recipe'],
+          reason: 'an unbound light toggled forty times a day is the same '
+              'volume class as a jog; it belongs behind the same chip.');
+    });
+
+    test('the Operate chip brings ungated writes back with it', () async {
+      final at = _now.subtract(const Duration(hours: 1));
+      await seed(at: at, groupRequired: '', itemKey: 'lights.bathroom.mirror');
+
+      final rows = await run(AuditTrailFilters(
+          groupNames: [...kAuditTrailDefaultGroupNames, 'operate']));
+
+      expect(rows.map((r) => r.itemKey), ['lights.bathroom.mirror'],
+          reason: 'a row whose group_required is the empty string matches no '
+              "group chip's IN clause, so without this leg it is unreachable "
+              'under every normal chip combination — recorded but never '
+              'shown, which reads as "the trail missed it".');
+    });
+
+    test('the ungated leg does not resurrect auth rows the auth chip cleared',
+        () async {
+      await DriftAuditSink(db).record(AuditRecord.login(
+        who: 'admin',
+        station: 'SVN-NES-OT-CL02',
+        roleName: 'Administrator',
+        actionId: 'action-login',
+        at: _now.subtract(const Duration(hours: 1)),
+      ));
+
+      final rows = await run(AuditTrailFilters(
+        groupNames: [...kAuditTrailDefaultGroupNames, 'operate'],
+        includeAuth: false,
+      ));
+
+      expect(rows, isEmpty,
+          reason: 'auth rows also carry an empty group_required; the ungated '
+              'leg keys on surface as well, so clearing the Auth chip still '
+              'means what it says.');
+    });
+
     test('auth rows survive the default filter, interleaved with writes',
         () async {
       await seed(

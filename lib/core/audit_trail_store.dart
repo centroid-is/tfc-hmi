@@ -544,6 +544,26 @@ class AuditTrailStore {
         final groupLegs = <Expression<bool>>[
           if (query.groupNames.isNotEmpty)
             t.groupRequired.isIn(query.groupNames),
+          // ## The ungated leg
+          //
+          // A write to a key nobody has bound carries an **empty**
+          // `group_required` — `GuardedStateMan`'s convention for "not gated
+          // on a group" — so it matches no chip's IN clause and, without this
+          // leg, is unreachable under every normal chip combination:
+          // recorded faithfully and never shown, which reads as "the trail
+          // missed it" (hq-skjar, 2026-09-02: a bathroom light toggled all
+          // afternoon, five hundred rows, zero on screen).
+          //
+          // It rides the **operate** chip rather than getting a ninth one,
+          // because it is the same volume class the operate exclusion exists
+          // for: an unbound light or jog is exactly the four-hundred-rows-an-
+          // hour noise the ROADMAP hides by default. The surface clause is
+          // what keeps the auth chip meaningful — auth rows also carry an
+          // empty `group_required`, and this leg must not resurrect the
+          // sign-ins that chip just cleared.
+          if (query.groupNames.contains(AccessGroup.operate.name))
+            t.groupRequired.equals('') &
+                t.surface.equals(_auditAuthSurface).not(),
           if (query.includeAuth) t.surface.equals(_auditAuthSurface),
         ];
         if (groupLegs.isNotEmpty) {

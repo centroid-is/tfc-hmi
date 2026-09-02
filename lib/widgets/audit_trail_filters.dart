@@ -63,8 +63,8 @@ import 'fuzzy_search_bar.dart';
 /// renders in both selection states: a note that vanishes the moment you change
 /// the thing it explains cannot be read a second time.
 const String kAuditTrailOperateNote =
-    'Operate writes are hidden by default — tap the Operate chip to include '
-    'them.';
+    'Operate and ungated writes are hidden by default — tap the Operate chip '
+    'to include them.';
 
 /// The eighth chip's label. Auth rows are not a group; see [AuditGroupChips].
 const String kAuditTrailAuthChipLabel = 'Auth';
