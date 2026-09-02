@@ -29,10 +29,13 @@ import 'package:tfc/providers/preferences.dart';
 /// A stand-in for `LocalAuthProvider` that honours the same null-versus-throw
 /// contract: null for an unrecognised credential, a throw for infrastructure.
 class _FakeAuthProvider implements AuthProvider {
-  _FakeAuthProvider(this.users);
+  _FakeAuthProvider(this.users, {this.stationAccounts = const {}});
 
   /// username -> (password, roleName)
   final Map<String, ({String password, String roleName})> users;
+
+  /// Usernames flagged as station accounts (schema v8).
+  final Set<String> stationAccounts;
 
   /// When set, `authenticate` throws instead of answering — a database outage.
   bool unavailable = false;
@@ -48,7 +51,11 @@ class _FakeAuthProvider implements AuthProvider {
     if (unavailable) throw StateError('the database is unreachable');
     final cred = users[username];
     if (cred == null || cred.password != password) return null;
-    return AuthenticatedUser(username: username, roleName: cred.roleName);
+    return AuthenticatedUser(
+      username: username,
+      roleName: cred.roleName,
+      stationAccount: stationAccounts.contains(username),
+    );
   }
 }
 
@@ -99,6 +106,7 @@ const String _kStation = 'test-panel';
 Future<_Harness> _harness({
   Duration? timeout = const Duration(minutes: 15),
   Map<String, ({String password, String roleName})>? users,
+  Set<String> stationAccounts = const {},
   bool withDatabase = true,
 }) async {
   final db = AppDatabase.inMemoryForTest();
@@ -108,11 +116,13 @@ Future<_Harness> _harness({
   await db.customSelect('SELECT 1').getSingle();
 
   final repository = AccessRepository(db);
-  final auth = _FakeAuthProvider(users ??
-      {
-        'jon': (password: 'correct horse', roleName: 'Engineering'),
-        'sigga': (password: 'hunter2', roleName: 'Shift Leader'),
-      });
+  final auth = _FakeAuthProvider(
+      users ??
+          {
+            'jon': (password: 'correct horse', roleName: 'Engineering'),
+            'sigga': (password: 'hunter2', roleName: 'Shift Leader'),
+          },
+      stationAccounts: stationAccounts);
   final sink = _RecordingSink();
 
   final container = ProviderContainer(
@@ -282,6 +292,26 @@ void main() {
       });
 
       expect(h.session!.expiresAt, pinned.add(const Duration(minutes: 20)));
+    });
+
+    test('a station account signs in with no expiry even under a normal '
+        'timeout', () async {
+      // The account-level half of the panel-PC story: the freezer display's
+      // identity never expires ANYWHERE, while jon on the same panel keeps
+      // the fifteen minutes. The station-wide disable switch is the blunt
+      // sibling; this is the precise one.
+      final h = await _harness(stationAccounts: {'jon'});
+      await h.settle();
+
+      await h.notifier.signIn('jon', 'correct horse');
+      expect(h.session!.isElevated, isTrue);
+      expect(h.session!.expiresAt, isNull);
+
+      h.notifier.poke();
+      await h.settle();
+      expect(h.session!.expiresAt, isNull,
+          reason: 'an activity extension must not conjure an expiry onto a '
+              'station account');
     });
 
     test('with expiry disabled, the session never expires and poke leaves it '

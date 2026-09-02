@@ -81,12 +81,12 @@ void main() {
       }
     });
 
-    test('schema version is 7', () async {
+    test('schema version is 8', () async {
       final db = AppDatabase.inMemoryForTest();
       addTearDown(() => db.close());
       // Read off an open database rather than grepped out of the source: the
       // value the migrator actually compares `from` against.
-      expect(db.schemaVersion, 7);
+      expect(db.schemaVersion, 8);
     });
 
     test('creates the access_key_binding template_name index', () async {
@@ -330,7 +330,7 @@ void main() {
       addTearDown(() => db.close());
 
       final row = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(row.read<int>('user_version'), 7);
+      expect(row.read<int>('user_version'), 8);
     });
   });
 }

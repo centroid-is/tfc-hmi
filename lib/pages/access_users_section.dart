@@ -307,6 +307,32 @@ const Key kAccessUsersHeaderKey = Key('access-users-header');
 /// One account's row.
 Key kAccessUserRowKey(String username) => Key('access-user-row-$username');
 
+/// The station-account toggle on a user row.
+Key kAccessUserStationAccountKey(String username) =>
+    Key('access-user-station-$username');
+
+/// The two tooltips are the two states, and the ON one carries the way back.
+const String kAccessUserStationAccountOffTooltip =
+    'Make station account — sessions never expire';
+const String kAccessUserStationAccountOnTooltip =
+    'Station account — sessions never expire. Tap to make it a person again.';
+
+/// The confirm labels, named so the tests tap the same words the operator
+/// reads.
+const String kAccessUserStationAccountConfirmMake = 'Make station account';
+const String kAccessUserStationAccountConfirmRevert = 'Make it a person';
+
+String kAccessUserStationAccountTitle(String username, bool making) => making
+    ? 'Make "$username" a station account?'
+    : 'Make "$username" a person again?';
+
+String kAccessUserStationAccountMessage(bool making) => making
+    ? 'Its sessions will never expire: a panel signed in as this account '
+        'stays signed in until an explicit sign-out, across restarts. The '
+        'change is recorded.'
+    : 'Its sessions will expire on inactivity again, like any person\'s. '
+        'The change is recorded.';
+
 /// The four cells, one key each, so a test asserts the *column* rather than
 /// some text that happens to be on screen.
 Key kAccessUserNameKey(String username) => Key('access-user-name-$username');
@@ -569,7 +595,7 @@ class AccessUsersSection extends ConsumerWidget {
 const int _kNameFlex = 3;
 const int _kRoleFlex = 3;
 const int _kWhenFlex = 3;
-const double _kActionsWidth = 144;
+const double _kActionsWidth = 192;
 
 // ---------------------------------------------------------------------------
 // One row
@@ -652,6 +678,18 @@ class _UserTileState extends ConsumerState<_UserTile> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     IconButton(
+                      key: kAccessUserStationAccountKey(user.username),
+                      icon: Icon(
+                          user.stationAccount
+                              ? Icons.desktop_windows
+                              : Icons.desktop_windows_outlined,
+                          size: 18),
+                      tooltip: user.stationAccount
+                          ? kAccessUserStationAccountOnTooltip
+                          : kAccessUserStationAccountOffTooltip,
+                      onPressed: _toggleStationAccount,
+                    ),
+                    IconButton(
                       key: kAccessUserChangeRoleKey(user.username),
                       icon: const Icon(Icons.badge_outlined, size: 18),
                       tooltip: 'Change role',
@@ -722,6 +760,36 @@ class _UserTileState extends ConsumerState<_UserTile> {
     // conditional on "is this me?" is a call site that gets the comparison
     // wrong once and then holds a stale privilege forever (T-06-77).
     await _afterWrite(ref);
+  }
+
+  /// Flips the station-account flag, after a confirmation that states the
+  /// consequence in one breath. No `refreshGroupsFromRoles`: the flag is not
+  /// a permission, and the sessions it affects re-read it at their next
+  /// sign-in, not mid-flight.
+  Future<void> _toggleStationAccount() async {
+    if (_busy) return;
+    final making = !user.stationAccount;
+    final confirmed = await showConfirmDialog(
+      context: context,
+      title: kAccessUserStationAccountTitle(user.username, making),
+      message: kAccessUserStationAccountMessage(making),
+      confirmLabel: making
+          ? kAccessUserStationAccountConfirmMake
+          : kAccessUserStationAccountConfirmRevert,
+    );
+    if (!confirmed || !mounted) return;
+
+    _busy = true;
+    final wrote = await _write(
+      context,
+      ref,
+      () => widget.store.setUserStationAccount(user.username, making),
+      onRefused: _showRefusal,
+      vanished: user.username,
+    );
+    _busy = false;
+    if (!wrote) return;
+    if (mounted) setState(() => _refusal = null);
   }
 
   /// Deletes the account, after a confirmation that says the trail survives.

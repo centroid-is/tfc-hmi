@@ -505,6 +505,40 @@ class AccessAdminStore {
     await _recordAllowed(actionId, row);
   }
 
+  /// Flips [username]'s station-account flag. Requires [kAccessAdminGroup].
+  ///
+  /// The v8 attribute: a station account's sessions never expire. Not a
+  /// permission, so no lockout guard — but very much a trail matter, since
+  /// it decides whether a signed-in panel ever signs itself out.
+  Future<void> setUserStationAccount(
+    String username,
+    bool value, {
+    String origin = _operatorOrigin,
+    String? reason,
+  }) async {
+    final existing = await _repository.user(username);
+
+    AuditRecord row(AccessSession session, String actionId, bool allowed) =>
+        AuditRecord.userStationAccount(
+          who: _who(session),
+          station: _station,
+          roleName: session.roleName,
+          actionId: actionId,
+          subject: username,
+          oldValue: existing?.stationAccount ?? false,
+          newValue: value,
+          allowed: allowed,
+          reason: reason,
+          origin: origin,
+        );
+
+    final actionId = await _requireUsers(itemKey: _userStationAccount, row: row);
+
+    if (existing == null) throw UserNotFoundException(username);
+    await _repository.setStationAccount(username, value);
+    await _recordAllowed(actionId, row);
+  }
+
   /// Resets [username]'s password to [password]. Requires [kAccessAdminGroup].
   ///
   /// **The credential goes to the repository and nowhere else.** It is not
@@ -632,4 +666,5 @@ class AccessAdminStore {
   static const String _userDelete = 'user.delete';
   static const String _userRole = 'user.role';
   static const String _userPassword = 'user.password';
+  static const String _userStationAccount = 'user.station_account';
 }

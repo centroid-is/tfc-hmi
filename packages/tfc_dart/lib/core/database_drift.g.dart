@@ -6829,9 +6829,24 @@ class $AppUserTable extends AppUser with TableInfo<$AppUserTable, AppUserData> {
   late final GeneratedColumn<DateTime> lastLoginAt = GeneratedColumn<DateTime>(
       'last_login_at', aliasedName, true,
       type: DriftSqlType.dateTime, requiredDuringInsert: false);
+  static const VerificationMeta _stationAccountMeta =
+      const VerificationMeta('stationAccount');
   @override
-  List<GeneratedColumn> get $columns =>
-      [username, roleName, passwordHash, salt, createdAt, lastLoginAt];
+  late final GeneratedColumn<bool> stationAccount = GeneratedColumn<bool>(
+      'station_account', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(false));
+  @override
+  List<GeneratedColumn> get $columns => [
+        username,
+        roleName,
+        passwordHash,
+        salt,
+        createdAt,
+        lastLoginAt,
+        stationAccount
+      ];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -6880,6 +6895,12 @@ class $AppUserTable extends AppUser with TableInfo<$AppUserTable, AppUserData> {
           lastLoginAt.isAcceptableOrUnknown(
               data['last_login_at']!, _lastLoginAtMeta));
     }
+    if (data.containsKey('station_account')) {
+      context.handle(
+          _stationAccountMeta,
+          stationAccount.isAcceptableOrUnknown(
+              data['station_account']!, _stationAccountMeta));
+    }
     return context;
   }
 
@@ -6901,6 +6922,8 @@ class $AppUserTable extends AppUser with TableInfo<$AppUserTable, AppUserData> {
           .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
       lastLoginAt: attachedDatabase.typeMapping
           .read(DriftSqlType.dateTime, data['${effectivePrefix}last_login_at']),
+      stationAccount: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}station_account'])!,
     );
   }
 
@@ -6928,13 +6951,23 @@ class AppUserData extends DataClass implements Insertable<AppUserData> {
   final String salt;
   final DateTime createdAt;
   final DateTime? lastLoginAt;
+
+  /// Schema v8: a station account's sessions never expire.
+  ///
+  /// The panel-PC flag — the freezer display signs in once as its area
+  /// account and lives signed in. On the USER rather than the station so a
+  /// human signing in on the same panel keeps the inactivity window. The
+  /// default is false: every account is a person until somebody says
+  /// otherwise, and the v8 migration backfills existing rows the same way.
+  final bool stationAccount;
   const AppUserData(
       {required this.username,
       required this.roleName,
       required this.passwordHash,
       required this.salt,
       required this.createdAt,
-      this.lastLoginAt});
+      this.lastLoginAt,
+      required this.stationAccount});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -6946,6 +6979,7 @@ class AppUserData extends DataClass implements Insertable<AppUserData> {
     if (!nullToAbsent || lastLoginAt != null) {
       map['last_login_at'] = Variable<DateTime>(lastLoginAt);
     }
+    map['station_account'] = Variable<bool>(stationAccount);
     return map;
   }
 
@@ -6959,6 +6993,7 @@ class AppUserData extends DataClass implements Insertable<AppUserData> {
       lastLoginAt: lastLoginAt == null && nullToAbsent
           ? const Value.absent()
           : Value(lastLoginAt),
+      stationAccount: Value(stationAccount),
     );
   }
 
@@ -6972,6 +7007,7 @@ class AppUserData extends DataClass implements Insertable<AppUserData> {
       salt: serializer.fromJson<String>(json['salt']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       lastLoginAt: serializer.fromJson<DateTime?>(json['lastLoginAt']),
+      stationAccount: serializer.fromJson<bool>(json['stationAccount']),
     );
   }
   @override
@@ -6984,6 +7020,7 @@ class AppUserData extends DataClass implements Insertable<AppUserData> {
       'salt': serializer.toJson<String>(salt),
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'lastLoginAt': serializer.toJson<DateTime?>(lastLoginAt),
+      'stationAccount': serializer.toJson<bool>(stationAccount),
     };
   }
 
@@ -6993,7 +7030,8 @@ class AppUserData extends DataClass implements Insertable<AppUserData> {
           String? passwordHash,
           String? salt,
           DateTime? createdAt,
-          Value<DateTime?> lastLoginAt = const Value.absent()}) =>
+          Value<DateTime?> lastLoginAt = const Value.absent(),
+          bool? stationAccount}) =>
       AppUserData(
         username: username ?? this.username,
         roleName: roleName ?? this.roleName,
@@ -7001,6 +7039,7 @@ class AppUserData extends DataClass implements Insertable<AppUserData> {
         salt: salt ?? this.salt,
         createdAt: createdAt ?? this.createdAt,
         lastLoginAt: lastLoginAt.present ? lastLoginAt.value : this.lastLoginAt,
+        stationAccount: stationAccount ?? this.stationAccount,
       );
   AppUserData copyWithCompanion(AppUserCompanion data) {
     return AppUserData(
@@ -7013,6 +7052,9 @@ class AppUserData extends DataClass implements Insertable<AppUserData> {
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       lastLoginAt:
           data.lastLoginAt.present ? data.lastLoginAt.value : this.lastLoginAt,
+      stationAccount: data.stationAccount.present
+          ? data.stationAccount.value
+          : this.stationAccount,
     );
   }
 
@@ -7024,14 +7066,15 @@ class AppUserData extends DataClass implements Insertable<AppUserData> {
           ..write('passwordHash: $passwordHash, ')
           ..write('salt: $salt, ')
           ..write('createdAt: $createdAt, ')
-          ..write('lastLoginAt: $lastLoginAt')
+          ..write('lastLoginAt: $lastLoginAt, ')
+          ..write('stationAccount: $stationAccount')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(
-      username, roleName, passwordHash, salt, createdAt, lastLoginAt);
+  int get hashCode => Object.hash(username, roleName, passwordHash, salt,
+      createdAt, lastLoginAt, stationAccount);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -7041,7 +7084,8 @@ class AppUserData extends DataClass implements Insertable<AppUserData> {
           other.passwordHash == this.passwordHash &&
           other.salt == this.salt &&
           other.createdAt == this.createdAt &&
-          other.lastLoginAt == this.lastLoginAt);
+          other.lastLoginAt == this.lastLoginAt &&
+          other.stationAccount == this.stationAccount);
 }
 
 class AppUserCompanion extends UpdateCompanion<AppUserData> {
@@ -7051,6 +7095,7 @@ class AppUserCompanion extends UpdateCompanion<AppUserData> {
   final Value<String> salt;
   final Value<DateTime> createdAt;
   final Value<DateTime?> lastLoginAt;
+  final Value<bool> stationAccount;
   final Value<int> rowid;
   const AppUserCompanion({
     this.username = const Value.absent(),
@@ -7059,6 +7104,7 @@ class AppUserCompanion extends UpdateCompanion<AppUserData> {
     this.salt = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.lastLoginAt = const Value.absent(),
+    this.stationAccount = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   AppUserCompanion.insert({
@@ -7068,6 +7114,7 @@ class AppUserCompanion extends UpdateCompanion<AppUserData> {
     required String salt,
     required DateTime createdAt,
     this.lastLoginAt = const Value.absent(),
+    this.stationAccount = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : username = Value(username),
         roleName = Value(roleName),
@@ -7081,6 +7128,7 @@ class AppUserCompanion extends UpdateCompanion<AppUserData> {
     Expression<String>? salt,
     Expression<DateTime>? createdAt,
     Expression<DateTime>? lastLoginAt,
+    Expression<bool>? stationAccount,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -7090,6 +7138,7 @@ class AppUserCompanion extends UpdateCompanion<AppUserData> {
       if (salt != null) 'salt': salt,
       if (createdAt != null) 'created_at': createdAt,
       if (lastLoginAt != null) 'last_login_at': lastLoginAt,
+      if (stationAccount != null) 'station_account': stationAccount,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -7101,6 +7150,7 @@ class AppUserCompanion extends UpdateCompanion<AppUserData> {
       Value<String>? salt,
       Value<DateTime>? createdAt,
       Value<DateTime?>? lastLoginAt,
+      Value<bool>? stationAccount,
       Value<int>? rowid}) {
     return AppUserCompanion(
       username: username ?? this.username,
@@ -7109,6 +7159,7 @@ class AppUserCompanion extends UpdateCompanion<AppUserData> {
       salt: salt ?? this.salt,
       createdAt: createdAt ?? this.createdAt,
       lastLoginAt: lastLoginAt ?? this.lastLoginAt,
+      stationAccount: stationAccount ?? this.stationAccount,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -7134,6 +7185,9 @@ class AppUserCompanion extends UpdateCompanion<AppUserData> {
     if (lastLoginAt.present) {
       map['last_login_at'] = Variable<DateTime>(lastLoginAt.value);
     }
+    if (stationAccount.present) {
+      map['station_account'] = Variable<bool>(stationAccount.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -7149,6 +7203,7 @@ class AppUserCompanion extends UpdateCompanion<AppUserData> {
           ..write('salt: $salt, ')
           ..write('createdAt: $createdAt, ')
           ..write('lastLoginAt: $lastLoginAt, ')
+          ..write('stationAccount: $stationAccount, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -7967,7 +8022,9 @@ class AccessTemplateTableData extends DataClass
 
   /// JSON object of member name -> `AccessGroup` name, written by
   /// `AccessTemplate.encodeRules()` and read back by
-  /// `AccessTemplate.decodeRules()`. An empty member name means the whole key.
+  /// `AccessTemplate.decodeRules()`. The member name `'*'` (`kWholeKeyMember`)
+  /// means the whole key — deliberately not a legal IEC 61131-3 identifier, so
+  /// it cannot collide with a real member.
   ///
   /// A member no rule mentions is **unrestricted** — tags fail open, which is
   /// why the key repository has to make unbound keys findable at a glance:
@@ -13992,6 +14049,7 @@ typedef $$AppUserTableCreateCompanionBuilder = AppUserCompanion Function({
   required String salt,
   required DateTime createdAt,
   Value<DateTime?> lastLoginAt,
+  Value<bool> stationAccount,
   Value<int> rowid,
 });
 typedef $$AppUserTableUpdateCompanionBuilder = AppUserCompanion Function({
@@ -14001,6 +14059,7 @@ typedef $$AppUserTableUpdateCompanionBuilder = AppUserCompanion Function({
   Value<String> salt,
   Value<DateTime> createdAt,
   Value<DateTime?> lastLoginAt,
+  Value<bool> stationAccount,
   Value<int> rowid,
 });
 
@@ -14046,6 +14105,10 @@ class $$AppUserTableFilterComposer
 
   ColumnFilters<DateTime> get lastLoginAt => $composableBuilder(
       column: $table.lastLoginAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get stationAccount => $composableBuilder(
+      column: $table.stationAccount,
+      builder: (column) => ColumnFilters(column));
 
   $$AppRoleTableFilterComposer get roleName {
     final $$AppRoleTableFilterComposer composer = $composerBuilder(
@@ -14093,6 +14156,10 @@ class $$AppUserTableOrderingComposer
   ColumnOrderings<DateTime> get lastLoginAt => $composableBuilder(
       column: $table.lastLoginAt, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<bool> get stationAccount => $composableBuilder(
+      column: $table.stationAccount,
+      builder: (column) => ColumnOrderings(column));
+
   $$AppRoleTableOrderingComposer get roleName {
     final $$AppRoleTableOrderingComposer composer = $composerBuilder(
         composer: this,
@@ -14137,6 +14204,9 @@ class $$AppUserTableAnnotationComposer
 
   GeneratedColumn<DateTime> get lastLoginAt => $composableBuilder(
       column: $table.lastLoginAt, builder: (column) => column);
+
+  GeneratedColumn<bool> get stationAccount => $composableBuilder(
+      column: $table.stationAccount, builder: (column) => column);
 
   $$AppRoleTableAnnotationComposer get roleName {
     final $$AppRoleTableAnnotationComposer composer = $composerBuilder(
@@ -14188,6 +14258,7 @@ class $$AppUserTableTableManager extends RootTableManager<
             Value<String> salt = const Value.absent(),
             Value<DateTime> createdAt = const Value.absent(),
             Value<DateTime?> lastLoginAt = const Value.absent(),
+            Value<bool> stationAccount = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               AppUserCompanion(
@@ -14197,6 +14268,7 @@ class $$AppUserTableTableManager extends RootTableManager<
             salt: salt,
             createdAt: createdAt,
             lastLoginAt: lastLoginAt,
+            stationAccount: stationAccount,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -14206,6 +14278,7 @@ class $$AppUserTableTableManager extends RootTableManager<
             required String salt,
             required DateTime createdAt,
             Value<DateTime?> lastLoginAt = const Value.absent(),
+            Value<bool> stationAccount = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               AppUserCompanion.insert(
@@ -14215,6 +14288,7 @@ class $$AppUserTableTableManager extends RootTableManager<
             salt: salt,
             createdAt: createdAt,
             lastLoginAt: lastLoginAt,
+            stationAccount: stationAccount,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0

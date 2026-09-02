@@ -10,6 +10,26 @@ void main() {
     displayName: 'Guðrún',
   );
 
+  group('station accounts', () {
+    test('the flag defaults to false — every account is a person until '
+        'somebody says otherwise', () {
+      const user = AuthenticatedUser(username: 'jon', roleName: 'Engineering');
+      expect(user.stationAccount, isFalse);
+    });
+
+    test('the flag participates in equality', () {
+      const person =
+          AuthenticatedUser(username: 'freezer', roleName: 'Operator');
+      const panel = AuthenticatedUser(
+          username: 'freezer', roleName: 'Operator', stationAccount: true);
+      expect(person == panel, isFalse,
+          reason: 'flipping the flag is a real change to the identity');
+      expect(panel,
+          const AuthenticatedUser(
+              username: 'freezer', roleName: 'Operator', stationAccount: true));
+    });
+  });
+
   group('anonymous', () {
     test('has no user, is not elevated, and never expires', () {
       final session = AccessSession.anonymous({AccessGroup.operate});

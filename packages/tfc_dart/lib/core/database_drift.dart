@@ -122,6 +122,16 @@ class AppUser extends Table {
 
   DateTimeColumn get createdAt => dateTime()();
   DateTimeColumn get lastLoginAt => dateTime().nullable()();
+
+  /// Schema v8: a station account's sessions never expire.
+  ///
+  /// The panel-PC flag — the freezer display signs in once as its area
+  /// account and lives signed in. On the USER rather than the station so a
+  /// human signing in on the same panel keeps the inactivity window. The
+  /// default is false: every account is a person until somebody says
+  /// otherwise, and the v8 migration backfills existing rows the same way.
+  BoolColumn get stationAccount =>
+      boolean().withDefault(const Constant(false))();
 }
 
 /// The human-action audit trail: append-only, never pruned.
@@ -451,7 +461,7 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
   }
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   /// The `audit_entry` indexes, created outside Drift because Drift's
   /// `@TableIndex` cannot express `DESC` and every one of these is a
@@ -717,6 +727,41 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
                   'CREATE TABLE IF NOT EXISTS access_template (name TEXT PRIMARY KEY, rules TEXT NOT NULL, updated_at TEXT NOT NULL)');
               await m.database.customStatement(
                   'CREATE TABLE IF NOT EXISTS access_key_binding (key_name TEXT PRIMARY KEY, template_name TEXT NOT NULL, updated_at TEXT NOT NULL)');
+            }
+          }
+          // Schema v8: `app_user.station_account` — a station account's
+          // sessions never expire. Existing rows backfill to FALSE: every
+          // account created before v8 is a person.
+          if (from < 8) {
+            if (native) {
+              // Idempotent by inspection, because SQLite has no `ADD COLUMN
+              // IF NOT EXISTS`: a database below v6 just had the table
+              // created by `m.createTable`, which always builds the LATEST
+              // shape, so the column can already be there — and adding it
+              // again aborts the whole migration. Checked against the actual
+              // table rather than against `from`, so the guard keeps holding
+              // however the table got its shape.
+              final cols = await m.database
+                  .customSelect("PRAGMA table_info('app_user')")
+                  .get();
+              final present =
+                  cols.any((r) => r.read<String>('name') == 'station_account');
+              if (!present) {
+                await m.addColumn(appUser, appUser.stationAccount);
+              }
+            } else {
+              // Unconditional on Postgres: the v6 arm's raw DDL string is
+              // frozen at its v6 shape, so even a below-v6 database arrives
+              // here without the column — and `IF NOT EXISTS` absorbs the
+              // rerun either way.
+              // PostgreSQL: `IF NOT EXISTS` for the same shared-database
+              // reason as the v6 and v7 arms — several stations run this on
+              // one database and the second one through must not abort. The
+              // same standing caveat as those arms applies: no test executes
+              // this statement; what stands behind it is the SQLite arm's
+              // test and this string's parity with the drift column.
+              await m.database.customStatement(
+                  'ALTER TABLE app_user ADD COLUMN IF NOT EXISTS station_account BOOLEAN NOT NULL DEFAULT FALSE');
             }
             await _createAccessBindingIndexes(m);
           }

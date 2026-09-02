@@ -413,6 +413,40 @@ class AuditRecord {
   ///
   /// `user.role` with a [member] of `jon` reads correctly in the trail viewer's
   /// generic row, which is why the username is here and not in the itemKey.
+  /// A station-account flip: `user.station_account`, subject in `member`,
+  /// the booleans in the value columns. Same shape as [AuditRecord.userRole]
+  /// because it is the same kind of change — an attribute of an account that
+  /// widens or narrows what a panel can do unattended.
+  factory AuditRecord.userStationAccount({
+    required String who,
+    required String station,
+    required String roleName,
+    required String actionId,
+    required String subject,
+    required bool oldValue,
+    required bool newValue,
+    required bool allowed,
+    DateTime? at,
+    String? reason,
+    String origin = 'operator',
+  }) =>
+      AuditRecord(
+        at: at ?? clock.now(),
+        who: who,
+        station: station,
+        roleName: roleName,
+        surface: _adminSurface,
+        itemKey: 'user.station_account',
+        member: subject,
+        oldValue: oldValue.toString(),
+        newValue: newValue.toString(),
+        groupRequired: AccessGroup.users.name,
+        allowed: allowed,
+        origin: origin,
+        actionId: actionId,
+        reason: reason,
+      );
+
   factory AuditRecord.userRole({
     required String who,
     required String station,

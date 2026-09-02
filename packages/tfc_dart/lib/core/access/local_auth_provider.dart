@@ -180,6 +180,7 @@ class LocalAuthProvider implements AuthProvider {
     return AuthenticatedUser(
       username: row.username,
       roleName: row.roleName,
+      stationAccount: row.stationAccount,
     );
   }
 }

@@ -142,6 +142,7 @@ AppUserData _user(
       salt: 'not-a-salt',
       createdAt: createdAt,
       lastLoginAt: lastLoginAt,
+      stationAccount: false,
     );
 
 /// The roster, in the order the repository returns it: by username.

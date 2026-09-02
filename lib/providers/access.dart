@@ -503,9 +503,12 @@ class AccessSessionController extends _$AccessSessionController {
     final session = AccessSession(
       user: user,
       groups: role.groups,
-      // Null timeout means a session that never expires — the panel-PC
-      // station account.
-      expiresAt: _timeout == null ? null : clock.now().add(_timeout!),
+      // Never-expiring two ways: the station-wide disable (null timeout) or
+      // the account's own v8 flag. The flag wins even under a normal
+      // timeout — the freezer display's identity does not time out anywhere.
+      expiresAt: (_timeout == null || user.stationAccount)
+          ? null
+          : clock.now().add(_timeout!),
     );
 
     await _record(AuditRecord.login(
@@ -559,9 +562,12 @@ class AccessSessionController extends _$AccessSessionController {
     final extended = AccessSession(
       user: session.user,
       groups: session.groups,
-      // Null timeout means a session that never expires — the panel-PC
-      // station account.
-      expiresAt: _timeout == null ? null : clock.now().add(_timeout!),
+      // A session with no expiry — the station-wide disable or a station
+      // account — has nothing to extend, and an activity extension must not
+      // conjure one onto it.
+      expiresAt: (_timeout == null || session.expiresAt == null)
+          ? null
+          : clock.now().add(_timeout!),
     );
     state = AsyncData(extended);
     unawaited(_persist(extended));

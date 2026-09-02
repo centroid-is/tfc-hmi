@@ -765,6 +765,18 @@ class AccessRepository {
   /// Refuses trip route (b) — moving the last `users` holder onto a role that
   /// does not grant it — via [_requireAUsersHolderRemains], after checking that
   /// the target role exists and inside the same transaction as the write.
+  /// Flips the v8 station-account flag. Throws [UserNotFoundException].
+  ///
+  /// No lockout guard, deliberately: the flag is not a permission — it only
+  /// changes whether the account's sessions expire — so no flip can take the
+  /// last `users` holder away.
+  Future<void> setStationAccount(String username, bool value) async {
+    final updated = await (db.update(db.appUser)
+          ..where((t) => t.username.equals(username)))
+        .write(AppUserCompanion(stationAccount: Value(value)));
+    if (updated == 0) throw UserNotFoundException(username);
+  }
+
   Future<void> setRole(String username, String roleName) async {
     await db.transaction(() async {
       final existing = await (db.select(db.appUser)

@@ -17,6 +17,7 @@ class AuthenticatedUser {
     required this.username,
     required this.roleName,
     String? displayName,
+    this.stationAccount = false,
   }) : _displayName = displayName;
 
   /// The `AppUser` primary key.
@@ -27,6 +28,13 @@ class AuthenticatedUser {
   final String roleName;
 
   final String? _displayName;
+
+  /// Schema v8: this identity is a panel, not a person, and its sessions
+  /// never expire. Set per ACCOUNT so the freezer display's login outlives
+  /// every restart while a human on the same panel keeps the inactivity
+  /// window. Defaults to false — every account is a person until somebody
+  /// says otherwise.
+  final bool stationAccount;
 
   /// What to show the operator. Falls back to [username] when nothing better
   /// is known, so the app bar never renders an empty elevation badge.
@@ -39,10 +47,12 @@ class AuthenticatedUser {
       other is AuthenticatedUser &&
           other.username == username &&
           other.roleName == roleName &&
-          other.displayName == displayName;
+          other.displayName == displayName &&
+          other.stationAccount == stationAccount;
 
   @override
-  int get hashCode => Object.hash(username, roleName, displayName);
+  int get hashCode =>
+      Object.hash(username, roleName, displayName, stationAccount);
 
   @override
   String toString() => 'AuthenticatedUser($username as $roleName)';

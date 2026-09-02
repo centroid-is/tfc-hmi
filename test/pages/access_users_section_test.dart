@@ -195,6 +195,14 @@ class _RecordingStore extends AccessAdminStore {
   }
 
   @override
+  Future<void> setUserStationAccount(String username, bool value,
+      {String origin = 'operator', String? reason}) async {
+    calls.add('setUserStationAccount:$username:$value');
+    return super.setUserStationAccount(username, value,
+        origin: origin, reason: reason);
+  }
+
+  @override
   Future<void> setUserRole(String username, String roleName,
       {String origin = 'operator', String? reason}) async {
     calls.add('setUserRole:$username:$roleName');
@@ -605,6 +613,47 @@ void main() {
         expect(find.byKey(kAccessUserRowKey(name)), findsOneWidget);
       }
       expect(cell(tester, kAccessUserRoleKey('cato')), 'Engineering');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Station account
+  // -------------------------------------------------------------------------
+
+  group('station account', () {
+    testWidgets('the toggle flips the flag through the store and the row '
+        'follows', (tester) async {
+      await makeUser('freezer', 'Shift Leader');
+      await pumpSection(tester, overrides());
+
+      await tester.tap(find.byKey(kAccessUserStationAccountKey('freezer')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(kAccessUserStationAccountConfirmMake));
+      await tester.pumpAndSettle();
+
+      expect(store!.calls, contains('setUserStationAccount:freezer:true'));
+      // The roster refreshed from the repository, so the row now renders the
+      // on-state affordance — the one whose tooltip offers the way back.
+      expect(
+          tester
+              .widget<IconButton>(
+                  find.byKey(kAccessUserStationAccountKey('freezer')))
+              .tooltip,
+          kAccessUserStationAccountOnTooltip);
+    });
+
+    testWidgets('cancelling the confirmation writes nothing', (tester) async {
+      await makeUser('freezer', 'Shift Leader');
+      await pumpSection(tester, overrides());
+
+      await tester.tap(find.byKey(kAccessUserStationAccountKey('freezer')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(
+          store!.calls.where((c) => c.startsWith('setUserStationAccount')),
+          isEmpty);
     });
   });
 

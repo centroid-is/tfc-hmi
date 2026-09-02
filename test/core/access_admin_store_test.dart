@@ -632,6 +632,27 @@ void main() {
       expect(row.newValue, 'Maintenance');
     });
 
+    test('setUserStationAccount records user.station_account with the flip',
+        () async {
+      await repository.createUser(
+          username: 'freezer', password: 'pw2', roleName: 'Shift Leader');
+      repository.calls.clear();
+      final store = buildStore();
+
+      await store.setUserStationAccount('freezer', true);
+
+      final row = sink.rows.single;
+      expect(row.itemKey, 'user.station_account');
+      expect(row.member, 'freezer');
+      expect(row.oldValue, 'false');
+      expect(row.newValue, 'true');
+      expect(
+          (await repository.listUsers())
+              .singleWhere((u) => u.username == 'freezer')
+              .stationAccount,
+          isTrue);
+    });
+
     test('setUserPassword records user.password and nothing about the password',
         () async {
       const secret = 'zXq7-never-in-a-row';
@@ -751,6 +772,15 @@ void main() {
       await expectGated(
           'user.role', (s) => s.setUserRole('bob', 'Maintenance'));
       expect((await repository.listUsers()).single.roleName, 'Shift Leader');
+    });
+
+    test('setUserStationAccount', () async {
+      await repository.createUser(
+          username: 'freezer', password: 'pw', roleName: 'Shift Leader');
+      repository.calls.clear();
+      await expectGated('user.station_account',
+          (s) => s.setUserStationAccount('freezer', true));
+      expect((await repository.listUsers()).single.stationAccount, isFalse);
     });
 
     test('setUserPassword', () async {
