@@ -39,6 +39,11 @@ enum _TableSortOrder { newestFirst, oldestFirst }
 class _HistoryTablePaneState extends ConsumerState<HistoryTablePane> {
   _TableSortOrder _sortOrder = _TableSortOrder.newestFirst;
 
+  /// True when the visible rows cross a calendar-day boundary, so the
+  /// Timestamp column must carry the date — HH:mm:ss alone made a multi-day
+  /// range unreadable (every midnight looked like a rewind).
+  bool _showDates = false;
+
   // Cache processed data to avoid recalculation
   List<Map<String, dynamic>>? _cachedTableRows;
   List<List<TimeseriesData<dynamic>>>? _lastProcessedData;
@@ -269,6 +274,9 @@ class _HistoryTablePaneState extends ConsumerState<HistoryTablePane> {
       setState(() {
         _cachedTableRows = tableRows;
         _lastProcessedData = lists;
+        // ordered is sorted, so the ends bound the whole set.
+        _showDates = ordered.isNotEmpty &&
+            !_sameCalendarDay(ordered.first, ordered.last);
       });
     }
 
@@ -427,11 +435,16 @@ class _HistoryTablePaneState extends ConsumerState<HistoryTablePane> {
     );
   }
 
+  static bool _sameCalendarDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
   String _formatTimestamp(DateTime ts) {
-    // Cache formatted strings to avoid repeated formatting
-    return '${ts.hour.toString().padLeft(2, '0')}:'
+    final time = '${ts.hour.toString().padLeft(2, '0')}:'
         '${ts.minute.toString().padLeft(2, '0')}:'
         '${ts.second.toString().padLeft(2, '0')}';
+    if (!_showDates) return time;
+    return '${ts.year}-${ts.month.toString().padLeft(2, '0')}-'
+        '${ts.day.toString().padLeft(2, '0')} $time';
   }
 
   static String _fmt(dynamic v) {

@@ -231,18 +231,43 @@ KeyTreeNode _buildKeyTree(List<String> keys) {
 // -----------------------------------------------------------------------------
 // Main Page
 // -----------------------------------------------------------------------------
-class HistoryViewPage extends ConsumerStatefulWidget {
+class HistoryViewPage extends StatelessWidget {
   const HistoryViewPage({super.key});
 
   @override
-  ConsumerState<HistoryViewPage> createState() => _HistoryViewPageState();
+  Widget build(BuildContext context) {
+    return const BaseScaffold(title: 'History', body: HistoryViewBody());
+  }
 }
 
-class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
+/// The page body without [BaseScaffold], so tests can pump it inside a plain
+/// [MaterialApp] — the scaffold needs a live router, which is why the old
+/// monolithic page was only ever tested through hand-copied layout replicas.
+class HistoryViewBody extends ConsumerStatefulWidget {
+  const HistoryViewBody({
+    super.key,
+    this.initialRealtime = true,
+    this.initialRange,
+  });
+
+  /// Test hooks: goldens need a fixed range — every timestamp the page
+  /// renders otherwise derives from DateTime.now() and churns per run.
+  final bool initialRealtime;
+  final DateTimeRange? initialRange;
+
+  @override
+  ConsumerState<HistoryViewBody> createState() => _HistoryViewBodyState();
+}
+
+class _HistoryViewBodyState extends ConsumerState<HistoryViewBody> {
   String _search = '';
   final _selected = <String>{};
   bool _realtime = true;
   DateTimeRange? _range;
+
+  /// Non-null when [_range] came from a quick preset; the chip then shows
+  /// the preset's name instead of two full timestamps.
+  String? _rangePresetLabel;
   SavedHistoryView? _activeView;
   bool _onlyCollected = true;
 
@@ -269,6 +294,8 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
   @override
   void initState() {
     super.initState();
+    _realtime = widget.initialRealtime;
+    _range = widget.initialRange;
     _updateGraphConfigs();
     _updateKeyConfigs();
   }
@@ -307,11 +334,9 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
 
   @override
   Widget build(BuildContext context) {
-    return BaseScaffold(
-      title: 'History',
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Row(
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Left pane: Key search + tree (now properly recursive)
@@ -387,8 +412,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
                 ],
               ),
             ),
-          ],
-        ),
+        ],
       ),
     );
   }
@@ -529,6 +553,11 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        // Saved views first: opening one is the everyday path, picking keys
+        // by hand is setup work. The dropdown used to sit below the tree,
+        // where a tall key list pushed it out of sight.
+        _buildViewSelector(context),
+        const SizedBox(height: 8),
         // Search
         TextField(
           decoration: const InputDecoration(
@@ -550,7 +579,6 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
               selected: _onlyCollected,
               onSelected: (v) => setState(() => _onlyCollected = v),
             ),
-            Chip(label: Text('Selected: ${_selected.length}')),
           ],
         ),
         const SizedBox(height: 8),
@@ -612,6 +640,15 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
                 expandedPaths: _expandedPaths,
                 onToggleFolder: (path) {
                   setState(() {
+                    // "Expand all" is the __ALL__ sentinel; the first
+                    // individual toggle afterwards materialises it into the
+                    // real folder set, otherwise the sentinel keeps every
+                    // folder forced open and collapsing one does nothing.
+                    if (_expandedPaths.contains('__ALL__')) {
+                      _expandedPaths
+                        ..remove('__ALL__')
+                        ..addAll(_folderPaths(root, 'root'));
+                    }
                     if (_expandedPaths.contains(path)) {
                       _expandedPaths.remove(path);
                     } else {
@@ -638,8 +675,17 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
         ),
 
         const Divider(height: 16),
-        // View management
-        Consumer(
+        _buildSelectedKeys(context),
+        const SizedBox(height: 8),
+        _buildBottomButtons(context, canSave),
+        if (dbAsync.isLoading) const SizedBox(height: 8),
+        if (dbAsync.isLoading) const LinearProgressIndicator(minHeight: 2),
+      ],
+    );
+  }
+
+  Widget _buildViewSelector(BuildContext context) {
+    return Consumer(
           builder: (context, ref, _) {
             final viewsAsync = ref.watch(savedViewsProvider);
             return viewsAsync.when(
@@ -737,8 +783,13 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
               error: (e, _) => Text('Views err: $e'),
             );
           },
-        ),
-        const SizedBox(height: 8),
+    );
+  }
+
+  Widget _buildBottomButtons(BuildContext context, bool canSave) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
         Row(
           children: [
             Expanded(
@@ -778,10 +829,68 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
             ],
           ),
         ],
-        if (dbAsync.isLoading) const SizedBox(height: 8),
-        if (dbAsync.isLoading) const LinearProgressIndicator(minHeight: 2),
       ],
     );
+  }
+
+  /// The selected keys as removable chips — what is plotted stays visible
+  /// and deletable even when search or the collected filter hides the key
+  /// in the tree.
+  Widget _buildSelectedKeys(BuildContext context) {
+    final theme = Theme.of(context);
+    if (_selected.isEmpty) {
+      return Text(
+        'No keys selected',
+        style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+      );
+    }
+    final keys = _selected.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Selected (${_selected.length})',
+            style: theme.textTheme.titleSmall),
+        const SizedBox(height: 4),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 140),
+          child: SingleChildScrollView(
+            child: Wrap(
+              spacing: 4,
+              runSpacing: 4,
+              children: [
+                for (final key in keys)
+                  Tooltip(
+                    message: key,
+                    child: InputChip(
+                      label: Text(key.split('.').last),
+                      deleteIcon: const Icon(Icons.close, size: 16),
+                      visualDensity: VisualDensity.compact,
+                      onDeleted: () {
+                        setState(() {
+                          _selected.remove(key);
+                          _updateKeyConfigs();
+                        });
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Set<String> _folderPaths(KeyTreeNode node, String path) {
+    final out = <String>{};
+    if (node.isFolder) {
+      out.add(path);
+      for (final child in node.children.values) {
+        out.addAll(_folderPaths(child, '$path/${child.name}'));
+      }
+    }
+    return out;
   }
 
   // Top controls (right pane header)
@@ -826,6 +935,28 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
               constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
             ),
 
+          // ── Where a newly ticked key lands ──
+          // With several graphs this was invisible modal state: ticking a
+          // key silently plotted it on whichever graph was last tapped.
+          if (_tabIndex == 0 && _visibleGraphIndices.length > 1)
+            Tooltip(
+              message: 'New keys are plotted on this graph — '
+                  'tap another graph\'s label to change it',
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: cs.primaryContainer,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  'Adding to: ${_graphConfigs[_targetGraphIndex]?.displayName ?? 'Graph ${_targetGraphIndex + 1}'}',
+                  style:
+                      TextStyle(fontSize: 12, color: cs.onPrimaryContainer),
+                ),
+              ),
+            ),
+
           // ── Time mode: Realtime / Historical ──
           SegmentedButton<bool>(
             segments: const [
@@ -834,11 +965,10 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
             ],
             selected: {_realtime},
             onSelectionChanged: (v) => setState(() {
+              // The picked range survives a trip through Realtime — clearing
+              // it here meant one stray toggle threw away a carefully
+              // dialled-in range.
               _realtime = v.first;
-              if (_realtime) {
-                _range = null;
-                _activePeriod = null;
-              }
             }),
             showSelectedIcon: false,
             style: ButtonStyle(
@@ -860,18 +990,33 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
     );
   }
 
+  /// Quick presets, the way every historian trend tool offers them — the
+  /// multi-wheel from/to picker stays behind "Custom…" for surgical ranges,
+  /// but "what happened in the last hour" must be one tap.
+  static const List<(String, Duration)> _rangePresets = [
+    ('Last 15 min', Duration(minutes: 15)),
+    ('Last hour', Duration(hours: 1)),
+    ('Last 4 hours', Duration(hours: 4)),
+    ('Last 8 hours', Duration(hours: 8)),
+    ('Last 24 hours', Duration(hours: 24)),
+    ('Last 7 days', Duration(days: 7)),
+  ];
+
   Widget _buildDateRangeChip(BuildContext context, ColorScheme cs) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(6),
-      onTap: () async {
-        final picked = await showSetDatePicker(context, _range);
-        if (picked != null) {
-          setState(() {
-            _range = picked;
-            _activePeriod = null;
-          });
-        }
-      },
+    final label = _range == null
+        ? 'Pick range…'
+        : (_activePeriod?.name ?? _rangePresetLabel ?? _rangeLabel(_range!));
+    return PopupMenuButton<String>(
+      tooltip: _range == null ? 'Pick a time range' : _rangeLabel(_range!),
+      onSelected: _onRangeChoice,
+      itemBuilder: (context) => [
+        for (final (name, _) in _rangePresets)
+          PopupMenuItem(value: name, child: Text(name)),
+        const PopupMenuItem(value: '__today__', child: Text('Today')),
+        const PopupMenuItem(value: '__yesterday__', child: Text('Yesterday')),
+        const PopupMenuDivider(),
+        const PopupMenuItem(value: '__custom__', child: Text('Custom…')),
+      ],
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
@@ -885,15 +1030,47 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
             const SizedBox(width: 6),
             Flexible(
               child: Text(
-                _range == null ? 'Pick range…' : _rangeLabel(_range!),
+                label,
                 style: TextStyle(fontSize: 12, color: cs.onSurface),
                 overflow: TextOverflow.ellipsis,
               ),
             ),
+            Icon(Icons.arrow_drop_down, size: 16, color: cs.onSurfaceVariant),
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _onRangeChoice(String choice) async {
+    final now = DateTime.now();
+    DateTimeRange picked;
+    String? label;
+    switch (choice) {
+      case '__custom__':
+        final result = await showSetDatePicker(context, _range);
+        if (result == null) return;
+        picked = result;
+      case '__today__':
+        picked = DateTimeRange(
+            start: DateTime(now.year, now.month, now.day), end: now);
+        label = 'Today';
+      case '__yesterday__':
+        // DateTime normalises day 0 / negative days across month boundaries.
+        picked = DateTimeRange(
+            start: DateTime(now.year, now.month, now.day - 1),
+            end: DateTime(now.year, now.month, now.day));
+        label = 'Yesterday';
+      default:
+        final preset = _rangePresets.firstWhere((p) => p.$1 == choice);
+        picked = DateTimeRange(start: now.subtract(preset.$2), end: now);
+        label = choice;
+    }
+    setState(() {
+      _range = picked;
+      _rangePresetLabel = label;
+      _activePeriod = null;
+    });
   }
 
   String _fmtDuration(Duration d) {
@@ -905,50 +1082,38 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
     return '${m}m ${s.toString().padLeft(2, '0')}s';
   }
 
+  static const List<Duration> _windowPresets = [
+    Duration(minutes: 1),
+    Duration(minutes: 5),
+    Duration(minutes: 10),
+    Duration(minutes: 30),
+    Duration(hours: 1),
+    Duration(hours: 4),
+    Duration(hours: 8),
+  ];
+
+  static String _windowPresetLabel(Duration d) =>
+      d.inHours >= 1 ? '${d.inHours} h' : '${d.inMinutes} min';
+
   Widget _buildWindowChip(BuildContext context, ColorScheme cs) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(6),
-      onTap: () async {
-        final now = DateTime.now();
-        final initial = DateTime(
-            now.year,
-            now.month,
-            now.day,
-            _realtimeWindow.inHours,
-            _realtimeWindow.inMinutes.remainder(60),
-            _realtimeWindow.inSeconds.remainder(60));
-
-        final result = await showBoardDateTimePicker(
-          context: context,
-          pickerType: DateTimePickerType.time,
-          initialDate: initial,
-          minimumDate: DateTime(now.year, now.month, now.day, 0, 0, 1),
-          maximumDate: DateTime(now.year, now.month, now.day, 23, 59, 59),
-          options: BoardDateTimeOptions(
-            textColor: Theme.of(context).colorScheme.onSurface,
-            activeTextColor: Theme.of(context).colorScheme.onTertiary,
-            activeColor: Theme.of(context).colorScheme.tertiary,
-            languages: const BoardPickerLanguages.en(),
-            withSecond: true,
-            boardTitle: 'Window Duration',
-            pickerSubTitles: BoardDateTimeItemTitles(
-              hour: 'Hours',
-              minute: 'Minutes',
-              second: 'Seconds',
-            ),
-          ),
-        );
-
-        if (result != null) {
-          setState(() {
-            _realtimeWindow = Duration(
-              hours: result.hour,
-              minutes: result.minute,
-              seconds: result.second,
-            );
-          });
+    return PopupMenuButton<Duration?>(
+      tooltip: 'How much history the live chart shows',
+      onSelected: (d) async {
+        if (d != null) {
+          setState(() => _realtimeWindow = d);
+          return;
+        }
+        final picked = await _pickCustomWindow();
+        if (picked != null) {
+          setState(() => _realtimeWindow = picked);
         }
       },
+      itemBuilder: (context) => [
+        for (final d in _windowPresets)
+          PopupMenuItem(value: d, child: Text(_windowPresetLabel(d))),
+        const PopupMenuDivider(),
+        const PopupMenuItem(value: null, child: Text('Custom…')),
+      ],
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
@@ -964,9 +1129,52 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
               'Window: ${_fmtDuration(_realtimeWindow)}',
               style: TextStyle(fontSize: 12, color: cs.onSurface),
             ),
+            Icon(Icons.arrow_drop_down, size: 16, color: cs.onSurfaceVariant),
           ],
         ),
       ),
+    );
+  }
+
+  /// The old window control fed a time-of-day picker with a duration and
+  /// read hours/minutes/seconds back out of the "clock". It survives only as
+  /// the Custom… escape hatch until a real duration picker exists.
+  Future<Duration?> _pickCustomWindow() async {
+    final now = DateTime.now();
+    final initial = DateTime(
+        now.year,
+        now.month,
+        now.day,
+        _realtimeWindow.inHours,
+        _realtimeWindow.inMinutes.remainder(60),
+        _realtimeWindow.inSeconds.remainder(60));
+
+    final result = await showBoardDateTimePicker(
+      context: context,
+      pickerType: DateTimePickerType.time,
+      initialDate: initial,
+      minimumDate: DateTime(now.year, now.month, now.day, 0, 0, 1),
+      maximumDate: DateTime(now.year, now.month, now.day, 23, 59, 59),
+      options: BoardDateTimeOptions(
+        textColor: Theme.of(context).colorScheme.onSurface,
+        activeTextColor: Theme.of(context).colorScheme.onTertiary,
+        activeColor: Theme.of(context).colorScheme.tertiary,
+        languages: const BoardPickerLanguages.en(),
+        withSecond: true,
+        boardTitle: 'Window Duration',
+        pickerSubTitles: BoardDateTimeItemTitles(
+          hour: 'Hours',
+          minute: 'Minutes',
+          second: 'Seconds',
+        ),
+      ),
+    );
+
+    if (result == null) return null;
+    return Duration(
+      hours: result.hour,
+      minutes: result.minute,
+      seconds: result.second,
     );
   }
 
@@ -1014,6 +1222,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
                         if (p != null) {
                           _realtime = false;
                           _range = DateTimeRange(start: p.start, end: p.end);
+                          _rangePresetLabel = null;
                         }
                       });
                     },
@@ -1612,6 +1821,13 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
 
   String _rangeLabel(DateTimeRange r) =>
       '${_fmtDT(r.start)} → ${_fmtDT(r.end)}';
+
+  /// The graphs that would actually render: every graph a selected key is
+  /// assigned to, plus the empty target placeholder.
+  Set<int> get _visibleGraphIndices => {
+        ..._keyConfigs.values.map((c) => c.graphIndex),
+        _targetGraphIndex,
+      };
 
   // Get the current real-time duration
   Duration get _realtimeDuration {
