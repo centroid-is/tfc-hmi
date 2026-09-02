@@ -22,6 +22,8 @@ import 'package:tfc_dart/tfc_dart.dart'
 import 'package:tfc_relay_local/tfc_relay_local.dart';
 import 'package:test/test.dart';
 
+import '../support/free_port.dart';
+
 /// The smallest gateway config file: one link, a mappings path, no collection.
 Map<String, dynamic> gatewayJson() => <String, dynamic>{
       'server': <String, dynamic>{'port': 0},
@@ -36,11 +38,16 @@ Map<String, dynamic> gatewayJson() => <String, dynamic>{
     };
 
 /// A collection block that names a database, fully spelled.
-Map<String, dynamic> collectionJson() => <String, dynamic>{
+///
+/// The port is drawn, not literal — freeze 5's sweep is blunt on purpose
+/// and nothing here ever binds it, so a free one costs one socket and
+/// keeps the allow-list empty (gateway_config_test.dart made the same
+/// choice for the same reason).
+Map<String, dynamic> collectionJson(int port) => <String, dynamic>{
       'enabled': true,
       'endpoint': <String, dynamic>{
         'host': '10.104.29.100',
-        'port': 5433,
+        'port': port,
         'database': 'hmi',
         'username': 'gateway',
         'password': 'not-a-real-password',
@@ -75,8 +82,8 @@ void main() {
 
   group('enabled defaults to false even when the block is present', () {
     test('a block that names an endpoint but not enabled collects nothing',
-        () {
-      final json = collectionJson()..remove('enabled');
+        () async {
+      final json = collectionJson(await freePort())..remove('enabled');
 
       final config = CollectionConfig.fromJson(json);
 
@@ -220,14 +227,14 @@ void main() {
 
   group('round-trips through JSON', () {
     test('a fully-spelled config survives the round trip, secrets included',
-        () {
+        () async {
       final config = CollectionConfig.fromJson(<String, dynamic>{
         'enabled': true,
         'table_prefix': 'line7_',
         'sole_writer': false,
         'endpoint': <String, dynamic>{
           'host': '10.104.29.100',
-          'port': 5433,
+          'port': await freePort(),
           'database': 'hmi',
           'username': 'gateway',
           'password': 'not-a-real-password',
@@ -258,8 +265,8 @@ void main() {
               'the guarantee off');
     });
 
-    test('toJson omits the password unless asked — IN-05\'s idiom', () {
-      final config = CollectionConfig.fromJson(collectionJson());
+    test('toJson omits the password unless asked — IN-05\'s idiom', () async {
+      final config = CollectionConfig.fromJson(collectionJson(await freePort()));
 
       final rendered = config.toJson();
       final endpoint = rendered['endpoint'] as Map<String, dynamic>;
@@ -276,8 +283,8 @@ void main() {
   });
 
   group('the block hangs off GatewayConfig', () {
-    test('a gateway file with a collection block parses it', () {
-      final json = gatewayJson()..['collection'] = collectionJson();
+    test('a gateway file with a collection block parses it', () async {
+      final json = gatewayJson()..['collection'] = collectionJson(await freePort());
 
       final config = GatewayConfig.fromJson(json);
 
@@ -290,8 +297,8 @@ void main() {
     });
 
     test('GatewayConfig.toJson round-trips the block and threads '
-        'includeSecrets', () {
-      final json = gatewayJson()..['collection'] = collectionJson();
+        'includeSecrets', () async {
+      final json = gatewayJson()..['collection'] = collectionJson(await freePort());
       final config = GatewayConfig.fromJson(json);
 
       final safe = config.toJson();
