@@ -653,6 +653,12 @@ class BeckhoffEL1008Config extends BaseAsset {
   String? onFiltersKey;
   String? offFiltersKey;
 
+  /// Optional per-channel descriptions carried by the asset itself, channel
+  /// I1 first. A non-empty entry outranks the descriptions key for that
+  /// channel; empty or missing entries fall through to it.
+  @JsonKey(name: 'channel_descriptions')
+  List<String>? channelDescriptions;
+
   BeckhoffEL1008Config({
     required this.nameOrId,
     this.descriptionsKey,
@@ -661,6 +667,7 @@ class BeckhoffEL1008Config extends BaseAsset {
     this.forceValuesKey,
     this.onFiltersKey,
     this.offFiltersKey,
+    this.channelDescriptions,
   });
 
   @override
@@ -684,6 +691,7 @@ class BeckhoffEL1008Config extends BaseAsset {
         forceValuesKey = null,
         onFiltersKey = null,
         offFiltersKey = null,
+        channelDescriptions = null,
         super();
 
   factory BeckhoffEL1008Config.fromJson(Map<String, dynamic> json) =>
@@ -763,6 +771,12 @@ class _EL1008ConfigContentState extends State<_EL1008ConfigContent> {
           onChanged: (value) => widget.config.offFiltersKey = value,
           label: 'Off Filters Key',
         ),
+        const SizedBox(height: 16),
+        _ChannelDescriptionsFields(
+          channelLabels: const ['I1', 'I2', 'I3', 'I4', 'I5', 'I6', 'I7', 'I8'],
+          initialValue: widget.config.channelDescriptions,
+          onChanged: (value) => widget.config.channelDescriptions = value,
+        ),
       ],
     );
   }
@@ -780,11 +794,18 @@ class BeckhoffEL2008Config extends BaseAsset {
   String? rawStateKey;
   String? forceValuesKey;
 
+  /// Optional per-channel descriptions carried by the asset itself, channel
+  /// O1 first. A non-empty entry outranks the descriptions key for that
+  /// channel; empty or missing entries fall through to it.
+  @JsonKey(name: 'channel_descriptions')
+  List<String>? channelDescriptions;
+
   BeckhoffEL2008Config({
     required this.nameOrId,
     this.descriptionsKey,
     this.rawStateKey,
     this.forceValuesKey,
+    this.channelDescriptions,
   });
 
   @override
@@ -805,6 +826,7 @@ class BeckhoffEL2008Config extends BaseAsset {
         descriptionsKey = null,
         rawStateKey = null,
         forceValuesKey = null,
+        channelDescriptions = null,
         super();
 
   factory BeckhoffEL2008Config.fromJson(Map<String, dynamic> json) =>
@@ -865,6 +887,12 @@ class _EL2008ConfigContentState extends State<_EL2008ConfigContent> {
           initialValue: widget.config.forceValuesKey,
           onChanged: (value) => widget.config.forceValuesKey = value,
           label: 'Force Values Key',
+        ),
+        const SizedBox(height: 16),
+        _ChannelDescriptionsFields(
+          channelLabels: const ['O1', 'O2', 'O3', 'O4', 'O5', 'O6', 'O7', 'O8'],
+          initialValue: widget.config.channelDescriptions,
+          onChanged: (value) => widget.config.channelDescriptions = value,
         ),
       ],
     );
@@ -974,9 +1002,7 @@ class _BeckhoffEL2008 extends ConsumerWidget {
           return const SizedBox.shrink();
         }
         final map = snapshot.data!;
-        List<bool>? rawStates = map["raw"] != null
-            ? List.generate(8, (i) => (map["raw"]!.asInt & (1 << i)) != 0)
-            : null;
+        List<bool>? rawStates = beckhoffChannelStates(map["raw"]);
 
         return Column(
           mainAxisSize: MainAxisSize.min,
@@ -1003,8 +1029,10 @@ class _BeckhoffEL2008 extends ConsumerWidget {
                       await stateMan.write(
                           config.forceValuesKey!, map["force"]!);
                     },
-                    leftDescription: map["descriptions"]?[i].asString,
-                    rightDescription: map["descriptions"]?[i + 1].asString,
+                    leftDescription: beckhoffChannelDescription(
+                        config.channelDescriptions, map["descriptions"], i),
+                    rightDescription: beckhoffChannelDescription(
+                        config.channelDescriptions, map["descriptions"], i + 1),
                     leftFilterEdit: null,
                     rightFilterEdit: null,
                   ),
@@ -1553,15 +1581,87 @@ CombineLatestStream<DynamicValue, Map<String, DynamicValue>> _combinedStream(
   });
 }
 
+/// Reads one direction's eight channels out of a generated terminal struct.
+///
+/// The GVL generator's `struct_digital` writes BOOL members `<prefix><n>`,
+/// and the two families it generates number them differently: the EL
+/// terminals from one (`ST_EL1008` `I1..I8`, `ST_EL2008` `O1..O8`), the
+/// EP2338 field boxes from zero (`ST_EP2338_0002` `I0..I7` *and* `O0..O7` in
+/// the same struct — every M8 port is one physical point carrying both). The
+/// base is detected from which first member the struct carries, and channel
+/// list index 0 is `<prefix>0` on a zero-based struct, `<prefix>1` on a
+/// one-based one.
+///
+/// `null` when [value] is not a struct or carries no members under [prefix]
+/// at all — for a combi box, call once per direction.
+List<bool>? beckhoffStructChannels(DynamicValue? value, String prefix) {
+  if (value == null || !value.isObject) return null;
+  final int base;
+  if (value.contains('${prefix}0')) {
+    base = 0;
+  } else if (value.contains('${prefix}1')) {
+    base = 1;
+  } else {
+    return null;
+  }
+  return List.generate(8, (i) {
+    final member = '$prefix${i + base}';
+    return value.contains(member) && value[member].asBool;
+  });
+}
+
+/// Decodes an 8-channel terminal state into per-channel booleans.
+///
+/// The canonical shape is the generated struct — see
+/// [beckhoffStructChannels]; either prefix is accepted on either terminal
+/// type, so an input terminal keeps working even if a generator ever labels
+/// its members the other way around. A plain integer still decodes as the
+/// packed byte the PLC used to publish (bit `i` is channel `i + 1`) — a
+/// zero-cost fallback for stations not yet regenerated.
+///
+/// Anything else — including no value at all — is `null`: unknown, which the
+/// callers render as dark channels rather than eight confident lows.
+List<bool>? beckhoffChannelStates(DynamicValue? value) {
+  if (value == null) return null;
+  final struct =
+      beckhoffStructChannels(value, 'I') ?? beckhoffStructChannels(value, 'O');
+  if (struct != null) return struct;
+  if (value.isInteger) {
+    final bits = value.asInt;
+    return List.generate(8, (i) => (bits & (1 << i)) != 0);
+  }
+  return null;
+}
+
+/// The description to show for channel [index] (0-based): the one configured
+/// on the asset when non-empty, else the one delivered over the descriptions
+/// key, else `null` — the caller's default channel label.
+///
+/// Both lists may be missing, short, or padded with empties; a channel they
+/// do not cover simply falls through.
+String? beckhoffChannelDescription(
+    List<String>? configured, DynamicValue? fromKey, int index) {
+  if (configured != null && index < configured.length) {
+    final text = configured[index].trim();
+    if (text.isNotEmpty) return text;
+  }
+  if (fromKey != null && fromKey.isArray && index < fromKey.asArray.length) {
+    final text = fromKey[index].asString.trim();
+    if (text.isNotEmpty) return text;
+  }
+  return null;
+}
+
 List<IOState> _ledStates(Map<String, DynamicValue> data) {
+  final raw = beckhoffChannelStates(data["raw"]);
   return List.generate(8, (i) {
     final forceValue = data["force"]?.asInt;
     if (forceValue == 1) return IOState.forcedLow;
     if (forceValue == 2) return IOState.forcedHigh;
-    if (data["raw"]?.asInt == null) {
+    if (raw == null) {
       return IOState.low;
     }
-    return (data["raw"]!.asInt & (1 << i)) != 0 ? IOState.high : IOState.low;
+    return raw[i] ? IOState.high : IOState.low;
   });
 }
 
@@ -1670,12 +1770,10 @@ class _BeckhoffEL1008 extends ConsumerWidget {
           return const SizedBox.shrink();
         }
         final map = snapshot.data!;
-        List<bool>? rawStates = map["raw"] != null
-            ? List.generate(8, (i) => (map["raw"]!.asInt & (1 << i)) != 0)
-            : null;
-        List<bool>? processedStates = map["processed"] != null
-            ? List.generate(8, (i) => (map["processed"]!.asInt & (1 << i)) != 0)
-            : null;
+        // No processed state under the struct exposure — the grid's
+        // "processed" halves already fall back to raw (see [RowIOView]), and
+        // nothing else read it.
+        List<bool>? rawStates = beckhoffChannelStates(map["raw"]);
 
         return Column(
           children: [
@@ -1701,8 +1799,10 @@ class _BeckhoffEL1008 extends ConsumerWidget {
                     map["force"]![i + 1].value = value;
                     await stateMan.write(config.forceValuesKey!, map["force"]!);
                   },
-                  leftDescription: map["descriptions"]?[i].asString,
-                  rightDescription: map["descriptions"]?[i + 1].asString,
+                  leftDescription: beckhoffChannelDescription(
+                      config.channelDescriptions, map["descriptions"], i),
+                  rightDescription: beckhoffChannelDescription(
+                      config.channelDescriptions, map["descriptions"], i + 1),
                   leftFilterEdit: map.containsKey("on_filters") &&
                           map.containsKey("off_filters")
                       ? FilterEdit(
@@ -3025,11 +3125,20 @@ class BeckhoffEPBoxConfig extends BaseAsset {
   /// Optional array naming what each of the eight sockets is wired to.
   String? descriptionsKey;
 
+  /// Optional per-port descriptions carried by the asset itself — exactly
+  /// one entry per physical M8 port, channel 1 (`Plug 1 A`) first. A port is
+  /// one physical point whose `I<n>` and `O<n>` both live on the same pin,
+  /// so one description covers both directions. A non-empty entry outranks
+  /// the descriptions key for that port.
+  @JsonKey(name: 'channel_descriptions')
+  List<String>? channelDescriptions;
+
   BeckhoffEPBoxConfig({
     required this.variantModel,
     required this.nameOrId,
     this.stateKey,
     this.descriptionsKey,
+    this.channelDescriptions,
   });
 
   @override
@@ -3049,6 +3158,7 @@ class BeckhoffEPBoxConfig extends BaseAsset {
         nameOrId = "RM01",
         stateKey = null,
         descriptionsKey = null,
+        channelDescriptions = null,
         super();
 
   factory BeckhoffEPBoxConfig.fromJson(Map<String, dynamic> json) =>
@@ -3128,6 +3238,17 @@ class _EPBoxConfigContentState extends State<_EPBoxConfigContent> {
             onChanged: (value) => config.descriptionsKey = value,
             label: 'Descriptions Key',
           ),
+          const SizedBox(height: 16),
+          // One field per physical port: I<n> and O<n> are the same M8
+          // connector, so a port gets one name, not one per direction.
+          _ChannelDescriptionsFields(
+            channelLabels: [
+              for (var c = 1; c <= epBoxChannelCount; c++)
+                epBoxChannelLabel(c),
+            ],
+            initialValue: config.channelDescriptions,
+            onChanged: (value) => config.channelDescriptions = value,
+          ),
         ] else ...[
           const SizedBox(height: 16),
           Text(
@@ -3157,14 +3278,18 @@ class _BeckhoffEPBox extends ConsumerWidget {
 
   bool get _isLive => config.variantModel.isLive && config.stateKey != null;
 
-  static ({List<EpBoxChannel> channels, List<String> descriptions}) _decode(
+  ({List<EpBoxChannel> channels, List<String> descriptions}) _decode(
       Map<String, DynamicValue> data) {
-    final descriptions = data["descriptions"];
     return (
       channels: epBoxChannelsOf(data["state"]),
-      descriptions: (descriptions != null && descriptions.isArray)
-          ? descriptions.asArray.map((d) => d.asString).toList()
-          : const <String>[],
+      // Per port, the description configured on the asset wins over the one
+      // off the key; an empty slot leaves the pane's own plug label.
+      descriptions: [
+        for (var c = 0; c < epBoxChannelCount; c++)
+          beckhoffChannelDescription(
+                  config.channelDescriptions, data["descriptions"], c) ??
+              '',
+      ],
     );
   }
 
@@ -3253,6 +3378,82 @@ Widget _beckhoffConfigureShell(BuildContext context, Widget content) {
       ),
     ),
   );
+}
+
+/// Eight optional per-channel description fields for the terminals that can
+/// carry their channel names on the asset itself.
+///
+/// One text field per channel, pre-filled from the config; an empty field is
+/// no description, and a config where every field is empty is stored as no
+/// list at all. What is entered here outranks a descriptions key — the wiring
+/// is the page author's to name, the key is the PLC's.
+class _ChannelDescriptionsFields extends StatefulWidget {
+  /// Label of channel `i`, e.g. `I1` or `Plug 1 A` — whatever the terminal
+  /// prints beside the channel.
+  final List<String> channelLabels;
+
+  final List<String>? initialValue;
+  final ValueChanged<List<String>?> onChanged;
+
+  const _ChannelDescriptionsFields({
+    required this.channelLabels,
+    required this.initialValue,
+    required this.onChanged,
+  });
+
+  @override
+  State<_ChannelDescriptionsFields> createState() =>
+      _ChannelDescriptionsFieldsState();
+}
+
+class _ChannelDescriptionsFieldsState
+    extends State<_ChannelDescriptionsFields> {
+  late final List<String> _descriptions;
+
+  @override
+  void initState() {
+    super.initState();
+    _descriptions = List.generate(
+      widget.channelLabels.length,
+      (i) => (widget.initialValue != null && i < widget.initialValue!.length)
+          ? widget.initialValue![i]
+          : '',
+    );
+  }
+
+  void _update(int index, String value) {
+    _descriptions[index] = value;
+    widget.onChanged(_descriptions.every((d) => d.trim().isEmpty)
+        ? null
+        : List.of(_descriptions));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Channel descriptions',
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        for (var i = 0; i < widget.channelLabels.length; i++) ...[
+          const SizedBox(height: 12),
+          TextFormField(
+            key: ValueKey('channel-description-$i'),
+            decoration: InputDecoration(
+              labelText: widget.channelLabels[i],
+              hintText: 'What this channel is wired to (optional)',
+              border: const OutlineInputBorder(),
+            ),
+            initialValue: _descriptions[i],
+            onChanged: (value) => _update(i, value),
+          ),
+        ],
+      ],
+    );
+  }
 }
 
 /// The configure form for a device that publishes nothing — the only

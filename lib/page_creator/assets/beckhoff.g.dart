@@ -111,6 +111,9 @@ BeckhoffEL1008Config _$BeckhoffEL1008ConfigFromJson(
       forceValuesKey: json['forceValuesKey'] as String?,
       onFiltersKey: json['onFiltersKey'] as String?,
       offFiltersKey: json['offFiltersKey'] as String?,
+      channelDescriptions: (json['channel_descriptions'] as List<dynamic>?)
+          ?.map((e) => e as String)
+          .toList(),
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -138,6 +141,7 @@ Map<String, dynamic> _$BeckhoffEL1008ConfigToJson(
       'forceValuesKey': instance.forceValuesKey,
       'onFiltersKey': instance.onFiltersKey,
       'offFiltersKey': instance.offFiltersKey,
+      'channel_descriptions': instance.channelDescriptions,
     };
 
 BeckhoffEL2008Config _$BeckhoffEL2008ConfigFromJson(
@@ -147,6 +151,9 @@ BeckhoffEL2008Config _$BeckhoffEL2008ConfigFromJson(
       descriptionsKey: json['descriptionsKey'] as String?,
       rawStateKey: json['rawStateKey'] as String?,
       forceValuesKey: json['forceValuesKey'] as String?,
+      channelDescriptions: (json['channel_descriptions'] as List<dynamic>?)
+          ?.map((e) => e as String)
+          .toList(),
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -171,6 +178,7 @@ Map<String, dynamic> _$BeckhoffEL2008ConfigToJson(
       'descriptionsKey': instance.descriptionsKey,
       'rawStateKey': instance.rawStateKey,
       'forceValuesKey': instance.forceValuesKey,
+      'channel_descriptions': instance.channelDescriptions,
     };
 
 BeckhoffEL9222Config _$BeckhoffEL9222ConfigFromJson(
@@ -438,6 +446,9 @@ BeckhoffEPBoxConfig _$BeckhoffEPBoxConfigFromJson(Map<String, dynamic> json) =>
       nameOrId: json['nameOrId'] as String,
       stateKey: json['stateKey'] as String?,
       descriptionsKey: json['descriptionsKey'] as String?,
+      channelDescriptions: (json['channel_descriptions'] as List<dynamic>?)
+          ?.map((e) => e as String)
+          .toList(),
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -462,6 +473,7 @@ Map<String, dynamic> _$BeckhoffEPBoxConfigToJson(
       'nameOrId': instance.nameOrId,
       'stateKey': instance.stateKey,
       'descriptionsKey': instance.descriptionsKey,
+      'channel_descriptions': instance.channelDescriptions,
     };
 
 const _$EPBoxVariantEnumMap = {
