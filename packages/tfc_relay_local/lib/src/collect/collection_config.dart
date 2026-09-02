@@ -139,9 +139,17 @@ const Set<String> collectionSslModes = <String>{
 /// one-shot `INSERT INTO … SELECT` that belongs to the cutover, not to this
 /// phase.
 final class CollectionConfig {
+  /// The one spelling of the default namespace prefix (8b-REVIEW IN-03).
+  /// The constructor default and `fromJson`'s missing-field default were
+  /// two independent literals; the freeze sweep counts files, not
+  /// occurrences, so editing one and not the other would have passed it —
+  /// and this default drifting means gateway rows in the app's tables with
+  /// no error anywhere.
+  static const String defaultTablePrefix = 'gw_';
+
   CollectionConfig({
     this.enabled = false,
-    this.tablePrefix = 'gw_',
+    this.tablePrefix = defaultTablePrefix,
     this.soleWriter = false,
     this.endpoint,
     this.sslMode = 'disable',
@@ -187,7 +195,7 @@ final class CollectionConfig {
     final endpoint = (json['endpoint'] as Map?)?.cast<String, dynamic>();
     return CollectionConfig(
       enabled: json['enabled'] as bool? ?? false,
-      tablePrefix: json['table_prefix'] as String? ?? 'gw_',
+      tablePrefix: json['table_prefix'] as String? ?? defaultTablePrefix,
       soleWriter: json['sole_writer'] as bool? ?? false,
       endpoint:
           endpoint == null ? null : CollectionEndpoint.fromJson(endpoint),

@@ -110,6 +110,16 @@ void main() {
               'doubles with no error anywhere');
     });
 
+    test('the constructor default and the fromJson default are the SAME '
+        'spelling (IN-03)', () {
+      expect(CollectionConfig.fromJson(const <String, dynamic>{}).tablePrefix,
+          CollectionConfig().tablePrefix,
+          reason: 'the freeze sweep counts files, not occurrences, so two '
+              'independent literals would pass it while drifting apart — '
+              'both paths must resolve through defaultTablePrefix');
+      expect(CollectionConfig.defaultTablePrefix, 'gw_');
+    });
+
     test('an empty prefix is refused unless soleWriter is set', () {
       expect(
           () => CollectionConfig(tablePrefix: ''),
