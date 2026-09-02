@@ -1149,7 +1149,10 @@ class AssetTypeCatalog {
         AssetPropertyInfo(
             name: 'label',
             type: 'String',
-            description: 'Display label for the drive'),
+            description: 'Display label drawn on the drive body. At most two '
+                'lines of 14 characters are shown; a newline breaks the label '
+                'explicitly (e.g. "CN01\\nFD01" stacks CN01 over FD01), '
+                'otherwise it is wrapped on spaces.'),
         AssetPropertyInfo(
             name: 'hmisKey',
             type: 'String',

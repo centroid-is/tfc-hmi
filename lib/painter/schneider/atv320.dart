@@ -19,14 +19,18 @@ class ATV320 extends CustomPainter {
     this.topLabel = '',
   }); // Add topLabel parameter
 
+  /// Maximum characters drawn per inline-label line.
+  static const int maxLabelCharsPerLine = 14;
+
   /// Splits [topLabel] into the (at most two) lines drawn on the drive body.
   ///
-  /// An explicit "\n" in the label takes precedence: the operator's line
-  /// breaks are honoured verbatim (e.g. "CN01\nFD01" renders "CN01" over
-  /// "FD01"). More than two explicit lines are capped at two, with an
-  /// ellipsis on the second. Labels without newlines keep the historical
-  /// behaviour: split on spaces into at most two lines of
-  /// [maxLabelCharsPerLine] characters, truncating with "..." on overflow.
+  /// Two or more non-blank lines separated by "\n" are honoured verbatim, so
+  /// the operator can render "CN01\nFD01" as "CN01" over "FD01". More than two
+  /// are capped at two, with an ellipsis on the second. Anything that does not
+  /// yield two lines that way — including a label carrying only a stray or
+  /// trailing newline — falls back to the historical behaviour: split on
+  /// spaces into at most two lines of [maxLabelCharsPerLine] characters,
+  /// truncating with "..." on overflow.
   @visibleForTesting
   static List<String> splitTopLabel(String topLabel) {
     const int maxCharsPerLine = maxLabelCharsPerLine;
@@ -35,30 +39,37 @@ class ATV320 extends CustomPainter {
         ? '${line.substring(0, maxCharsPerLine)}...'
         : line;
 
+    // Truncate so that line + "..." still fits within the line budget.
+    String ellipsise(String line) => line.length > maxCharsPerLine - 3
+        ? '${line.substring(0, maxCharsPerLine - 3)}...'
+        : '$line...';
+
     // Explicit newlines take precedence over the space-splitting heuristic.
-    if (topLabel.contains('\n')) {
-      final explicitLines = topLabel
-          .split('\n')
-          .map((line) => line.trim())
-          .where((line) => line.isNotEmpty)
-          .toList();
-      if (explicitLines.length <= 1) {
-        return explicitLines.map(clip).toList();
-      }
-      String line2 = explicitLines[1];
-      if (explicitLines.length > 2) {
-        // Capped at two lines: draw the first two, ellipsis on the second.
-        if (line2.length > maxCharsPerLine - 3) {
-          line2 = line2.substring(0, maxCharsPerLine - 3);
-        }
-        line2 = '$line2...';
-      } else {
-        line2 = clip(line2);
-      }
-      return [clip(explicitLines.first), line2];
+    final explicitLines = topLabel
+        .split('\n')
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toList();
+    if (explicitLines.length > 1) {
+      return [
+        clip(explicitLines.first),
+        // Capped at two lines: ellipsis on the second says more was dropped.
+        explicitLines.length > 2
+            ? ellipsise(explicitLines[1])
+            : clip(explicitLines[1]),
+      ];
     }
 
-    final words = topLabel.trim().split(' ');
+    // Only one line survived, so there is no operator line break to honour.
+    // A trailing newline left behind by the multiline Label field must not
+    // cost a multi-word label its second line, so run the heuristic on that
+    // surviving line rather than on the raw label.
+    final label = topLabel.contains('\n')
+        ? (explicitLines.isEmpty ? '' : explicitLines.first)
+        : topLabel;
+    if (label.isEmpty) return const [];
+
+    final words = label.trim().split(' ');
     if (words.length > 1) {
       // Split into 2 lines with character limit
       String line1 = '';
@@ -80,21 +91,19 @@ class ATV320 extends CustomPainter {
 
       // Add "..." to lines that are truncated
       if (hasMoreWords && line2.isNotEmpty) {
-        if (line2.length > maxCharsPerLine - 3) {
-          line2 = line2.substring(0, maxCharsPerLine - 3);
-        }
-        line2 = '$line2...';
+        line2 = ellipsise(line2);
       }
+
+      // A first word wider than the line budget leaves both lines empty; draw
+      // it truncated rather than leaving the drive unlabelled.
+      if (line1.isEmpty) return [clip(words.first)];
 
       return [line1, if (line2.isNotEmpty) line2];
     }
 
     // Single line - truncate if too long (kept untrimmed, as before).
-    return [clip(topLabel)];
+    return [clip(label)];
   }
-
-  /// Maximum characters drawn per inline-label line.
-  static const int maxLabelCharsPerLine = 14;
 
 // Segment order: [top, top-right, bottom-right, bottom, bottom-left, top-left, middle]
   static const Map<String, List<bool>> sevenSegmentMap = {

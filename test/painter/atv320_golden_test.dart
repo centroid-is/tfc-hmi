@@ -91,6 +91,15 @@ void main() {
         matchesGoldenFile('goldens/atv320_sto_label.png'),
       );
     });
+
+    testWidgets('top label broken onto two lines with a newline',
+        (tester) async {
+      await tester.pumpWidget(buildDisplay('sto', topLabel: 'CN01\nFD01'));
+      await expectLater(
+        find.byType(ATV320Widget),
+        matchesGoldenFile('goldens/atv320_sto_label_newline.png'),
+      );
+    });
   });
 
   group('ATV320.splitTopLabel', () {
@@ -140,6 +149,35 @@ void main() {
     test('trailing newline alone does not create a second line', () {
       expect(ATV320.splitTopLabel('CN01\n'), ['CN01']);
       expect(ATV320.splitTopLabel('CN01\n\n'), ['CN01']);
+    });
+
+    test('a stray newline does not cost a multi-word label its second line',
+        () {
+      // The Label field is multiline now, so an operator editing an existing
+      // label can easily leave a trailing newline behind. That must not
+      // collapse the space heuristic into one truncated line.
+      expect(
+        ATV320.splitTopLabel('Conveyor Drive Cabinet North\n'),
+        ATV320.splitTopLabel('Conveyor Drive Cabinet North'),
+      );
+      expect(
+        ATV320.splitTopLabel('\nConveyor Drive Cabinet North'),
+        ['Conveyor Drive', 'Cabinet North'],
+      );
+    });
+
+    test('a label of nothing but newlines draws no lines', () {
+      expect(ATV320.splitTopLabel('\n'), isEmpty);
+      expect(ATV320.splitTopLabel('  \n \n'), isEmpty);
+    });
+
+    test('a first word wider than the line is still drawn, truncated', () {
+      // Both lines come out empty in the space heuristic when word one does
+      // not fit; the drive must not end up unlabelled.
+      expect(
+        ATV320.splitTopLabel('ABCDEFGHIJKLMNOP QRS'),
+        ['ABCDEFGHIJKLMN...'],
+      );
     });
 
     test('blank explicit lines are dropped', () {
