@@ -35,6 +35,7 @@ export 'src/m2400_upstream_link.dart';
 export 'src/modbus_upstream_link.dart';
 export 'src/opcua_upstream_link.dart';
 export 'src/pipe_health.dart';
+export 'src/string_encoding.dart';
 export 'src/upstream_link.dart';
 export 'src/value_shaping.dart';
 // The write vocabulary the two DeviceClient adapters name in their own public
