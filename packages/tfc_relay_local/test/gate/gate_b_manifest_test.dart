@@ -140,6 +140,29 @@ const _skipReasonFloor = 40;
 /// number is a finding, one without is an excuse.
 const _deviationReasonFloor = 60;
 
+/// Where a deviation may send a clause — this manifest's own copy of the
+/// registry's [followUpDestinations], written down twice for the same reason
+/// the row count is: a destination pruned from the registry deletes itself
+/// from both sides of a one-source comparison, and this literal is the only
+/// place the pruning shows.
+///
+/// `'Phase 10'` and `'Phase 11'` have zero users among the seven seeded
+/// deviations and stay anyway (the registry's doc says why: cheaper to carry
+/// the destination now than to reopen this closed set when a later wave or
+/// Phase 11's soak defers a clause there). Do not prune them here either.
+const _followUpDestinations = <String>{
+  'Phase 10',
+  'Phase 11',
+  'post-milestone',
+  'app-side (AlarmMan)',
+  'none — accepted',
+};
+
+/// The three texts a deviation may quote its clause from. A closed set: a
+/// `source` outside it names no text, so the clause it carries is checkable
+/// against nothing.
+const _deviationSources = <String>{'expectation', 'injection', 'prose'};
+
 /// Getters whose value is derived from a wall clock, and must therefore never
 /// be read at an instant.
 ///
@@ -566,6 +589,101 @@ void main() {
               'cannot tell whether the thing being given up is the whole row '
               'or a corner of it');
     });
+
+    test('the registry is printed, in full, on every run', () {
+      // The print is the point. RES-02's checkbox evidence is this block
+      // plus the manifest plus a green lane, and the verification document
+      // quotes the block — a registry read only by an assertion is a
+      // registry nobody reads. It goes to the run report whether or not
+      // anything below fails.
+      print('');
+      print('gate B deviations — what the green does NOT cover '
+          '(${gateDeviations.length} entries)');
+      print('row · source · clause · reason · follow-up');
+      for (final deviation in gateDeviations) {
+        print('${deviation.row} · ${deviation.source} · '
+            '"${deviation.clause}" · ${deviation.reason} · '
+            '-> ${deviation.followUp}');
+      }
+      print('');
+
+      expect(gateDeviations, isNotEmpty,
+          reason: 'the deviations registry is empty, so this run reports '
+              'that the gate covers every clause of all ${gateRows.length} '
+              'catalogue rows. That has not been true since before the phase '
+              'started — three of F27\'s clauses and one of F23\'s were out '
+              'of scope before the first case was written (09-CONTEXT '
+              'rulings 1 and 4). An empty registry is not a clean gate, it '
+              'is a gate that stopped saying what it gave up');
+
+      final thin = [
+        for (final deviation in gateDeviations)
+          if (deviation.reason.length < _deviationReasonFloor)
+            '${deviation.row}: "${deviation.clause}" '
+                '(${deviation.reason.length} chars)',
+      ];
+      expect(thin, isEmpty,
+          reason: 'these deviation reasons are shorter than '
+              '$_deviationReasonFloor characters: $thin. A reason that short '
+              'names the clause and not the measurement or the ruling behind '
+              'it, which is the difference between a finding and an excuse');
+    });
+
+    test('every deviation names a real source and a real destination', () {
+      // The row-exists half of the plan's rule is asserted by "every
+      // deviation quotes a row the catalogue declares" above; asserting it
+      // twice would fail two cases for one fault and send the reader to the
+      // wrong one first. What only this case asserts: the source names one
+      // of the three texts, a prose source has prose to quote, and the
+      // follow-up is somewhere the phase can grep for at the milestone.
+      final unsourced = [
+        for (final deviation in gateDeviations)
+          if (!_deviationSources.contains(deviation.source))
+            '${deviation.row}: "${deviation.source}"',
+      ];
+      expect(unsourced, isEmpty,
+          reason: 'these deviations name a source outside '
+              '${_deviationSources.toList()}: $unsourced. The source says '
+              'which text the clause was quoted from, and a source that '
+              'names no text is a clause checkable against nothing — the '
+              'verbatim arm above will have judged it against null and the '
+              'reader deserves the direct accusation too');
+
+      final proseless = [
+        for (final deviation in gateDeviations)
+          if (deviation.source == 'prose' &&
+              !catalogueProse.containsKey(deviation.row))
+            deviation.row,
+      ];
+      expect(proseless, isEmpty,
+          reason: 'these prose-sourced deviations name rows with no '
+              'catalogueProse entry: $proseless. A prose clause with no '
+              'prose behind it quotes a text this repository does not hold, '
+              'which is the exact gap the prose map was added to close — '
+              'the Expect column compresses requirements the prose states '
+              'in full, and a deviation against the compressed form would '
+              'silently drop the clause the user asked to have recorded');
+
+      expect(followUpDestinations, _followUpDestinations,
+          reason: 'the registry\'s followUpDestinations set and this '
+              'manifest\'s copy disagree. The two are written down twice on '
+              'purpose, like the row count: Phase 10 and Phase 11 have zero '
+              'users among the seeded seven DELIBERATELY, and pruning them '
+              'from one file is the edit this comparison exists to catch');
+
+      final adrift = [
+        for (final deviation in gateDeviations)
+          if (!_followUpDestinations.contains(deviation.followUp))
+            '${deviation.row}: "${deviation.followUp}"',
+      ];
+      expect(adrift, isEmpty,
+          reason: 'these deviations name a follow-up outside the closed set '
+              '${_followUpDestinations.toList()}: $adrift. "later" and '
+              '"TODO" are not destinations — nobody can grep for them at the '
+              'milestone, and the entry stops being a handover to a named '
+              'owner and becomes a note to self. If a clause genuinely goes '
+              'nowhere, "none — accepted" says so out loud');
+    });
   });
 
   group('the phase measures itself by running its own sweep', () {
@@ -583,8 +701,19 @@ void main() {
           if (entry.value.kind == OutstandingKind.partial) entry.key,
       ];
 
+      // The phase measures itself by running its own sweep, so the progress
+      // line carries both registries: this one's coverage, and the
+      // reconciled total. The gate-A half is the same text read the
+      // reconciliation group guards; here it only feeds the print, and a
+      // missing registry fails loudly there rather than quietly here.
+      final gateA = File(_gateARegistry);
+      final gateARows = gateA.existsSync()
+          ? _rowIdsDeclaredIn(gateA.readAsStringSync()).length
+          : 0;
       print('gate B: ${covered.length} of $_declaredRows rows have a case, '
-          '${gateOutstanding.length} outstanding (${partial.length} partial)');
+          '${gateOutstanding.length} outstanding (${partial.length} partial); '
+          '${gateARows + covered.length + missing.length} of '
+          '${_gateARows + _declaredRows} across two registries');
 
       expect(covered.length + missing.length, _declaredRows,
           reason: '${covered.length} rows have a case and ${missing.length} '
