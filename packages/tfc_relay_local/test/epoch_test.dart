@@ -15,6 +15,7 @@ import 'dart:async';
 import 'package:open62541/open62541.dart' as ua;
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_relay_local/tfc_relay_local.dart';
+import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:test/test.dart';
 
 import 'support/opcua_server_fixture.dart';
@@ -50,6 +51,47 @@ Future<void> awaitConnected(OpcUaUpstreamLink link,
           'heartbeat has not ticked');
     }
     await Future<void>.delayed(const Duration(milliseconds: 25));
+  }
+}
+
+/// A server's identity, under the test's control.
+///
+/// The bump choreography and the *reading* of an identity are two different
+/// subjects, and conflating them makes both harder to test: a case about "what
+/// happens when the server changed" should not also be a case about restarting
+/// a server, and `stale_handle_test.dart` is where the reading is proved
+/// against one that genuinely did. This holder is the injected
+/// [EpochInputsReader]; production's is [readEpochInputs].
+final class PretendIdentity {
+  PretendIdentity();
+
+  /// What the next reading will say. Starts as a perfectly ordinary server.
+  EpochInputs current = EpochInputs(
+    startTime: DateTime.utc(2026, 9, 2, 6, 30),
+    namespaceArrayHash:
+        hashNamespaceArray(const ['http://opcfoundation.org/UA/', 'urn:st101']),
+  );
+
+  /// How many times the link asked.
+  int reads = 0;
+
+  /// The server is now a different one.
+  void change() => current = EpochInputs(
+        startTime: DateTime.utc(2026, 9, 2, 9, 15),
+        namespaceArrayHash: hashNamespaceArray(
+            const ['http://opcfoundation.org/UA/', 'urn:st101']),
+      );
+
+  /// The server answered none of the three questions.
+  void goSilent() => current = EpochInputs.unreadable;
+
+  Future<EpochInputs> read(
+    ua.ClientApi client, {
+    required Duration deadline,
+    ua.NodeId? buildStampNode,
+  }) async {
+    reads++;
+    return current;
   }
 }
 
@@ -268,5 +310,214 @@ void main() {
       expect(isUnreadableEpoch(inputs.combine()), isTrue);
       print('UNREADABLE epoch=${inputs.combine()}');
     }, timeout: const Timeout(Duration(minutes: 2)));
+  }, tags: 'opcua');
+
+  group('the bump: one batch, one announcement, one re-browse', () {
+    late OpcUaServerFixture fixture;
+    late OpcUaUpstreamLink link;
+    late PretendIdentity identity;
+    late List<String> log;
+
+    setUp(() async {
+      fixture = await OpcUaServerFixture.start(valueKeys: [speedKey, secondKey]);
+      addTearDown(fixture.dispose);
+      identity = PretendIdentity();
+      link = OpcUaUpstreamLink(
+        alias: alias,
+        endpoint: fixture.endpoint,
+        useIsolate: false,
+        epochReader: identity.read,
+      );
+      addTearDown(link.dispose);
+      log = <String>[];
+      await link.connect(deadline: generous);
+      await awaitConnected(link);
+    });
+
+    test('the epoch is read on session activation, and it is a reading rather '
+        'than a placeholder', () async {
+      expect(identity.reads, greaterThan(0),
+          reason: 'the epoch is re-read on session activation and on nothing '
+              'else — not on a timer, because a timer asks a healthy server a '
+              'question it already answered');
+      expect(link.epoch, isNot(unconnectedEpoch));
+      expect(isUnreadableEpoch(link.epoch), isFalse);
+      expect(link.epoch, identity.current.combine());
+    });
+
+    test('a reconnection that finds the same server produces NO bump',
+        () async {
+      final epochs = <String>[];
+      final states = <UpstreamLinkState>[];
+      link.epochStream.listen(epochs.add);
+      link.stateStream.listen(states.add);
+      final before = link.epoch;
+
+      // Three activations in a row against a server that did not change. A
+      // flapping link must not read as forty reprogrammings (T-08-32).
+      await link.debugRefreshEpoch();
+      await link.debugRefreshEpoch();
+      await link.debugRefreshEpoch();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(link.epoch, before);
+      expect(epochs, isEmpty,
+          reason: 'an epochStream event means every handle this link ever '
+              'issued is stale, and issuing one because a socket reopened '
+              'would make every reconnect a plant-wide re-resolution');
+      expect(states, isNot(contains(UpstreamLinkState.reprogrammed)));
+      expect(link.reBrowses, 0);
+      expect(identity.reads, greaterThanOrEqualTo(4),
+          reason: 'the anti-vacuity half: it must have ASKED three more times '
+              'and decided nothing changed, not skipped the question');
+    });
+
+    test('a bump degrades every key in one batch BEFORE it announces '
+        'reprogrammed', () async {
+      final refA = link.resolve(speedKey, mappingFor(speedKey))!;
+      final refB = link.resolve(secondKey, mappingFor(secondKey))!;
+      link.subscribe(refA).listen((v) => log.add('$speedKey:${v.quality.code}'));
+      link.subscribe(refB).listen((v) => log.add('$secondKey:${v.quality.code}'));
+      await until(
+          () =>
+              link.peek(refA)?.quality == Quality.good &&
+              link.peek(refB)?.quality == Quality.good,
+          'both keys to report a good value');
+      log.clear();
+      link.stateStream.listen((s) => log.add('state:${s.wireName}'));
+
+      identity.change();
+      await link.debugRefreshEpoch();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      print('BUMP ORDER $log');
+      final announced = log.indexOf('state:${UpstreamLinkState.reprogrammed.wireName}');
+      expect(announced, isNonNegative,
+          reason: 'an epoch bump that nobody can see is a silent '
+              're-resolution, which is the thing this mechanism replaces');
+      final degrades = <int>[
+        for (var i = 0; i < log.length; i++)
+          if (log[i].endsWith(':${Quality.badCommFault.code}')) i,
+      ];
+      expect(degrades, hasLength(2),
+          reason: 'every key on the alias degrades, in ONE pass');
+      expect(degrades.every((i) => i < announced), isTrue,
+          reason: 'a panel that receives `reprogrammed` and then reads a key '
+              'that has not yet degraded sees a good value under a '
+              'reprogrammed link — the exact combination the epoch exists to '
+              'make impossible');
+    });
+
+    test('birthCount does not move on a bump', () async {
+      final before = link.birthCount;
+
+      identity.change();
+      await link.debugRefreshEpoch();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(link.birthCount, before,
+          reason: 'a reprogram is not a reconnection. Conflating them makes '
+              'the Sparkplug counter lie about link stability, which is the '
+              'one number a client uses to tell "same session, still running" '
+              'from "a new session that may have missed updates"');
+    });
+
+    test('a key that survived comes back uncertain; a key that left the '
+        'address space is errorConfig and stays there', () async {
+      final refA = link.resolve(speedKey, mappingFor(speedKey))!;
+      final refB = link.resolve(secondKey, mappingFor(secondKey))!;
+      link.subscribe(refA).listen((_) {});
+      link.subscribe(refB).listen((_) {});
+      await until(
+          () =>
+              link.peek(refA)?.quality == Quality.good &&
+              link.peek(refB)?.quality == Quality.good,
+          'both keys to report a good value');
+
+      // The reprogram that dropped a tag.
+      fixture.deleteNode(secondKey);
+      identity.change();
+      await link.debugRefreshEpoch();
+
+      final freshA = link.resolve(speedKey, mappingFor(speedKey))!;
+      final freshB = link.resolve(secondKey, mappingFor(secondKey))!;
+      expect(freshA.epoch, link.epoch,
+          reason: 'a key that still resolves gets a handle under the NEW '
+              'epoch; that is what makes it usable again');
+      expect(freshA.epoch, isNot(refA.epoch));
+      await until(() => link.peek(freshB)?.quality == Quality.errorConfig,
+          'the deleted tag to settle on errorConfig');
+      await until(
+          () =>
+              link.peek(freshA)?.quality == Quality.uncertainLastKnown ||
+              link.peek(freshA)?.quality == Quality.good,
+          'the surviving tag to come back');
+
+      // And it STAYS there: errorConfig means waiting will not fix it, and a
+      // later mass degrade must not relabel it as a comms fault.
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(link.peek(freshB)!.quality, Quality.errorConfig);
+      expect(link.peek(freshB)!.value, isNull);
+    });
+
+    test('a server that stops answering is not read as a reprogram', () async {
+      final epochs = <String>[];
+      link.epochStream.listen(epochs.add);
+      final before = link.epoch;
+
+      identity.goSilent();
+      await link.debugRefreshEpoch();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(link.epoch, before,
+          reason: 'absence of evidence is not evidence of change. Adopting '
+              'the unreadable epoch here would turn every comms glitch into a '
+              'plant-wide re-resolution, and the keys are already degrading '
+              'for the honest reason');
+      expect(epochs, isEmpty);
+      expect(link.reBrowses, 0);
+    });
+  }, tags: 'opcua');
+
+  group('one re-browse, whatever the key count', () {
+    test('a bump across fifty keys re-browses exactly once', () async {
+      final keys = <String>[
+        for (var i = 1; i <= 50; i++)
+          'ST101.CN${i.toString().padLeft(2, '0')}.MOT01.speed',
+      ];
+      final fixture = await OpcUaServerFixture.start(valueKeys: keys);
+      addTearDown(fixture.dispose);
+      final identity = PretendIdentity();
+      final link = OpcUaUpstreamLink(
+        alias: alias,
+        endpoint: fixture.endpoint,
+        useIsolate: false,
+        epochReader: identity.read,
+      );
+      addTearDown(link.dispose);
+      await link.connect(deadline: generous);
+      await awaitConnected(link);
+      final refs = <UpstreamRef>[
+        for (final key in keys) link.resolve(key, mappingFor(key))!,
+      ];
+      for (final ref in refs) {
+        link.subscribe(ref).listen((_) {});
+      }
+      await until(() => refs.every((r) => link.peek(r) != null),
+          'all fifty keys to report something', within: const Duration(minutes: 1));
+
+      identity.change();
+      await link.debugRefreshEpoch();
+
+      print('REBROWSE ${keys.length} keys bumped -> ${link.reBrowses} '
+          're-browse(s)');
+      expect(link.reBrowses, 1,
+          reason: 'a slow level is a slow panel, but fifty of them is a '
+              'browse storm against a controller that just restarted '
+              '(T-08-31)');
+      expect(refs.every((r) => link.peek(r) == null), isTrue,
+          reason: 'every handle issued under the old epoch is stale, and peek '
+              'refuses all fifty of them without a list to walk');
+    }, timeout: const Timeout(Duration(minutes: 4)));
   }, tags: 'opcua');
 }

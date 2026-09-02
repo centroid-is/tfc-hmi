@@ -49,6 +49,7 @@ import 'package:open62541/open62541.dart' as ua;
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
+import 'epoch.dart';
 import 'upstream_link.dart';
 import 'write_translation.dart';
 
@@ -253,10 +254,15 @@ final class OpcUaUpstreamLink implements UpstreamLink {
     this.staleAfter = const Duration(seconds: 10),
     Duration publishingInterval = const Duration(milliseconds: 100),
     Duration iteratePeriod = const Duration(milliseconds: 10),
+    this.epochDeadline = const Duration(seconds: 5),
+    EpochInputsReader epochReader = readEpochInputs,
+    ua.NodeId? buildStampNode,
     ua.ClientApi? client,
     void Function(Object error, StackTrace stack)? onIterateError,
   })  : _endpoint = endpoint,
         _iteratePeriod = iteratePeriod,
+        _epochReader = epochReader,
+        _buildStampNode = buildStampNode,
         _injectedClient = client,
         _onIterateError = onIterateError {
     _config = OpcUAConfig()
@@ -280,8 +286,20 @@ final class OpcUaUpstreamLink implements UpstreamLink {
   /// See the library doc: assumption A5, recorded and not decided.
   final bool useIsolate;
 
+  /// The bound on one epoch reading.
+  ///
+  /// Separate from `connect`'s deadline because it bounds a different thing:
+  /// `connect` waits for a session, this waits for three small reads on a
+  /// session that is already up. It is short on purpose — a server that will
+  /// not answer `ns=0;i=2257` in five seconds has told us what we needed to
+  /// know, and the reading is [EpochInputs.unreadable], which the link
+  /// deliberately does **not** adopt.
+  final Duration epochDeadline;
+
   final String _endpoint;
   final Duration _iteratePeriod;
+  final EpochInputsReader _epochReader;
+  final ua.NodeId? _buildStampNode;
   final ua.ClientApi? _injectedClient;
   final void Function(Object error, StackTrace stack)? _onIterateError;
 
@@ -319,7 +337,19 @@ final class OpcUaUpstreamLink implements UpstreamLink {
   StreamSubscription<EffectiveDeviceStatus>? _statusSub;
 
   UpstreamLinkState _state = UpstreamLinkState.disconnected;
-  String _epoch = 'unconnected';
+  String _epoch = unconnectedEpoch;
+
+  /// Latched between an epoch bump and the end of its re-browse.
+  ///
+  /// The announced state is [UpstreamLinkState.reprogrammed] for exactly that
+  /// window, and it is a latch rather than a value of [_state] because
+  /// `effectiveStatus` keeps reporting the *session*, which is fine — the
+  /// session really is up. What is not fine is a green badge on a link whose
+  /// every handle is stale, so this wins over the session while it is set.
+  bool _reprogrammed = false;
+
+  /// How many re-browses this link has run. **One per bump, never per key.**
+  int _reBrowses = 0;
   int _birthCount = 0;
   DateTime? _lastDeathAt;
   String? _lastError;
@@ -355,10 +385,20 @@ final class OpcUaUpstreamLink implements UpstreamLink {
   /// number exists.
   int get sourceTimeFallbacks => _sourceTimeFallbacks;
 
+  /// How many times this link has re-resolved its keys against a new address
+  /// space.
+  ///
+  /// The number a test reads to prove T-08-31: **one per bump**, no matter how
+  /// many keys the bump affected.
+  int get reBrowses => _reBrowses;
+
   // ------------------------------------------------------------- the surface
 
   @override
   UpstreamLinkState get state {
+    // The latch wins over the session, and only for the window between the
+    // bump and the end of its re-browse. See [_reprogrammed].
+    if (_reprogrammed) return UpstreamLinkState.reprogrammed;
     final wrapper = _wrapper;
     if (wrapper == null) return _state;
     return mapEffectiveStatus(wrapper.effectiveStatus);
@@ -555,9 +595,14 @@ final class OpcUaUpstreamLink implements UpstreamLink {
       // is definitively no effect (08-03's ruling, and what the fake does).
       return WriteRejected(
         cmd,
-        const WriteReason('stale_handle',
-            message: 'this handle was resolved before the link changed '
-                'identity; re-resolve the key and try again'),
+        WriteReason('stale_handle',
+            // The stale epoch is NAMED, and the current one beside it. Neither
+            // is parsed by anybody — they are two opaque tokens in a sentence
+            // an engineer reads at three in the morning, and "these two
+            // differ" is the whole diagnosis.
+            message: 'this handle was resolved under epoch ${ref.epoch} and '
+                'the link is now at $_epoch; nothing was sent — re-resolve '
+                'the key and try again'),
         at: DateTime.now().millisecondsSinceEpoch,
       );
     }
@@ -641,7 +686,11 @@ final class OpcUaUpstreamLink implements UpstreamLink {
     // wraps rather than rebuilds: a session that dies quietly still ages out
     // of `connected` because a clock says so, not because an event arrived.
     wrapper.startHeartbeat(_subscriptionId!);
-    _epoch = 'session:${DateTime.now().microsecondsSinceEpoch}';
+    // The session is activated, which is the one moment the epoch is read. On
+    // a first connect this ADOPTS an identity rather than bumping one — see
+    // [_refreshEpoch] decision 3 — so no `reprogrammed` is announced for the
+    // ordinary act of finding out who we are talking to.
+    await _refreshEpoch(deadline: deadline);
     // **`connect` returning is deliberately NOT the same as being connected.**
     // The state comes from `ClientWrapper.effectiveStatus` and nowhere else,
     // and until the first heartbeat tick that is `connecting` — a live session
@@ -772,7 +821,18 @@ final class OpcUaUpstreamLink implements UpstreamLink {
       // Phase three: the same key set, never a bigger one.
       for (final monitored in _monitors.values) {
         _subscriptionsCreated++;
-        await _establish(monitored);
+        try {
+          await _establish(monitored);
+        } catch (error) {
+          // **ONE TAG fails, never the pass** — the standing constraint, and
+          // it earns its keep here rather than in the abstract: a re-browse
+          // after a reprogram is exactly when a key is most likely to have
+          // left the address space, and a throw on the seventh of fifty would
+          // leave forty-three keys with no monitored item and no error either.
+          _recordError(error);
+          _publishDegraded(
+              monitored.key, qualityForOpcUaErrorText(error.toString()));
+        }
       }
     } finally {
       _resubscribing = false;
@@ -794,7 +854,231 @@ final class OpcUaUpstreamLink implements UpstreamLink {
       _lastDeathAt = DateTime.now().toUtc();
     }
     _state = next;
+    // The bookkeeping above still runs while a reprogram is latched —
+    // `birthCount` and `lastDeathAt` are facts about the SESSION and a
+    // reprogram does not make them stop being true — but the announcement does
+    // not. A `connected` on the wire between the `reprogrammed` and the end of
+    // the re-browse would tell a panel the link is fine while every handle it
+    // holds is stale.
+    if (_reprogrammed) return;
     if (!_states.isClosed) _states.add(next);
+  }
+
+  // ------------------------------------------------------------- the epoch
+  //
+  // SRV-07's second criterion. The epoch is re-read on **session activation**
+  // and on nothing else: not on a timer, because a timer asks a healthy server
+  // a question it already answered, and because the moment a handle can start
+  // pointing at the wrong variable is the moment a new session comes up
+  // (`state_man.dart:1458-1510` is where that transition already lives).
+
+  /// Re-reads the server's identity and bumps the epoch if it changed.
+  ///
+  /// Returns whether a bump happened. Four decisions, in this order, and each
+  /// one is a case in `epoch_test.dart`:
+  ///
+  ///  1. **The same reading is not a bump.** A reconnection that finds the
+  ///     same server produces no event at all, which is what stops a flapping
+  ///     link from being reported as forty reprogrammings (T-08-32).
+  ///  2. **An unreadable reading is never adopted.** A server that answered
+  ///     none of the three questions has told us nothing about its identity,
+  ///     and absence of evidence is not evidence of change; adopting it would
+  ///     turn every comms glitch into a plant-wide re-resolution. The keys are
+  ///     already degrading for the honest reason — the link is down.
+  ///  3. **The first reading is not a change.** Going from
+  ///     [unconnectedEpoch] to a real epoch is this link learning who it is
+  ///     talking to, not that PLC being reprogrammed.
+  ///  4. Otherwise the server underneath us changed, and [_bump] runs.
+  Future<bool> _refreshEpoch(
+      {Duration? deadline, bool sessionIsNew = false}) async {
+    final client = _client;
+    if (client == null || _disposed) return false;
+    EpochInputs inputs;
+    try {
+      inputs = await _epochReader(client,
+          deadline: deadline ?? epochDeadline, buildStampNode: _buildStampNode);
+    } catch (error) {
+      // `readEpochInputs` does not throw; an injected one might, and a
+      // detector that dies of its own exception is worse than one that says
+      // it could not read.
+      _recordError(error);
+      inputs = EpochInputs.unreadable;
+    }
+    final next = inputs.combine();
+    if (next == _epoch) return false;
+    if (isUnreadableEpoch(next)) return false;
+    if (_epoch == unconnectedEpoch) {
+      _epoch = next;
+      return false;
+    }
+    await _bump(next, sessionIsNew: sessionIsNew);
+    return true;
+  }
+
+  /// The four things a bump does, in this order and once each.
+  ///
+  /// The **order** is the part that matters and the part a sabotage can break
+  /// invisibly, so it is numbered here and asserted there.
+  Future<void> _bump(String next, {required bool sessionIsNew}) async {
+    // 1. Every ref this link ever issued becomes stale — and it is this single
+    //    assignment that does it. `_isLive` compares a ref's epoch against
+    //    this field, so there is no list of outstanding handles to walk and
+    //    therefore none to miss.
+    _epoch = next;
+    // 2. ONE batch. `_degradeAll` is one pass over the cache; at 1500 keys a
+    //    per-key fan-out is a denial of service against the screen the
+    //    operator is trying to read.
+    _degradeAll();
+    // 3. And THEN the announcement, kept a separate act from the degradation
+    //    for `fake_state_man.dart:598-605`'s reason and for a second one: a
+    //    panel that receives `reprogrammed` and then reads a key that has not
+    //    yet degraded sees a good value under a reprogrammed link, which is
+    //    the exact combination the epoch exists to make impossible.
+    _announceReprogrammed();
+    if (!_epochs.isClosed) _epochs.add(next);
+    // 4. One re-browse, whatever the key count.
+    await _reBrowse(sessionIsNew: sessionIsNew);
+  }
+
+  void _announceReprogrammed() {
+    _reprogrammed = true;
+    // Deliberately NOT `_setState`: a reprogram is not a death and not a
+    // birth, so neither `lastDeathAt` nor `birthCount` moves here.
+    if (!_states.isClosed) _states.add(UpstreamLinkState.reprogrammed);
+  }
+
+  /// Ends the reprogrammed window and re-announces whatever the session says.
+  void _clearReprogrammed() {
+    if (!_reprogrammed) return;
+    _reprogrammed = false;
+    if (!_states.isClosed) _states.add(state);
+  }
+
+  /// Re-resolves every key this link owns against the new address space —
+  /// **once**, in one pass.
+  ///
+  /// What it costs on a real PLC: one subscription create plus one monitored
+  /// item per key, against a controller that has just restarted and is the
+  /// slowest it will ever be. That is not free. It is still once, because the
+  /// alternative is fifty of these — a browse storm at exactly the wrong
+  /// moment (T-08-31), and the assertion that keeps it honest counts the
+  /// re-browses across a fifty-key bump and expects 1.
+  ///
+  /// Two outcomes per key, and both are already implemented by the resubscribe
+  /// path rather than by a second mechanism:
+  ///
+  ///  * a key that still resolves gets a fresh monitored item, and is marked
+  ///    [Quality.uncertainLastKnown] until a sample actually arrives;
+  ///  * a key that left the address space fails to monitor with
+  ///    `BadNodeIdUnknown`, which `qualityForOpcUaErrorText` maps to
+  ///    [Quality.errorConfig] — and it stays there, because `_publishDegraded`
+  ///    refuses to relabel an error as a comms fault.
+  ///
+  /// **The value is dropped, not carried over.** `_markRestored` keeps the old
+  /// number under an uncertain badge and is right to: after a reconnect it is
+  /// still *this tag's* last reading. After a reprogram it is not — the
+  /// address space was rebuilt, and a number from before the download is a
+  /// number from a different variable wearing this key's name. That is the
+  /// whole failure this phase exists to prevent, so the two paths differ here
+  /// on purpose.
+  ///
+  /// ## Why [sessionIsNew] exists, and why it is not a test accommodation
+  ///
+  /// A reprogram arrives in two shapes, and they need different work:
+  ///
+  ///  * **The session died with the server** (a restart; the reopen path).
+  ///    The old subscription id is meaningless, so the full resubscribe runs:
+  ///    a new subscription, the heartbeat moved onto it, then the key set.
+  ///  * **The session survived the reprogram** — which is *precisely* the A1
+  ///    case this whole multi-input epoch exists for. TF6100 is a separate
+  ///    Windows service and a PLC download restarts the runtime, not the
+  ///    service, so the session, the subscription and the heartbeat are all
+  ///    still perfectly good and the address space underneath them is not.
+  ///    Here the right work is only to re-monitor the keys.
+  ///
+  /// Doing the heavy version on a live session is not merely wasteful, it is
+  /// **measured to crash**: creating a second subscription and restarting the
+  /// heartbeat onto it while fifty monitored-item creates are in flight makes
+  /// the binding answer one of them `No results for create monitored item`,
+  /// and its error path closes a `NativeCallable` that open62541 still holds —
+  /// the VM then aborts inside `UA_Client_delete` with `Callback invoked after
+  /// it has been deleted`. Reproducible on the fifty-key arm, absent from the
+  /// same arm without a bump. Recorded here rather than worked around
+  /// silently: the binding fix belongs upstream (the orphaned-monitored-item
+  /// family, open62541_dart#92), and this is the shape that does not need it.
+  Future<void> _reBrowse({required bool sessionIsNew}) async {
+    _reBrowses++;
+    try {
+      for (final entry in _cache.entries.toList()) {
+        // A tag that is already gone stays gone: `errorConfig` means waiting
+        // will not fix it, and marking it uncertain would tell an operator to
+        // keep waiting for a tag that no longer exists.
+        if (entry.value.quality.isError) continue;
+        _publishDegraded(entry.key, Quality.uncertainLastKnown);
+      }
+      if (sessionIsNew) {
+        await _resubscribeAll();
+      } else {
+        await _remonitorAll();
+      }
+    } finally {
+      _clearReprogrammed();
+    }
+  }
+
+  /// Re-establishes every monitored key on the **existing** subscription.
+  ///
+  /// [_resubscribeAll] without the subscription create and without touching
+  /// the heartbeat — the live-session half of [_reBrowse]. The two-phase
+  /// ordering is kept exactly (`state_man.dart:1480-1501`): cancel every
+  /// monitored item first, re-monitor second. Interleaving them is what let
+  /// one key's monitored-item id collide with another's, and that ordering
+  /// fixed a measured storm; it does not stop being true because the
+  /// subscription is the same one.
+  Future<void> _remonitorAll() async {
+    if (_resubscribing || _disposed) return;
+    final client = _client;
+    if (client == null || _subscriptionId == null) return;
+    _resubscribing = true;
+    try {
+      for (final monitored in _monitors.values) {
+        await monitored.subscription?.cancel();
+        monitored.subscription = null;
+      }
+      for (final monitored in _monitors.values) {
+        _subscriptionsCreated++;
+        try {
+          await _establish(monitored);
+        } catch (error) {
+          // ONE TAG fails, never the pass. See `_resubscribeAll`.
+          _recordError(error);
+          _publishDegraded(
+              monitored.key, qualityForOpcUaErrorText(error.toString()));
+        }
+      }
+    } finally {
+      _resubscribing = false;
+    }
+  }
+
+  /// The re-browse currently running, if any.
+  ///
+  /// Tracked for [dispose]'s reason and only that one: `client.delete()` frees
+  /// the native client, and a `subscriptionCreate` still crossing the FFI
+  /// boundary against it walks freed memory and SEGVs the VM rather than
+  /// failing. Same hazard as [_inFlight], different entry point.
+  Future<void>? _reBrowseInFlight;
+
+  /// Re-reads the epoch as a session activation would.
+  ///
+  /// **A lever, and named so.** Production re-reads on activation and on
+  /// nothing else; a case about the bump *choreography* cannot force an
+  /// activation on a healthy link, and restarting a server to test the
+  /// ordering of four steps would test the fixture instead. The reading itself
+  /// is proved against a server that genuinely restarted in
+  /// `stale_handle_test.dart`.
+  Future<void> debugRefreshEpoch() async {
+    await _refreshEpoch();
   }
 
   void _recordError(Object error) {
@@ -881,9 +1165,15 @@ final class OpcUaUpstreamLink implements UpstreamLink {
     _lastReopenAt = now;
     _reopening = true;
     _inFlight = client.connect(_endpoint).timeout(_connectDeadline).then<void>(
-      (_) {
+      (_) async {
         _reopening = false;
         wrapper.sessionLost = false;
+        // **A new session is the one moment the epoch is re-read.** Ask before
+        // restoring anything: if the server underneath is a different one, the
+        // bump owns the recovery — it degrades, announces and re-browses — and
+        // marking the old numbers "restored" first would relabel readings from
+        // an address space that no longer exists.
+        if (await _refreshEpoch(sessionIsNew: true)) return;
         // **Restored is marked HERE, not on the transition back to
         // connected.** The link being back is a fact about the socket; the
         // numbers are still the old ones and nothing has re-read them. Doing
@@ -935,13 +1225,17 @@ final class OpcUaUpstreamLink implements UpstreamLink {
   /// Forces a new epoch, for the cases that need a stale handle without a PLC
   /// download.
   ///
-  /// 08-08 replaces this with the real multi-input epoch (`StartTime` + a
-  /// `NamespaceArray` hash + an optional build stamp); until then the epoch is
-  /// per-session and this is how a test reaches it. Named `debug` so it reads
-  /// as what it is.
+  /// 08-07 left this as a placeholder over a per-session epoch; 08-08 kept the
+  /// name and its one caller (`opcua_link_test.dart`'s stale-handle arm) and
+  /// routed it through the **real** [_bump], so the lever now exercises the
+  /// production choreography rather than a shortcut past it. Synchronous
+  /// because its caller is; the re-browse it starts is tracked so [dispose]
+  /// cannot delete the client out from under it.
   void debugBumpEpoch() {
-    _epoch = 'session:${DateTime.now().microsecondsSinceEpoch}:bumped';
-    if (!_epochs.isClosed) _epochs.add(_epoch);
+    _reBrowseInFlight = _bump(
+        'e1:debug-bump-${DateTime.now().microsecondsSinceEpoch}',
+        sessionIsNew: false);
+    unawaited(_reBrowseInFlight!.catchError(_recordError));
   }
 
   @override
@@ -960,6 +1254,14 @@ final class OpcUaUpstreamLink implements UpstreamLink {
       await _inFlight;
     } catch (_) {
       // A failed reopen is not a disposal failure.
+    }
+    try {
+      // And the same for a re-browse started by a bump that nobody awaited
+      // (`debugBumpEpoch`). Same hazard, same reason: `subscriptionCreate` is
+      // FFI, and deleting the client under it is a SEGV rather than an error.
+      await _reBrowseInFlight;
+    } catch (_) {
+      // A failed re-browse is not a disposal failure either.
     }
     for (final monitored in _monitors.values) {
       await monitored.subscription?.cancel();
