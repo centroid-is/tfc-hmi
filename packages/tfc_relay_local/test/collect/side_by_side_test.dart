@@ -385,14 +385,27 @@ void main() {
         () async => second.stats.lastError?.contains('alpha') ?? false,
         'the second gateway being refused while the first holds');
 
+    // WR-01's arm: rows handed to the refused gateway during the contested
+    // window. If any of them survives to the takeover, the replay writes a
+    // second writer's samples into the window the first gateway owned.
+    for (var m = 1; m <= 3; m++) {
+      await second.insert('gw_$base',
+          DateTime.utc(2026, 5, 1).add(Duration(seconds: m)), 90.0 + m);
+    }
+    await eventuallyAsync(() async => second.stats.rowsDropped >= 3,
+        "the refused gateway's rows becoming counted drops, not a pen");
+
     await first.close();
     await waitConnected(second, 'the second gateway after the first closed');
     await second.ensureTable(
         'gw_$base', const RetentionPolicy(dropAfter: Duration(days: 30)));
     for (var i = 1; i <= 2; i++) {
       await second.insert('gw_$base',
-          DateTime.utc(2026, 5, 1).add(Duration(seconds: i)), i.toDouble());
+          DateTime.utc(2026, 5, 1).add(Duration(minutes: 1, seconds: i)),
+          i.toDouble());
     }
+    // pumpUntilCount fails on an overshoot: 2 means the two post-takeover
+    // rows and NOTHING replayed from the refused window.
     await pumpUntilCount(second, 'gw_$base', 2);
   });
 

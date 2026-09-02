@@ -153,10 +153,23 @@ final class TimescaleSink implements TimeseriesSink {
   Future<void>? _closeFuture;
   final Completer<void> _closing = Completer<void>();
 
-  /// Rows accepted before the backend exists. Bounded by the config's total
-  /// cap; overflow drops oldest and is counted like every other loss.
+  /// Rows accepted before the backend exists — but only while nobody else
+  /// owns the namespace. Bounded by the config's total cap; overflow drops
+  /// oldest and is counted like every other loss.
+  ///
+  /// A **refusal drains this pen and closes it** (WR-01): rows a refused
+  /// gateway keeps are rows a takeover would replay into tables the previous
+  /// holder was writing for that whole window — both writers' samples of the
+  /// same keys, doubled row density across exactly the stretch somebody will
+  /// later chart. Refusal and lock loss reach the same verdict: not the
+  /// owner → a counted drop. The pen serves only the nobody-holds-it-yet
+  /// connect window.
   final List<_PendingRow> _preBuffer = <_PendingRow>[];
   int _preDropped = 0;
+
+  /// True from the moment a connect attempt is refused the namespace lock
+  /// until an attempt acquires it. While true, nothing is penned.
+  bool _lockRefused = false;
 
   /// Rows handed to `Database.insertTimeseriesData` without it throwing.
   int _handedOver = 0;
@@ -195,6 +208,7 @@ final class TimescaleSink implements TimeseriesSink {
           await db.close();
           return;
         }
+        _lockRefused = false;
         _adopt(db);
         try {
           await _replay(db);
@@ -203,6 +217,17 @@ final class TimescaleSink implements TimeseriesSink {
         }
         return;
       } catch (error) {
+        if (error is AdvisoryLockRefused) {
+          // WR-01: another collector owns this namespace right now, so the
+          // pen holds samples of the same keys the holder is writing.
+          // Replaying them after a takeover would back-fill the contested
+          // window with a second writer's rows; the honest verdict is the
+          // lock-loss one — counted drops, here and for every insert until
+          // an attempt acquires.
+          _lockRefused = true;
+          _preDropped += _preBuffer.length;
+          _preBuffer.clear();
+        }
         _recordFailure('connect', error);
         attempt++;
         await _pause(_backoffFor(attempt));
@@ -361,6 +386,13 @@ final class TimescaleSink implements TimeseriesSink {
     if (!config.enabled || _closed) return;
     final db = _db;
     if (db == null) {
+      if (_lockRefused) {
+        // WR-01: refused the namespace — the same verdict as a lost lock
+        // session, one connect earlier. `lastError` already names the
+        // holder (the one detail the redactor lets through).
+        _preDropped++;
+        return;
+      }
       _preBuffer.add(_PendingRow(table, time, value));
       if (_preBuffer.length > config.maxQueuedRowsTotal) {
         _preBuffer.removeAt(0);

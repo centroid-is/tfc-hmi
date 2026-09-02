@@ -25,6 +25,7 @@ import 'dart:async';
 import 'package:logger/logger.dart';
 import 'package:test/test.dart';
 import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_relay_local/src/collect/advisory_lock.dart';
 import 'package:tfc_relay_local/src/collect/timescale_sink.dart';
 import 'package:tfc_relay_local/tfc_relay_local.dart'
     show CollectionConfig, CollectionEndpoint;
@@ -245,6 +246,67 @@ void main() {
       expect(sink.stats.rowsQueued, 0,
           reason: 're-queueing a poisoned batch is the infinite loop '
               'Database._handleFailedBatch exists to prevent');
+    });
+  });
+
+  group('a refused namespace is a counted drop, never a deferred replay',
+      () {
+    test(
+        'rows handed over while refused are dropped-and-counted, the pen is '
+        'drained, and takeover replays nothing from the contested window',
+        () async {
+      final backend = FakeWriteBackend();
+      var refuse = true;
+      final sink = TimescaleSink(
+        enabledConfig(),
+        backendFactory: (_) async {
+          if (refuse) throw const AdvisoryLockRefused('other-gateway');
+          return Database(backend);
+        },
+        sleep: shortSleep,
+      );
+      addTearDown(sink.close);
+
+      // One row lands in the pen during the connect window, before the
+      // refusal is known.
+      await sink.insert('gw_t', DateTime.utc(2026, 1, 1), 0.5);
+      await sink.start();
+      await eventually(
+          () => sink.stats.lastError?.contains('other-gateway') ?? false,
+          'the refusal naming the holder');
+
+      // The refusal drained the pen: the contested-window row is a counted
+      // drop, not a replay waiting to happen.
+      expect(sink.stats.rowsQueued, 0,
+          reason: 'a refused gateway holding a pen is a takeover that '
+              'back-fills the window another writer owned (WR-01)');
+      expect(sink.stats.rowsDropped, 1);
+
+      // Rows handed over while refused: dropped and counted, never penned.
+      for (var i = 1; i <= 3; i++) {
+        await sink.insert(
+            'gw_t', DateTime.utc(2026, 1, 1 + i), i.toDouble());
+      }
+      expect(sink.stats.rowsQueued, 0);
+      expect(sink.stats.rowsDropped, 4);
+
+      // The holder releases; this gateway takes over — and replays NOTHING
+      // from the refused hour.
+      refuse = false;
+      await within(sink.connected.firstWhere((up) => up),
+          'the takeover connecting', budget: const Duration(seconds: 5));
+      await sink.flush();
+      expect(backend.stored, isEmpty,
+          reason: 'the shared tables must never hold both gateways\' '
+              'samples for the refused window — that is the doubling '
+              'defect arriving retroactively');
+
+      // Post-takeover rows land normally.
+      await sink.insert('gw_t', DateTime.utc(2026, 2, 1), 9.0);
+      await sink.flush();
+      expect(backend.storedValues, [9.0]);
+      expect(sink.stats.rowsDropped, 4,
+          reason: 'ownership acquired: drops stop with the refusal');
     });
   });
 
