@@ -166,7 +166,17 @@ const int declaredRetainedTimers = 1;
 /// sites has to carry a `deadline` argument or a `.timeout(`, and the offender
 /// case is what enforces that.
 ///
-/// **A seventh site exists that this sweep structurally cannot see, and that
+/// And, since 08-08, the epoch reader's one:
+///
+///  * `epoch.dart._readOrNull` — `client.read(node)`, bounded. **One helper,
+///    not three call sites**, and that is the reason the reader is shaped the
+///    way it is: `StartTime`, the `NamespaceArray` and the optional
+///    build-stamp tag are three questions asked through one bounded, never-
+///    throwing read, so a deadline cannot go missing on one of them and stay
+///    present on the others. The epoch is the detector for a server that
+///    changed underneath our handles; a detector that can hang is not one.
+///
+/// **A site exists that this sweep structurally cannot see, and that
 /// is a finding rather than an oversight.**
 /// `OpcUaUpstreamLink._reopenSessionIfNeeded` dials
 /// `client.connect(_endpoint).timeout(_connectDeadline)` and *stores* the
@@ -180,7 +190,7 @@ const int declaredRetainedTimers = 1;
 /// re-count every site in `local_state_man.dart` under a rule 08-05 and 08-06
 /// did not agree to, so it is **recorded for 08-13's gate** rather than done
 /// here on the way past.
-const int declaredUpstreamAwaitSites = 6;
+const int declaredUpstreamAwaitSites = 7;
 
 /// Lines under `lib/` that call `.write(` on an upstream.
 ///

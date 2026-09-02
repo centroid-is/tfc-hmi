@@ -25,6 +25,7 @@
 /// interface each of them invented separately.
 library;
 
+export 'src/epoch.dart';
 export 'src/fanin.dart';
 export 'src/freshness_sweep.dart';
 export 'src/ingest.dart';
