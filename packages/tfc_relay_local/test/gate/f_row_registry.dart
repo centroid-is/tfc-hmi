@@ -263,9 +263,9 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     clause: 'the stall harness, the announcement and the staleness clauses (F22a/b/d); the reaper half ("synchronized false disconnect") is 09-08\'s RED and fix, and the historian half ("historian marks the gap") is 09-09\'s db-tagged arm',
   ),
   'F27': Outstanding(
-    kind: OutstandingKind.missing,
+    kind: OutstandingKind.partial,
     owner: '09-06',
-    clause: 'fifty keys on four aliases degrade with exactly one status notification and bounded log growth; five panels, one absent throughout, converge on identical values and qualities',
+    clause: 'the degrade half has its case (F27a); still owed by this plan\'s task 2: five panels — one absent throughout — converging on identical values and qualities under one budget, the conflation and priority-lane clauses, and the resync-damper arm',
   ),
 };
 
