@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:drift/drift.dart' hide isNull;
 import 'package:test/test.dart';
 import 'package:postgres/postgres.dart';
+import 'package:tfc_dart/core/alarm.dart' show alarmHistoryOverlaps;
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/database_drift.dart';
 import 'docker_compose.dart';
@@ -1103,6 +1104,121 @@ void main() {
       // The information_schema lookup that picks the scalar-vs-array SQL used
       // to run once per series per query — 2 ms each, queued behind everything
       // else on a pool of one.
+    });
+
+    // The Downtime view is the only reader that bounds `alarm_history` by a
+    // window, and it was the only thing broken by drift rewriting datetime
+    // comparisons into `JULIANDAY(...)` — a function Postgres does not have.
+    // A sqlite-only test cannot see that, so this one runs the real query
+    // against the real server. See `alarmHistoryOverlaps`.
+    group('Alarm history window', () {
+      /// A closed activation, written the way `AlarmMan._addToDb` writes one:
+      /// raw SQL through a `::timestamp` cast, which Postgres stores back as
+      /// its own `2026-08-29 10:00:00` text rather than ISO-8601.
+      Future<void> insertLikeAlarmMan(
+          String uid, DateTime start, DateTime? end) async {
+        await database.db.customInsert(
+          r'INSERT INTO alarm (uid, title, description, rules) '
+          r'VALUES ($1, $2, $3, $4) ON CONFLICT (uid) DO NOTHING',
+          variables: [
+            Variable.withString(uid),
+            Variable.withString(uid),
+            Variable.withString(uid),
+            Variable.withString('[]'),
+          ],
+        );
+        await database.db.customInsert(
+          r'INSERT INTO alarm_history (alarm_uid, alarm_title, '
+          r'alarm_description, alarm_level, expression, active, pending_ack, '
+          r'created_at, deactivated_at) '
+          r'VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamp, $9::timestamp)',
+          variables: [
+            Variable.withString(uid),
+            Variable.withString(uid),
+            Variable.withString(uid),
+            Variable.withString('error'),
+            Variable.withString('a'),
+            Variable.withBool(false),
+            Variable.withBool(false),
+            Variable.withString(start.toIso8601String()),
+            // NULL for a standing alarm; `_addToDb` only ever writes closed ones.
+            Variable<String>(end?.toIso8601String()),
+          ],
+        );
+      }
+
+      Future<List<String>> inWindow({DateTime? from, DateTime? to}) async {
+        final query = database.db.select(database.db.alarmHistory)
+          ..where((t) => alarmHistoryOverlaps(t, from: from, to: to));
+        final rows = await query.get();
+        return rows.map((r) => r.alarmUid).toList()..sort();
+      }
+
+      final day = DateTime(2026, 8, 29);
+      DateTime at(int hour) => day.add(Duration(hours: hour));
+
+      setUp(() async {
+        await database.db.customStatement('DELETE FROM alarm_history');
+        await database.db.customStatement('DELETE FROM alarm');
+        await insertLikeAlarmMan('before', at(2), at(4));
+        await insertLikeAlarmMan('straddles-start', at(6), at(9));
+        await insertLikeAlarmMan('inside', at(10), at(11));
+        await insertLikeAlarmMan('after', at(20), at(22));
+        await insertLikeAlarmMan('standing', at(7), null);
+      });
+
+      tearDown(() async {
+        try {
+          await database.db.customStatement('DELETE FROM alarm_history');
+          await database.db.customStatement('DELETE FROM alarm');
+        } catch (_) {}
+      });
+
+      test('a bounded window runs at all', () async {
+        // Before the fix this threw
+        // `function julianday(text) does not exist` and the Downtime tab
+        // showed the error instead of a timeline.
+        expect(await inWindow(from: at(8), to: at(16)),
+            ['inside', 'standing', 'straddles-start']);
+      });
+
+      test('an unbounded query is unaffected', () async {
+        expect(await inWindow(), hasLength(5));
+      });
+
+      test('an open-ended window bounds only the side it names', () async {
+        expect(await inWindow(to: at(5)), ['before']);
+        expect(await inWindow(from: at(21)), ['after', 'standing']);
+      });
+
+      test('rows drift itself inserted compare the same', () async {
+        // drift stores ISO-8601 in the same text column; `::timestamp` has to
+        // parse both spellings or half the history sorts wrong.
+        await database.db.into(database.db.alarm).insert(
+              AlarmCompanion.insert(
+                  uid: 'drift-written',
+                  title: 'drift-written',
+                  description: 'drift-written',
+                  rules: '[]'),
+            );
+        await database.db.into(database.db.alarmHistory).insert(
+              AlarmHistoryCompanion.insert(
+                alarmUid: 'drift-written',
+                alarmTitle: 'drift-written',
+                alarmDescription: 'drift-written',
+                alarmLevel: 'error',
+                expression: const Value('a'),
+                active: false,
+                pendingAck: false,
+                createdAt: at(10),
+                deactivatedAt: Value(at(11)),
+              ),
+            );
+
+        expect(await inWindow(from: at(8), to: at(16)),
+            contains('drift-written'));
+        expect(await inWindow(to: at(5)), isNot(contains('drift-written')));
+      });
     });
 
     group('Error Handling', () {
