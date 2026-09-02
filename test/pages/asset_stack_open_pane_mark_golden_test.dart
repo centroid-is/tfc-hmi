@@ -249,6 +249,33 @@ void main() {
       );
     });
 
+    testWidgets('a fading ring carried through a relayout sits on its asset',
+        (tester) async {
+      // The close-time ghost. Closing a pane the page had stepped aside for
+      // re-lays the canvas out in the same frame the ring starts its 180ms
+      // fade, and the ring used to spend that fade at the old layout's
+      // coordinates — off to the left of the gate it was about. This frame is
+      // taken mid-fade, after the canvas has moved: the dimmed ring must sit
+      // on the gate at its new place, standoff and all.
+      await pump(tester, [
+        _gate('CN-04', x: 0.1),
+        _gate('CN-05', x: 0.25),
+        _gate('CN-06', x: 0.4, angle: 35),
+      ]);
+      await tapGlyph(tester, find.byType(ConveyorGate).at(1));
+
+      closeSidePane();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // The relayout the inset release causes, reproduced as a surface
+      // change: every asset lands somewhere new while the ring is mid-fade.
+      await tester.binding.setSurfaceSize(const Size(600, 450));
+      await tester.pump(const Duration(milliseconds: 16));
+
+      await expectCanvas(tester, 'open_pane_mark_fading_relayout');
+    });
+
     testWidgets('a diverter gate: its box, which the arm overhangs',
         (tester) async {
       // The gate takes taps on its whole box, so the box is what is marked.
