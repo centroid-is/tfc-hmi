@@ -92,29 +92,28 @@ class _AboutLinuxPageState extends State<AboutLinuxPage> {
       if (d.trim().isNotEmpty) describe = d.trim();
     } catch (_) {}
 
-    // 3) Optionally discover a "main" IPv4 via NetworkManager (quietly skip if absent)
+    // 3) Optionally discover the host's IPv4s via NetworkManager (quietly skip if absent)
     List<String> activeIPs = [];
     try {
       final client = nm.NetworkManagerClient(bus: widget.dbusClient);
       await client.connect();
-      for (final dev in client.devices) {
-        final active = dev.activeConnection;
-        final ok = active != null &&
-            active.state == nm.NetworkManagerActiveConnectionState.activated;
-        if (!ok) continue;
-        final cfg = dev.ip4Config;
-        if (cfg != null && cfg.addressData.isNotEmpty) {
-          final first = cfg.addressData.first;
-          final addr = first['address']?.toString();
-          if (addr != null && addr.isNotEmpty) {
-            if (addr == '127.0.0.1' || addr.startsWith('127.')) {
-              continue;
-            }
-            activeIPs.add(addr);
-            break;
-          }
-        }
-      }
+      final primary = client.primaryConnection;
+      activeIPs = selectHostIps([
+        if (primary != null)
+          HostIpCandidate(
+            isPrimary: true,
+            isActivated: primary.state ==
+                nm.NetworkManagerActiveConnectionState.activated,
+            addresses: _ip4Addresses(primary.ip4Config),
+          ),
+        for (final dev in client.devices)
+          HostIpCandidate(
+            deviceType: dev.deviceType,
+            isActivated: dev.activeConnection?.state ==
+                nm.NetworkManagerActiveConnectionState.activated,
+            addresses: _ip4Addresses(dev.ip4Config),
+          ),
+      ]);
       await client.close();
     } catch (_) {
       // ignore
@@ -480,6 +479,72 @@ class _AboutLinuxPageState extends State<AboutLinuxPage> {
     return '${dt.year}-${two(dt.month)}-${two(dt.day)} '
         '${two(dt.hour)}:${two(dt.minute)}:${two(dt.second)}';
   }
+}
+
+List<String> _ip4Addresses(nm.NetworkManagerIP4Config? cfg) {
+  if (cfg == null) return const [];
+  return [
+    for (final data in cfg.addressData)
+      if (data['address'] is String && (data['address'] as String).isNotEmpty)
+        data['address'] as String,
+  ];
+}
+
+/// One network interface reduced from NetworkManager state, so the IP
+/// selection logic stays testable without a DBus connection.
+@visibleForTesting
+class HostIpCandidate {
+  /// Null for the primary-connection candidate, which has no single device.
+  final nm.NetworkManagerDeviceType? deviceType;
+
+  /// Whether this candidate backs NetworkManager's primary connection —
+  /// the one holding the default route.
+  final bool isPrimary;
+  final bool isActivated;
+  final List<String> addresses;
+
+  const HostIpCandidate({
+    this.deviceType,
+    this.isPrimary = false,
+    required this.isActivated,
+    required this.addresses,
+  });
+}
+
+/// Picks the host's real IPv4 addresses. Device enumeration order from
+/// NetworkManager is arbitrary, so virtual interfaces (docker bridges,
+/// veths, tunnels) must never win over the interface that actually routes
+/// traffic: prefer the primary (default-route) connection, then physical
+/// ethernet/wifi devices, then anything else that is activated.
+@visibleForTesting
+List<String> selectHostIps(List<HostIpCandidate> candidates) {
+  bool isLoopback(String addr) => addr.startsWith('127.');
+
+  List<String> collect(bool Function(HostIpCandidate) where) {
+    final ips = <String>{};
+    for (final c in candidates) {
+      if (!c.isActivated || !where(c)) continue;
+      ips.addAll(c.addresses.where((a) => !isLoopback(a)));
+    }
+    return ips.toList();
+  }
+
+  const physical = {
+    nm.NetworkManagerDeviceType.ethernet,
+    nm.NetworkManagerDeviceType.wifi,
+  };
+  const virtual = {
+    nm.NetworkManagerDeviceType.bridge,
+    nm.NetworkManagerDeviceType.veth,
+    nm.NetworkManagerDeviceType.tun,
+    nm.NetworkManagerDeviceType.dummy,
+  };
+
+  final primary = collect((c) => c.isPrimary);
+  if (primary.isNotEmpty) return primary;
+  final wired = collect((c) => physical.contains(c.deviceType));
+  if (wired.isNotEmpty) return wired;
+  return collect((c) => !c.isPrimary && !virtual.contains(c.deviceType));
 }
 
 class _HostInfo {
