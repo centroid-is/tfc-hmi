@@ -33,8 +33,14 @@ class FakeScreenCapturer implements ScreenCapturer {
   /// Every capturePage call's arguments.
   final List<Map<String, Object?>> pageCalls = <Map<String, Object?>>[];
 
-  /// Thrown instead of capturing, when set.
-  Exception? failure;
+  /// Thrown instead of capturing, when set. Deliberately [Object] and not
+  /// [Exception]: the engine throws [Error]s too, and the tools have to
+  /// survive those the same way.
+  Object? failure;
+
+  /// How many leading captures throw [failure] before one is allowed to
+  /// succeed. -1, the default, means every capture throws it.
+  int failuresBeforeSuccess = -1;
 
   /// How many PNG bytes a capture at the given width produces.
   int Function(int maxWidth) byteCount = (maxWidth) => maxWidth * 4;
@@ -55,7 +61,11 @@ class FakeScreenCapturer implements ScreenCapturer {
   CapturedImage _render(int maxWidth) {
     requestedWidths.add(maxWidth);
     final failure = this.failure;
-    if (failure != null) throw failure;
+    if (failure != null &&
+        (failuresBeforeSuccess < 0 ||
+            requestedWidths.length <= failuresBeforeSuccess)) {
+      throw failure;
+    }
     final bytes = Uint8List(byteCount(maxWidth));
     return CapturedImage(
       pngBytes: bytes,
@@ -194,6 +204,73 @@ void main() {
       }
     });
 
+    test('a frame the engine could not rasterise is retried smaller', () async {
+      // The failure the crash of 2026-09-02 came from: the engine accepts
+      // the capture and draws nothing. It is a size problem far more often
+      // than a permanent one, so the tool halves and asks again.
+      capturer.failure = const ScreenCaptureRasterizationException(
+        'the engine returned an empty image',
+      );
+      capturer.failuresBeforeSuccess = 2;
+
+      final client = await clientWithTools();
+      try {
+        final result = await client.callTool('screenshot_window', {});
+
+        expect(result.isError, isNot(true));
+        expect(capturer.requestedWidths, hasLength(3));
+        expect(capturer.requestedWidths.first, kDefaultScreenshotMaxWidth);
+        expect(capturer.requestedWidths[1], kDefaultScreenshotMaxWidth ~/ 2);
+        expect(capturer.requestedWidths[2], kDefaultScreenshotMaxWidth ~/ 4);
+        expect(textOf(result), contains('drew nothing on the first 2'));
+      } finally {
+        await client.close();
+      }
+    });
+
+    test('a frame that will not rasterise at any size is an error, not a death',
+        () async {
+      capturer.failure = const ScreenCaptureRasterizationException(
+        'the engine returned an empty image',
+      );
+
+      final client = await clientWithTools();
+      try {
+        final result = await client.callTool('screenshot_window', {});
+
+        expect(result.isError, isTrue);
+        expect(textOf(result), contains('empty image'));
+        expect(textOf(result), contains('drew nothing each time'));
+        expect(
+            capturer.requestedWidths,
+            [
+              kDefaultScreenshotMaxWidth,
+              kDefaultScreenshotMaxWidth ~/ 2,
+              kMinScreenshotMaxWidth,
+            ],
+            reason: 'it stops at the narrowest useful width, not forever');
+      } finally {
+        await client.close();
+      }
+    });
+
+    test('an error from the engine is reported, not propagated', () async {
+      // Not an Exception: `RenderRepaintBoundary.toImage` casts a null layer
+      // in a build with asserts stripped, and that is a TypeError.
+      capturer.failure = ArgumentError('null layer');
+
+      final client = await clientWithTools();
+      try {
+        final result = await client.callTool('screenshot_window', {});
+
+        expect(result.isError, isTrue);
+        expect(textOf(result), contains('abandoned'));
+        expect(textOf(result), contains('null layer'));
+      } finally {
+        await client.close();
+      }
+    });
+
     test('an over-budget capture is re-rendered smaller until it fits',
         () async {
       // Anything wider than 600 px comes back at 3 MB, which is 4 MB of
@@ -227,8 +304,8 @@ void main() {
         expect(result.isError, isTrue);
         expect(textOf(result), contains('2048 kB'));
         expect(textOf(result), contains('smaller max_width'));
-        expect(capturer.requestedWidths,
-            hasLength(kScreenshotShrinkAttempts + 1));
+        expect(
+            capturer.requestedWidths, hasLength(kScreenshotShrinkAttempts + 1));
       } finally {
         await client.close();
       }
@@ -324,8 +401,7 @@ void main() {
       }
     });
 
-    test('is absent when the capturer cannot render pages offscreen',
-        () async {
+    test('is absent when the capturer cannot render pages offscreen', () async {
       capturer = FakeScreenCapturer(canRenderPages: false);
       final client = await clientWithTools();
       try {

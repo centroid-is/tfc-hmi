@@ -7,7 +7,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/mcp/app_capture.dart';
 import 'package:tfc/mcp/app_screen_capturer.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
-    show CapturedImage, ScreenCaptureUnavailableException;
+    show
+        CapturedImage,
+        ScreenCaptureRasterizationException,
+        ScreenCaptureUnavailableException;
 
 /// The eight bytes every PNG starts with.
 const List<int> _pngMagic = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -321,6 +324,89 @@ void main() {
       );
       expect(capturer.pageKeys, isEmpty);
       expect(capturer.canRenderPages, isTrue);
+    });
+  });
+
+  group('an image the engine never drew', () {
+    // A profile-mode engine that cannot rasterise a frame does not fail the
+    // future: it completes it with a ui.Image whose native image is null,
+    // which reports 0 x 0. Passing that to toByteData is an access violation
+    // on the IO thread, not a Dart exception -- it killed the HMI on
+    // 2026-09-02. The size is the only warning there is, so it is checked
+    // before the encode.
+    test('is refused by its size, with a message that says why', () {
+      expect(
+        () => AppCaptureController.checkRasterized(0, 0),
+        throwsA(isA<ScreenCaptureRasterizationException>().having(
+          (e) => e.message,
+          'message',
+          allOf(contains('empty image'), contains('could not be rasterised')),
+        )),
+      );
+    });
+
+    test('a half-empty image is refused too', () {
+      expect(() => AppCaptureController.checkRasterized(1280, 0),
+          throwsA(isA<ScreenCaptureRasterizationException>()));
+      expect(() => AppCaptureController.checkRasterized(0, 720),
+          throwsA(isA<ScreenCaptureRasterizationException>()));
+      expect(() => AppCaptureController.checkRasterized(-1, -1),
+          throwsA(isA<ScreenCaptureRasterizationException>()));
+    });
+
+    test('an image with pixels in it is let through', () {
+      expect(() => AppCaptureController.checkRasterized(1, 1), returnsNormally);
+      expect(() => AppCaptureController.checkRasterized(1920, 1080),
+          returnsNormally);
+    });
+
+    testWidgets('a real capture passes the check it is guarded by',
+        (tester) async {
+      // Ties the guard to the live path: whatever the engine hands back for
+      // an ordinary capture must be something the guard accepts, or every
+      // screenshot would start failing closed.
+      final controller = AppCaptureController(debugLabel: 'test-guard');
+      await pumpScope(tester, controller);
+
+      final captured = await tester.runAsync(
+        () => controller.captureWindow(maxWidth: 4096),
+      );
+
+      expect(captured!.width, greaterThan(0));
+      expect(captured.height, greaterThan(0));
+      expect(
+        () => AppCaptureController.checkRasterized(
+            captured.width, captured.height),
+        returnsNormally,
+      );
+    });
+  });
+
+  group('the pixel budget', () {
+    test('leaves an ordinary capture alone', () {
+      expect(
+        AppCaptureController.capToPixelBudget(1.0, const Size(1920, 1080)),
+        1.0,
+      );
+      expect(
+        AppCaptureController.capToPixelBudget(0.5, const Size(2560, 1440)),
+        0.5,
+      );
+    });
+
+    test('lowers the ratio rather than let a huge render target be asked for',
+        () {
+      const logical = Size(8192, 8192);
+      final ratio = AppCaptureController.capToPixelBudget(1.0, logical);
+
+      expect(ratio, lessThan(1.0));
+      final pixels = (logical.width * ratio) * (logical.height * ratio);
+      expect(pixels,
+          lessThanOrEqualTo(AppCaptureController.kMaxCapturePixels + 1));
+    });
+
+    test('a degenerate size does not divide by zero', () {
+      expect(AppCaptureController.capToPixelBudget(1.0, Size.zero), 1.0);
     });
   });
 }

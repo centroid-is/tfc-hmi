@@ -165,10 +165,31 @@ Future<CallToolResult> _captureAsResult({
 }) async {
   var width = maxWidth;
   var shrinks = 0;
+  var retries = 0;
 
   try {
     while (true) {
-      final image = await capture(width);
+      final CapturedImage image;
+      try {
+        image = await capture(width);
+      } on ScreenCaptureRasterizationException catch (e) {
+        // The engine took the request and drew nothing. That is a size
+        // problem far more often than a permanent one, so halve and ask
+        // again rather than reporting a failure the caller cannot act on.
+        if (retries >= kScreenshotShrinkAttempts ||
+            width <= kMinScreenshotMaxWidth) {
+          return _error(
+            'Could not capture: ${e.message}. Retried '
+            '$retries time(s) at smaller sizes, down to $width px wide, and '
+            'the engine drew nothing each time. Nothing was changed on the '
+            'operator\'s screen.',
+          );
+        }
+        width = math.max(kMinScreenshotMaxWidth, width ~/ 2);
+        retries++;
+        continue;
+      }
+
       final encoded = base64Encode(image.pngBytes);
 
       if (encoded.length <= kMaxScreenshotBase64Bytes) {
@@ -176,7 +197,7 @@ Future<CallToolResult> _captureAsResult({
           content: [
             ImageContent(data: encoded, mimeType: 'image/png'),
             TextContent(
-              text: _caption(label, image, encoded.length, shrinks),
+              text: _caption(label, image, encoded.length, shrinks, retries),
             ),
           ],
         );
@@ -196,24 +217,36 @@ Future<CallToolResult> _captureAsResult({
       // asked for: a source narrower than max_width ignores the bound, and
       // scaling the bound instead of the delivered width would loop without
       // shrinking anything.
-      final scale =
-          math.sqrt(kMaxScreenshotBase64Bytes / encoded.length) * 0.9;
+      final scale = math.sqrt(kMaxScreenshotBase64Bytes / encoded.length) * 0.9;
       final next = math.max(
         kMinScreenshotMaxWidth,
         (image.width * scale).floor(),
       );
       // A "shrink" that does not shrink would spin the loop for nothing.
-      width = next < width ? next : math.max(kMinScreenshotMaxWidth, width ~/ 2);
+      width =
+          next < width ? next : math.max(kMinScreenshotMaxWidth, width ~/ 2);
       shrinks++;
     }
   } on ScreenCaptureUnavailableException catch (e) {
     return _error('Cannot capture the screen: ${e.message}');
   } on ScreenCaptureBusyException catch (e) {
     return _error('Busy: ${e.message}');
+  } catch (e) {
+    // Anything else the widget tree, the engine or the encoder can throw.
+    // A screenshot is a read-only convenience; there is no failure of it
+    // worth raising to the protocol, and certainly none worth letting reach
+    // the operator's app.
+    return _error('The capture failed and was abandoned: $e');
   }
 }
 
-String _caption(String label, CapturedImage image, int base64Len, int shrinks) {
+String _caption(
+  String label,
+  CapturedImage image,
+  int base64Len,
+  int shrinks,
+  int retries,
+) {
   final buffer = StringBuffer()
     ..writeln('$label.')
     ..writeln('PNG ${image.width}x${image.height} px, '
@@ -224,6 +257,10 @@ String _caption(String label, CapturedImage image, int base64Len, int shrinks) {
         'cap ${_kb(kMaxScreenshotBase64Bytes)}.');
   if (shrinks > 0) {
     buffer.write(' Re-rendered $shrinks time(s) smaller to fit the cap.');
+  }
+  if (retries > 0) {
+    buffer.write(' The engine drew nothing on the first $retries attempt(s); '
+        'this is the first size it managed to rasterise.');
   }
   return buffer.toString();
 }
@@ -254,7 +291,8 @@ _Parsed<int> _readMaxWidth(Map<String, dynamic> arguments) {
   if (value <= 0) {
     return _Parsed.bad('max_width must be positive, got $value.');
   }
-  return _Parsed.ok(value.clamp(kMinScreenshotMaxWidth, kMaxScreenshotMaxWidth));
+  return _Parsed.ok(
+      value.clamp(kMinScreenshotMaxWidth, kMaxScreenshotMaxWidth));
 }
 
 _Parsed<({int width, int height})> _readCanvas(
