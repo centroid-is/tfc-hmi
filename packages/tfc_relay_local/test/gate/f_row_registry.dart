@@ -263,9 +263,9 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     clause: 'the stall harness, the announcement and the staleness clauses (F22a/b/d); the reaper half ("synchronized false disconnect") is 09-08\'s RED and fix, and the historian half ("historian marks the gap") is 09-09\'s db-tagged arm',
   ),
   'F26': Outstanding(
-    kind: OutstandingKind.missing,
+    kind: OutstandingKind.partial,
     owner: '09-05',
-    clause: 'three deaths, one observable: the plant tag\'s deadman counter stops advancing, and for (a) and (b) the tag reads 0 within a printed bound',
+    clause: 'the three arms and the control land in this commit; the measured hold-expiry window (F26c) and its registry deviation land in this plan\'s closing commit',
   ),
   'F27': Outstanding(
     kind: OutstandingKind.missing,

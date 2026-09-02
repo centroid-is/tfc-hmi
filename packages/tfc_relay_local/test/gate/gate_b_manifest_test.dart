@@ -258,6 +258,14 @@ const _supportingCases = <String, String>{
           'teardown. It injects no fault and asserts no catalogue clause, so '
           'numbering it would report the catalogue as covering a scenario it '
           'does not — the exact inflation the row grammar exists to prevent',
+  'the panel-isolate probe (supporting case, gates no row)':
+      'the panel-isolate harness\'s capability probe (09-05 task 1): it '
+          'measures on THIS platform that a paused panel isolate stops '
+          'sending its reports and that a killed one stops immediately — the '
+          'two capabilities every F26 arm leans on, re-measured here rather '
+          'than trusted from F16\'s number (07-RESEARCH §A.4). It injects no '
+          'catalogue fault and asserts no F26 clause, so numbering it would '
+          'report the catalogue as covering a scenario it does not',
 };
 
 void main() {
