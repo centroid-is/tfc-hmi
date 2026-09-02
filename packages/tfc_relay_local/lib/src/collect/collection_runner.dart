@@ -182,6 +182,12 @@ final class CollectionRunner {
     // until stop() — the flat-line lie the class doc promises this method
     // prevents (collector.dart:294-298's lesson, completed).
     _sampleTimers.remove(entry.key)?.cancel();
+    // Re-read after every await (WR-04, 08-REVIEW's connect() shape): a
+    // stop() that lands while this call is suspended runs the whole
+    // teardown, and the resumed call must not rebuild a subscription and a
+    // timer into cleared maps — a live timer owned by a runner that reports
+    // itself stopped, inserting into a sink about to close.
+    if (_stopped) return;
 
     // Retention is registered once per table, before the first insert can
     // create the table untyped. An entry 8b-01 marked `adjusted` carries a
@@ -189,6 +195,10 @@ final class CollectionRunner {
     // — the table keeps everything rather than fighting over an unusable
     // policy at every start.
     await _sink.ensureTable(entry.table, entry.retention);
+    if (_stopped) return;
+    // Everything below is synchronous until this method returns — the gate
+    // build, the subscribe and the timer creation cannot interleave with a
+    // stop(), so these two re-checks are the complete set.
 
     final interval = entry.sampleInterval;
     final members = entry.sampleMembers;

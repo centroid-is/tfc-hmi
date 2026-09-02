@@ -153,6 +153,36 @@ Future<void> until(
   }
 }
 
+/// A [TimeseriesSink] whose `ensureTable` parks on a completer — the lever
+/// for landing `stop()` in the middle of an in-flight `collectEntry`
+/// (WR-04's arm). Everything else delegates to a [FakeSink].
+final class _ParkedEnsureSink implements TimeseriesSink {
+  final FakeSink inner = FakeSink();
+  final Completer<void> gate = Completer<void>();
+
+  @override
+  Future<void> ensureTable(String table, RetentionPolicy? retention) async {
+    await gate.future;
+    await inner.ensureTable(table, retention);
+  }
+
+  @override
+  Future<void> insert(String table, DateTime time, Object? value) =>
+      inner.insert(table, time, value);
+
+  @override
+  Future<void> flush() => inner.flush();
+
+  @override
+  Future<void> close() => inner.close();
+
+  @override
+  SinkStats get stats => inner.stats;
+
+  @override
+  Stream<bool> get connected => inner.connected;
+}
+
 /// The runner reached only through `subscribe` — any other member is an
 /// architecture violation, not a stub gap. One key throws, to drive the
 /// per-entry isolation the plan is about.
@@ -751,6 +781,41 @@ void main() {
               'first timer would be one it does not know about, and these '
               'inserts after stop are its doubled rows');
       expect(r.runner.liveSampleTimers, 0);
+    });
+
+    test('stop() racing an in-flight collectEntry resurrects nothing: no '
+        'timer, no subscription, no upstream refcount (WR-04)', () async {
+      final nodes = {speedKey: collectedEntry(speedKey, interval: tick)};
+      final over = plantOver(nodes);
+      final sink = _ParkedEnsureSink();
+      final plan =
+          CollectionPlan.from(KeyMappings(nodes: nodes), CollectionConfig());
+      final runner = CollectionRunner(
+        plan: plan,
+        stateMan: over.plant,
+        sink: sink,
+        health: over.plant.collectHealth,
+      );
+      addTearDown(runner.stop);
+
+      // collectEntry parks on the sink's ensureTable; stop() lands while it
+      // is suspended, tears everything down — and then the suspended call
+      // resumes into a runner that reports itself stopped.
+      final inFlight = runner.collectEntry(plan.entries.single);
+      await pump();
+      await runner.stop();
+      sink.gate.complete();
+      await inFlight;
+      await pump();
+
+      expect(runner.liveSampleTimers, 0,
+          reason: 'a timer created after stop() is one stop() can never '
+              'cancel — its inserts go to a sink the composition root is '
+              'about to close, and vanish uncounted (WR-04)');
+      expect(runner.liveSubscriptions, 0);
+      expect(over.plant.openUpstreamSubscriptions, 0,
+          reason: 'the resumed call must not re-attach the fan-in refcount '
+              'after teardown released it');
     });
 
     test('a re-collect that switches interval → change mode cancels the old '
