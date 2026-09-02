@@ -602,29 +602,48 @@ void main() {
       final started = Stopwatch()..start();
       final at = List<int?>.filled(fixture.panels.length, null);
       var absentReadyMs = -1;
-      await until(
-        'all five panels — the rejoining one included — reading '
-        '$finalValue under good quality for all ${plantKeys.length} keys',
-        () {
+      const herdBudget = Duration(seconds: 90);
+      while (true) {
+        for (var i = 0; i < fixture.panels.length; i++) {
+          if (at[i] != null) continue;
+          final one = fixture.panels[i];
+          if (one == absent && !one.client.isReady) continue;
+          if (one == absent && absentReadyMs < 0) {
+            absentReadyMs = started.elapsedMilliseconds;
+          }
+          final done = plantKeys.every((key) {
+            final seen = one.client.read(key);
+            return seen != null &&
+                seen.quality.isGood &&
+                seen.value == finalValue;
+          });
+          if (done) at[i] = started.elapsedMilliseconds;
+        }
+        if (at.every((instant) => instant != null)) break;
+        if (started.elapsed > herdBudget) {
+          // Fails NAMING the laggards and what they hold — a herd wait that
+          // times out anonymously sends the reader back to rerun it.
+          final laggards = <String>[];
           for (var i = 0; i < fixture.panels.length; i++) {
             if (at[i] != null) continue;
             final one = fixture.panels[i];
-            if (one == absent && !one.client.isReady) continue;
-            if (one == absent && absentReadyMs < 0) {
-              absentReadyMs = started.elapsedMilliseconds;
-            }
-            final done = plantKeys.every((key) {
-              final seen = one.client.read(key);
-              return seen != null &&
-                  seen.quality.isGood &&
-                  seen.value == finalValue;
-            });
-            if (done) at[i] = started.elapsedMilliseconds;
+            final wrong = [
+              for (final key in plantKeys)
+                if (one.client.read(key)?.value != finalValue ||
+                    !(one.client.read(key)?.quality.isGood ?? false))
+                  '$key=${one.client.read(key)?.value}'
+                      '/${one.client.read(key)?.quality.code}',
+            ];
+            laggards.add('panel ${one.index}: ${wrong.length} of '
+                '${plantKeys.length} keys diverge from '
+                '$finalValue/good, first: '
+                '${wrong.take(3).join(', ')}');
           }
-          return at.every((instant) => instant != null);
-        },
-        budget: const Duration(seconds: 90),
-      );
+          fail('timed out after ${herdBudget.inMilliseconds} ms waiting '
+              'under ONE budget for the herd to converge; $laggards');
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
       final spread = [for (final instant in at) instant!];
       absentSince.stop();
       print('F27b convergence spread across five panels = $spread ms '
