@@ -53,3 +53,16 @@ device-local preferences and re-applying it on start; see
 `ntpServersPrefsKey` in `lib/core/system_clock.dart`. If you would rather the
 host own the list, set `NTP=` in `timesyncd.conf` through provisioning — the
 page shows those as "From /etc/systemd/timesyncd.conf on the host".
+
+## Checking a station's clock from a workstation
+
+`tool/probe_clock.dart` reads the same properties the page does, over an SSH
+D-Bus bridge, and prints them parsed:
+
+```sh
+dart run tool/probe_clock.dart 10.50.10.11 centroid ~/.ssh/id_ed25519
+```
+
+Useful for confirming a station's time source during commissioning without
+walking to the panel, and for checking that a parsing change still agrees
+with `timedatectl show-timesync` on real hardware.
