@@ -57,6 +57,7 @@ import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_relay_server/src/auth/identity.dart';
 import 'package:tfc_relay_server/src/error_codes.dart';
+import 'package:tfc_relay_server/src/health/session_health_state_man.dart';
 import 'package:tfc_relay_server/src/policy/key_policy.dart';
 import 'package:tfc_relay_server/src/policy/policy_state_man.dart';
 import 'package:tfc_relay_server/src/relay_server.dart';
@@ -493,12 +494,21 @@ void main() {
       gateway.plant.setValue(_hidden, 900);
       await gateway.station();
 
-      expect(gateway.served.keys, equals(gateway.plant.keys),
+      expect(
+          gateway.served.keys,
+          equals([
+            ...gateway.plant.keys,
+            ...SessionHealthStateMan.perSessionKeys,
+          ]),
           reason: 'under AllVisibleOperatorWrites the decorator must be '
               'invisible — same list, same order. It sits in the path of '
               'every request the whole suite makes, so anything it changes '
-              'here it changes for all 454 of them, and a leak found later '
-              'would be attributed to the policy instead of to the plumbing');
+              'here it changes for all of them, and a leak found later '
+              'would be attributed to the policy instead of to the plumbing. '
+              'The six trailing names are not the policy: they are the '
+              'per-session health overlay underneath it (08-12), and naming '
+              'them here rather than relaxing the matcher is what keeps this '
+              'case able to see the policy add or drop one');
     });
 
     test('readFresh answers a hidden key the way it answers a nonexistent one',

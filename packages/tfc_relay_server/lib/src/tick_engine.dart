@@ -193,6 +193,23 @@ final class TickEngine {
   int get ticks => _ticks;
   int _ticks = 0;
 
+  /// How late the last tick arrived, in milliseconds past the configured
+  /// period, or null before there have been two ticks.
+  ///
+  /// **The number `PIPE.event_loop_lag_ms` publishes** (HLTH-01). It is
+  /// measured here rather than asked of [lag] because [LagMonitor] answers a
+  /// *verdict* — a stall or not — and a health gauge that only ever read the
+  /// stall threshold or nothing would tell an engineer that the isolate is
+  /// fine right up until the moment it is not. Never negative: a tick that
+  /// arrived early is not negative lag, it is zero lag and a timer with
+  /// jitter.
+  ///
+  /// Null before the second tick, for the same reason `effective_hz` is: no
+  /// measurement is not the same statement as a measurement of nothing.
+  int? get lastLagMs => _lastLagMs;
+  int? _lastLagMs;
+  int? _prevTickMs;
+
   /// Whether the periodic timer is running.
   bool get running => _timer != null;
 
@@ -218,6 +235,12 @@ final class TickEngine {
   /// injected timestamp rather than a sleep on a hosted runner.
   void tickOnce(int nowMs) {
     _ticks++;
+    final prev = _prevTickMs;
+    if (prev != null) {
+      final excess = (nowMs - prev) - config.tick.inMilliseconds;
+      _lastLagMs = excess < 0 ? 0 : excess;
+    }
+    _prevTickMs = nowMs;
     encoder.beginTick();
     final drift = lag.poll(nowMs);
     // `registry.sessions` is a copy, and the copy is the point: a session torn
@@ -475,6 +498,10 @@ final class TickEngine {
         return;
       }
       state.markPushed(nowMs);
+      // A tick this session was actually served on, which is the measurement
+      // `PIPE.effective_hz` publishes. Idempotent within a tick, so a panel
+      // watching forty pages is not counted forty times.
+      session.noteServedTick(nowMs);
       session.emit(encoder.updateFrame(
         sub: state.literal(encoder.subLiteral),
         seq: state.nextSeq(),
