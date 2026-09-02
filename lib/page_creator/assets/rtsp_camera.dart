@@ -20,12 +20,14 @@ library;
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show ValueListenable, visibleForTesting;
+import 'package:flutter/foundation.dart'
+    show ValueListenable, debugPrint, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
+import '../../core/media_kit_stale_refs.dart';
 import '../../theme.dart';
 import 'common.dart';
 
@@ -454,6 +456,16 @@ class _MediaKitPlayback implements RtspCameraPlayback {
 
   static Player _construct() {
     if (!_initialized) {
+      // Before media_kit wakes up: delete the NativeReferenceHolder file a
+      // dead predecessor with our pid left in /tmp, which the holder would
+      // otherwise dereference. On stations the pid never changes between
+      // container restarts, so without this the first camera tile after a
+      // restart segfaults the whole app — see media_kit_stale_refs.dart.
+      final purged = purgeStaleNativeReferenceFile();
+      if (purged != null) {
+        debugPrint('rtsp: deleted stale media_kit reference file from a '
+            'previous process: $purged');
+      }
       MediaKit.ensureInitialized();
       _initialized = true;
     }
