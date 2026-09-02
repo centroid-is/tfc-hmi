@@ -160,7 +160,7 @@ void main() {
         (tester) async {
       await _pump(tester, AuditEntryLine(row: _row()));
 
-      expect(find.text('30-08-2026 14:05:09'), findsOneWidget);
+      expect(find.text('30.08.26 14:05:09'), findsOneWidget);
       expect(find.textContaining('jon'), findsWidgets);
       expect(find.textContaining('engineer'), findsWidgets);
       expect(find.text('ST101.CN04.p_cfg'), findsOneWidget);
@@ -592,7 +592,7 @@ void main() {
 
       expect(find.text('ST101.CN04.p_cfg'), findsOneWidget);
       expect(find.textContaining('jon'), findsWidgets);
-      expect(find.text('30-08-2026 14:05:09'), findsOneWidget);
+      expect(find.text('30.08.26 14:05:09'), findsOneWidget);
       expect(find.text(kAuditMembersChangedLabel(2)), findsOneWidget);
       expect(find.text('setpoints'), findsOneWidget);
     });
