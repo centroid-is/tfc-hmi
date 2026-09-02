@@ -185,12 +185,20 @@ Finder _destination(Finder dialog, String label) => find.descendant(
 
 /// Holds the row for [label] until the drag starts, drops it on [target], and
 /// lets the resulting move settle.
+///
+/// The hold starts on the row's LABEL, not the row's centre. The centre is a
+/// function of how many trailing controls the row carries -- adding the
+/// published-for popup put it on top of a button, whose recognizer wins the
+/// arena and the drag never begins. The label is where a person grabs a row,
+/// and it stays a label no matter how many controls the row grows.
 Future<void> _dragRowOnto(
   WidgetTester tester,
   String label,
   Finder target,
 ) async {
-  final gesture = await tester.startGesture(tester.getCenter(_treeNode(label)));
+  final gesture = await tester.startGesture(tester.getCenter(
+    find.descendant(of: _treeNode(label), matching: find.text(label)),
+  ));
   await tester.pump(kLongPressTimeout + const Duration(milliseconds: 50));
   await gesture.moveTo(tester.getCenter(target));
   await tester.pump();
@@ -538,8 +546,9 @@ void main() {
           .first;
       final before = tester.state<ScrollableState>(list).position.pixels;
 
-      final gesture =
-          await tester.startGesture(tester.getCenter(_treeNode('Page 1')));
+      // On the label, not the row centre -- see _dragRowOnto for why.
+      final gesture = await tester.startGesture(tester.getCenter(find
+          .descendant(of: _treeNode('Page 1'), matching: find.text('Page 1'))));
       await tester.pump(kLongPressTimeout + const Duration(milliseconds: 50));
 
       // Hold the row against the bottom edge of the tree viewport.
@@ -590,8 +599,9 @@ void main() {
             matching: find.byType(Scrollable),
           )
           .first;
-      final gesture =
-          await tester.startGesture(tester.getCenter(_treeNode('Page 1')));
+      // On the label, not the row centre -- see _dragRowOnto for why.
+      final gesture = await tester.startGesture(tester.getCenter(find
+          .descendant(of: _treeNode('Page 1'), matching: find.text('Page 1'))));
       await tester.pump(kLongPressTimeout + const Duration(milliseconds: 50));
 
       final viewport = tester.getRect(find.byType(ReorderableListView));
@@ -643,8 +653,9 @@ void main() {
           )
           .first;
 
-      final gesture =
-          await tester.startGesture(tester.getCenter(_treeNode('Page 1')));
+      // On the label, not the row centre -- see _dragRowOnto for why.
+      final gesture = await tester.startGesture(tester.getCenter(find
+          .descendant(of: _treeNode('Page 1'), matching: find.text('Page 1'))));
       await tester.pump(kLongPressTimeout + const Duration(milliseconds: 50));
 
       final viewport = tester.getRect(find.byType(ReorderableListView));
