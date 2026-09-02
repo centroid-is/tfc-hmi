@@ -889,10 +889,10 @@ final class OpcUaUpstreamLink implements UpstreamLink {
   ///     [unconnectedEpoch] to a real epoch is this link learning who it is
   ///     talking to, not that PLC being reprogrammed.
   ///  4. Otherwise the server underneath us changed, and [_bump] runs.
-  Future<bool> _refreshEpoch(
+  Future<EpochOutcome> _refreshEpoch(
       {Duration? deadline, bool sessionIsNew = false}) async {
     final client = _client;
-    if (client == null || _disposed) return false;
+    if (client == null || _disposed) return EpochOutcome.notAsked;
     EpochInputs inputs;
     try {
       inputs = await _epochReader(client,
@@ -905,14 +905,14 @@ final class OpcUaUpstreamLink implements UpstreamLink {
       inputs = EpochInputs.unreadable;
     }
     final next = inputs.combine();
-    if (next == _epoch) return false;
-    if (isUnreadableEpoch(next)) return false;
+    if (next == _epoch) return EpochOutcome.unchanged;
+    if (isUnreadableEpoch(next)) return EpochOutcome.unreadable;
     if (_epoch == unconnectedEpoch) {
       _epoch = next;
-      return false;
+      return EpochOutcome.adopted;
     }
     await _bump(next, sessionIsNew: sessionIsNew);
-    return true;
+    return EpochOutcome.bumped;
   }
 
   /// The four things a bump does, in this order and once each.
@@ -1166,22 +1166,49 @@ final class OpcUaUpstreamLink implements UpstreamLink {
     _reopening = true;
     _inFlight = client.connect(_endpoint).timeout(_connectDeadline).then<void>(
       (_) async {
-        _reopening = false;
-        wrapper.sessionLost = false;
-        // **A new session is the one moment the epoch is re-read.** Ask before
-        // restoring anything: if the server underneath is a different one, the
-        // bump owns the recovery — it degrades, announces and re-browses — and
-        // marking the old numbers "restored" first would relabel readings from
-        // an address space that no longer exists.
-        if (await _refreshEpoch(sessionIsNew: true)) return;
-        // **Restored is marked HERE, not on the transition back to
-        // connected.** The link being back is a fact about the socket; the
-        // numbers are still the old ones and nothing has re-read them. Doing
-        // it on the connected transition would run *after* the resubscribe had
-        // already delivered fresh values and would relabel a good reading as
-        // uncertain — the right badge on the wrong sample.
-        _markRestored();
-        return _resubscribeAll();
+        try {
+          // **A new session is the one moment the epoch is re-read**, and the
+          // read doubles as the activation probe. Ask before restoring
+          // anything: if the server underneath is a different one, the bump
+          // owns the recovery — it degrades, announces and re-browses — and
+          // marking the old numbers "restored" first would relabel readings
+          // from an address space that no longer exists.
+          //
+          // `sessionLost` is deliberately NOT cleared before this: a
+          // `connect()` that completes is not proof of an activated session.
+          // Measured, on a fixture restart: the channel reopens, the binding's
+          // connect future completes, and the server answers
+          // `ActivateSession: Session not found` — clearing the flag there
+          // wedges the link permanently, because it is the only thing that
+          // makes the driver dial again.
+          switch (await _refreshEpoch(sessionIsNew: true)) {
+            case EpochOutcome.unreadable:
+              // The socket is back and the server will not answer its own
+              // identity node. That is not a session. Say so and let the
+              // driver try again.
+              wrapper.sessionLost = true;
+            case EpochOutcome.bumped:
+              // The bump already degraded, announced and re-browsed.
+              wrapper.sessionLost = false;
+            case EpochOutcome.unchanged:
+            case EpochOutcome.adopted:
+            case EpochOutcome.notAsked:
+              wrapper.sessionLost = false;
+              // **Restored is marked HERE, not on the transition back to
+              // connected.** The link being back is a fact about the socket;
+              // the numbers are still the old ones and nothing has re-read
+              // them. Doing it on the connected transition would run *after*
+              // the resubscribe had already delivered fresh values and would
+              // relabel a good reading as uncertain — the right badge on the
+              // wrong sample.
+              _markRestored();
+              await _resubscribeAll();
+          }
+        } finally {
+          // Held until the whole recovery is done, so a second dial cannot
+          // start on top of an epoch read or a resubscribe.
+          _reopening = false;
+        }
       },
       onError: (Object error, StackTrace stack) {
         _reopening = false;

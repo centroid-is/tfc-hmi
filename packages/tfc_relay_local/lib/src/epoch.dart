@@ -128,6 +128,32 @@ bool isUnreadableEpoch(String epoch) => epoch == unreadableEpoch;
 
 // ---------------------------------------------------------------- the inputs
 
+/// What one re-reading of a server's identity decided.
+///
+/// Five outcomes rather than a bool, because the caller's next move differs
+/// for each and a bool would collapse the two that matter most: "the server
+/// says it is the same one" and "the server would not say" look identical to
+/// an `if` and mean opposite things to a link deciding whether to keep dialing.
+enum EpochOutcome {
+  /// The reading matched. Same server, no event, nothing to do.
+  unchanged,
+
+  /// The first reading on a link that had never asked. An identity was
+  /// learned, not changed — no bump.
+  adopted,
+
+  /// The server underneath changed. Handles are stale and the bump ran.
+  bumped,
+
+  /// The server answered none of the identity questions. **Not adopted**: a
+  /// link cannot tell a reprogram from a silence, and on a reconnect path this
+  /// is also the honest signal that the session is not really activated.
+  unreadable,
+
+  /// There was no client to ask, or the link is being disposed.
+  notAsked,
+}
+
 /// Which of the three questions a server actually answered.
 enum EpochInput {
   /// `ns=0;i=2257`.
