@@ -39,3 +39,15 @@ tags:
   meta:
     # Cases that test the surface itself: freeze tests, structural sweeps, and
     # the arms that prove a check bites a deliberately broken implementation.
+  db:
+    # Legs that need a REAL TimescaleDB: the sink adapter against a live
+    # server, the advisory lock, and the two-writer isolation proof.
+    # Provisioned by test/support/timescale_fixture.dart — Docker Compose on
+    # its own project name and an env-drawn host port locally and on the
+    # ubuntu CI leg; TIMESCALEDB_EXTERNAL=1 (the natively provisioned
+    # Postgres) on macOS and Windows. In CI these run inside the
+    # tfc-dart-test job — the one that already provisions TimescaleDB on all
+    # three platforms — while relay-packages-test runs with
+    # `--exclude-tags db` and stays databaseless. Declared here because an
+    # undeclared tag does not select, it warns
+    # (tfc_relay_server/dart_test.yaml:21-24's lesson).
