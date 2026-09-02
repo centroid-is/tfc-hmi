@@ -224,6 +224,76 @@ void main() {
     expect(markOpacity(tester), 0);
   });
 
+  testWidgets('a fading ring follows the asset through a relayout',
+      (tester) async {
+    // The ghosting case. Closing a pane the page had stepped aside for
+    // releases the inset strip, and the page is re-laid-out at full width in
+    // the same frame — while the ring, whose subject is already gone, spends
+    // 180ms fading out. An outline cached in the old layout's coordinates
+    // would sit off to the side of the asset for the whole fade. It has to be
+    // carried onto the asset's new frame instead, in the frame of the
+    // relayout itself.
+    final asset = _PaneAsset('one', x: 0.5);
+    await tester.pumpWidget(_wrap([asset]));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('one'));
+    await pumpMarked(tester);
+    expect(markOpacity(tester), 1);
+
+    closeSidePane();
+    // A slice of the fade, not all of it: the ring must still be up when the
+    // canvas moves under it. One pump for the fade to be asked for, one to
+    // get 50ms into it.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(markOpacity(tester), greaterThan(0));
+    expect(markOpacity(tester), lessThan(1));
+
+    // The relayout the inset release causes, reproduced directly: the canvas
+    // changes size mid-fade and every asset lands somewhere new.
+    await tester.pumpWidget(_wrap([asset], size: const Size(600, 450)));
+    await tester.pump(const Duration(milliseconds: 16));
+
+    expect(markOpacity(tester), greaterThan(0),
+        reason: 'still mid-fade — this is the window the ghost showed in');
+    final face = tester.getRect(find.byKey(const ValueKey('face:one')));
+    final bounds = markBounds(tester);
+    expect(bounds.center.dx, closeTo(face.center.dx, 1),
+        reason: 'the fading ring stays on the asset, not on the old layout');
+    expect(bounds.center.dy, closeTo(face.center.dy, 1));
+    // The carried ring scales as one piece, standoff included, so its air is
+    // three quarters of the styled one here — close enough for the tail of a
+    // fade, and the bound below allows exactly that much slack.
+    final air = HitBoundaryStyle.selection.standoff * 2;
+    expect(bounds.width, greaterThan(face.width));
+    expect(bounds.width, lessThan(face.width + air + 2));
+    expect(bounds.height, greaterThan(face.height));
+    expect(bounds.height, lessThan(face.height + air + 2));
+  });
+
+  testWidgets('an asset deleted mid-fade takes its ring with it',
+      (tester) async {
+    // The frame the ring would be carried onto is gone; a ring scaled onto
+    // nothing would hang in empty page. It goes at once instead.
+    final asset = _PaneAsset('one', x: 0.5);
+    await tester.pumpWidget(_wrap([asset]));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('one'));
+    await pumpMarked(tester);
+
+    closeSidePane();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(markOpacity(tester), greaterThan(0));
+
+    await tester.pumpWidget(_wrap([]));
+    await tester.pump(const Duration(milliseconds: 16));
+
+    expect(markOpacity(tester), 0);
+  });
+
   testWidgets('a pane opened from outside an asset marks nothing',
       (tester) async {
     // What the page editor does: it opens its config pane from the page's own
@@ -270,6 +340,7 @@ void main() {
 Widget _wrap(
   List<Asset> assets, {
   ValueChanged<BuildContext>? onPageContext,
+  Size size = const Size(800, 600),
 }) {
   return ProviderScope(
     child: MaterialApp(
@@ -277,8 +348,8 @@ Widget _wrap(
       body: Builder(builder: (context) {
         onPageContext?.call(context);
         return SizedBox(
-          width: 800,
-          height: 600,
+          width: size.width,
+          height: size.height,
           child: LayoutBuilder(
             builder: (context, constraints) => AssetStack(
               assets: assets,

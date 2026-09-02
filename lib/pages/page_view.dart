@@ -944,7 +944,10 @@ class _OpenPaneMarkState extends State<_OpenPaneMark>
     // By value, not identity: every rebuild mints a new frame, and only a
     // frame that says something different is worth re-tracing for.
     final moved = shown && (!identical(subject, _target) || live != _frame);
-    if (shown == _shown && !moved) return;
+    if (shown == _shown && !moved) {
+      if (!shown) _follow(notify: notify);
+      return;
+    }
 
     void apply() {
       _shown = shown;
@@ -965,6 +968,63 @@ class _OpenPaneMarkState extends State<_OpenPaneMark>
     }
     _driveMarch();
     if (shown && !_answered) _scheduleLookup();
+  }
+
+  /// Keeps a fading ring on its asset.
+  ///
+  /// The subject is cleared the moment a close begins, but the canvas can
+  /// still move under the ring while it fades out: closing a pane the page
+  /// had stepped aside for releases the inset strip, and [SidePaneInset]
+  /// re-lays the page out at full width in that same frame. The cached
+  /// outline is in the old layout's coordinates, so left alone it spends the
+  /// fade ghosting off to the side of where the asset now is. The relayout
+  /// only rescales canvas coordinates, so the outline is carried onto the
+  /// asset's new frame by scaling it between the two — synchronously, not by
+  /// a post-frame probe, so no frame is ever painted in the wrong place.
+  void _follow({required bool notify}) {
+    final target = _target;
+    final from = _frame;
+    if (target == null || from == null) return;
+    final to = widget.frames[target];
+    if (to == from) return;
+
+    void apply() {
+      // Nothing to carry the ring onto — the asset left the page, or turned,
+      // so the old contour is no shape for the new frame. For the tail of a
+      // fade, no ring beats a wrong one.
+      if (to == null ||
+          to.angle != from.angle ||
+          from.size.width <= 0 ||
+          from.size.height <= 0) {
+        _target = null;
+        _frame = null;
+        _outline = null;
+        _answered = false;
+        return;
+      }
+      final sx = to.size.width / from.size.width;
+      final sy = to.size.height / from.size.height;
+      final outline = _outline;
+      _frame = to;
+      if (outline == null) return;
+      _outline = [
+        for (final ring in outline)
+          [
+            for (final p in ring)
+              to.center +
+                  Offset(
+                    (p.dx - from.center.dx) * sx,
+                    (p.dy - from.center.dy) * sy,
+                  ),
+          ],
+      ];
+    }
+
+    if (notify) {
+      setState(apply);
+    } else {
+      apply();
+    }
   }
 
   /// Looks the asset's shape up after the frame it was laid out in.
