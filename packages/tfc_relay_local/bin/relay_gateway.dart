@@ -32,7 +32,21 @@ Future<void> main(List<String> args) async {
   // The level is chosen, not defaulted: this repository has already measured
   // `trace` + `PrettyPrinter` turning per-node logging into seconds of lag
   // (PR #210). A gateway logs conditions, not events.
+  //
+  // **`ProductionFilter` is not a preference either, and leaving it out was a
+  // bug that shipped silently.** `package:logger`'s default is
+  // `DevelopmentFilter`, whose whole body is inside an `assert` — so it logs
+  // only when asserts are evaluated, and *"in release mode ALL logs are
+  // omitted"* (`development_filter.dart:7`). `dart run` does not enable
+  // asserts and `dart compile exe` cannot, so the gateway that runs at the
+  // plant printed **nothing at all**: not the links it opened, not the port it
+  // bound, not the reserved keys it refused, not the signal it stopped on.
+  // Measured: a 25-second run against a live in-process PLC produced an empty
+  // log and exit 0. A process whose only operator-facing output is suppressed
+  // by its logging library's default is one nobody can diagnose, and the fault
+  // it hides is the one that made somebody look.
   final log = Logger(
+    filter: ProductionFilter(),
     level: Level.info,
     printer: PrefixPrinter(SimplePrinter(printTime: true)),
   );
