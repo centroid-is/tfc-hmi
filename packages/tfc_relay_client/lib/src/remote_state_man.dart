@@ -347,6 +347,33 @@ final class RemoteStateMan implements StateManApi {
   /// Set when the gateway refused this build outright and the loop gave up.
   String? get stopReason => _supervisor.stopReason;
 
+  /// Why the gateway last told this connection to rebuild, when that reason was
+  /// a stall — `'gateway_stalled'`, or null when no stall has been announced on
+  /// the current connection.
+  ///
+  /// **Distinct from [lastDownReason] and [stopReason] on purpose.** Those two
+  /// are about the *socket*: it dropped, or the gateway refused this build. This
+  /// is about the gateway's own event loop freezing while the socket stayed up
+  /// — the F22 case an operator must be able to tell apart from "you
+  /// disconnected", because a Veeam snapshot froze the plant for everyone at
+  /// once and no cable was pulled. The gateway puts the fact on the wire
+  /// (`ResyncParams.reason == 'gateway_stalled'`); this getter is where it
+  /// finally reaches a surface a widget can bind to.
+  ///
+  /// Reset on a fresh connection: a stall reported over a previous socket is
+  /// not a fact about this one.
+  String? get stallReason => _supervisor.stallReason;
+
+  /// How long the gateway said it was frozen, in milliseconds — the **absolute**
+  /// figure the gateway sent (`ResyncParams.stalledMs`), never recomputed from
+  /// this panel's clock. Null when [stallReason] is null.
+  ///
+  /// It is the whole content of the operator sentence: "the plant view was
+  /// frozen for N ms". It lives here rather than only in [complaints] because a
+  /// complaint list is a diagnostic an engineer reads tomorrow, not a value a
+  /// widget renders now.
+  int? get stalledMs => _supervisor.stalledMs;
+
   /// Configuration problems collected while re-establishing pages — a rejected
   /// key, a snapshot entry naming a handle nobody announced. Never thrown: a
   /// page carries ~1500 hand-edited keys and one typo must cost one tag.

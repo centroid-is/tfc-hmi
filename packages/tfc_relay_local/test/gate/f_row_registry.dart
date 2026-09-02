@@ -258,9 +258,9 @@ const Map<String, String> catalogueProse = <String, String>{
 /// case is a missing entry wearing the wrong label, and the manifest says so.
 const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
   'F22': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '09-07',
-    clause: 'the stall harness, the announcement and the staleness clauses (F22a/b/d); the reaper half ("synchronized false disconnect") is 09-08\'s RED and fix, and the historian half ("historian marks the gap") is 09-09\'s db-tagged arm',
+    kind: OutstandingKind.partial,
+    owner: '09-08',
+    clause: 'the announcement (F22a), the operator sentence (F22b) and staleness-that-clears-unaided (F22c) landed in 09-07; still owed: the reaper half ("synchronized false disconnect on every client") is 09-08\'s RED and fix, and the historian half ("historian marks the gap") is 09-09\'s db-tagged arm',
   ),
 };
 

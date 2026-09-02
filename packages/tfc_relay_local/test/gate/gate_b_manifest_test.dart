@@ -266,6 +266,16 @@ const _supportingCases = <String, String>{
           'than trusted from F16\'s number (07-RESEARCH §A.4). It injects no '
           'catalogue fault and asserts no F26 clause, so numbering it would '
           'report the catalogue as covering a scenario it does not',
+  'the stall capability probe (supporting case, gates no row)':
+      'the stall harness\'s capability probe (09-07 task 1): it measures on '
+          'THIS platform that pausing an isolate which OWNS A LISTENING SOCKET '
+          'stops it serving that socket — assumption A3 — by proving the plant '
+          'freezes, a command to the gateway times out while paused, and a '
+          'connected panel sees no new value across the pause, then recovers on '
+          'resume. Re-measured here rather than trusted from F16\'s '
+          'client-isolate number (07-RESEARCH §A.4). It injects no catalogue '
+          'fault and asserts no F22 clause, so numbering it would report the '
+          'catalogue as covering a scenario it does not',
 };
 
 void main() {
