@@ -70,6 +70,12 @@ final Directory testRoot = Directory('test');
 ///    house rules require every timer to arrive with an allow-list entry, and
 ///    the second list is the reconciliation.
 ///  * 08-07's `runIterate` driver — **landed**, entry below.
+///
+/// **Final for Phase 8, checked by 08-13's gate.** The composition root added
+/// none: it has no cadence of its own, and 08-12's per-session overlay
+/// deliberately recomputes on the read path rather than on a clock. If a later
+/// phase wants `data_age_ms` pushed on a cadence, the honest place is the tick
+/// engine's existing timer in `tfc_relay_server` — not a third entry here.
 const Map<String, String> periodicTimerAllowList = <String, String>{
   // 08-05, task 3. Listener-gated: started when the store gains its first
   // watcher and stopped when it loses its last, so with nobody watching there
@@ -201,7 +207,48 @@ const int declaredRetainedTimers = 1;
 /// re-count every site in `local_state_man.dart` under a rule 08-05 and 08-06
 /// did not agree to, so it is **recorded for 08-13's gate** rather than done
 /// here on the way past.
+///
+/// **08-13's gate closed it, and not by widening this sweep.**
+/// [unawaitedUpstreamSites] is a second sweep over the lines this one cannot
+/// see, asserting the same bound on them. This number is unchanged at eight —
+/// the composition root adds no crossing of its own, because everything it
+/// touches it reaches through `LocalStateMan`.
 const int declaredUpstreamAwaitSites = 8;
+
+/// Lines under `lib/` that cross into the plant **without** the word `await`.
+///
+/// **The blind spot, made countable.** 08-07 and 08-11 both recorded that
+/// [declaredUpstreamAwaitSites] requires `await` on the line, so a call whose
+/// future is stored — or which is not a future at all — escapes it entirely,
+/// and both left it "for 08-13's gate". This is that: a second sweep over
+/// exactly the lines the first cannot see, pinned the same way, so the fourth
+/// one is a decision rather than a drift.
+///
+/// **Three, and each is a different reason for not awaiting:**
+///
+///  * `OpcUaUpstreamLink._reopenSessionIfNeeded` — `client.connect(_endpoint)
+///    .timeout(_connectDeadline)`, **stored** so `dispose` can await it rather
+///    than deleting the native client out from under an in-flight connect (a
+///    measured SEGV, 08-07). Bounded on its own line.
+///  * `DeviceClientUpstreamLink.performWrite` — `client.write(...)`, a one-line
+///    **seam** whose single caller is fourteen lines below it and applies
+///    `.timeout(deadline)` there. The bound is one frame up, at the one pinned
+///    crossing (`declaredUpstreamWriteSites`), and moving it into the seam
+///    would give the overriding subclasses two places to lose it.
+///  * `DeviceClientUpstreamLink.connect` — `client.connect()`, which is
+///    `void`, not a future: `modbus_device_client.dart:1273` is
+///    `void connect() => wrapper.connect()`. There is nothing to await, nothing
+///    to bound and nothing to leak; the link's state comes from
+///    `effectiveStatusStream`, and the deadline this method takes belongs to
+///    the caller's wait on that stream.
+///
+/// **What this sweep still does not see, and it is named rather than fixed:**
+/// `browse` is not in the needle, so `OpcUaAddressSpace.childrenOf`'s
+/// `client.browse(...).timeout(deadline)` is invisible to both sweeps. Adding
+/// it would re-count every browse site in the package under a rule 08-11 did
+/// not agree to, on the way past a closing task. It is bounded today; the
+/// obligation moves to whichever plan next edits `local_browse.dart`.
+const int declaredUnawaitedUpstreamSites = 3;
 
 /// Lines under `lib/` that call `.write(` on an upstream.
 ///
@@ -247,6 +294,14 @@ const String contractKitPackage = 'tfc_stateman_contract';
 ///  * **0 owed by 08-11** — `browse` landed with `local_browse.dart`, and the
 ///    count came down with it in the same commit.
 ///  * **3 owed by 10-01** — `timeseries`, `historyViews`, `preferences`.
+///
+/// **08-13's gate re-checked it and left it at three.** 08-13's plan asked for
+/// zero here, drafted before 08-11 measured the question and took the escape
+/// clause its own plan offered. Zeroing it now would mean three stub getters —
+/// a chart that silently draws nothing — or three members deleted from the only
+/// written record of what is owed, to make a closing task's checklist tidy. The
+/// number is a ledger, not a score. It reaches zero when 10-01 builds the
+/// historian, and the contract leg reaches 50 in the same commit.
 ///
 /// **Why this is 3 and not 0.** 08-11's plan asked for zero on the argument
 /// that "the data-services members are answered by the capability flag rather
@@ -392,6 +447,22 @@ void main() {
           reason: 'a new upstream call site should be a deliberate edit to '
               'this number, so that the person adding it reads the rule '
               'above while they are here');
+    });
+
+    test('the NON-awaited crossings are the declared three — 08-13 closing the '
+        'gap 08-07 and 08-11 both recorded', () {
+      expect(unawaitedUpstreamSites(libRoot),
+          hasLength(declaredUnawaitedUpstreamSites),
+          reason: 'a stored or fire-and-forget crossing into the plant is '
+              'invisible to the sweep above, and a fourth one arriving '
+              'silently is exactly how an unbounded dial gets into this '
+              'package. Read the three above before you make it four');
+    });
+
+    test('the non-awaited sweep is non-vacuous', () {
+      expect(unawaitedUpstreamSites(libRoot), isNotEmpty,
+          reason: 'an empty result means the needle stopped matching and the '
+              'case above has been passing on nothing');
     });
   });
 
@@ -601,6 +672,38 @@ List<String> unboundedUpstreamAwaits(Directory directory) =>
     upstreamAwaitSites(directory)
         .where((site) => !site.contains('deadline') && !site.contains('.timeout('))
         .toList();
+
+/// Every line under [directory] that calls an upstream **without** awaiting it.
+///
+/// **08-13's gate closes the blind spot 08-07 and 08-11 both recorded.**
+/// [upstreamAwaitSites] requires the word `await` on the line, so a call whose
+/// future is *stored* rather than awaited — `_reopenSessionIfNeeded`'s dial,
+/// which has to be stored so `dispose` can await it instead of deleting the
+/// native client out from under an in-flight connect (a measured SEGV) — was
+/// invisible to it. So was `OpcUaAddressSpace.childrenOf`'s
+/// `client.browse(...).timeout(deadline)`, on the other half of the same gap.
+///
+/// This sweep is the other half and it is deliberately **not** the widening
+/// 08-07 refused: it does not re-count the awaited sites under a new rule, it
+/// counts only the lines the first sweep cannot see. The property asserted on
+/// them is the same one — a bound — because the hazard is the same one. A
+/// crossing into the plant that can hang is a poll cycle that can hang, and
+/// whether the caller wrote `await` on that line has nothing to do with it.
+List<String> unawaitedUpstreamSites(Directory directory) {
+  final sites = <String>[];
+  for (final file in dartFilesIn(directory)) {
+    final lines = file.readAsLinesSync();
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      if (_isAnyComment(line)) continue;
+      if (line.contains('await')) continue;
+      if (!_upstreamCall.hasMatch(line)) continue;
+      sites.add('${file.path}:${i + 1}: ${line.trim()}');
+    }
+  }
+  return sites;
+}
+
 
 /// Every line under [directory] that calls `.write(` on something.
 List<String> upstreamWriteSites(Directory directory) {

@@ -24,6 +24,8 @@ import 'package:tfc_relay_local/tfc_relay_local.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:test/test.dart';
 
+import 'support/free_port.dart';
+
 /// A config with one OPC UA link, the smallest thing that is a gateway.
 Map<String, dynamic> oneLinkJson({String alias = 'ST101'}) => <String, dynamic>{
       'server': <String, dynamic>{'port': 0},
@@ -51,12 +53,19 @@ void main() {
       expect(again.keyMappingsPath, 'svn-key-mappings.json');
     });
 
-    test('every field the gateway needs survives the round trip', () {
+    test('every field the gateway needs survives the round trip', () async {
+      // **Not a literal, and freeze 5 is why.** The round trip only needs *a*
+      // number here, and a hard-coded one trips the port sweep — correctly: the
+      // sweep is blunt on purpose, because the day somebody copies this line
+      // into a case that actually binds is the day two worktrees collide and
+      // the collision reads as a fault in the code under test. Drawing a real
+      // free port costs one socket and keeps the allow-list empty.
+      final chosen = await freePort();
       final json = oneLinkJson()
         ..['stale_after_ms'] = 7000
         ..['linger_ms'] = 250
         ..['server'] = <String, dynamic>{
-          'port': 8443,
+          'port': chosen,
           'tick_ms': 60,
           'publisher_id': 'svn-gateway-1',
           'tls': <String, dynamic>{
@@ -76,7 +85,7 @@ void main() {
 
       expect(again.staleAfter, const Duration(milliseconds: 7000));
       expect(again.linger, const Duration(milliseconds: 250));
-      expect(again.server.port, 8443);
+      expect(again.server.port, chosen);
       expect(again.server.tick, const Duration(milliseconds: 60));
       expect(again.server.publisherId, 'svn-gateway-1');
       expect(again.server.tls?.chainPath, '/etc/relay/leaf.pem');
