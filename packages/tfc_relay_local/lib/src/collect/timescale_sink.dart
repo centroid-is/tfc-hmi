@@ -382,6 +382,20 @@ final class TimescaleSink implements TimeseriesSink {
   /// refuses to *install* anything under a minute — so the table is created,
   /// keeps everything, and no `add_retention_policy` ever runs. The safe
   /// direction to fail in, per `database.dart:866-885`.
+  ///
+  /// **What the catch below can and cannot see (8b-REVIEW IN-02, recorded
+  /// rather than fixed):** `registerRetentionPolicy` swallows a failed
+  /// check/update on an *existing* table internally (`database.dart:852-863`
+  /// — catch, `logger.w`, normal return), so a transient
+  /// `updateRetentionPolicy` failure leaves the old policy installed until
+  /// restart and this method returns as if it succeeded. The catch here
+  /// only ever fires on isolate-transport failures. A wanted-vs-confirmed
+  /// split in [_ensured] would therefore confirm blindly, and verifying by
+  /// reading the catalog back would add a round trip per table on the very
+  /// startup path WR-03 just unblocked. The exposure is one Postgres log
+  /// line wide and self-heals at the next process start; the honest fix
+  /// belongs in `tfc_dart` (surface the failure), not in a wrapper
+  /// pretending it can see it.
   Future<void> _registerRetention(
       Database db, String table, RetentionPolicy? retention) async {
     try {
