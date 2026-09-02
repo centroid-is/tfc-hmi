@@ -29,6 +29,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/access_admin.dart';
 import '../widgets/base_scaffold.dart';
 import 'access_roles_section.dart';
+import 'access_session_section.dart';
 import 'access_users_section.dart';
 
 // ---------------------------------------------------------------------------
@@ -280,6 +281,8 @@ class AccessAdminBody extends ConsumerWidget {
           AccessRolesSection(),
           SizedBox(height: _kSectionGap),
           AccessUsersSection(),
+          SizedBox(height: _kSectionGap),
+          AccessSessionSection(),
           SizedBox(height: _kSectionGap),
           _HonestyNote(),
         ],

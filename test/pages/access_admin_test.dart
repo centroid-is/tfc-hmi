@@ -34,6 +34,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/core/access_admin_store.dart';
 import 'package:tfc/pages/access_admin.dart';
+import 'package:tfc/pages/access_session_section.dart';
 import 'package:tfc/pages/access_roles_section.dart';
 import 'package:tfc/pages/access_users_section.dart';
 import 'package:tfc/providers/access_admin.dart';
@@ -233,6 +234,17 @@ void main() {
       expect(roles, lessThan(users),
           reason: 'roles are created first at commissioning, so the section '
               'that creates them is the one read first');
+    });
+
+    testWidgets('the Session card renders below users — the station knob '
+        'after the people', (tester) async {
+      await pumpBody(tester, overrides());
+
+      expect(find.byKey(kAccessSessionSectionKey), findsOneWidget);
+      final users = tester.getTopLeft(find.byKey(kAccessUsersSectionKey)).dy;
+      final session =
+          tester.getTopLeft(find.byKey(kAccessSessionSectionKey)).dy;
+      expect(users, lessThan(session));
     });
 
     testWidgets('a station with no database still renders both sections, each '

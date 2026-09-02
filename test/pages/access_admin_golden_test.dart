@@ -66,6 +66,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/core/access_admin_store.dart';
 import 'package:tfc/models/menu_item.dart';
 import 'package:tfc/pages/access_admin.dart';
+import 'package:tfc/providers/preferences.dart';
+import 'package:tfc_dart/core/preferences.dart' show PreferencesApi;
 import 'package:tfc/pages/access_roles_section.dart';
 import 'package:tfc/pages/access_users_section.dart';
 import 'package:tfc/providers/access.dart';
@@ -246,6 +248,18 @@ AccessSession _anonymous() =>
 
 const Key _boundary = Key('access_admin_golden');
 
+/// An empty in-memory device-local store: the card then shows the default
+/// 15 minutes, which is what a fresh station shows.
+class _MemoryPrefs extends Fake implements PreferencesApi {
+  final Map<String, Object> _store = {};
+
+  @override
+  Future<int?> getInt(String key) async => _store[key] as int?;
+
+  @override
+  Future<void> setInt(String key, int value) async => _store[key] = value;
+}
+
 List<Override> _overrides({
   required AccessSession session,
   AccessAdminStore? store,
@@ -254,6 +268,11 @@ List<Override> _overrides({
       accessRepositoryProvider.overrideWith((ref) async => _PresentRepository()),
       accessAdminStoreProvider.overrideWith((ref) async => store),
       accessSessionProvider.overrideWith(() => _FixedSession(session)),
+      // The Session card reads the device-local store for the inactivity
+      // timeout; without an override the platform channel never answers in a
+      // test and the card's field renders empty — a baseline of a state no
+      // settled station shows.
+      localPreferencesProvider.overrideWithValue(_MemoryPrefs()),
     ];
 
 /// The three body images' host.
@@ -446,7 +465,7 @@ void main() {
     testWidgets('the page, elevated, with the honesty note collapsed',
         (tester) async {
       await withClock(Clock.fixed(_frozen), () async {
-        const size = Size(900, 880);
+        const size = Size(900, 1000);
         _sizeView(tester, size);
 
         await tester.pumpWidget(_pageHost(
@@ -492,7 +511,7 @@ void main() {
     testWidgets('the Operator editor open, with the warning above the boxes',
         (tester) async {
       await withClock(Clock.fixed(_frozen), () async {
-        const size = Size(900, 1400);
+        const size = Size(900, 1520);
         _sizeView(tester, size);
 
         await tester.pumpWidget(_pageHost(
@@ -598,7 +617,13 @@ void main() {
         // confirming action in the frame at all — not greyed, absent — and nothing to
         // type into either. 06-CONTEXT rejected a typed-confirmation override outright.
         expect(find.byKey(kAccessRoleDeleteConfirmKey), findsNothing);
-        expect(find.byType(TextField), findsNothing);
+        // Scoped to the refusal dialog since the Session card gave the PAGE a
+        // legitimate TextField; the claim was always about the dialog.
+        expect(
+            find.descendant(
+                of: find.byKey(kAccessAdminRefusalKey),
+                matching: find.byType(TextField)),
+            findsNothing);
         expect(tester.takeException(), isNull);
 
         await expectLater(
