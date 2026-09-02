@@ -375,4 +375,35 @@ void main() {
       }
     });
   });
+
+  group('T-08-33: the announcement is fanned out, so it is swept too', () {
+    test('a credentialed endpoint in the link\'s error reaches neither the '
+        'announcement nor any key on the forty-key set', () async {
+      final announced = <StatusParams>[];
+      final sub = man.statusStream.listen(announced.add);
+      addTearDown(sub.cancel);
+
+      st101.setLastError(
+          'opc.tcp://plc-user:hunter2@10.104.29.11/UA refused the session');
+      st101.disconnectUpstream();
+      await pumpEventQueue();
+
+      final carried = '${announced.single.toJson()}';
+      print('ANNOUNCED $carried');
+      for (final secret in <String>['hunter2', 'plc-user', '10.104.29.11']) {
+        expect(carried, isNot(contains(secret)),
+            reason: 'a status notification goes to every connected session '
+                'unasked, so the redaction has to have happened before the '
+                'string ever became one. This is the local half of 06-06\'s '
+                'server-side credential sweep');
+      }
+      expect(announced.single.error, isNotNull,
+          reason: 'anti-vacuity: an announcement with no error at all would '
+              'pass every assertion above while saying nothing');
+
+      for (final key in <String>[...st101Keys, ...st201Keys]) {
+        expect('${man.read(key)!.value}', isNot(contains('hunter2')));
+      }
+    });
+  });
 }

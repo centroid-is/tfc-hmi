@@ -61,6 +61,13 @@ const List<String> injectedSecrets = <String>[
   'opc.tcp',
 ];
 
+/// How many times the flap arm takes the link down and back up.
+///
+/// Forty because that is the number in the requirement's own sentence — "up
+/// for six hours" versus "flapped forty times since breakfast" — and because a
+/// loop is one case rather than forty.
+const int flapCycles = 40;
+
 /// A movable clock, so a gauge measured in milliseconds can be tested without
 /// sleeping for any of them.
 final class TestClock {
@@ -303,6 +310,91 @@ void main() {
     });
   });
 
+  group('Sparkplug bdSeq: telling "up six hours" from "flapped forty times"',
+      () {
+    late LocalStateMan man;
+    late FakeUpstreamLink st101;
+
+    setUp(() async {
+      final built = buildTwoLinks();
+      man = built.man;
+      st101 = built.st101;
+      await man.start();
+      addTearDown(man.dispose);
+    });
+
+    test('forty disconnect/reconnect cycles move BOTH counters', () async {
+      final started = DateTime.now();
+      final beforeLastDeath = DateTime.now();
+      for (var cycle = 0; cycle < flapCycles; cycle++) {
+        st101.disconnectUpstream();
+        await pumpEventQueue();
+        st101.reconnectUpstream();
+        await pumpEventQueue();
+      }
+      final afterLastDeath = DateTime.now();
+      final elapsed = DateTime.now().difference(started);
+
+      final births = man.read(PipeKeys.upstreamBirthCount(st101Alias))!;
+      final death = man.read(PipeKeys.upstreamLastDeathAt(st101Alias))!;
+      print('FLAP $flapCycles cycles -> birth_count=${births.value} '
+          'last_death_at=${death.value} in ${elapsed.inMilliseconds} ms');
+
+      // Forty-one, not forty: opening the link at start() is the first birth
+      // and the counter is documented as "times this link has entered
+      // connected since the process started". A counter that skipped the first
+      // one would make "never reconnected" and "reconnected once" the same
+      // number, which is the exact distinction it exists to carry.
+      expect(births.value, flapCycles + 1);
+      expect(births.quality, Quality.good);
+
+      // BOTH, asserted together. A counter that moved and a timestamp that did
+      // not is the bug this arm exists to catch: an operator reading
+      // "forty births, never died" cannot tell a flapping link from a
+      // miscounted one, and the pair is the whole point of the pair.
+      expect(death.value, isA<int>());
+      expect(death.value, st101.lastDeathAt!.millisecondsSinceEpoch,
+          reason: 'the key publishes what the link says, not a time of its own');
+      expect(death.value as int,
+          inInclusiveRange(beforeLastDeath.millisecondsSinceEpoch,
+              afterLastDeath.millisecondsSinceEpoch),
+          reason: 'and it is the LAST disconnection, inside the window this '
+              'case ran in');
+
+      // Written down rather than asserted: a threshold here would be a timing
+      // flake on a loaded runner. If this ever reads seconds, that is a finding
+      // about the producer\'s write amplification and not about the test.
+      expect(elapsed, isNotNull);
+    });
+
+    test('an epoch bump moves the epoch key and NOT birth_count — a reprogram '
+        'is not a reconnection', () async {
+      final beforeEpoch = man.read(PipeKeys.upstreamEpoch(st101Alias))!.value;
+      final beforeBirths =
+          man.read(PipeKeys.upstreamBirthCount(st101Alias))!.value;
+
+      st101.bumpEpoch();
+      await pumpEventQueue();
+
+      final afterEpoch = man.read(PipeKeys.upstreamEpoch(st101Alias))!.value;
+      print('EPOCH BUMP $beforeEpoch -> $afterEpoch births=$beforeBirths -> '
+          '${man.read(PipeKeys.upstreamBirthCount(st101Alias))!.value}');
+
+      expect(afterEpoch, isNot(beforeEpoch),
+          reason: 'the identity moved and the key that reports identity has to '
+              'move with it, or every cached value on this PLC keeps looking '
+              'attributable to an address space that no longer exists');
+      expect(afterEpoch, st101.epoch);
+      expect(man.read(PipeKeys.upstreamBirthCount(st101Alias))!.value,
+          beforeBirths,
+          reason: '08-08\'s rule from this side: a PLC download is not a '
+              'reconnection. A birth counter that moved on every reprogram '
+              'would report a stable link that was downloaded to forty times '
+              'as a link that flapped forty times, and those want two '
+              'different people called');
+    });
+  });
+
   group('T-08-33: no key value carries a credential', () {
     test('a credentialed endpoint in an upstream error reaches no key value',
         () async {
@@ -332,6 +424,58 @@ void main() {
           reason: 'and that is the other half');
       expect(text, isNot(contains('opc.tcp')),
           reason: 'the scheme goes with the endpoint it introduced');
+    });
+
+    test('the whole key set carries no secret, after every way this package '
+        'knows of getting one in', () async {
+      final built = buildTwoLinks();
+      final man = built.man;
+      addTearDown(man.dispose);
+
+      final announced = <StatusParams>[];
+      final sub = man.statusStream.listen(announced.add);
+      addTearDown(sub.cancel);
+
+      await man.start();
+
+      // Every injection lever this package has: the link's own error, a
+      // per-key stream error, and a value that happens to carry one.
+      built.st101.setLastError('$credentialedEndpoint refused the session');
+      built.st101.disconnectUpstream();
+      built.st201.setLastError(
+          'certificate at /etc/centroid/certs/client.pem is not trusted by '
+          '$credentialedEndpoint');
+      built.st201.disconnectUpstream();
+      await pumpEventQueue();
+
+      var swept = 0;
+      for (final key in man.keys) {
+        final value = man.read(key);
+        if (value == null) continue;
+        swept++;
+        final rendered = '${value.value}';
+        for (final secret in injectedSecrets) {
+          expect(rendered, isNot(contains(secret)),
+              reason: '$key reads "$rendered", which carries "$secret". An '
+                  'unprivileged panel can subscribe to any key this gateway '
+                  'serves; a credential or an endpoint in one is disclosed to '
+                  'everyone with a screen');
+        }
+      }
+      for (final status in announced) {
+        for (final secret in injectedSecrets) {
+          expect('${status.toJson()}', isNot(contains(secret)),
+              reason: 'the status notification carries the error too, and it '
+                  'goes to every connected session unasked');
+        }
+      }
+      print('SWEEP $swept keys and ${announced.length} announcements against '
+          '${injectedSecrets.length} secrets');
+      expect(swept, greaterThan(10),
+          reason: 'anti-vacuity: a sweep over an empty key set passes against '
+              'nothing at all');
+      expect(announced, isNotEmpty,
+          reason: 'and so does a sweep over no announcements');
     });
   });
 }
