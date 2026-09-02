@@ -101,13 +101,29 @@ Future<void> main(List<String> args) async {
       sink: sink,
       health: gateway.plant.collectHealth,
     );
-    await runner.start();
-    // ONE line, 08-13's rule: a gateway whose startup is forty lines is one
-    // whose real problem is invisible.
-    log.i('collecting ${plan.entries.length} keys into '
-        '"${collection.tablePrefix}"-prefixed tables '
-        '(${plan.rejected.length} rejected, ${plan.adjusted.length} '
-        'retention-adjusted, ${runner.entryFailures.length} failed to start)');
+    // NOT awaited (WR-03): start() awaits ensureTable per entry, and on a
+    // database that connects fast but answers slowly each of those is a
+    // real round trip bounded only by queryTimeout — ~430 entries × 30 s of
+    // sequential awaits between process start and the WebSocket existing.
+    // Panels must never wait on retention registration: a database that is
+    // down, slow or absent costs collection and nothing else. The startup
+    // log moves to completion, where entryFailures is finally a fact; the
+    // runner's own per-entry guards mean the future cannot reject in
+    // ordinary operation, and the handler is for the day that stops being
+    // true. stop() racing a still-starting runner is safe: collectEntry
+    // re-checks _stopped across its awaits (WR-04).
+    final started = runner;
+    unawaited(runner.start().then((_) {
+      // ONE line, 08-13's rule: a gateway whose startup is forty lines is
+      // one whose real problem is invisible.
+      log.i('collecting ${plan.entries.length} keys into '
+          '"${collection.tablePrefix}"-prefixed tables '
+          '(${plan.rejected.length} rejected, ${plan.adjusted.length} '
+          'retention-adjusted, ${started.entryFailures.length} failed to '
+          'start)');
+    }).catchError((Object error, StackTrace stack) {
+      log.e('collection failed to start', error: error, stackTrace: stack);
+    }));
   }
 
   await gateway.server.start();
