@@ -50,6 +50,22 @@ class ScreenCaptureUnavailableException implements Exception {
   String toString() => message;
 }
 
+/// Raised when the engine accepted the capture but never drew it.
+///
+/// Distinct from [ScreenCaptureUnavailableException] because it is worth
+/// retrying: the usual cause is that no render target of that size could be
+/// allocated, so the same capture asked for smaller often succeeds. The tools
+/// do that retry themselves before reporting anything.
+class ScreenCaptureRasterizationException implements Exception {
+  const ScreenCaptureRasterizationException(this.message);
+
+  /// What the engine failed to draw.
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 /// Raised when a second offscreen render is asked for while one is running.
 class ScreenCaptureBusyException implements Exception {
   const ScreenCaptureBusyException(this.message);

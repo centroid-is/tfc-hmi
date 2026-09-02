@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
     show
         CapturedImage,
         ScreenCaptureBusyException,
+        ScreenCaptureRasterizationException,
         ScreenCaptureUnavailableException;
 
 /// The seam between the MCP screenshot tools and the live widget tree.
@@ -28,6 +30,58 @@ class AppCaptureController {
   /// Creates a controller with its own capture key.
   AppCaptureController({String debugLabel = 'mcp-window-capture'})
       : windowKey = GlobalKey(debugLabel: debugLabel);
+
+  /// The largest capture, in output pixels, that will be asked of the engine.
+  ///
+  /// Every capture costs one render target allocated for it alone
+  /// (`SkSurfaces::RenderTarget`, unbudgeted) plus a device-to-host copy of
+  /// the same size, and both of those can fail -- which is the failure
+  /// [checkRasterized] exists to survive. The cheapest protection is not to
+  /// ask for the enormous ones at all. 8 MPx is ~32 MB of RGBA, far above
+  /// what the tools' base64 budget lets through anyway, so no request is
+  /// refused for being too big: it is rendered at a lower pixel ratio.
+  static const int kMaxCapturePixels = 8 * 1000 * 1000;
+
+  /// Throws when the engine handed back an image it never actually drew.
+  ///
+  /// `RepaintBoundary.toImage` does not report a rasterisation failure. When
+  /// the snapshot cannot be made -- no render target of that size, a GL
+  /// context that would not go current, a device-to-host copy that did not
+  /// come back -- `SnapshotControllerSkia::DoMakeRasterSnapshot` ends at
+  /// `DlImage::Make(nullptr)`, which is a live `DlImageSkia` wrapping a null
+  /// `SkImage`. `Picture::DoRasterizeToImage`'s null check looks at that
+  /// wrapper rather than the image inside it, so it passes; `DlImageGPU::Make`
+  /// then returns nullptr, and `CanvasImage::set_image` stores the nullptr
+  /// behind an `FML_DCHECK` a profile or release engine does not compile in.
+  /// What arrives in Dart is an ordinary [ui.Image] with a null native image,
+  /// reporting 0 x 0, from a future that completed successfully.
+  ///
+  /// Handing that image to `toByteData` does not throw -- it is fatal. The
+  /// engine posts it to the IO thread, where the matching `FML_DCHECK(image)`
+  /// is also compiled out, and `ConvertImageToRasterSkia` dereferences null.
+  /// The process dies with an access violation reading address 0 on a thread
+  /// no Dart `try` and no zone can reach. That is what took the HMI down.
+  ///
+  /// So the size is checked here, in Dart, while it is still an error.
+  @visibleForTesting
+  static void checkRasterized(int width, int height) {
+    if (width > 0 && height > 0) return;
+    throw const ScreenCaptureRasterizationException(
+      'the engine accepted the capture but returned an empty image, which is '
+      'how it reports that the frame could not be rasterised (usually no '
+      'render target of that size, or a graphics context that was not '
+      'available). Nothing was drawn, so there is nothing to encode',
+    );
+  }
+
+  /// Lowers [pixelRatio] until a capture of [logical] fits
+  /// [kMaxCapturePixels].
+  @visibleForTesting
+  static double capToPixelBudget(double pixelRatio, Size logical) {
+    final pixels = logical.width * pixelRatio * (logical.height * pixelRatio);
+    if (pixels <= kMaxCapturePixels || pixels <= 0) return pixelRatio;
+    return pixelRatio * math.sqrt(kMaxCapturePixels / pixels);
+  }
 
   /// The controller the app and the MCP tools share.
   static final AppCaptureController instance = AppCaptureController();
@@ -141,9 +195,13 @@ class AppCaptureController {
     if (maxWidth > 0 && logical.width > maxWidth) {
       pixelRatio = maxWidth / logical.width;
     }
+    pixelRatio = capToPixelBudget(pixelRatio, logical);
 
     final image = await boundary.toImage(pixelRatio: pixelRatio);
     try {
+      // Before toByteData, never after: an unrasterised image is fatal to
+      // encode, and only its size says so. See [checkRasterized].
+      checkRasterized(image.width, image.height);
       final data = await image.toByteData(format: ui.ImageByteFormat.png);
       if (data == null) {
         throw const ScreenCaptureUnavailableException(
@@ -151,7 +209,8 @@ class AppCaptureController {
         );
       }
       return CapturedImage(
-        pngBytes: data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+        pngBytes:
+            data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
         width: image.width,
         height: image.height,
         logicalWidth: logical.width,
