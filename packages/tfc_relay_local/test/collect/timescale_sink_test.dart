@@ -342,12 +342,14 @@ void main() {
               'so an operator can still tell a refusal from a timeout');
     });
 
-    test('a five-character token in a socket message is not laundered into '
+    test('a five-character token in a driver message is not laundered into '
         'a SQLSTATE (IN-04)', () async {
       final sink = TimescaleSink(
         enabledConfig(),
+        // A pid here; a port in a socket message is the same shape. The
+        // freeze's literal-port sweep is why this arm does not spell one.
         backendFactory: (_) async =>
-            throw Exception('SocketException: connect failed, port = 42840'),
+            throw Exception('server closed: backend pid 42840 terminated'),
         sleep: shortSleep,
       );
       addTearDown(sink.close);
