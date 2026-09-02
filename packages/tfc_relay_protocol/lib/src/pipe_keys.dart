@@ -64,7 +64,10 @@ abstract final class PipeKeys {
   static const String rttMs = '${prefix}rtt_ms';
 
   /// Age of the newest value received, milliseconds.
-  static const String dataAgeMs = '${prefix}data_age_ms';
+  ///
+  /// The pipe-wide half of [upstreamDataAgeMs]: this one is about the socket to
+  /// the gateway, that one is about one PLC behind it.
+  static const String dataAgeMs = '$prefix$_dataAgeMsTail';
 
   /// Reconnects this process has made.
   static const String reconnects = '${prefix}reconnects';
@@ -182,6 +185,21 @@ abstract final class PipeKeys {
   static String upstreamLastDeathAt(String alias) =>
       _link(alias, _lastDeathAtTail);
 
+  /// Age of the newest value on this link, milliseconds.
+  ///
+  /// The seventh builder, added by 08-09 — the one key 08-02 declined to
+  /// declare because it had no producer yet. **It needed no edit to
+  /// [_priorityTails]**, and that is the suffix rule working rather than an
+  /// omission: `data_age_ms` is a gauge, gauges ride the conflated lane, and
+  /// an unconflated fast-moving gauge is a queue the core value forbids
+  /// outright. It is also deliberately absent from [declared] — an alias is a
+  /// runtime value and the per-alias keys have no finite roster.
+  ///
+  /// [dataAgeMs] is the same field asked about the pipe rather than about one
+  /// PLC. Two facts, one word, and the test pins that the two spellings cannot
+  /// drift.
+  static String upstreamDataAgeMs(String alias) => _link(alias, _dataAgeMsTail);
+
   static String _link(String alias, String tail) {
     // An alias carrying a dot would mint a key `aliasOf` reads back as null:
     // the name is dot-delimited and there would be no way to tell the alias
@@ -252,6 +270,7 @@ abstract final class PipeKeys {
   static const String _epochTail = 'epoch';
   static const String _birthCountTail = 'birth_count';
   static const String _lastDeathAtTail = 'last_death_at';
+  static const String _dataAgeMsTail = 'data_age_ms';
 
   /// The last segment of every key that is news rather than telemetry.
   static const Set<String> _priorityTails = {

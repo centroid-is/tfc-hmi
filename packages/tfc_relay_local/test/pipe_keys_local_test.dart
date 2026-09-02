@@ -219,6 +219,9 @@ void main() {
       st101.disconnectUpstream();
       await pumpEventQueue();
 
+      expect(st201.state, UpstreamLinkState.connected,
+          reason: 'anti-vacuity: the assertion below is about a link that is '
+              'genuinely still up');
       expect(man.read(PipeKeys.upstreamConnected(st201Alias))!.value, isTrue,
           reason: 'ST201 is up and its own indicator must say so while ST101 '
               'is down. The alias in the key is what keeps four PLCs apart');

@@ -73,6 +73,7 @@ import 'fanin.dart';
 import 'freshness_sweep.dart';
 import 'ingest.dart';
 import 'key_router.dart';
+import 'pipe_health.dart';
 import 'upstream_link.dart';
 import 'write_translation.dart';
 
@@ -95,6 +96,12 @@ final class LocalStateMan implements StateManApi {
     // Allocation only. Nothing here opens a socket, starts a clock or spawns a
     // loop — see the library doc on why `StateMan._`'s constructor is the shape
     // being replaced.
+    //
+    // The health producer is the one thing that *writes* during construction,
+    // and that is its whole point: every per-link key exists before anything
+    // can subscribe. An indicator that reads unknown until the first fault
+    // tells an operator nothing at the moment they most need telling.
+    _health = PipeHealth(links: this.links, store: _store, now: _now);
     _sweep = FreshnessSweep(
       staleAfter: staleAfter,
       store: _store,
@@ -199,6 +206,17 @@ final class LocalStateMan implements StateManApi {
   /// The clock that notices silence. Listener-gated; see `freshness_sweep.dart`.
   late final FreshnessSweep _sweep;
 
+  /// The per-link health producer. Seeded at construction; see
+  /// `pipe_health.dart`.
+  late final PipeHealth _health;
+
+  /// The per-link health keys this instance produces, by alias.
+  ///
+  /// Exposed so a diagnostics caller — and 08-12's session overlay, which has
+  /// to know which names it must *not* also claim — can enumerate them without
+  /// a second roster.
+  List<String> healthKeysFor(String alias) => PipeHealth.keysFor(alias);
+
   /// Which keys have already been complained about, so a struct failing at
   /// 10 Hz costs one log line rather than the log file.
   final IngestLog _ingestLog = IngestLog();
@@ -237,6 +255,10 @@ final class LocalStateMan implements StateManApi {
         // decide the meaning of.
         _noteLinkStartFailure(link, error);
       }
+      // Asked, whether or not it answered. Before this the link's keys read
+      // null-under-errorConfig, which is "nobody has asked" — a different
+      // statement from a link known to be down, and the one the seed makes.
+      _health.onLinkEvent(link);
     }
   }
 
@@ -356,7 +378,13 @@ final class LocalStateMan implements StateManApi {
     // period must still be correct. `judge` does not write to the store — a
     // read is not an event, and one that notified every listener would make a
     // diagnostics page's poll a rebuild storm.
-    return _sweep.judge(key, cached);
+    //
+    // Two judges, and each is the identity on the other's keys: the sweep
+    // returns health keys untouched (they are outside freshness accounting,
+    // HLTH-02) and the producer returns everything but its own one time-derived
+    // gauge untouched. Composed rather than branched, so neither has to know
+    // the other exists.
+    return _health.judge(key, _sweep.judge(key, cached));
   }
 
   /// Forces a round trip and answers a freshly-read value.
@@ -466,10 +494,18 @@ final class LocalStateMan implements StateManApi {
   void applyUpstreamBatch(Map<String, DynamicValue> values) {
     if (values.isEmpty) return;
     final now = _now();
+    final arrivedOn = <String>{};
     for (final key in values.keys) {
       _lastArrival[key] = now;
+      final alias = aliasOfKey(key);
+      if (alias != null) arrivedOn.add(alias);
     }
     _store.applyBatch(values);
+    // AFTER the values, never before: `data_age_ms` describes them, and a gauge
+    // that moved before the thing it measures is a page rendering the new age
+    // of the old number. The set is aliases and not keys, so a four-hundred-key
+    // poll cycle moves at most four gauges.
+    _health.noteArrivals(arrivedOn, now);
   }
 
   /// Converts a batch of raw upstream samples and applies it.
@@ -972,7 +1008,12 @@ final class LocalStateMan implements StateManApi {
   /// here rather than there because the string must never exist unredacted
   /// outside the link (T-08-08).
   void _noteLinkStartFailure(UpstreamLink link, Object error) {
-    _startFailures[link.alias] = redactUpstreamError(error.toString()) ?? '';
+    final redacted = redactUpstreamError(error.toString()) ?? '';
+    _startFailures[link.alias] = redacted;
+    // Already redacted, and handed on redacted. The producer does not redact a
+    // second time on purpose — one redactor, applied at the boundary the string
+    // crossed, is the property worth keeping (T-08-33).
+    _health.noteError(link.alias, redacted);
   }
 
   /// Links whose [start] connect did not succeed, by alias, redacted.
@@ -1040,7 +1081,14 @@ final class LocalStateMan implements StateManApi {
 
   /// An error on one key's upstream stream costs that key and nothing else.
   void _onUpstreamError(String key, Object error) {
-    _upstreamErrors[key] = redactUpstreamError(error.toString()) ?? '';
+    final redacted = redactUpstreamError(error.toString()) ?? '';
+    _upstreamErrors[key] = redacted;
+    // Attributed to the link as well as to the key: one tag's stream failing is
+    // usually the first thing anybody notices about a PLC, and an operator
+    // looking at a link indicator should not have to guess which of four
+    // hundred keys carries the reason.
+    final alias = aliasOfKey(key);
+    if (alias != null) _health.noteError(alias, redacted);
     _onUpstreamEnded(key);
   }
 
@@ -1099,8 +1147,7 @@ final class LocalStateMan implements StateManApi {
         // everybody.
         break;
     }
-    // The `PIPE.upstream.<alias>.*` producer goes here, between the two, in
-    // 08-09 task 2.
+    _health.onLinkEvent(link);
     announceLinkState(link);
   }
 
