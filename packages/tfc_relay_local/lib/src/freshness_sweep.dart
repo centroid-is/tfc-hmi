@@ -37,6 +37,24 @@
 /// gateway's**. A fake exists for the length of one test; this object exists
 /// for the length of a plant shift.
 ///
+/// ## The fourth property: the age is asked of an elapsed clock
+///
+/// `ClientWrapper`'s three properties are above; this one is 07-REVIEW CR-01's,
+/// and it is the reason this file takes an `int Function()` rather than a
+/// `DateTime Function()`. *How long since this value arrived* is an
+/// elapsed-time question, and `DateTime.now()` steps: NTP corrects it, an
+/// operator sets it, a suspended VM resumes with a different one. A backwards
+/// correction larger than [staleAfter] made the old subtraction negative for
+/// **every key in the store at once**, so this swept nothing and the read
+/// path's [judge] agreed with it — the whole plant reading fresh from PLCs
+/// nobody had heard from. A forward step did the mirror image and greyed
+/// everything.
+///
+/// The client was fixed for this in `6a499d65`; 08-REVIEW CR-02 found the same
+/// arithmetic gateway-side, where it costs every panel rather than one. There
+/// is deliberately **no wall-clock seam left to hand in** (07-REVIEW's note on
+/// `c4e62845`): a seam that accepts a steppable clock is a seam somebody steps.
+///
 /// ## Why health keys are skipped by prefix
 ///
 /// 06-09 found the trap on `days_to_expiry`: a value that changes once a day is
@@ -62,22 +80,28 @@ final class FreshnessSweep {
   FreshnessSweep({
     required this.staleAfter,
     required ValueStore store,
-    required Map<String, DateTime> lastArrival,
+    required Map<String, int> lastArrival,
     required void Function(Map<String, DynamicValue>) degrade,
-    DateTime Function()? now,
+    required int Function() elapsedMs,
   })  : _store = store,
         _lastArrival = lastArrival,
         _degrade = degrade,
-        _now = now ?? DateTime.now;
+        _elapsedMs = elapsedMs;
 
   /// How long a value may go unheard-of before it must stop claiming to be
   /// current.
   final Duration staleAfter;
 
   final ValueStore _store;
-  final Map<String, DateTime> _lastArrival;
+
+  /// Arrival instants **on the elapsed anchor**, in milliseconds. Owned by
+  /// `LocalStateMan` and read here.
+  final Map<String, int> _lastArrival;
   final void Function(Map<String, DynamicValue>) _degrade;
-  final DateTime Function() _now;
+
+  /// The elapsed clock, and there is deliberately no wall-clock alternative to
+  /// hand it — see the library doc's fourth property.
+  final int Function() _elapsedMs;
 
   /// The floor under [intervalFor].
   ///
@@ -147,7 +171,7 @@ final class FreshnessSweep {
   ///    (`fake_state_man.dart:517`, `:570`).
   void sweep() {
     _sweeps++;
-    final now = _now();
+    final now = _elapsedMs();
     final stale = <String, DynamicValue>{};
     for (final key in _store.keys) {
       final cached = _store.peek(key);
@@ -170,15 +194,19 @@ final class FreshnessSweep {
   /// store: a read is not an event, and a read that notified every listener
   /// would make a diagnostics page's poll a rebuild storm.
   DynamicValue judge(String key, DynamicValue cached) =>
-      _isStale(key, cached, _now())
+      _isStale(key, cached, _elapsedMs())
           ? cached.copyWith(quality: Quality.badStale)
           : cached;
 
-  bool _isStale(String key, DynamicValue cached, DateTime now) {
+  bool _isStale(String key, DynamicValue cached, int nowMs) {
     if (PipeKeys.isPipeKey(key)) return false;
     final arrived = _lastArrival[key];
     if (arrived == null) return false;
-    if (now.difference(arrived) < staleAfter) return false;
+    // Two readings of a monotonic counter. The subtraction that used to be
+    // here took two `DateTime.now()` readings, and a backwards NTP step made
+    // it negative for every key at once — the sweep then degraded nothing and
+    // the whole plant read fresh (08-REVIEW CR-02).
+    if (nowMs - arrived < staleAfter.inMilliseconds) return false;
     if (Quality.badStale.band <= cached.quality.band) return false;
     return true;
   }

@@ -93,10 +93,12 @@ final class LocalStateMan implements StateManApi {
     Map<String, UpstreamAddressSpace> browseSpaces =
         const <String, UpstreamAddressSpace>{},
     DateTime Function()? now,
+    int Function()? elapsedMs,
   })  : links = List<UpstreamLink>.unmodifiable(links),
         browseSpaces =
             Map<String, UpstreamAddressSpace>.unmodifiable(browseSpaces),
-        _now = now ?? DateTime.now {
+        _now = now ?? DateTime.now,
+        _elapsedMs = elapsedMs {
     _startedMs = _now().millisecondsSinceEpoch;
     // Allocation only. Nothing here opens a socket, starts a clock or spawns a
     // loop — see the library doc on why `StateMan._`'s constructor is the shape
@@ -106,13 +108,13 @@ final class LocalStateMan implements StateManApi {
     // and that is its whole point: every per-link key exists before anything
     // can subscribe. An indicator that reads unknown until the first fault
     // tells an operator nothing at the moment they most need telling.
-    _health = PipeHealth(links: this.links, store: _store, now: _now);
+    _health = PipeHealth(links: this.links, store: _store, elapsedMs: _elapsed);
     _sweep = FreshnessSweep(
       staleAfter: staleAfter,
       store: _store,
       lastArrival: _lastArrival,
       degrade: _degrade,
-      now: _now,
+      elapsedMs: _elapsed,
     );
     _fanIn = FanIn(
       router: router,
@@ -200,22 +202,56 @@ final class LocalStateMan implements StateManApi {
   /// settled is a leak with an audit trail's name on it.
   final int maxWriteOutcomes;
 
-  /// Injectable clock. The freshness verdict is arithmetic on this, so a case
-  /// can move the gateway forward in time instead of sleeping.
+  /// Injectable **wall** clock, and only for the facts that have to be
+  /// comparable with a peer's clock: the ULID arithmetic in [_statusOf], the
+  /// mint time of a cmd, the instant an outcome was settled.
+  ///
+  /// **Never for an age.** 07-REVIEW CR-01 settled that argument on the client
+  /// and 08-REVIEW CR-02 found it again here: `DateTime.now()` steps — NTP
+  /// corrects it, an operator sets it, a suspended VM resumes with a different
+  /// one — so subtracting two readings of it can answer a negative number, and
+  /// a negative age reads as *fresh*. See [_elapsed].
   final DateTime Function() _now;
+
+  /// The monotonic anchor every elapsed-time question is asked of.
+  ///
+  /// A `Stopwatch` and not a clock: it cannot be stepped, so an NTP correction
+  /// on the plant PC moves nothing here. This is the gateway-side half of
+  /// `6a499d65` ("age staleness on a monotonic anchor, not the panel's RTC"),
+  /// and it matters more here than it did there — a step on a panel misleads
+  /// one operator, a step on the gateway makes every key in the store read
+  /// fresh at once.
+  ///
+  /// It is not a timer and does not appear in [liveTimers]: a `Stopwatch` is
+  /// arithmetic over a monotonic counter, with nothing to cancel.
+  final Stopwatch _uptime = Stopwatch()..start();
+
+  /// The injected elapsed clock, or null for [_uptime].
+  ///
+  /// **The injected type is the elapsed one**, deliberately — 07-REVIEW's note
+  /// on `c4e62845`: a seam that can be handed a wall clock is a seam somebody
+  /// hands a wall clock, and the defect returns wearing the fix's clothes.
+  final int Function()? _elapsedMs;
+
+  /// Milliseconds since this source was constructed, monotonic.
+  int _elapsed() => _elapsedMs?.call() ?? _uptime.elapsedMilliseconds;
 
   /// One map, one batch entry point — the same [ValueStore] the server and
   /// client implementations use, so the k-of-n notification promise is
   /// satisfied by production code rather than by anything written here.
   final ValueStore _store = ValueStore();
 
-  /// When each key last had a value *arrive* for it.
+  /// When each key last had a value *arrive* for it, **on [_elapsed]**.
   ///
   /// Deliberately not the value's own `sourceTime`: an upstream may not fill
   /// it, and a source that dated freshness from a field the PLC leaves null
   /// would consider every value it has ever received to be infinitely old
   /// (`fake_state_man.dart:133-140`).
-  final Map<String, DateTime> _lastArrival = <String, DateTime>{};
+  ///
+  /// And deliberately not a `DateTime` either — see [_elapsed]. The two
+  /// numbers subtracted to answer "how old is this" must both come off a clock
+  /// that only goes forward.
+  final Map<String, int> _lastArrival = <String, int>{};
 
   /// The refcount that makes thirty panels on one key cost the PLC one
   /// monitored item, and releases it when the last of them goes (SRV-07).
@@ -537,7 +573,9 @@ final class LocalStateMan implements StateManApi {
   /// see [_degrade] for the other half of that distinction.
   void applyUpstreamBatch(Map<String, DynamicValue> values) {
     if (values.isEmpty) return;
-    final now = _now();
+    // The ARRIVAL anchor, not the wall clock: everything downstream of this
+    // number is an age. See [_elapsed].
+    final now = _elapsed();
     final arrivedOn = <String>{};
     for (final key in values.keys) {
       _lastArrival[key] = now;

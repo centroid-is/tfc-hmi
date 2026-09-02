@@ -70,10 +70,23 @@ const int flapCycles = 40;
 
 /// A movable clock, so a gauge measured in milliseconds can be tested without
 /// sleeping for any of them.
+///
+/// **Two clocks, moved together.** Since 08-REVIEW CR-02 the gateway asks its
+/// elapsed-time questions of a monotonic anchor and its peer-comparable
+/// questions of the wall clock, so a case that means "three seconds passed"
+/// has to say so on both. `clock_step_test.dart` is the one place that moves
+/// them apart, which is what an NTP correction does.
 final class TestClock {
   DateTime at = DateTime.utc(2026, 9, 2, 6);
+  int elapsed = 0;
+
   DateTime call() => at;
-  void advance(Duration by) => at = at.add(by);
+  int elapsedMs() => elapsed;
+
+  void advance(Duration by) {
+    at = at.add(by);
+    elapsed += by.inMilliseconds;
+  }
 }
 
 ({
@@ -96,6 +109,7 @@ final class TestClock {
     ),
     staleAfter: staleAfter,
     now: clock.call,
+    elapsedMs: clock.elapsedMs,
   );
   return (man: man, st101: st101, st201: st201, clock: clock);
 }

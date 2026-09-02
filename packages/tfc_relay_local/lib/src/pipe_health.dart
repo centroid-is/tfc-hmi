@@ -42,7 +42,8 @@
 /// event, which is exactly why they are exempt from the freshness sweep
 /// (HLTH-02) — a value that changes once a shift is always older than any
 /// freshness deadline. The seventh, `data_age_ms`, is a gauge: it advances with
-/// the wall clock whether or not anything happens.
+/// elapsed time whether or not anything happens — on a monotonic anchor and
+/// never on the RTC (08-REVIEW CR-02; see [PipeHealth._elapsedMs]).
 ///
 /// A gauge written only on events would freeze at the last event's reading,
 /// which is the stale-but-plausible number this project exists to prevent
@@ -85,18 +86,26 @@ final class PipeHealth {
   PipeHealth({
     required Iterable<UpstreamLink> links,
     required ValueStore store,
-    required DateTime Function() now,
+    required int Function() elapsedMs,
   })  : _links = <String, UpstreamLink>{
           for (final link in links) link.alias: link,
         },
         _store = store,
-        _now = now {
+        _elapsedMs = elapsedMs {
     _seed();
   }
 
   final Map<String, UpstreamLink> _links;
   final ValueStore _store;
-  final DateTime Function() _now;
+
+  /// The monotonic anchor `data_age_ms` is measured on.
+  ///
+  /// **Not a wall clock, and the type is what says so** (08-REVIEW CR-02).
+  /// The gauge answers "how long since a value arrived", which is an
+  /// elapsed-time question; subtracting two `DateTime.now()` readings made it
+  /// go *negative* after a backwards NTP step, and a negative age published
+  /// under [Quality.good] is a number no page can render sensibly.
+  final int Function() _elapsedMs;
 
   /// Aliases the gateway has actually asked about.
   ///
@@ -106,8 +115,8 @@ final class PipeHealth {
   /// link whether the connect succeeded or threw.
   final Set<String> _asked = <String>{};
 
-  /// The newest arrival per alias, for `data_age_ms`.
-  final Map<String, DateTime> _newestArrival = <String, DateTime>{};
+  /// The newest arrival per alias, on the elapsed anchor, for `data_age_ms`.
+  final Map<String, int> _newestArrival = <String, int>{};
 
   /// A redacted error attributed to an alias rather than to one of its keys.
   final Map<String, String> _noted = <String, String>{};
@@ -142,8 +151,9 @@ final class PipeHealth {
     publish(link.alias);
   }
 
-  /// Values arrived on [aliases] at [at]. Moves `data_age_ms` and nothing else.
-  void noteArrivals(Iterable<String> aliases, DateTime at) {
+  /// Values arrived on [aliases] at elapsed millisecond [at]. Moves
+  /// `data_age_ms` and nothing else.
+  void noteArrivals(Iterable<String> aliases, int at) {
     final batch = <String, DynamicValue>{};
     for (final alias in aliases) {
       _newestArrival[alias] = at;
@@ -243,7 +253,9 @@ final class PipeHealth {
   DynamicValue _dataAge(String alias) {
     final newest = _newestArrival[alias];
     if (newest == null) return _unknown();
-    return _known(_now().difference(newest).inMilliseconds);
+    // Two readings of a monotonic counter, so the answer cannot be negative
+    // and cannot jump when the plant PC's RTC is corrected. See [_elapsedMs].
+    return _known(_elapsedMs() - newest);
   }
 
   /// A reading. Null is allowed and means "the answer is nothing" — which is
