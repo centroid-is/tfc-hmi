@@ -26,16 +26,26 @@ class SchneiderATV320Config extends BaseAsset {
   String get category => 'Schneider Devices';
 
   String? label;
+
+  /// Point size of the label drawn on the drive body. Null means the drive's
+  /// default; pages saved before the field existed deserialise to that.
+  double? labelFontSize;
   String? hmisKey;
   String? freqKey;
   String? configKey;
 
   SchneiderATV320Config({
     this.label,
+    this.labelFontSize,
     this.hmisKey,
     this.freqKey,
     this.configKey,
   });
+
+  /// The label size to paint with: the configured one held inside the range
+  /// the drive can actually draw, or the default when unset.
+  double get resolvedLabelFontSize => (labelFontSize ?? ATV320.defaultLabelFontSize)
+      .clamp(ATV320.minLabelFontSize, ATV320.maxLabelFontSize);
 
   @override
   Widget build(BuildContext context) {
@@ -117,6 +127,29 @@ class _ATV320ConfigContentState extends State<_ATV320ConfigContent> {
           decoration: const InputDecoration(
             labelText: 'Label',
             helperText: 'Enter breaks the label onto a new line (max 2 shown)',
+          ),
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          initialValue: widget.config.labelFontSize?.toString() ?? '',
+          onChanged: (value) {
+            final trimmed = value.trim();
+            // Blank clears back to the drive's own default rather than
+            // pinning the label at whatever half-typed number was left.
+            widget.config.labelFontSize = trimmed.isEmpty
+                ? null
+                : double.tryParse(trimmed)?.clamp(
+                    ATV320.minLabelFontSize,
+                    ATV320.maxLabelFontSize,
+                  );
+          },
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(
+            labelText: 'Label text size',
+            helperText: 'Blank uses the default '
+                '(${ATV320.defaultLabelFontSize}); '
+                '${ATV320.minLabelFontSize}-${ATV320.maxLabelFontSize}. '
+                'Bigger text fits fewer characters per line.',
           ),
         ),
         const SizedBox(height: 16),
@@ -204,6 +237,7 @@ class _SchneiderATV320 extends ConsumerWidget {
                 name: "ATV320",
                 displayText: displayText,
                 topLabel: topLabel,
+                labelFontSize: config.resolvedLabelFontSize,
               ),
             );
           },

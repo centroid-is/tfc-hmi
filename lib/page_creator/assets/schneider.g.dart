@@ -10,6 +10,7 @@ SchneiderATV320Config _$SchneiderATV320ConfigFromJson(
         Map<String, dynamic> json) =>
     SchneiderATV320Config(
       label: json['label'] as String?,
+      labelFontSize: (json['labelFontSize'] as num?)?.toDouble(),
       hmisKey: json['hmisKey'] as String?,
       freqKey: json['freqKey'] as String?,
       configKey: json['configKey'] as String?,
@@ -34,6 +35,7 @@ Map<String, dynamic> _$SchneiderATV320ConfigToJson(
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
       'label': instance.label,
+      'labelFontSize': instance.labelFontSize,
       'hmisKey': instance.hmisKey,
       'freqKey': instance.freqKey,
       'configKey': instance.configKey,
