@@ -10,6 +10,11 @@ class CXxxxx extends CustomPainter {
   final double heightMm = 100;
 
   final String name;
+  /// The device's configured name or id, worn as a marker tag over the
+  /// terminal-marker band of the block's own I/O slice — the same tag, in the
+  /// same place, that an EL terminal beside it wears. Empty draws nothing, so
+  /// an unnamed block is the drawing it always was.
+  final String markerLabel;
   final Color fillColor;
   final Color pwrColor; // PWR box color
   final Color tcColor; // TC box color
@@ -19,6 +24,7 @@ class CXxxxx extends CustomPainter {
 
   CXxxxx({
     required this.name,
+    this.markerLabel = '',
     this.fillColor = bodyColor,
     this.pwrColor = Colors.transparent,
     this.tcColor = Colors.transparent,
@@ -288,6 +294,7 @@ class CXxxxx extends CustomPainter {
       selected: false,
       topLabels: ('', ''),
       topLabelColors: (null, null),
+      markerLabel: markerLabel,
       name: '',
       bottomLabel: '',
       ioLabels: const ['24V', '0V', '+', '+', '-', '-', 'PE', 'PE'],
@@ -370,6 +377,7 @@ class CXxxxx extends CustomPainter {
   @override
   bool shouldRepaint(covariant CXxxxx old) {
     return name != old.name ||
+        markerLabel != old.markerLabel ||
         fillColor != old.fillColor ||
         pwrColor != old.pwrColor ||
         tcColor != old.tcColor ||

@@ -76,18 +76,15 @@ abstract class BeckhoffCXConfig extends BaseAsset {
   @AssetListConverter()
   List<Asset> subdevices = [];
 
-  /// Operator-facing label, printed on the drawing in place of the model
-  /// name — a page carrying several of these wants to say which is which.
+  /// Operator-facing label, worn as a marker tag on the drawing the way the
+  /// EL terminals wear theirs — a page carrying several racks wants to
+  /// say which is which, and the tag is where the plant writes it.
   ///
-  /// Blank means "use the model name". That is what every page saved before
-  /// the field existed deserialises to, so those drawings are unchanged, and
-  /// clearing the box gives the model name back rather than a nameless
-  /// drawing.
+  /// The model name stays where it was printed. Empty draws no tag at all,
+  /// which is what every page saved before the field existed deserialises
+  /// to, so those drawings are unchanged.
   @JsonKey(defaultValue: '')
   String nameOrId = '';
-
-  /// What the drawing is actually labelled with.
-  String get label => nameOrId.isEmpty ? model : nameOrId;
 
   // The slices are child assets: a pane opened from one slice marks that
   // slice on the mimic, not the whole rack. Excluded from JSON like the
@@ -130,7 +127,8 @@ abstract class BeckhoffCXConfig extends BaseAsset {
             CustomPaint(
               size: cxNativeSize,
               painter: CXxxxx(
-                name: label,
+                name: model,
+                markerLabel: nameOrId,
                 pwrColor: Colors.green,
                 tcColor: Colors.green,
               ),
@@ -402,18 +400,15 @@ class BeckhoffEK1100Config extends BaseAsset {
   @override
   List<Asset> get childAssets => subdevices;
 
-  /// Operator-facing label, printed on the drawing in place of the model
-  /// name — a page carrying several of these wants to say which is which.
+  /// Operator-facing label, worn as a marker tag on the drawing the way the
+  /// EL terminals wear theirs — a page carrying several couplers wants to
+  /// say which is which, and the tag is where the plant writes it.
   ///
-  /// Blank means "use the model name". That is what every page saved before
-  /// the field existed deserialises to, so those drawings are unchanged, and
-  /// clearing the box gives the model name back rather than a nameless
-  /// drawing.
+  /// The model name stays where it was printed. Empty draws no tag at all,
+  /// which is what every page saved before the field existed deserialises
+  /// to, so those drawings are unchanged.
   @JsonKey(defaultValue: '')
   String nameOrId = '';
-
-  /// What the drawing is actually labelled with.
-  String get label => nameOrId.isEmpty ? 'EK1100' : nameOrId;
 
   BeckhoffEK1100Config();
 
@@ -440,7 +435,8 @@ class BeckhoffEK1100Config extends BaseAsset {
             CustomPaint(
               size: _ekNativeSize,
               painter: EK1100(
-                name: label,
+                name: "EK1100",
+                markerLabel: nameOrId,
               ),
             ),
             // Subdevices to the right, normalized to match EK height.
@@ -1316,18 +1312,15 @@ class BeckhoffEL9187Config extends BaseAsset {
   @override
   String get category => 'Beckhoff Devices';
 
-  /// Operator-facing label, printed on the drawing in place of the model
-  /// name — a page carrying several of these wants to say which is which.
+  /// Operator-facing label, worn as a marker tag on the drawing the way the
+  /// EL terminals wear theirs — a page carrying several terminals wants to
+  /// say which is which, and the tag is where the plant writes it.
   ///
-  /// Blank means "use the model name". That is what every page saved before
-  /// the field existed deserialises to, so those drawings are unchanged, and
-  /// clearing the box gives the model name back rather than a nameless
-  /// drawing.
+  /// The model name stays where it was printed. Empty draws no tag at all,
+  /// which is what every page saved before the field existed deserialises
+  /// to, so those drawings are unchanged.
   @JsonKey(defaultValue: '')
   String nameOrId = '';
-
-  /// What the drawing is actually labelled with.
-  String get label => nameOrId.isEmpty ? 'EL9187' : nameOrId;
 
   BeckhoffEL9187Config();
 
@@ -1393,6 +1386,7 @@ class _EL9187ConfigContentState extends State<_EL9187ConfigContent> {
 }
 
 class _BeckhoffEL9187 extends StatelessWidget {
+  static const String name = 'EL9187';
   final BeckhoffEL9187Config config;
 
   const _BeckhoffEL9187({required this.config});
@@ -1403,7 +1397,8 @@ class _BeckhoffEL9187 extends StatelessWidget {
 
     return IO8Widget(
       ledStates: leds,
-      name: config.label,
+      name: name,
+      markerLabel: config.nameOrId,
       animation: const AlwaysStoppedAnimation(0),
       ioLabels: const ['OV', 'OV', 'OV', 'OV', 'OV', 'OV', 'OV', 'OV'],
       ioLabelColors: const [
@@ -2814,18 +2809,15 @@ class BeckhoffEL6070Config extends BaseAsset {
   @override
   List<String> get searchKeywords => const ['licence', 'license', 'twincat'];
 
-  /// Operator-facing label, printed on the drawing in place of the model
-  /// name — a page carrying several of these wants to say which is which.
+  /// Operator-facing label, worn as a marker tag on the drawing the way the
+  /// EL terminals wear theirs — a page carrying several terminals wants to
+  /// say which is which, and the tag is where the plant writes it.
   ///
-  /// Blank means "use the model name". That is what every page saved before
-  /// the field existed deserialises to, so those drawings are unchanged, and
-  /// clearing the box gives the model name back rather than a nameless
-  /// drawing.
+  /// The model name stays where it was printed. Empty draws no tag at all,
+  /// which is what every page saved before the field existed deserialises
+  /// to, so those drawings are unchanged.
   @JsonKey(defaultValue: '')
   String nameOrId = '';
-
-  /// What the drawing is actually labelled with.
-  String get label => nameOrId.isEmpty ? 'EL6070' : nameOrId;
 
   BeckhoffEL6070Config();
 
@@ -2835,7 +2827,8 @@ class BeckhoffEL6070Config extends BaseAsset {
       fit: BoxFit.contain,
       child: IO8Widget(
         ledStates: List.filled(8, IOState.low),
-        name: label,
+        name: 'EL6070',
+        markerLabel: nameOrId,
         animation: const AlwaysStoppedAnimation(0),
         ioLabels: const ['', '', '', '', '', '', '', ''],
         ioLabelColors: List.filled(8, const Color(0xFFE0E0E0)),
@@ -2875,18 +2868,15 @@ class BeckhoffEK1110Config extends BaseAsset {
   @override
   List<String> get searchKeywords => const ['ethercat', 'extension'];
 
-  /// Operator-facing label, printed on the drawing in place of the model
-  /// name — a page carrying several of these wants to say which is which.
+  /// Operator-facing label, worn as a marker tag on the drawing the way the
+  /// EL terminals wear theirs — a page carrying several extensions wants to
+  /// say which is which, and the tag is where the plant writes it.
   ///
-  /// Blank means "use the model name". That is what every page saved before
-  /// the field existed deserialises to, so those drawings are unchanged, and
-  /// clearing the box gives the model name back rather than a nameless
-  /// drawing.
+  /// The model name stays where it was printed. Empty draws no tag at all,
+  /// which is what every page saved before the field existed deserialises
+  /// to, so those drawings are unchanged.
   @JsonKey(defaultValue: '')
   String nameOrId = '';
-
-  /// What the drawing is actually labelled with.
-  String get label => nameOrId.isEmpty ? 'EK1110' : nameOrId;
 
   BeckhoffEK1110Config();
 
@@ -2894,7 +2884,7 @@ class BeckhoffEK1110Config extends BaseAsset {
   Widget build(BuildContext context) {
     return FittedBox(
       fit: BoxFit.contain,
-      child: EK1110Widget(name: label),
+      child: EK1110Widget(name: 'EK1110', markerLabel: nameOrId),
     );
   }
 

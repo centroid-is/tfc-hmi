@@ -10,7 +10,7 @@ library;
 import 'package:flutter/material.dart';
 
 import 'ek1100.dart' show EthernetPortPainter;
-import 'io8.dart' show bodyColor;
+import 'io8.dart' show bodyColor, ioLabelColor;
 
 /// Whether the extension's outgoing segment is up, as far as the mimic knows.
 ///
@@ -23,12 +23,21 @@ enum EK1110Link { unknown, down, up }
 class EK1110Painter extends CustomPainter {
   EK1110Painter({
     this.name = 'EK1110',
+    this.markerLabel = '',
     this.link = EK1110Link.unknown,
     this.housingColor = bodyColor,
   });
 
   /// Printed above `BECKHOFF` at the foot of the terminal.
   final String name;
+
+  /// The extension's configured name or id, worn as a marker tag on the
+  /// terminal-marker band — the same tag an EL terminal beside it wears, at
+  /// the same height, so a rack row reads as one row.
+  ///
+  /// Empty draws nothing and leaves the lamps where they were, so an unnamed
+  /// EK1110 is the drawing it always was.
+  final String markerLabel;
 
   final EK1110Link link;
   final Color housingColor;
@@ -58,11 +67,54 @@ class EK1110Painter extends CustomPainter {
 
     final pad = size.width * 0.05;
 
-    // Link lamps, side by side at the top where the EL terminals put theirs.
+    // The marker tag, when there is one, takes the band an EL terminal gives
+    // it and the lamps drop below — the same order as an EL: markers on top,
+    // then the lamp block.
+    final markerH = size.height * 0.06;
+    double lampTop = pad;
+    if (markerLabel.isNotEmpty) {
+      final rect = Rect.fromLTWH(pad, pad, size.width - pad * 2, markerH);
+      canvas.drawRect(rect, Paint()..color = ioLabelColor);
+      canvas.drawRect(rect, stroke);
+
+      // Shrink to fit before ellipsizing, as [IO8Painter] does: plant ids are
+      // told apart by their tail and an ellipsis eats exactly that.
+      TextPainter layoutAt(double fs, {bool clamp = false}) => TextPainter(
+            text: TextSpan(
+              text: markerLabel,
+              style: TextStyle(
+                color: Colors.black,
+                fontSize: fs,
+                fontWeight: FontWeight.bold,
+                fontFamily: 'Roboto',
+              ),
+            ),
+            maxLines: 1,
+            ellipsis: '…',
+            textAlign: TextAlign.center,
+            textDirection: TextDirection.ltr,
+          )..layout(
+              minWidth: clamp ? rect.width : 0,
+              maxWidth: clamp ? rect.width : double.infinity,
+            );
+
+      final avail = rect.width - pad;
+      double fs = markerH * 0.7;
+      while (fs > markerH * 0.32 && layoutAt(fs).width > avail) {
+        fs -= markerH * 0.04;
+      }
+      final tp = layoutAt(fs, clamp: true);
+      tp.paint(canvas, Offset(rect.left, rect.top + (rect.height - tp.height) / 2));
+
+      lampTop = rect.bottom + pad * 0.6;
+    }
+
+    // Link lamps, side by side where the EL terminals put theirs.
     final lampH = size.height * 0.035;
     final lampW = (size.width - pad * 3) / 2;
     for (int i = 0; i < 2; i++) {
-      final rect = Rect.fromLTWH(pad + i * (lampW + pad), pad, lampW, lampH);
+      final rect =
+          Rect.fromLTWH(pad + i * (lampW + pad), lampTop, lampW, lampH);
       canvas.drawRect(rect, Paint()..color = _lampColor);
       canvas.drawRect(rect, stroke);
     }
@@ -118,6 +170,7 @@ class EK1110Painter extends CustomPainter {
   @override
   bool shouldRepaint(covariant EK1110Painter old) =>
       old.name != name ||
+      old.markerLabel != markerLabel ||
       old.link != link ||
       old.housingColor != housingColor;
 }
@@ -127,11 +180,13 @@ class EK1110Widget extends StatelessWidget {
   const EK1110Widget({
     super.key,
     this.name = 'EK1110',
+    this.markerLabel = '',
     this.link = EK1110Link.unknown,
     this.height = 300,
   });
 
   final String name;
+  final String markerLabel;
   final EK1110Link link;
   final double height;
 
@@ -140,7 +195,13 @@ class EK1110Widget extends StatelessWidget {
     return SizedBox(
       width: height / 6,
       height: height,
-      child: CustomPaint(painter: EK1110Painter(name: name, link: link)),
+      child: CustomPaint(
+        painter: EK1110Painter(
+          name: name,
+          markerLabel: markerLabel,
+          link: link,
+        ),
+      ),
     );
   }
 }

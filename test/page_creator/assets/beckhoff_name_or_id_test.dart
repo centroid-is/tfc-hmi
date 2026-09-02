@@ -11,14 +11,15 @@ import 'package:tfc/providers/state_man.dart' show stateManProvider;
 import 'package:tfc_dart/core/state_man.dart' show StateMan;
 
 /// The passive Beckhoff drawings carry a `nameOrId` the operator can set, and
-/// what these pin is the part that is easy to get wrong: the *fallback*.
+/// it lands where the EL terminals have always put theirs: a marker tag over
+/// the terminal-marker band, with the model name left where it is printed.
 ///
-/// A cabinet page holds three EK1100s and several EL6070s, and the only way
-/// to tell them apart on the mimic is the name printed on the face. But the
-/// field is new: every page already saved stores no `nameOrId` at all, and an
-/// operator who selects the box and deletes the text leaves it empty. Neither
-/// may produce a nameless block — both fall back to the model name, so an
-/// untouched page renders exactly as it did before the field existed.
+/// Two things are easy to get wrong and are what these pin. The tag must not
+/// eat the model name — a rack of `ST301 A1`s with no EK1100 or EL6070
+/// anywhere on it tells an operator less than the drawing did before. And an
+/// empty name must draw no tag at all, because every page already saved
+/// stores no `nameOrId`, so an untouched page has to render exactly as it did
+/// before the field existed.
 
 class _FakeStateMan extends Fake implements StateMan {}
 
@@ -44,28 +45,33 @@ Future<void> pumpAsset(WidgetTester tester, Asset config) async {
   await tester.pumpAndSettle();
 }
 
-/// The name the device's own drawing was handed — whichever way it draws.
-String paintedName(WidgetTester tester) {
-  final cx = find.byWidgetPredicate(
-      (w) => w is CustomPaint && w.painter is CXxxxx);
+/// The model name printed on the device, and the marker tag over its band —
+/// whichever of the four drawings it is.
+({String name, String marker}) painted(WidgetTester tester) {
+  final cx =
+      find.byWidgetPredicate((w) => w is CustomPaint && w.painter is CXxxxx);
   if (cx.evaluate().isNotEmpty) {
-    return (tester.widget<CustomPaint>(cx.first).painter! as CXxxxx).name;
+    final p = tester.widget<CustomPaint>(cx.first).painter! as CXxxxx;
+    return (name: p.name, marker: p.markerLabel);
   }
 
-  final ek = find.byWidgetPredicate(
-      (w) => w is CustomPaint && w.painter is EK1100);
+  final ek =
+      find.byWidgetPredicate((w) => w is CustomPaint && w.painter is EK1100);
   if (ek.evaluate().isNotEmpty) {
-    return (tester.widget<CustomPaint>(ek.first).painter! as EK1100).name;
+    final p = tester.widget<CustomPaint>(ek.first).painter! as EK1100;
+    return (name: p.name, marker: p.markerLabel);
   }
 
   final ek1110 = find.byType(EK1110Widget);
   if (ek1110.evaluate().isNotEmpty) {
-    return tester.widget<EK1110Widget>(ek1110.first).name;
+    final w = tester.widget<EK1110Widget>(ek1110.first);
+    return (name: w.name, marker: w.markerLabel);
   }
 
   final io8 = find.byType(IO8Widget);
   if (io8.evaluate().isNotEmpty) {
-    return tester.widget<IO8Widget>(io8.first).name;
+    final w = tester.widget<IO8Widget>(io8.first);
+    return (name: w.name, marker: w.markerLabel);
   }
 
   fail('no Beckhoff drawing found to read a name off');
@@ -77,7 +83,6 @@ class _Device {
   final String model;
   final BaseAsset Function() make;
   final BaseAsset Function(Map<String, dynamic>) fromJson;
-  final String Function(BaseAsset) label;
   final String Function(BaseAsset) nameOrId;
   final void Function(BaseAsset, String) setNameOrId;
 
@@ -85,7 +90,6 @@ class _Device {
     required this.model,
     required this.make,
     required this.fromJson,
-    required this.label,
     required this.nameOrId,
     required this.setNameOrId,
   });
@@ -96,7 +100,6 @@ final _devices = <_Device>[
     model: 'CX5010',
     make: BeckhoffCX5010Config.new,
     fromJson: BeckhoffCX5010Config.fromJson,
-    label: (a) => (a as BeckhoffCX5010Config).label,
     nameOrId: (a) => (a as BeckhoffCX5010Config).nameOrId,
     setNameOrId: (a, v) => (a as BeckhoffCX5010Config).nameOrId = v,
   ),
@@ -104,7 +107,6 @@ final _devices = <_Device>[
     model: 'CX5340',
     make: BeckhoffCX5340Config.new,
     fromJson: BeckhoffCX5340Config.fromJson,
-    label: (a) => (a as BeckhoffCX5340Config).label,
     nameOrId: (a) => (a as BeckhoffCX5340Config).nameOrId,
     setNameOrId: (a, v) => (a as BeckhoffCX5340Config).nameOrId = v,
   ),
@@ -112,7 +114,6 @@ final _devices = <_Device>[
     model: 'EK1100',
     make: BeckhoffEK1100Config.new,
     fromJson: BeckhoffEK1100Config.fromJson,
-    label: (a) => (a as BeckhoffEK1100Config).label,
     nameOrId: (a) => (a as BeckhoffEK1100Config).nameOrId,
     setNameOrId: (a, v) => (a as BeckhoffEK1100Config).nameOrId = v,
   ),
@@ -120,7 +121,6 @@ final _devices = <_Device>[
     model: 'EK1110',
     make: BeckhoffEK1110Config.new,
     fromJson: BeckhoffEK1110Config.fromJson,
-    label: (a) => (a as BeckhoffEK1110Config).label,
     nameOrId: (a) => (a as BeckhoffEK1110Config).nameOrId,
     setNameOrId: (a, v) => (a as BeckhoffEK1110Config).nameOrId = v,
   ),
@@ -128,7 +128,6 @@ final _devices = <_Device>[
     model: 'EL6070',
     make: BeckhoffEL6070Config.new,
     fromJson: BeckhoffEL6070Config.fromJson,
-    label: (a) => (a as BeckhoffEL6070Config).label,
     nameOrId: (a) => (a as BeckhoffEL6070Config).nameOrId,
     setNameOrId: (a, v) => (a as BeckhoffEL6070Config).nameOrId = v,
   ),
@@ -136,7 +135,6 @@ final _devices = <_Device>[
     model: 'EL9187',
     make: BeckhoffEL9187Config.new,
     fromJson: BeckhoffEL9187Config.fromJson,
-    label: (a) => (a as BeckhoffEL9187Config).label,
     nameOrId: (a) => (a as BeckhoffEL9187Config).nameOrId,
     setNameOrId: (a, v) => (a as BeckhoffEL9187Config).nameOrId = v,
   ),
@@ -145,10 +143,8 @@ final _devices = <_Device>[
 void main() {
   for (final device in _devices) {
     group('${device.model} — name or ID', () {
-      test('a fresh one is unnamed and labels itself with the model', () {
-        final asset = device.make();
-        expect(device.nameOrId(asset), '');
-        expect(device.label(asset), device.model);
+      test('a fresh one carries no name', () {
+        expect(device.nameOrId(device.make()), '');
       });
 
       test('a page saved before the field existed still loads', () {
@@ -157,38 +153,46 @@ void main() {
         final json = device.make().toJson()..remove('nameOrId');
         expect(json.containsKey('nameOrId'), isFalse);
 
-        final back = device.fromJson(json);
-        expect(device.nameOrId(back), '');
-        expect(device.label(back), device.model);
+        expect(device.nameOrId(device.fromJson(json)), '');
       });
 
       test('a name round-trips through JSON', () {
         final asset = device.make();
         device.setNameOrId(asset, 'ST301 A1');
 
-        final back = device.fromJson(asset.toJson());
-        expect(device.nameOrId(back), 'ST301 A1');
-        expect(device.label(back), 'ST301 A1');
+        expect(device.nameOrId(device.fromJson(asset.toJson())), 'ST301 A1');
       });
 
-      test('clearing the box gives the model name back, not a blank', () {
-        final asset = device.make();
-        device.setNameOrId(asset, 'ST301 A1');
-        device.setNameOrId(asset, '');
-        expect(device.label(asset), device.model);
-      });
-
-      testWidgets('the drawing is labelled with the name', (tester) async {
+      testWidgets('the name goes on the marker tag', (tester) async {
         final asset = device.make();
         device.setNameOrId(asset, 'ST301 A1');
         await pumpAsset(tester, asset);
-        expect(paintedName(tester), 'ST301 A1');
+        expect(painted(tester).marker, 'ST301 A1');
       });
 
-      testWidgets('an unnamed drawing is labelled with the model',
-          (tester) async {
+      testWidgets('the model name survives being named', (tester) async {
+        // The regression this exists for: naming a terminal must not take
+        // the printed type off it. A rack of tags with no model anywhere is
+        // less use to an operator than the drawing was unnamed.
+        final asset = device.make();
+        device.setNameOrId(asset, 'ST301 A1');
+        await pumpAsset(tester, asset);
+        expect(painted(tester).name, device.model);
+      });
+
+      testWidgets('an unnamed drawing wears no tag', (tester) async {
         await pumpAsset(tester, device.make());
-        expect(paintedName(tester), device.model);
+        final p = painted(tester);
+        expect(p.marker, '');
+        expect(p.name, device.model);
+      });
+
+      testWidgets('clearing the box takes the tag away again', (tester) async {
+        final asset = device.make();
+        device.setNameOrId(asset, 'ST301 A1');
+        device.setNameOrId(asset, '');
+        await pumpAsset(tester, asset);
+        expect(painted(tester).marker, '');
       });
     });
   }

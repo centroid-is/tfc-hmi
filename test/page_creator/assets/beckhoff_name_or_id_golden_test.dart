@@ -14,15 +14,16 @@ import '../../helpers/golden_tolerance.dart';
 
 /// Goldens of the passive Beckhoff devices carrying operator-set names.
 ///
-/// The name goes where the model name used to go, and the faces it goes on
-/// are not generous: the CX prints its label rotated down a narrow red
-/// stripe, and an EL terminal has a few millimetres of head. `ST301 A1` is
-/// longer than `EL6070`, and whether it fits, clips, or shrinks the rest of
-/// the drawing is not something a widget test asserting a string can see.
+/// The name lands on a marker tag over the terminal-marker band, exactly
+/// where an EL1008 beside them has always worn its id, and the model name
+/// stays printed at the foot. A widget test can assert both strings; only an
+/// image can say whether the tag reads at rack scale, whether `ST301 A1` fits
+/// a band sized for `1`, and whether the EK1110's lamps still have somewhere
+/// to sit once the tag takes the top of its face.
 ///
-/// The unnamed row is the control: with no name set every device falls back
-/// to its model name, which is what every page saved before this field
-/// existed renders as. If that image ever moves, a saved page moved with it.
+/// The unnamed row is the control: no name set, no tag drawn, which is what
+/// every page saved before this field existed renders as. If that image ever
+/// moves, a saved page moved with it.
 
 /// Loads real fonts so the names render as letterforms rather than the test
 /// font's boxes — the label IS the change, so Ahem boxes would pin nothing.
@@ -141,9 +142,9 @@ void main() {
       );
     });
 
-    /// The CX on its own, large enough that the stripe text is legible. Its
-    /// label runs vertically up a red band roughly two characters wide, which
-    /// is the tightest place any of these names has to fit.
+    /// The CX on its own, large enough to read. Its tag rides the block's own
+    /// I/O slice — the narrowest band any of these names has to fit — while
+    /// `CX5010` stays down the red stripe.
     Future<void> pumpCx(WidgetTester tester, String nameOrId) async {
       final cx = BeckhoffCX5010Config()
         ..size = const RelativeSize(width: 1.0, height: 1.0)
@@ -169,7 +170,7 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    testWidgets('an unnamed CX still prints CX5010 down the stripe',
+    testWidgets('an unnamed CX prints CX5010 and wears no tag',
         (tester) async {
       await pumpCx(tester, '');
 
@@ -179,7 +180,7 @@ void main() {
       );
     });
 
-    testWidgets('a named CX prints the name down the stripe', (tester) async {
+    testWidgets('a named CX wears the tag and keeps CX5010', (tester) async {
       await pumpCx(tester, 'ST301');
 
       await expectLater(
