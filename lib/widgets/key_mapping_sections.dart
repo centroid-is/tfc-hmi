@@ -1193,9 +1193,10 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
 /// The section's label.
 const String kKeyAccessTemplateLabel = 'Access template';
 
-/// The "nothing governs this key" entry. Named for what it *means* rather than
-/// "None" alone, which reads as an omission instead of a state.
-const String kKeyAccessTemplateNoneLabel = 'None — unrestricted';
+/// The "no template governs this key" entry. Named for what it *means*
+/// rather than "None" alone, which reads as an omission instead of a state.
+/// Since the 2026-09-02 ruling an untemplated key still needs `operate`.
+const String kKeyAccessTemplateNoneLabel = 'None — Operate only';
 
 /// A bound name with no template row behind it.
 ///

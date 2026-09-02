@@ -19,14 +19,15 @@
 /// group instead derives the list from `state_man.dart` at test time, so a
 /// member added there and not here fails the build rather than the plant.
 ///
-/// ## Phase 3 denies nothing on this surface, and that is correct
+/// ## Every tag write requires at least `operate`
 ///
-/// `AccessPolicy` ships with no tag bindings — Phase 4's access templates
-/// supply them — so `groupForWireSurface('tag', …)` answers null for every key
-/// today and every write is permitted. What ships now is the **recording**:
-/// every jog, setpoint and force in the trail. The deny path below is fully
-/// built and fully tested against an injected binding, so Phase 4 turns it on
-/// by supplying templates rather than by writing new code.
+/// Phase 3 shipped this guard recording everything and denying nothing —
+/// `AccessPolicy` had no tag bindings, and an unbound key meant unrestricted.
+/// The 2026-09-02 ruling replaced that: `groupForWireSurface('tag', …)` now
+/// floors at `operate`, so a session without it is refused on every tag
+/// write, bound or not, and templates only raise the requirement from there.
+/// The anonymous session maps to the Operator role, which holds `operate`,
+/// so a stock station behaves exactly as before.
 library;
 
 import 'dart:async';
@@ -183,16 +184,17 @@ class GuardedStateMan implements StateMan {
     // not know which members moved, so it falls back to the key-level
     // question - the template's whole-key row, or null.
     //
-    // That is **fail-open**, deliberately. The strict reading - require every
-    // group the template names anywhere - would refuse an anonymous jog
-    // because a PLC read was slow, which takes a working control off the floor
-    // for a reason the operator cannot see or fix. Spec §7's asymmetry is
-    // explicit that tags fail open where preferences fail closed, and tap-time
-    // elevation (plan 04-06) resolves from the template synchronously and
-    // needs no baseline at all, so this guard is the backstop rather than the
-    // operator's path.
+    // That degrades to the least gated answer the template can give — since
+    // the 2026-09-02 ruling that is the operate floor, never "unrestricted".
+    // The strict reading - require every group the template names anywhere -
+    // would refuse an anonymous jog because a PLC read was slow, which takes
+    // a working control off the floor for a reason the operator cannot see
+    // or fix. Tap-time elevation (plan 04-06) resolves from the template
+    // synchronously and needs no baseline at all, so this guard is the
+    // backstop rather than the operator's path.
     //
-    // The cost, stated plainly: **a setpoint write lands unchecked here when
+    // The cost, stated plainly: **a setpoint write lands checked only against
+    // the key-level answer — the operate floor, absent a whole-key row — when
     // the baseline read fails.** This is the one way member gating can be
     // bypassed. Both halves are pinned in
     // `guarded_state_man_member_test.dart`, group `the no-baseline fallback -
@@ -200,7 +202,7 @@ class GuardedStateMan implements StateMan {
     // permitted without a baseline, and the same case *is* gated when the
     // template carries a whole-key row - so the fallback is the key-level
     // answer, not the absence of one.
-    final memberGroups = <AccessGroup?>[
+    final memberGroups = <AccessGroup>[
       if (changes.isEmpty || changes.any((c) => c.member == null))
         _policy.groupForWireSurface(_surface, resolvedKey)
       else
@@ -208,14 +210,14 @@ class GuardedStateMan implements StateMan {
           _policy.groupForWireSurface(_surface, resolvedKey, member: c.member),
     ];
 
-    // Null means unrestricted, per member and per key alike. Tags fail
-    // **open** - deliberately, and opposite to `GuardedPreferences`: binding
-    // is explicit per key and per member (spec §7b), so a key nobody has bound
-    // and a member no rule mentions both have no group by construction rather
-    // than by omission, and a strict default would lock every control on the
-    // plant on the day the guards merge. Do not "fix" this into a fail-closed
-    // default.
-    final required = memberGroups.whereType<AccessGroup>().toList();
+    // Since the 2026-09-02 ruling the policy never answers null on this
+    // surface: every tag write requires at least `operate`, and bindings only
+    // raise that. The old fail-open reading — unbound key means unrestricted
+    // — let any account press any plain control regardless of its role,
+    // which surfaced on hq-skjar as a user stripped of `operate` toggling
+    // lights. The anonymous session maps to the Operator role, which holds
+    // `operate`, so the floor locks nothing on a stock station.
+    final required = memberGroups;
     final missing =
         required.where((group) => !session.can(group)).toList(growable: false);
 

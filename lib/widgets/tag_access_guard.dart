@@ -159,25 +159,18 @@ String? _resolvedTagKey(WidgetRef ref, String key, StateMan? stateMan) {
   return resolved.contains(r'$') ? null : resolved;
 }
 
-/// The group [member] of [resolvedKey] needs, or null when nothing is bound.
+/// The group [member] of [resolvedKey] needs. Never null since the
+/// 2026-09-02 operate-floor ruling: an unbound key answers
+/// [AccessGroup.operate], so every control on the plant now has a real
+/// question to ask of the session — which is why the callers below all watch
+/// `tagAccessProvider` where they used to short-circuit on "nothing bound".
+/// A page of controls rebuilding on sign-in is the point, not a regression:
+/// the locks have to come off, or go on, the moment the session changes.
 ///
-/// A `read`, never a `watch`, and it is the short-circuit every caller here
-/// takes first: an unbound key is answered from the snapshot alone, without
-/// subscribing to the session. That is the `AccessLockBadge` idiom and it is
-/// what keeps a page of two hundred ordinary controls from taking two hundred
-/// listeners on `tagAccessProvider` and rebuilding all of them on every
-/// sign-in.
-///
-/// It is not a second copy of the fail-open rule: the decision for a **bound**
-/// key is still `TagAccess.canWrite` and nowhere else. This only answers "is
-/// there anything to ask about?".
-///
-/// The cost, named: because it is a read, a control already on screen for an
-/// unbound key does not repaint when somebody binds that key from the key
-/// repository. Binding happens on a configuration page and any later rebuild
-/// picks it up; the guard, which is the enforcement point, sees the new
-/// binding on the very next write regardless.
-AccessGroup? _boundGroup(WidgetRef ref, String resolvedKey, String? member) =>
+/// A `read` of the resolver itself: the decision for the session in force is
+/// still `TagAccess.canWrite` and nowhere else. This only answers "which
+/// group is being asked about?" — for the denial row and the prompt.
+AccessGroup _boundGroup(WidgetRef ref, String resolvedKey, String? member) =>
     ref.read(tagBindingResolverProvider).groupFor(resolvedKey, member);
 
 /// Whether the session in force may write [member] of [key]. The pure
@@ -187,8 +180,10 @@ AccessGroup? _boundGroup(WidgetRef ref, String resolvedKey, String? member) =>
 /// so a control that renders a lock loses it the moment the operator signs in
 /// — without the pane having to be navigated away from and back.
 ///
-/// True when nothing is bound, which is spec §7b's fail-open half, and true
-/// when the session holds the group.
+/// True when the session holds the group the key requires — which is at
+/// least `operate` for every key, bound or not (2026-09-02 ruling). The only
+/// remaining fail-open arm is an unresolvable key, which is `StateMan`'s
+/// failure to raise, not a lock.
 bool tagWriteAllowed(
   WidgetRef ref,
   String key, {
@@ -197,7 +192,6 @@ bool tagWriteAllowed(
 }) {
   final resolved = _resolvedTagKey(ref, key, stateMan);
   if (resolved == null) return true;
-  if (_boundGroup(ref, resolved, member) == null) return true;
   return ref.watch(tagAccessProvider).canWrite(resolved, member: member);
 }
 
@@ -234,12 +228,11 @@ Future<bool> guardTagWrite(
   final resolved = _resolvedTagKey(ref, key, stateMan);
   if (resolved == null) return true;
 
-  final group = _boundGroup(ref, resolved, member);
-  if (group == null) return true;
-
   if (ref.read(tagAccessProvider).canWrite(resolved, member: member)) {
     return true;
   }
+
+  final group = _boundGroup(ref, resolved, member);
 
   final sink = ref.read(tagRefusalSinkProvider);
   final session =
@@ -346,13 +339,11 @@ class TagLockBadge extends ConsumerWidget {
     final resolved = _resolvedTagKey(ref, tagKey, null);
     if (resolved == null) return const SizedBox.shrink();
 
-    // The short-circuit first, before anything is watched — see [_boundGroup].
-    final group = _boundGroup(ref, resolved, member);
-    if (group == null) return const SizedBox.shrink();
-
     if (ref.watch(tagAccessProvider).canWrite(resolved, member: member)) {
       return const SizedBox.shrink();
     }
+
+    final group = _boundGroup(ref, resolved, member);
 
     return Semantics(
       // Named, not just drawn: a glyph-only lock says nothing to a screen

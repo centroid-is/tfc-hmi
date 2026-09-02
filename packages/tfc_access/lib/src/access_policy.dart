@@ -219,10 +219,11 @@ const List<PrefAccessRule> kPrefAccessRules = <PrefAccessRule>[
 /// fail-closed rule, and the interesting failure of this phase is the silent
 /// one: a wrong answer looks identical to a right one from every screen.
 ///
-/// **The asymmetry is the point.** [groupForTag] returns `AccessGroup?` and
-/// [groupForPref] returns a non-nullable `AccessGroup`. Tags fail open,
-/// config keys fail closed, and the type system carries that so a later edit
-/// cannot quietly collapse it into one default.
+/// **Both surfaces fail closed, to different floors.** [groupForTag] floors
+/// at `operate` (2026-09-02 ruling — an unbound key is not unrestricted) and
+/// [groupForPref] walks `kPrefAccessRules` down to `administer` for anything
+/// unrecognised. Neither returns null, and the type system carries that so a
+/// later edit cannot quietly reopen a hole.
 @immutable
 class AccessPolicy {
   /// [tagBindings] is Phase 4's access-template lookup; the default answers
@@ -240,29 +241,32 @@ class AccessPolicy {
   final TagBindingLookup? _tagBindings;
   final Map<String, AccessGroup> _routes;
 
-  /// The group required to write [member] of tag [key], or **null for
-  /// unrestricted**.
+  /// The group required to write [member] of tag [key]. **Never null** — the
+  /// floor is [AccessGroup.operate].
   ///
-  /// Null is the shipped answer for every key until Phase 4 binds access
-  /// templates (spec §7b). This is the fail-open half: a strict default would
-  /// lock every control on the plant on the day the guards merge, and a
-  /// wrongly-open setpoint is a nuisance where a wrongly-open config write is
-  /// a broken plant.
-  AccessGroup? groupForTag(String key, {String? member}) {
+  /// The 2026-09-02 ruling that replaced spec §7b's fail-open half: an
+  /// unbound key, an unmentioned member, a missing lookup and an unreadable
+  /// binding source all answer `operate` rather than "unrestricted".
+  /// Bindings raise the requirement; nothing lowers it past the floor. The
+  /// plant does not lock, because the anonymous session maps to the Operator
+  /// role, which holds `operate`; what closes is the free pass an account
+  /// deliberately stripped of `operate` used to get on every unbound key.
+  AccessGroup groupForTag(String key, {String? member}) {
     final lookup = _tagBindings;
-    if (lookup == null) return null;
+    if (lookup == null) return AccessGroup.operate;
     try {
-      return lookup(key, member);
+      return lookup(key, member) ?? AccessGroup.operate;
     } on Object {
       // Deliberately swallowed, and deliberately not logged — this package has
       // no logger and must not grow one.
       //
-      // The fail-open half must not become fail-closed because a template
-      // table is unreadable. This runs on the write path of every jog, start
-      // and alarm ack; a guard that threw here because Postgres was down would
-      // take the plant's controls down with it. An unreadable binding source
-      // is indistinguishable from an unbound key, and both mean unrestricted.
-      return null;
+      // The floor must not escalate because a template table is unreadable.
+      // This runs on the write path of every jog, start and alarm ack; a
+      // guard that threw here because Postgres was down would take the
+      // plant's controls down with it. An unreadable binding source is
+      // indistinguishable from an unbound key, and both answer the operate
+      // floor — which the anonymous Operator role holds.
+      return AccessGroup.operate;
     }
   }
 
@@ -310,9 +314,10 @@ class AccessPolicy {
   /// directly deletes the unmapped branch's only caller and with it the one
   /// test that proves an unknown surface fails closed.
   ///
-  /// Returns null only for `'tag'`, where null means unrestricted. `'pref'`
-  /// and `'route'` always answer a group, and so does the unmapped branch.
-  AccessGroup? groupForWireSurface(String surface, String key,
+  /// Never null: every surface answers a group. The tag arm floors at
+  /// `operate`, `'pref'` and `'route'` always answered one, and the unmapped
+  /// branch fails closed on `administer`.
+  AccessGroup groupForWireSurface(String surface, String key,
       {String? member}) {
     return switch (AccessSurface.byWireName(surface)) {
       AccessSurface.tag => groupForTag(key, member: member),

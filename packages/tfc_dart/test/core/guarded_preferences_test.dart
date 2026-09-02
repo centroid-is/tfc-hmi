@@ -646,19 +646,23 @@ void main() {
       expect(f.sink.rows.single.groupRequired, AccessGroup.administer.name);
     });
 
-    test('a null group from the wire lookup means administer, not unrestricted',
-        () async {
-      // groupForWireSurface returns AccessGroup? for the tag surface's sake,
-      // where null means unrestricted. Routing the config surface through a
-      // nullable lookup must not reintroduce a fail-open path: on this guard a
-      // null answer is administer.
-      expect(_policy.groupForWireSurface('tag', _operateKey), isNull,
-          reason: 'the premise of this test — no tag binding ships in Phase 3');
-      final f = _Fixture(surface: 'tag');
+    test('the wire lookup can no longer answer null — the tag surface floors '
+        'at operate', () async {
+      // This test used to pin that a null answer from the nullable wire
+      // lookup was treated as administer on this guard. Since the 2026-09-02
+      // operate-floor ruling `groupForWireSurface` is non-nullable — the
+      // fail-open path this defended against is unrepresentable — and a
+      // guard misconfigured onto the tag surface gets the tag floor, which a
+      // session without operate still cannot pass.
+      expect(_policy.groupForWireSurface('tag', _operateKey),
+          AccessGroup.operate);
+      final f = _Fixture(
+          surface: 'tag',
+          session: AccessSession.anonymous(const {AccessGroup.device}));
       await expectLater(
         f.guard.setString(_operateKey, 'dark'),
         throwsA(isA<AccessDenied>()
-            .having((e) => e.required, 'required', AccessGroup.administer)),
+            .having((e) => e.required, 'required', AccessGroup.operate)),
       );
       expect(f.inner.calls, isEmpty);
       expect(f.sink.rows.single.allowed, isFalse);

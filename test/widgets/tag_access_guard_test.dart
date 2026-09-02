@@ -396,7 +396,37 @@ void main() {
               'permitted write');
     });
 
-    testWidgets('an unbound key behaves exactly as it did before this phase',
+    testWidgets('an unbound key refuses a session without operate — the '
+        '2026-09-02 floor', (tester) async {
+      // The hq-skjar report that forced the ruling: a user whose role held
+      // only `device`-less groups could toggle the bathroom lights, because
+      // an unbound key was unrestricted. The floor is `operate`, everywhere.
+      final inner = _FakeStateMan();
+      final sink = _RecordingSink();
+
+      await tester.pumpWidget(_shell(
+        body: Center(
+          child: _WriteButton(stateMan: inner, tagKey: _unboundKey),
+        ),
+        overrides: _overrides(
+          resolver: _loadedResolver(),
+          session: AccessSession.anonymous(const {AccessGroup.device}),
+          sink: sink,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Write'));
+      await tester.pumpAndSettle();
+
+      expect(inner.writes, isEmpty,
+          reason: 'no operate, no write — bound or not');
+      expect(sink.rows.single.allowed, isFalse);
+      expect(sink.rows.single.groupRequired, 'operate');
+      expect(find.byKey(kAccessDeniedBodyKey), findsOneWidget);
+    });
+
+    testWidgets('an unbound key still writes for a session holding operate',
         (tester) async {
       final inner = _FakeStateMan();
       final sink = _RecordingSink();

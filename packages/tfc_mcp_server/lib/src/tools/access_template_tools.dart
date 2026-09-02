@@ -60,7 +60,7 @@ import 'tool_registry.dart';
 /// different actions: one is a schema upgrade, the other is a template.
 const String _kNoTablesNote =
     'This station has no access_template table, so no template exists and no '
-    'key is gated — every key is unrestricted. This is "cannot tell you", not '
+    'key is gated above the Operate floor — every key needs only Operate. This is "cannot tell you", not '
     '"there are none": the tables arrive with the database schema upgrade '
     'that adds access templates. Nothing can be proposed until they do.';
 
@@ -123,7 +123,7 @@ void _registerListAccessTemplates(
         'List every access template on this station: its name, the permission '
         'each struct member of a bound key needs, and which keys are bound to '
         'it. A template is the only thing that restricts a write — a key with '
-        'no template is unrestricted, so this is also the list of everything '
+        'no template needs only Operate, so this is also the list of everything '
         'that IS gated here. Read this before proposing any change to a '
         'template, because create_access_template refuses a name that already '
         'exists and update_access_template replaces a template\'s rules '
@@ -139,7 +139,7 @@ void _registerListAccessTemplates(
           TextContent(
               text: 'No access templates exist on this station. That is the '
                   'shipped state, not a fault: until a template is created '
-                  'and a key is bound to it, every key is unrestricted. '
+                  'and a key is bound to it, every key needs only Operate. '
                   'Use list_unbound_keys to see what that covers.')
         ]);
       }
@@ -184,10 +184,10 @@ void _registerListUnboundKeys(
     description:
         'List the keys on this station that no access template governs — the '
         'keys anybody may write. "Unbound" means one of two things and both '
-        'are reported, because both leave the key completely unrestricted: '
+        'are reported, because both drop the key to the Operate floor: '
         'the key has no binding row at all, OR it is bound to a template that '
         'no longer exists (a dangling binding, usually left by a rename). It '
-        'does NOT mean "not yet configured": an unrestricted key still reads '
+        'does NOT mean "not yet configured": an Operate-floor key still reads '
         'and writes normally, it is simply not gated. This is the sweep tool — '
         'call it, then propose the whole plant\'s bindings in one '
         'bind_key_access_template call. Note that a binding row naming a key '
@@ -263,7 +263,7 @@ void _registerListUnboundKeys(
         header.writeln(dangling == null
             ? key
             : '$key — bound to "$dangling", which has no template row, so it '
-                'is unrestricted');
+                'needs only Operate');
       }
       return CallToolResult(
         content: [TextContent(text: header.toString().trimRight())],
@@ -374,7 +374,7 @@ CallToolResult _error(String message) => CallToolResult(
 
 /// Rules as a diff-table value: `member -> group`, sorted, one per line.
 String _describeRules(Map<String, AccessGroup> rules) => rules.isEmpty
-    ? '(no rules — a key bound to this is unrestricted)'
+    ? '(no rules — a key bound to this needs only Operate)'
     : [
         for (final member in rules.keys.toList()..sort())
           '${_member(member)} -> ${rules[member]!.name}'
@@ -470,7 +470,7 @@ void _registerUpdateAccessTemplate(
     description:
         'Propose replacing an access template\'s rules. The rules given here '
         'REPLACE the template\'s whole rule set — they are not merged into '
-        'it, so a member you leave out becomes unrestricted for every key '
+        'it, so a member you leave out drops to the Operate floor for every key '
         'bound to this template. Call list_access_templates first and send '
         'back the entries you want to keep. Returns proposal JSON for a '
         'person to approve; it does not write to the database.',

@@ -74,9 +74,11 @@ const double kKeyRepositoryMinKeyListHeight = 264;
 // ---------------------------------------------------------------------------
 // The unbound-key surface — spec §7b's honesty requirement.
 //
-// The design is fail-open on purpose: an unbound key is unrestricted, and so
-// is a member no bound template mentions. **Nothing enforces that somebody
-// remembered.** §7b's answer is that "enforcement is replaced by visibility …
+// An unbound key floors at `operate` (2026-09-02 ruling), and so does a
+// member no bound template mentions — no key is unrestricted, but nothing
+// above the floor is enforced until somebody binds it. **Nothing enforces
+// that somebody remembered.** §7b's answer is that "enforcement is replaced
+// by visibility …
 // A key that should have been restricted must not stay open with no signal
 // that someone forgot", and this count and this filter are that signal.
 //
@@ -129,9 +131,9 @@ const Key kUnboundKeysFilterKey = Key('key-repository-unbound-filter');
 const String kKeyMappingsImportBindingsNote =
     'Access bindings are not in this file. The bindings already on this '
     'station are left exactly as they are, and every key arriving from the '
-    'file is unbound — unrestricted — until somebody binds it. Bind them on '
-    'each key\'s card below, or have an agent sweep them with '
-    'list_unbound_keys.';
+    'file is unbound — anyone with Operate can write it — until somebody '
+    'binds it. Bind them on each key\'s card below, or have an agent sweep '
+    'them with list_unbound_keys.';
 
 /// Shown in the export result, so a file handed to another station is not
 /// assumed to carry what it does not.

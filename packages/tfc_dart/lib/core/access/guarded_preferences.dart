@@ -102,13 +102,12 @@ class GuardedPreferences implements Preferences {
 
   /// The group [key] requires on this guard's surface.
   ///
-  /// [AccessPolicy.groupForWireSurface] returns a nullable group for the tag
-  /// surface's sake, where null means unrestricted. **A null here is
-  /// [AccessGroup.administer], never unrestricted.** Routing the surface that
-  /// fails closed through a nullable lookup must not quietly reintroduce a
-  /// fail-open path.
+  /// [AccessPolicy.groupForWireSurface] answers a group for every surface
+  /// since the 2026-09-02 operate-floor ruling — the nullable tag arm this
+  /// method used to defend against with an `?? administer` is gone from the
+  /// signature itself.
   AccessGroup _groupFor(String key) =>
-      _policy.groupForWireSurface(_surface, key) ?? AccessGroup.administer;
+      _policy.groupForWireSurface(_surface, key);
 
   /// The old-value reader for a write, or null when there must not be one.
   ///

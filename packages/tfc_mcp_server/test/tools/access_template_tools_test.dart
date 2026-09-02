@@ -209,7 +209,7 @@ void main() {
               'told nothing is gated, not handed a driver error');
       final text = (result.content.first as TextContent).text;
       expect(text.toLowerCase(), contains('no access_template table'));
-      expect(text.toLowerCase(), contains('unrestricted'));
+      expect(text.toLowerCase(), contains('needs only operate'));
     });
 
     test('tables present and empty says so in different words', () async {

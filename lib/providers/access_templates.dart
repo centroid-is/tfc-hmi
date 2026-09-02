@@ -126,7 +126,8 @@ TagBindingResolver tagBindingResolver(Ref ref) {
       // Swallowed and logged rather than rethrown: a failed template load must
       // not take down the provider every guard on the panel depends on. What
       // is left behind is visible — the resolver stays `neverLoaded`.
-      _log.w('Access templates did not load — every bound key is unrestricted '
+      _log.w('Access templates did not load — every bound key answers only '
+          'the Operate floor '
           'until they do (state=${resolver.state}): $e');
     }
   });
@@ -179,14 +180,13 @@ Future<AccessTemplateStore?> accessTemplateStore(Ref ref) async {
 /// write. Both go through [AccessTemplateStore], so there is one trigger and
 /// no listener to leak.
 ///
-/// ## The one place fail-open is refused
+/// ## Why a failed load keeps the previous snapshot
 ///
 /// A store throw — Postgres away mid-read — leaves the **previous snapshot in
-/// place** and only marks it stale. It does not clear it. Everywhere else in
-/// this phase the fail-open direction is the right one: an unbound key is
-/// unrestricted, an unreadable binding source is indistinguishable from no
-/// binding, and a strict default would lock the plant's controls the day the
-/// guards merged.
+/// place** and only marks it stale. It does not clear it. Since the
+/// 2026-09-02 ruling an unreadable binding source degrades to the operate
+/// floor rather than to "unrestricted", which softens the blast radius of a
+/// cleared snapshot — but only to the floor.
 ///
 /// Here it is not. Clearing the snapshot on a blink would silently unrestrict
 /// every bound key on the panel for the duration of a retry — an elevation of
@@ -259,7 +259,7 @@ void _applySnapshot(
 ///
 /// It computes nothing itself. [groupFor] is the resolver's answer and
 /// [canWrite] is that answer plus `AccessSession.can` — a second copy of the
-/// fail-open rule here is how the UI and the guard end up disagreeing.
+/// operate-floor rule here is how the UI and the guard end up disagreeing.
 class TagAccess {
   const TagAccess({
     required TagBindingResolver resolver,
@@ -270,20 +270,18 @@ class TagAccess {
   final TagBindingResolver _resolver;
   final AccessSession _session;
 
-  /// The group required to write [member] of [key], or null for unrestricted.
-  AccessGroup? groupFor(String key, {String? member}) =>
+  /// The group required to write [member] of [key]. Never null — the
+  /// resolver floors at `operate` (2026-09-02 ruling).
+  AccessGroup groupFor(String key, {String? member}) =>
       _resolver.groupFor(key, member);
 
   /// Whether the session in force may write [member] of [key].
   ///
-  /// True when the key is unbound — spec §7b's fail-open half — and true when
-  /// the session holds the group. This is the **only** thing a widget needs in
-  /// order to decide whether to render a lock.
-  bool canWrite(String key, {String? member}) {
-    final group = groupFor(key, member: member);
-    if (group == null) return true;
-    return _session.can(group);
-  }
+  /// True when the session holds the required group — which is at least
+  /// `operate` for every key, bound or not. This is the **only** thing a
+  /// widget needs in order to decide whether to render a lock.
+  bool canWrite(String key, {String? member}) =>
+      _session.can(groupFor(key, member: member));
 
   /// The template [key] is bound to, or null when it is unbound — or bound to
   /// a template that no longer exists, which reads the same from here and is

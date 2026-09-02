@@ -198,7 +198,7 @@ void main() {
       final resolver = w.container.read(tagBindingResolverProvider);
 
       await w.container.read(accessTemplatesProvider.future);
-      expect(resolver.groupFor(_kKey, _kManualFreq), isNull);
+      expect(resolver.groupFor(_kKey, _kManualFreq), AccessGroup.operate);
 
       await seedConveyor();
       w.container.invalidate(accessTemplatesProvider);
@@ -283,9 +283,11 @@ void main() {
       expect(templates, isEmpty);
       final resolver = container.read(tagBindingResolverProvider);
       expect(resolver.state, TagBindingSnapshotState.loaded,
-          reason: 'a station with no database gates nothing deliberately, and '
+          reason: 'a station with no database binds nothing deliberately, and '
               'must not read as one whose snapshot never loaded');
-      expect(resolver.groupFor(_kKey, _kManualFreq), isNull);
+      expect(resolver.groupFor(_kKey, _kManualFreq), AccessGroup.operate,
+          reason: 'no database means no bindings, and no binding means the '
+              'operate floor — not unrestricted (2026-09-02 ruling)');
     });
 
     test('a binding write followed by an invalidate changes the answer',
@@ -295,7 +297,7 @@ void main() {
       w.container.invalidate(accessTemplatesProvider);
       await w.container.read(accessTemplatesProvider.future);
       final resolver = w.container.read(tagBindingResolverProvider);
-      expect(resolver.groupFor(_kKey, _kManualFreq), isNull);
+      expect(resolver.groupFor(_kKey, _kManualFreq), AccessGroup.operate);
 
       await rawStore().bind(_kKey, 'conveyor');
       w.container.invalidate(accessTemplatesProvider);
@@ -454,8 +456,10 @@ void main() {
       expect(
           policy.groupForTag(_kKey, member: _kManualFreq), AccessGroup.device);
       expect(policy.groupForTag(_kKey, member: _kJog), AccessGroup.operate);
-      expect(policy.groupForTag('ST999.UNBOUND', member: _kManualFreq), isNull,
-          reason: 'every unbound key is still unrestricted — spec §7b');
+      expect(policy.groupForTag('ST999.UNBOUND', member: _kManualFreq),
+          AccessGroup.operate,
+          reason: 'every unbound key answers the operate floor — the '
+              '2026-09-02 ruling replacing spec §7b\'s fail-open half');
     });
 
     test(
@@ -515,13 +519,16 @@ void main() {
       expect(access.canWrite(_kKey, member: _kManualFreq), isFalse);
     });
 
-    test('an unbound key is writable — canWrite is true when the group is null',
-        () async {
+    test('an unbound key is writable for anonymous — the Operator role holds '
+        'the operate floor', () async {
       final w = wired(session: _anonymous());
       final access = await loaded(w.container);
 
-      expect(access.groupFor('ST999.UNBOUND', member: _kManualFreq), isNull);
-      expect(access.canWrite('ST999.UNBOUND', member: _kManualFreq), isTrue);
+      expect(access.groupFor('ST999.UNBOUND', member: _kManualFreq),
+          AccessGroup.operate);
+      expect(access.canWrite('ST999.UNBOUND', member: _kManualFreq), isTrue,
+          reason: 'the anonymous session maps to Operator, which holds '
+              'operate — the floor locks nothing on a stock station');
     });
 
     test('templateFor names the template a key is bound to', () async {
@@ -618,11 +625,11 @@ void main() {
       // merely failing a grep.
       final w = wired();
       final TagAccess access = w.container.read(tagAccessProvider);
-      final AccessGroup? Function(String, {String? member}) groupFor =
+      final AccessGroup Function(String, {String? member}) groupFor =
           access.groupFor;
       final bool Function(String, {String? member}) canWrite = access.canWrite;
       final AccessTemplate? Function(String) templateFor = access.templateFor;
-      expect(groupFor(_kKey, member: _kJog), isNull);
+      expect(groupFor(_kKey, member: _kJog), AccessGroup.operate);
       expect(canWrite(_kKey, member: _kJog), isTrue);
       expect(templateFor(_kKey), isNull);
     });

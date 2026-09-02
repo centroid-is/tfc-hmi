@@ -144,7 +144,9 @@ void main() {
           reason: 'a station with bindings configured must come up enforcing '
               'them, whether or not anybody opens the key repository');
       expect(policy.groupForTag(_kKey, member: _kJog), AccessGroup.operate);
-      expect(policy.groupForTag('ST999.UNBOUND', member: _kManualFreq), isNull);
+      expect(policy.groupForTag('ST999.UNBOUND', member: _kManualFreq),
+          AccessGroup.operate,
+          reason: 'unbound keys answer the operate floor (2026-09-02 ruling)');
     });
 
     test('reading the resolver alone is enough to start the load', () async {
@@ -190,9 +192,10 @@ void main() {
       final resolver = container.read(tagBindingResolverProvider);
 
       expect(resolver.state, TagBindingSnapshotState.neverLoaded);
-      expect(resolver.groupFor(_kKey, _kManualFreq), isNull,
-          reason: 'fail-open, deliberately: a strict floor would refuse every '
-              'write on a booting panel');
+      expect(resolver.groupFor(_kKey, _kManualFreq), AccessGroup.operate,
+          reason: 'the boot window answers the operate floor — which the '
+              'anonymous Operator session holds, so a booting panel still '
+              'writes; only bindings above the floor wait for the load');
 
       await settle();
 
@@ -210,7 +213,7 @@ void main() {
       final resolver = container.read(tagBindingResolverProvider);
       expect(resolver.state, TagBindingSnapshotState.loaded);
       expect(resolver.boundKeyCount, 0);
-      expect(resolver.groupFor(_kKey, _kManualFreq), isNull);
+      expect(resolver.groupFor(_kKey, _kManualFreq), AccessGroup.operate);
     });
 
     test('a station with no database also ends at loaded', () async {
@@ -246,7 +249,7 @@ void main() {
       expect(identical(resolver, container.read(tagBindingResolverProvider)),
           isTrue);
       expect(container.read(accessPolicyProvider).groupForTag(_kKey),
-          isNull);
+          AccessGroup.operate);
     });
 
     test('a failed load after a good one leaves stale, with the answers '

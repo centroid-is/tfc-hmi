@@ -94,20 +94,21 @@ void main() {
       expect(policy.groupForRoute(kAccessAdminRoute), AccessGroup.users);
     });
 
-    test('answers null for every key until a snapshot loads', () {
-      // Extended by 04-05, not relaxed. This used to say "binds no tag": the
-      // policy carried no lookup, and null was the shipped state. It now
-      // carries one — the resolver's `groupFor` — and the resolver is empty
-      // until `accessTemplatesProvider` fills it, so null is still the answer
-      // here. `access_templates_test.dart` covers the loaded case; what
-      // belongs in this file is that a bare container, with nothing loaded,
-      // still gates nothing rather than throwing or locking the plant.
+    test('answers the operate floor for every key until a snapshot loads', () {
+      // Rewritten twice. It used to say "binds no tag" (no lookup), then
+      // "answers null until a load" (04-05's empty resolver). Since the
+      // 2026-09-02 ruling the empty resolver answers the operate floor, so a
+      // bare container gates everything at `operate` — which the anonymous
+      // Operator session holds — rather than gating nothing, throwing, or
+      // locking the plant. `access_templates_test.dart` covers the loaded
+      // case.
       final container = ProviderContainer();
       addTearDown(container.dispose);
       final policy = container.read(accessPolicyProvider);
 
-      expect(policy.groupForTag('Line1.p_cmd_JogFwd'), isNull);
-      expect(policy.groupForTag('anything', member: 'at_all'), isNull);
+      expect(policy.groupForTag('Line1.p_cmd_JogFwd'), AccessGroup.operate);
+      expect(policy.groupForTag('anything', member: 'at_all'),
+          AccessGroup.operate);
     });
 
     test('is the same instance on a second read — it is a pure value', () {

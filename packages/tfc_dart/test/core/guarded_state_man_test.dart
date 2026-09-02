@@ -173,7 +173,7 @@ class _RecordingPolicy extends AccessPolicy {
       <({String surface, String key, String? member})>[];
 
   @override
-  AccessGroup? groupForWireSurface(String surface, String key,
+  AccessGroup groupForWireSurface(String surface, String key,
       {String? member}) {
     lookups.add((surface: surface, key: key, member: member));
     return super.groupForWireSurface(surface, key, member: member);
@@ -352,14 +352,35 @@ void main() {
       expect(journal.rows.single.roleName, kOperatorRoleName);
     });
 
-    test('an unbound key records an empty groupRequired', () async {
+    test('an unbound key REFUSES a session without operate — the floor is '
+        'enforced, not just recorded', () async {
+      current = AccessSession.anonymous(const {AccessGroup.device});
+      final guard = build();
+
+      await expectLater(
+        guard.write('CN04.MOT01.HMI.p_cmd_Start', DynamicValue(value: true)),
+        throwsA(isA<AccessDenied>()),
+      );
+
+      expect(journal.writes, isEmpty,
+          reason: 'the hq-skjar hole: a role stripped of operate could still '
+              'toggle any unbound key. No operate, no write.');
+      expect(journal.rows.single.allowed, isFalse);
+      expect(journal.rows.single.groupRequired, 'operate');
+    });
+
+    test('an unbound key records the operate floor as groupRequired',
+        () async {
       final guard = build();
 
       await guard.write('CN04.MOT01.HMI.p_cmd_Start',
           DynamicValue(value: true));
 
-      expect(journal.rows.single.groupRequired, '',
-          reason: "the auth rows' convention for 'not gated on a group'");
+      expect(journal.rows.single.groupRequired, 'operate',
+          reason: '2026-09-02 ruling: no tag write is ungated. The empty '
+              'string is reserved for the auth rows, and it is what made '
+              'unbound writes invisible to every group chip on the trail '
+              'page.');
     });
 
     test('the audited itemKey is the resolved key', () async {

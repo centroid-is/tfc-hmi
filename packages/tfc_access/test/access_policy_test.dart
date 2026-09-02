@@ -62,17 +62,20 @@ void main() {
     });
   });
 
-  group('the asymmetry: tags fail OPEN', () {
-    test('an unbound tag key is unrestricted — groupForTag answers null', () {
-      // This is the fail-open half, and the return type carries it: null means
-      // "no group required". Phase 4 has not shipped access templates, so a
-      // strict default here would lock every control on the plant on the day
-      // this merges.
+  group('the operate floor: every tag write requires a group', () {
+    test('an unbound tag key answers the operate floor, never null', () {
+      // The 2026-09-02 ruling replacing the fail-open half: every tag write
+      // requires at least `operate`, and the return type carries it — there
+      // is no null to collapse into "no group required". The plant does not
+      // lock on the day this merges because the anonymous session maps to
+      // the Operator role, which holds `operate`; what changes is that an
+      // account deliberately stripped of `operate` can no longer press any
+      // plain control.
       const policy = AccessPolicy();
-      expect(policy.groupForTag('CN01.MOT01'), isNull);
-      expect(policy.groupForTag(''), isNull);
-      expect(policy.groupForTag('anything_at_all'), isNull);
-      expect(policy.groupForTag('server_config_envelope'), isNull);
+      expect(policy.groupForTag('CN01.MOT01'), AccessGroup.operate);
+      expect(policy.groupForTag(''), AccessGroup.operate);
+      expect(policy.groupForTag('anything_at_all'), AccessGroup.operate);
+      expect(policy.groupForTag('server_config_envelope'), AccessGroup.operate);
     });
 
     test('groupForTag consults the injected binding lookup', () {
@@ -93,25 +96,31 @@ void main() {
           AccessGroup.operate);
     });
 
-    test('groupForTag returns null when the binding lookup answers null', () {
-      // A member no bound template mentions is unrestricted, same as an
-      // unbound key (spec section 7b).
+    test('groupForTag floors to operate when the binding lookup answers null',
+        () {
+      // A member no bound template mentions gets the same floor as an
+      // unbound key: bindings can only raise the requirement above operate,
+      // never lower it past the floor.
       final policy = AccessPolicy(tagBindings: (key, member) => null);
-      expect(policy.groupForTag('CN01.MOT01', member: 'p_stat_RunMode'), isNull);
+      expect(policy.groupForTag('CN01.MOT01', member: 'p_stat_RunMode'),
+          AccessGroup.operate);
     });
 
-    test('a binding lookup that throws is treated as no binding', () {
-      // The fail-open half must not become fail-closed because a template
-      // table is unreadable. A guard that threw on the read path would take
-      // down jogging.
+    test('a binding lookup that throws is treated as no binding — the floor',
+        () {
+      // An unreadable template table must not escalate past the floor: the
+      // guard still answers `operate`, which the anonymous Operator role
+      // holds, so a Postgres outage cannot take jogging off the floor — and
+      // cannot open a bound setpoint wider than any unbound key either.
       final policy = AccessPolicy(
         tagBindings: (key, member) => throw StateError('template table is gone'),
       );
-      expect(policy.groupForTag('CN01.MOT01', member: 'p_cmd_JogFwd'), isNull);
-      expect(policy.groupForTag('CN01.MOT01'), isNull);
+      expect(policy.groupForTag('CN01.MOT01', member: 'p_cmd_JogFwd'),
+          AccessGroup.operate);
+      expect(policy.groupForTag('CN01.MOT01'), AccessGroup.operate);
       expect(
         policy.groupForWireSurface('tag', 'CN01.MOT01', member: 'p_cmd_JogFwd'),
-        isNull,
+        AccessGroup.operate,
       );
     });
   });
@@ -162,10 +171,11 @@ void main() {
   });
 
   group('groupForWireSurface', () {
-    test("the 'tag' wire name delegates to groupForTag and may answer null",
+    test("the 'tag' wire name delegates to groupForTag and floors to operate",
         () {
       const policy = AccessPolicy();
-      expect(policy.groupForWireSurface('tag', 'CN01.MOT01'), isNull);
+      expect(policy.groupForWireSurface('tag', 'CN01.MOT01'),
+          AccessGroup.operate);
 
       final bound = AccessPolicy(
         tagBindings: (key, member) =>

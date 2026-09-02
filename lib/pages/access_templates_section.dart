@@ -112,7 +112,8 @@ const String kAccessTemplatesNoDatabaseNote =
 
 /// A database that answered, with nothing in it. A different claim, and true.
 const String kAccessTemplatesEmptyNote =
-    'No templates yet. Until a key is bound to one, every key is unrestricted.';
+    'No templates yet. Until a key is bound to one, every key needs only '
+    'Operate.';
 
 /// The read failed. The rules already loaded stay in force (04-05 refuses to
 /// drop the snapshot on a blink), so this says the list is untrustworthy
@@ -146,22 +147,23 @@ const String kAccessTemplateDuplicateNameNote =
 ///
 /// 04-03's store deliberately does not re-point bindings on a rename, so every
 /// bound key is left naming a template that no longer exists — and 04-01's
-/// resolver reports a dangling binding as *unbound*, which is fail-open. That
-/// is a real, silent unrestriction, and since the 2026-08-30 ruling moved
+/// resolver reports a dangling binding as *unbound*, which since 2026-09-02
+/// means the operate floor rather than whatever the template raised the key
+/// to. That is a real, silent lowering, and since the 2026-08-30 ruling moved
 /// bindings into their own table nothing else carries the old name and nothing
 /// else will mention it. This dialog and 04-08's unbound-key surface are the
 /// whole of the warning.
 String kAccessTemplateRenameWarning(String from, int keys) =>
     'Renaming "$from" does not move the ${_count(keys, 'key')} bound to it. '
-    'They will name a template that no longer exists, which reads as no '
-    'restriction at all — so every one of them becomes unrestricted until it '
-    'is bound again:';
+    'They will name a template that no longer exists, which reads as the '
+    'Operate floor — so every one of them drops any stricter requirement '
+    'until it is bound again:';
 
 /// The delete block (spec §7d). Says which keys, and what to do instead.
 String kAccessTemplateDeleteBlockedNote(String name, int keys) =>
     'Deleting "$name" would leave the ${_count(keys, 'key')} still bound to it '
-    'unrestricted, so it is not offered. Bind them to another template, or '
-    'clear them, and then delete this one:';
+    'needing only Operate, so it is not offered. Bind them to another '
+    'template, or clear them, and then delete this one:';
 
 /// Nothing is bound, so the delete costs nothing.
 const String kAccessTemplateDeleteFreeNote =
@@ -1283,8 +1285,9 @@ class _TemplateNameDialogState extends State<_TemplateNameDialog> {
 /// that template, so it is picking from a list rather than typing PLC
 /// identifiers from memory." That sentence is this dialog, and the reason it
 /// matters is that the alternative — typing `p_cfg_ManualFreq` from memory
-/// into a field where a typo silently means *no restriction* — is a fail-open
-/// hole with no symptom (T-04-39).
+/// into a field where a typo silently means *the operate floor instead of
+/// the intended group* — is a silent-lowering hole with no symptom
+/// (T-04-39).
 ///
 /// **The list is not authoritative and the text field never goes away.** A
 /// member no key has yet reported is still a legal rule. The residual is

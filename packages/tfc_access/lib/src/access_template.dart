@@ -294,12 +294,19 @@ class TagBindingResolver {
   /// is blocked while keys still reference it (spec §7d). This is the belt to
   /// that pair of braces, for the row somebody removes by hand, and
   /// [unboundKeys] is what surfaces it (T-04-03).
-  AccessGroup? groupFor(String key, String? member) {
+  /// Never null since the 2026-09-02 operate-floor ruling: an unbound key, a
+  /// dangling binding, a never-loaded snapshot and a member no bound template
+  /// mentions all answer [AccessGroup.operate]. Bindings **raise** the
+  /// requirement above the floor; nothing lowers it. The plant stays usable
+  /// because the anonymous session maps to the Operator role, which holds
+  /// `operate` — what the floor removes is the free pass an account
+  /// deliberately stripped of `operate` used to get on every unbound key.
+  AccessGroup groupFor(String key, String? member) {
     final templateName = _keyToTemplate[key];
-    if (templateName == null) return null;
+    if (templateName == null) return AccessGroup.operate;
     final template = _templates[templateName];
-    if (template == null) return null;
-    return template.groupFor(member);
+    if (template == null) return AccessGroup.operate;
+    return template.groupFor(member) ?? AccessGroup.operate;
   }
 
   /// The template **name** [key] names, or null when nothing is bound.

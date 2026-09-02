@@ -83,7 +83,7 @@ class _RecordingPolicy extends AccessPolicy {
       <({String surface, String key, String? member})>[];
 
   @override
-  AccessGroup? groupForWireSurface(String surface, String key,
+  AccessGroup groupForWireSurface(String surface, String key,
       {String? member}) {
     lookups.add((surface: surface, key: key, member: member));
     return super.groupForWireSurface(surface, key, member: member);
@@ -362,8 +362,8 @@ void main() {
   });
 
   group('an unbound key', () {
-    test('still reaches inner.write unchanged and records an empty '
-        'groupRequired', () async {
+    test('still reaches inner.write unchanged and records the operate floor',
+        () async {
       bindConveyorTo(_conveyorTemplate());
       baselines[_unbound] = _struct({'p_cfg_ManualFreq': 42.5});
       final guard = build();
@@ -374,7 +374,8 @@ void main() {
       expect(inner.writes, hasLength(1));
       expect(inner.writes.single.key, _unbound);
       expect(identical(inner.writes.single.value, value), isTrue);
-      expect(audit.rows.single.groupRequired, '');
+      expect(audit.rows.single.groupRequired, 'operate',
+          reason: 'an unbound key is floored at operate, not ungated');
     });
   });
 
@@ -560,8 +561,8 @@ void main() {
           reason: 'the no-op suppression is about the trail, not the plant');
     });
 
-    test('a permitted write on an unbound key records its member rows with an '
-        'empty groupRequired', () async {
+    test('a permitted write on an unbound key records its member rows with '
+        'the operate floor', () async {
       baselines[_unbound] = _struct({
         'p_cmd_JogFwd': false,
         'p_cfg_ManualFreq': 42.5,
@@ -576,7 +577,7 @@ void main() {
           }));
 
       expect(audit.rows, hasLength(2));
-      expect(audit.rows.every((r) => r.groupRequired == ''), isTrue);
+      expect(audit.rows.every((r) => r.groupRequired == 'operate'), isTrue);
       expect(audit.rows.every((r) => r.allowed), isTrue);
     });
 

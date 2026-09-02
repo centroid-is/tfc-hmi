@@ -248,12 +248,18 @@ TagBindingResolver _loadedResolver({String templateName = 'conveyor'}) {
 
 void _resolverTests() {
   group('TagBindingResolver snapshot state', () {
-    test('a fresh resolver is neverLoaded and answers null for everything', () {
+    test('a fresh resolver is neverLoaded and answers the operate floor', () {
+      // 2026-09-02 ruling: every tag write requires at least `operate`. A
+      // resolver that has never loaded reads exactly like a station with
+      // nothing bound — the floor, not unrestricted. The anonymous session
+      // maps to the Operator role, which holds `operate`, so a booting panel
+      // stays usable; an account deliberately stripped of `operate` does not
+      // get a free window while templates load.
       final resolver = TagBindingResolver();
       expect(resolver.state, TagBindingSnapshotState.neverLoaded);
-      expect(resolver.groupFor(_cn04, 'p_cfg_ManualFreq'), isNull);
-      expect(resolver.groupFor(_cn04, null), isNull);
-      expect(resolver.groupFor('anything', 'anything'), isNull);
+      expect(resolver.groupFor(_cn04, 'p_cfg_ManualFreq'), AccessGroup.operate);
+      expect(resolver.groupFor(_cn04, null), AccessGroup.operate);
+      expect(resolver.groupFor('anything', 'anything'), AccessGroup.operate);
       expect(resolver.boundKeyCount, 0);
       expect(resolver.templateCount, 0);
     });
@@ -279,8 +285,8 @@ void _resolverTests() {
       expect(never.state, isNot(empty.state));
 
       for (final member in <String?>[null, 'p_cfg_ManualFreq', 'p_cmd_JogFwd']) {
-        expect(never.groupFor(_cn04, member), isNull);
-        expect(empty.groupFor(_cn04, member), isNull);
+        expect(never.groupFor(_cn04, member), AccessGroup.operate);
+        expect(empty.groupFor(_cn04, member), AccessGroup.operate);
       }
       expect(never.boundKeyCount, empty.boundKeyCount);
       expect(never.templateCount, empty.templateCount);
@@ -289,7 +295,7 @@ void _resolverTests() {
 
     test('setSnapshot moves neverLoaded to loaded and changes the answers', () {
       final resolver = TagBindingResolver();
-      expect(resolver.groupFor(_cn04, 'p_cmd_JogFwd'), isNull);
+      expect(resolver.groupFor(_cn04, 'p_cmd_JogFwd'), AccessGroup.operate);
       resolver.setSnapshot(
         keyToTemplate: <String, String>{_cn04: 'conveyor'},
         templates: <String, AccessTemplate>{'conveyor': _conveyor()},
@@ -331,7 +337,7 @@ void _resolverTests() {
       // And the answers did move, so the identity is not being preserved by
       // the snapshot having failed to land.
       expect(resolver.groupFor(_cn04, 'p_cmd_JogFwd'), AccessGroup.device);
-      expect(resolver.groupFor(_cn04, 'p_cfg_ManualFreq'), isNull);
+      expect(resolver.groupFor(_cn04, 'p_cfg_ManualFreq'), AccessGroup.operate);
     });
 
     test('markStale changes no answer', () {
@@ -361,7 +367,7 @@ void _resolverTests() {
       resolver.markStale();
       expect(resolver.state, TagBindingSnapshotState.neverLoaded,
           reason: 'there is nothing to be stale about');
-      expect(resolver.groupFor(_cn04, 'p_cmd_JogFwd'), isNull);
+      expect(resolver.groupFor(_cn04, 'p_cmd_JogFwd'), AccessGroup.operate);
     });
 
     test('a successful load after markStale returns the state to loaded', () {
@@ -388,19 +394,27 @@ void _resolverTests() {
           AccessGroup.operate);
     });
 
-    test('answers null for a key nobody bound, on every member', () {
+    test('answers the operate floor for a key nobody bound, on every member',
+        () {
+      // 2026-09-02 ruling: an unbound key is not unrestricted — every tag
+      // write requires at least `operate`.
       final resolver = _loadedResolver();
       for (final member in <String?>[null, 'p_cmd_JogFwd', 'p_cfg_ManualFreq']) {
-        expect(resolver.groupFor('CN05.conveyor', member), isNull);
+        expect(resolver.groupFor('CN05.conveyor', member), AccessGroup.operate);
       }
     });
 
-    test('a dangling binding answers null rather than locking the key', () {
-      // T-04-03. A key naming a template somebody removed in psql is
-      // indistinguishable, from here, from a key nobody bound.
+    test('a dangling binding answers the operate floor, not a harder lock',
+        () {
+      // T-04-03, updated for the 2026-09-02 operate-floor ruling. A key
+      // naming a template somebody removed in psql is indistinguishable,
+      // from here, from a key nobody bound: both answer `operate`. The row
+      // removed by hand still cannot freeze a conveyor — the Operator role
+      // holds `operate` — and it no longer opens the key wider than any
+      // other unbound key either.
       final resolver = _loadedResolver(templateName: 'deleted_template');
-      expect(resolver.groupFor(_cn04, 'p_cmd_JogFwd'), isNull);
-      expect(resolver.groupFor(_cn04, null), isNull);
+      expect(resolver.groupFor(_cn04, 'p_cmd_JogFwd'), AccessGroup.operate);
+      expect(resolver.groupFor(_cn04, null), AccessGroup.operate);
       expect(resolver.templateForKey(_cn04), isNull);
     });
 
@@ -437,10 +451,11 @@ void _resolverTests() {
           AccessGroup.setpoints);
     });
 
-    test('an unmentioned member of a bound key stays unrestricted', () {
+    test('an unmentioned member of a bound key answers the operate floor', () {
       final policy = AccessPolicy(tagBindings: _loadedResolver().groupFor);
-      expect(policy.groupForTag(_cn04, member: 'p_stat_Frequency'), isNull);
-      expect(policy.groupForTag(_cn04), isNull);
+      expect(policy.groupForTag(_cn04, member: 'p_stat_Frequency'),
+          AccessGroup.operate);
+      expect(policy.groupForTag(_cn04), AccessGroup.operate);
     });
   });
 
@@ -459,7 +474,8 @@ void _resolverTests() {
           rules: <String, AccessGroup>{'p_cmd_JogFwd': AccessGroup.administer});
 
       expect(resolver.groupFor(_cn04, 'p_cmd_JogFwd'), AccessGroup.operate);
-      expect(resolver.groupFor('CN05.conveyor', 'p_cmd_JogFwd'), isNull);
+      expect(resolver.groupFor('CN05.conveyor', 'p_cmd_JogFwd'),
+          AccessGroup.operate);
       expect(resolver.boundKeyCount, 1);
       expect(resolver.templateCount, 1);
     });
