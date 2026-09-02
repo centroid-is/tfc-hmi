@@ -48,6 +48,20 @@ dependencies:
   # Structural equality for the key/value fingerprints the routing layer
   # compares, at the version already resolved across this repository.
   collection: ^1.18.0
+  # The Postgres driver, for exactly two files: collect/timescale_sink.dart
+  # (translating CollectionEndpoint into pg.Endpoint at the seam) and
+  # collect/advisory_lock.dart (the dedicated out-of-pool lock connection).
+  # NOT a new external package: the same pinned fork already resolves through
+  # tfc_dart, and the override below decides which code is built — this entry
+  # only makes the dependency an honest, declared one. Kept identical to
+  # packages/tfc_dart/pubspec.yaml's entry.
+  postgres:
+    git:
+      url: https://github.com/centroid-is/postgresql-dart.git
+      # Pinned, not a branch: pubspec.lock is gitignored, so a branch ref
+      # lets a tagged build pick up untested code. Head of `fix-orphaned-socket-on-failed-connect`
+      # as of 2026-08-23. Keep in step with the root pubspec.yaml.
+      ref: 519312712bacca6c54f296ce190bdb85f37a2581
   # The gateway logs; it does not print. Same version the rest of the workspace
   # pins. Note the project's own finding that trace level with PrettyPrinter
   # makes per-node logging seconds of lag — levels are chosen, not defaulted.
@@ -91,6 +105,12 @@ dependency_overrides:
 dev_dependencies:
   # Same analyzer-recommended lint set as the other relay packages.
   lints: ^4.0.0
+  # test/support/fake_write_backend.dart hands Database an in-memory sqlite
+  # executor (NativeDatabase.memory), the same trick tfc_dart's own fake
+  # uses. Dev-only: nothing under lib/ touches drift — the seam sweep in
+  # freeze_test.dart is what keeps that true. Resolves at the version
+  # tfc_dart already pins; not a new external package.
+  drift: ^2.28.0
   # The suite runner. Never a production dependency here for the same reason it
   # is not one in tfc_relay_server.
   test: ^1.25.0

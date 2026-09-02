@@ -380,12 +380,19 @@ jobs:
     # job rather than reading the diff. And no apt packages are installed for
     # it on purpose: the tfc-dart-test job already builds the same native asset
     # on all three OSes with none, which is evidence rather than optimism.
+    #
+    # `--exclude-tags db` (8b-02): the db-tagged collection legs need a real
+    # TimescaleDB, and this job has no database and should not grow one — the
+    # tfc-dart-test job already provisions TimescaleDB three different ways
+    # across three platforms, and those legs run there as a step after its
+    # own suite. Duplicating that here would be eighty lines of YAML to
+    # install a database in front of tests that do not use one.
     - name: Test tfc_relay_local
       working-directory: packages/tfc_relay_local
       run: |
         dart pub get
         dart analyze
-        dart test
+        dart test --exclude-tags db
 
   tfc-dart-test:
     strategy:
@@ -486,6 +493,53 @@ jobs:
       env:
         TIMESCALEDB_EXTERNAL: ${{ matrix.timescaledb_external }}
       run: dart test
+
+    # The relay collection legs (8b-02, `--tags db`) need a real TimescaleDB,
+    # and this job is the one that already has one on all three platforms:
+    # the tests bring their own Compose stack up on ubuntu (own project name,
+    # env-drawn host port — never tfc_dart's fixture or its 15432), and use
+    # the natively provisioned server above on macOS/Windows via
+    # TIMESCALEDB_EXTERNAL. Steps run sequentially, so the operational rule
+    # that analyze/test never run in two packages at once survives; the
+    # alternative — a fourth provisioning of TimescaleDB in the relay lane —
+    # buys nothing. Do NOT touch the provisioning steps above for these legs:
+    # if they need a database setting those steps do not provide, fix the
+    # fixture, so tfc_dart's own suite keeps running against exactly what it
+    # runs against today.
+    #
+    # This step builds the open62541 native asset in a job that did not
+    # previously build it for this package: a run that dies with no ❌ line
+    # and no test output is the known download-flake class — rerun the job
+    # rather than reading the diff (project memory; 08-01 task 3 records the
+    # same for the relay lane).
+    - name: Test tfc_relay_local collection (needs TimescaleDB)
+      working-directory: packages/tfc_relay_local
+      env:
+        TIMESCALEDB_EXTERNAL: ${{ matrix.timescaledb_external }}
+      run: |
+        dart pub get
+        dart test --tags db --file-reporter "json:test-report.json"
+
+    # jbtm-test's floor, applied to the step above: `dart test --tags db`
+    # that selects nothing still exits green, and a renamed tag or a moved
+    # directory is exactly how that happens silently. The JSON reporter emits
+    # one synthetic "loading <path>" test per suite; subtract those.
+    - name: Verify the collection suite actually ran
+      if: always()
+      shell: bash
+      working-directory: packages/tfc_relay_local
+      run: |
+        [ -f test-report.json ] || { echo "::error::no test-report.json — the collection step never produced a report"; exit 1; }
+        total=$(grep -o '"type":"testStart"' test-report.json | wc -l)
+        loading=$(grep -o '"name":"loading ' test-report.json | wc -l)
+        ran=$((total - loading))
+        echo "relay collection (db) tests reported: $ran"
+        # 10 as of 8b-02. The floor sits just under that, so it catches the
+        # suite collapsing without tripping on every new test 8b-03 adds.
+        if [ "$ran" -lt 8 ]; then
+          echo "::error::relay collection ran only $ran db-tagged tests, expected ~10 — the db tag is not selecting"
+          exit 1
+        fi
 
     - name: Upload test results
       uses: actions/upload-artifact@v4
