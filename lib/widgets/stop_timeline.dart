@@ -4,87 +4,40 @@ import 'dart:math' as math;
 import 'package:flutter/gestures.dart' show PointerScrollEvent;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc_dart/core/alarm.dart';
 import 'package:tfc_dart/core/alarm_interval.dart';
 import 'package:tfc_dart/core/alarm_tree.dart';
 import 'package:tfc_dart/core/stop_interval_source.dart';
 
-import '../../providers/alarm.dart';
-import '../../widgets/alarm.dart' show formatAlarmGroup, parseAlarmGroup;
-import '../../widgets/button_graph.dart' show showSetDatePicker;
-import 'common.dart';
+import '../providers/alarm.dart';
+import 'alarm.dart' show formatAlarmGroup;
+import 'button_graph.dart' show showSetDatePicker;
 import 'stop_timeline_geometry.dart';
 import 'stop_timeline_painter.dart';
 
-part 'stop_timeline.g.dart';
-
-/// A stop-analysis timeline: the alarm system on a time axis.
+/// What the stop timeline is asked to show.
 ///
 /// The tree it draws is the alarm definitions themselves, grouped by
-/// [AlarmConfig.group], so this asset has almost nothing to configure — it
+/// [AlarmConfig.group], so there is almost nothing to specify — a spec
 /// picks which part of that tree to show. Severity colours, what a leaf
-/// means, how deep it nests: none of that is the asset's to decide, which is
-/// why a page can never drift out of step with the alarm system.
-@JsonSerializable(explicitToJson: true)
-class StopTimelineConfig extends BaseAsset {
-  @override
-  String get displayName => 'Stop Analysis';
-  @override
-  String get category => 'Visualization';
-  @override
-  List<String> get searchKeywords =>
-      const ['downtime', 'stops', 'gantt', 'timeline', 'availability', 'oee'];
-
-  /// Which groups to draw. Empty is the whole alarm tree.
-  ///
-  /// A list rather than a single address, because "Line 1 and Line 2 but not
-  /// Infrastructure" is an obvious thing to want on a comparison page and
-  /// there is otherwise no way to say it.
-  @JsonKey(defaultValue: <List<String>>[])
-  List<List<String>> groups;
-
-  /// How much history the asset loads and the overview strip covers.
-  @JsonKey(name: 'period_hours', defaultValue: 12)
-  int periodHours;
-
-  /// Header text, or null for the default.
-  @JsonKey(name: 'header_text')
-  String? headerText;
-
-  StopTimelineConfig({
-    List<List<String>>? groups,
+/// means, how deep it nests: none of that is the caller's to decide, which
+/// is why a stop view can never drift out of step with the alarm system.
+class StopTimelineSpec {
+  const StopTimelineSpec({
+    this.groups = const [],
     this.periodHours = 12,
     this.headerText,
-  }) : groups = groups ?? [];
+  });
 
-  StopTimelineConfig.preview()
-      : groups = [],
-        periodHours = 12,
-        headerText = null {
-    // A timeline is a chart, not a badge: at the 3% square `BaseAsset`
-    // defaults to, the header alone does not fit and there is nothing to
-    // read. Drop it at the size it is meant to be worked with, the way the
-    // other canvas-sized assets do.
-    size = const RelativeSize(width: 0.4, height: 0.3);
-  }
+  /// Which groups to draw. Empty is the whole alarm tree.
+  final List<List<String>> groups;
 
-  // The asset binds to alarms, not to OPC UA keys, so it contributes nothing
-  // to the page's key set.
-  @override
-  List<String> get allKeys => const [];
+  /// How much history is loaded and the overview strip covers, when no
+  /// rolling span has been picked at runtime.
+  final int periodHours;
 
-  factory StopTimelineConfig.fromJson(Map<String, dynamic> json) =>
-      _$StopTimelineConfigFromJson(json);
-  @override
-  Map<String, dynamic> toJson() => _$StopTimelineConfigToJson(this);
-
-  @override
-  Widget build(BuildContext context) => StopTimeline(config: this);
-
-  @override
-  Widget configure(BuildContext context) =>
-      StopTimelineConfigForm(config: this);
+  /// Header text, or null for the default.
+  final String? headerText;
 }
 
 /// What one row of the timeline draws, resolved once per data change.
@@ -112,9 +65,9 @@ class _Lane {
 /// is pure presentation over data it is given, so a golden can render a whole
 /// shift without an `AlarmMan`, a `StateMan` or a database behind it.
 class StopTimeline extends ConsumerStatefulWidget {
-  const StopTimeline({super.key, required this.config});
+  const StopTimeline({super.key, this.config = const StopTimelineSpec()});
 
-  final StopTimelineConfig config;
+  final StopTimelineSpec config;
 
   @override
   ConsumerState<StopTimeline> createState() => _StopTimelineState();
@@ -132,7 +85,7 @@ class _StopTimelineState extends ConsumerState<StopTimeline> {
   /// yesterday and draw an empty chart.
   DateTimeRange? _range;
 
-  /// A rolling span picked at runtime, or null for [StopTimelineConfig.periodHours].
+  /// A rolling span picked at runtime, or null for [StopTimelineSpec.periodHours].
   Duration? _interval;
 
   /// Bumped by every [_load] so a superseded one cannot stomp the winner —
@@ -175,7 +128,11 @@ class _StopTimelineState extends ConsumerState<StopTimeline> {
       final active = await man.activeAlarms().first;
       if (!mounted || generation != _generation) return;
       setState(() {
-        _tree = AlarmTree.fromConfigs(man.config.alarms);
+        // An alarm the editor marked as not a stop is out at the source:
+        // no lane, and no share of the header counts or the overview strip,
+        // which only ever ask about uids the tree contains.
+        _tree = AlarmTree.fromConfigs(
+            man.config.alarms.where((a) => a.countsAsStop).toList());
         _source =
             StopIntervalSource.fromAlarms(history: history, active: active);
         _loading = false;
@@ -250,7 +207,7 @@ class StopTimelineView extends StatefulWidget {
     this.clock,
   });
 
-  final StopTimelineConfig config;
+  final StopTimelineSpec config;
   final AlarmTree tree;
   final StopIntervalSource source;
 
@@ -258,7 +215,7 @@ class StopTimelineView extends StatefulWidget {
   final DateTimeRange? range;
 
   /// The rolling span when [range] is null, or null for the configured
-  /// [StopTimelineConfig.periodHours].
+  /// [StopTimelineSpec.periodHours].
   final Duration? interval;
 
   /// Called with the operator's pick from the date-range picker.
@@ -381,8 +338,8 @@ class _StopTimelineViewState extends State<StopTimelineView> {
 
   /// Every alarm the configured groups actually cover.
   ///
-  /// The header counts and the overview strip are about what this asset is
-  /// showing, not about the whole plant — an asset scoped to Multivac that
+  /// The header counts and the overview strip are about what this view is
+  /// showing, not about the whole plant — a timeline scoped to Multivac that
   /// reports the site's alarm counts is lying about its own subject.
   Map<String, AlarmConfig> _scopedAlarms() {
     final alarms = <String, AlarmConfig>{};
@@ -485,7 +442,7 @@ class _StopTimelineViewState extends State<StopTimelineView> {
         border:
             Border(bottom: BorderSide(color: theme.dividerColor)),
       ),
-      // The asset is sized on a page canvas, so the header has to survive any
+      // The embedding decides the width, so the header has to survive any
       // width. The title ellipsises and the chips scroll rather than
       // overflowing -- and the window readout, the one thing that is never
       // guessable from the lanes, keeps its space.
@@ -547,8 +504,8 @@ class _StopTimelineViewState extends State<StopTimelineView> {
   /// It hangs off the window read-out because that read-out already answers
   /// "which stretch am I looking at" — the operator who wants a different
   /// stretch reaches for the thing telling them which one they have. Without
-  /// it the asset could only ever show the last [StopTimelineConfig.periodHours]
-  /// hours, so yesterday's night shift was not reachable from the page at all.
+  /// it the view could only ever show the last [StopTimelineSpec.periodHours]
+  /// hours, so yesterday's night shift was not reachable at all.
   Widget _periodMenu(BuildContext context) {
     final theme = Theme.of(context);
     final live = widget.range == null;
@@ -1350,104 +1307,4 @@ String _durShort(Duration d) {
   if (d.inSeconds < 60) return '${d.inSeconds}s';
   if (d.inMinutes < 60) return '${d.inMinutes}m';
   return '${d.inHours}h ${_two(d.inMinutes % 60)}m';
-}
-
-/// The page-editor form: which groups to show, and how far back to look.
-class StopTimelineConfigForm extends ConsumerStatefulWidget {
-  const StopTimelineConfigForm({super.key, required this.config});
-
-  final StopTimelineConfig config;
-
-  @override
-  ConsumerState<StopTimelineConfigForm> createState() =>
-      _StopTimelineConfigFormState();
-}
-
-class _StopTimelineConfigFormState
-    extends ConsumerState<StopTimelineConfigForm> {
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final groups = widget.config.groups;
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('Groups to show', style: theme.textTheme.titleSmall),
-        const SizedBox(height: 4),
-        Text(
-          'Leave empty for the whole alarm tree. Each entry is an alarm '
-          'group, outermost first — "Line 3 / Multivac".',
-          style: theme.textTheme.bodySmall,
-        ),
-        const SizedBox(height: 10),
-        for (var i = 0; i < groups.length; i++)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Row(children: [
-              Expanded(
-                child: TextFormField(
-                  key: ValueKey('stop-timeline-group-$i'),
-                  initialValue: formatAlarmGroup(groups[i]),
-                  decoration: const InputDecoration(
-                    isDense: true,
-                    border: OutlineInputBorder(),
-                    hintText: 'Line 3 / Multivac',
-                  ),
-                  onChanged: (v) => groups[i] = parseAlarmGroup(v),
-                ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.close),
-                tooltip: 'Remove',
-                onPressed: () => setState(() => groups.removeAt(i)),
-              ),
-            ]),
-          ),
-        TextButton.icon(
-          key: const ValueKey('stop-timeline-add-group'),
-          icon: const Icon(Icons.add),
-          label: const Text('Add group'),
-          onPressed: () => setState(() => groups.add(const [])),
-        ),
-        const SizedBox(height: 16),
-        TextFormField(
-          key: const ValueKey('stop-timeline-period'),
-          initialValue: widget.config.periodHours.toString(),
-          decoration: const InputDecoration(
-            labelText: 'History to load (hours)',
-            helperText: 'Also the span the overview strip covers.',
-          ),
-          keyboardType: TextInputType.number,
-          onChanged: (v) {
-            final parsed = int.tryParse(v);
-            if (parsed != null && parsed > 0) {
-              widget.config.periodHours = parsed;
-            }
-          },
-        ),
-        const SizedBox(height: 16),
-        TextFormField(
-          key: const ValueKey('stop-timeline-header'),
-          initialValue: widget.config.headerText ?? '',
-          decoration: const InputDecoration(labelText: 'Header text'),
-          onChanged: (v) =>
-              widget.config.headerText = v.isEmpty ? null : v,
-        ),
-        const SizedBox(height: 16),
-        // Every other asset's form ends with these two. Without them the
-        // only way to size a timeline is the canvas grow/shrink pair, in
-        // 10% steps -- which is not a way to size a chart.
-        SizeField(
-          initialValue: widget.config.size,
-          onChanged: (value) => setState(() => widget.config.size = value),
-        ),
-        const SizedBox(height: 16),
-        CoordinatesField(
-          initialValue: widget.config.coordinates,
-          onChanged: (c) => setState(() => widget.config.coordinates = c),
-        ),
-      ]),
-    );
-  }
 }

@@ -108,6 +108,17 @@ class AlarmConfig {
   @JsonKey(defaultValue: false)
   final bool bindToGroup;
 
+  /// Whether an activation of this alarm counts as a stop.
+  ///
+  /// The stop analysis reads the same alarm definitions the alarm system
+  /// runs on, and by default every activation is downtime. An advisory
+  /// alarm — a door open, a level warning that never halts the line — is
+  /// excluded here, at the definition, so every stop view agrees; which is
+  /// also why the flag is not on any one screen (see [group] for the same
+  /// argument).
+  @JsonKey(defaultValue: true)
+  final bool countsAsStop;
+
   // Navigation announcement lives on the Alarm beacon asset
   // (`AlarmVisibilityConfig.announceInNavigation`), not here: an alarm is a
   // plant-wide fact, where it announces is a per-page presentation choice,
@@ -123,11 +134,12 @@ class AlarmConfig {
     required this.rules,
     this.group = const [],
     this.bindToGroup = false,
+    this.countsAsStop = true,
   });
 
   @override
   String toString() {
-    return 'AlarmConfig(uid: $uid, key: $key, title: $title, description: $description, group: $group, bindToGroup: $bindToGroup, rules: $rules)';
+    return 'AlarmConfig(uid: $uid, key: $key, title: $title, description: $description, group: $group, bindToGroup: $bindToGroup, countsAsStop: $countsAsStop, rules: $rules)';
   }
 
   /// Drift row constructor for the `Alarm` table — alarm configuration is
@@ -159,6 +171,7 @@ class AlarmConfig {
       description: copy.description,
       group: List<String>.from(copy.group),
       bindToGroup: copy.bindToGroup,
+      countsAsStop: copy.countsAsStop,
       rules: copy.rules.map((e) => AlarmRule.from(e)).toList(),
     );
   }

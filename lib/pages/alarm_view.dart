@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../widgets/base_scaffold.dart';
 import '../widgets/alarm.dart';
+import '../widgets/stop_timeline.dart';
 import 'package:tfc_dart/core/alarm.dart';
 
 class AlarmViewPage extends StatefulWidget {
@@ -13,9 +14,24 @@ class AlarmViewPage extends StatefulWidget {
 class _AlarmViewPageState extends State<AlarmViewPage> {
   AlarmActive? _selectedAlarm;
 
+  /// Active, history — or the stop analysis, which is the same alarm system
+  /// read as downtime instead of as a list. It lives here as a sub-view
+  /// because the question it answers ("why was the line down?") is asked on
+  /// this page, not on a mimic page.
+  AlarmViewMode _mode = AlarmViewMode.active;
+
   /// Set once the operator has closed the detail pane on purpose; from then
   /// on the page stops choosing for them until they pick an alarm again.
   bool _operatorCleared = false;
+
+  void _setMode(AlarmViewMode mode) {
+    setState(() {
+      _mode = mode;
+      // A different reading is a different question; the selection belonged
+      // to the old one.
+      _selectedAlarm = null;
+    });
+  }
 
   void _onActiveAlarms(List<AlarmActive> active) {
     if (_operatorCleared) return;
@@ -33,6 +49,32 @@ class _AlarmViewPageState extends State<AlarmViewPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_mode == AlarmViewMode.stops) {
+      return BaseScaffold(
+        title: 'Stop Analysis',
+        body: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // The same control the list header carries, so leaving the
+              // stop view is the same gesture as entering it.
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  AlarmViewModeSegments(
+                    selected: AlarmViewMode.stops,
+                    onChanged: _setMode,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              const Expanded(child: StopTimeline()),
+            ],
+          ),
+        ),
+      );
+    }
     return BaseScaffold(
       title: 'Active Alarms',
       body: Padding(
@@ -44,15 +86,12 @@ class _AlarmViewPageState extends State<AlarmViewPage> {
             Expanded(
               flex: 2,
               child: ListActiveAlarms(
+                mode: _mode,
+                onModeChanged: _setMode,
                 onShow: (alarm) {
                   setState(() {
                     _selectedAlarm = alarm;
                     _operatorCleared = false;
-                  });
-                },
-                onViewChanged: () {
-                  setState(() {
-                    _selectedAlarm = null;
                   });
                 },
                 onActiveAlarms: _onActiveAlarms,

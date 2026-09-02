@@ -69,12 +69,12 @@ Future<void> _pumpBar(WidgetTester tester, double width) async {
 
 /// The label inside a segment, if the segment kept one.
 Finder _segmentLabel(String text) => find.descendant(
-      of: find.byType(SegmentedButton<bool>),
+      of: find.byType(SegmentedButton<AlarmViewMode>),
       matching: find.text(text),
     );
 
-List<ButtonSegment<bool>> _segments(WidgetTester tester) =>
-    tester.widget<SegmentedButton<bool>>(find.byType(SegmentedButton<bool>))
+List<ButtonSegment<AlarmViewMode>> _segments(WidgetTester tester) =>
+    tester.widget<SegmentedButton<AlarmViewMode>>(find.byType(SegmentedButton<AlarmViewMode>))
         .segments
         .toList();
 

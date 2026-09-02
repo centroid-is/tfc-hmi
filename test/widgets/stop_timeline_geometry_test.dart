@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tfc/page_creator/assets/stop_timeline_geometry.dart';
+import 'package:tfc/widgets/stop_timeline_geometry.dart';
 import 'package:tfc_dart/core/alarm.dart' show AlarmLevel;
 import 'package:tfc_dart/core/alarm_interval.dart';
 

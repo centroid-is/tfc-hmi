@@ -37,6 +37,7 @@ AlarmConfig _$AlarmConfigFromJson(Map<String, dynamic> json) => AlarmConfig(
           (json['group'] as List<dynamic>?)?.map((e) => e as String).toList() ??
               [],
       bindToGroup: json['bindToGroup'] as bool? ?? false,
+      countsAsStop: json['countsAsStop'] as bool? ?? true,
     );
 
 Map<String, dynamic> _$AlarmConfigToJson(AlarmConfig instance) =>
@@ -48,6 +49,7 @@ Map<String, dynamic> _$AlarmConfigToJson(AlarmConfig instance) =>
       'rules': instance.rules,
       'group': instance.group,
       'bindToGroup': instance.bindToGroup,
+      'countsAsStop': instance.countsAsStop,
     };
 
 AlarmManConfig _$AlarmManConfigFromJson(Map<String, dynamic> json) =>

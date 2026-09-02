@@ -489,6 +489,7 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
   late List<AlarmRule> _rules;
   late String _group;
   late bool _bindToGroup;
+  late bool _countsAsStop;
 
   @override
   void initState() {
@@ -498,6 +499,7 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
     _rules = widget.initialConfig?.rules.toList() ?? [];
     _group = formatAlarmGroup(widget.initialConfig?.group ?? const []);
     _bindToGroup = widget.initialConfig?.bindToGroup ?? false;
+    _countsAsStop = widget.initialConfig?.countsAsStop ?? true;
   }
 
   /// Groups that already exist, so the operator picks an existing name
@@ -572,6 +574,18 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
               value: _bindToGroup,
               onChanged: widget.editable && parseAlarmGroup(_group).isNotEmpty
                   ? (v) => setState(() => _bindToGroup = v)
+                  : null,
+            ),
+            SwitchListTile(
+              key: const ValueKey('alarm-form-counts-as-stop'),
+              title: const Text('Counts as a stop'),
+              subtitle: const Text(
+                  'On by default: an activation is downtime in the stop '
+                  'analysis. Turn off for advisory alarms that never halt '
+                  'the line.'),
+              value: _countsAsStop,
+              onChanged: widget.editable
+                  ? (v) => setState(() => _countsAsStop = v)
                   : null,
             ),
             const SizedBox(height: 16),
@@ -686,6 +700,7 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
                             rules: _rules,
                             group: group,
                             bindToGroup: _bindToGroup && group.isNotEmpty,
+                            countsAsStop: _countsAsStop,
                           );
                           widget.onSubmit?.call(config);
                         }
@@ -766,9 +781,78 @@ class EditAlarm extends ConsumerWidget {
   }
 }
 
+/// Which of the alarm page's three readings is on screen: what is wrong
+/// now, what has been wrong, or what it cost (the stop analysis).
+enum AlarmViewMode { active, history, stops }
+
+/// The Active / History / Stops control.
+///
+/// Shared between the alarm list's header and the stop view's own header
+/// row, so switching to Stops — which unmounts the list — never takes the
+/// way back with it.
+class AlarmViewModeSegments extends StatelessWidget {
+  const AlarmViewModeSegments({
+    super.key,
+    required this.selected,
+    required this.onChanged,
+    this.compact = false,
+    this.showStops = true,
+  });
+
+  final AlarmViewMode selected;
+  final ValueChanged<AlarmViewMode> onChanged;
+
+  /// Icons-only with tooltips, for widths where the labels overflowed.
+  final bool compact;
+
+  /// Whether the Stops segment is offered at all. The list is also embedded
+  /// in places that have nowhere to put a timeline.
+  final bool showStops;
+
+  @override
+  Widget build(BuildContext context) {
+    return SegmentedButton<AlarmViewMode>(
+      style: ButtonStyle(
+        visualDensity: VisualDensity.compact,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        side: WidgetStateProperty.all(BorderSide.none),
+      ),
+      segments: [
+        ButtonSegment<AlarmViewMode>(
+          value: AlarmViewMode.active,
+          icon: const Icon(Icons.warning, size: 18),
+          label: compact ? null : const Text('Active'),
+          tooltip: compact ? 'Active' : null,
+        ),
+        ButtonSegment<AlarmViewMode>(
+          value: AlarmViewMode.history,
+          icon: const Icon(Icons.history, size: 18),
+          label: compact ? null : const Text('History'),
+          tooltip: compact ? 'History' : null,
+        ),
+        if (showStops)
+          ButtonSegment<AlarmViewMode>(
+            value: AlarmViewMode.stops,
+            icon: const Icon(Icons.align_horizontal_left, size: 18),
+            label: compact ? null : const Text('Stops'),
+            tooltip: compact ? 'Stops' : null,
+          ),
+      ],
+      selected: {selected},
+      onSelectionChanged: (modes) => onChanged(modes.first),
+    );
+  }
+}
+
 class ListActiveAlarms extends ConsumerStatefulWidget {
   final void Function(AlarmActive)? onShow;
   final void Function()? onViewChanged;
+
+  /// Which list to show, when the page owns the mode. With [onModeChanged]
+  /// null the widget keeps its own Active/History state instead, so it can
+  /// still be dropped somewhere standalone.
+  final AlarmViewMode mode;
+  final ValueChanged<AlarmViewMode>? onModeChanged;
 
   /// Every time the active list arrives (not the history), after the frame,
   /// with the alarms in list order. The page uses it to pick a default
@@ -780,6 +864,8 @@ class ListActiveAlarms extends ConsumerStatefulWidget {
     this.onShow,
     this.onViewChanged,
     this.onActiveAlarms,
+    this.mode = AlarmViewMode.active,
+    this.onModeChanged,
   });
 
   @override
@@ -788,7 +874,12 @@ class ListActiveAlarms extends ConsumerStatefulWidget {
 
 class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
   String _searchQuery = '';
-  bool _showHistory = false;
+  AlarmViewMode _localMode = AlarmViewMode.active;
+
+  /// The controlled mode when the page owns it, the local one otherwise.
+  AlarmViewMode get _mode =>
+      widget.onModeChanged != null ? widget.mode : _localMode;
+  bool get _showHistory => _mode == AlarmViewMode.history;
 
   /// The levels the operator has tapped. Empty means every level; it survives
   /// the Active/History toggle, because "I am only looking at errors" is a
@@ -961,9 +1052,13 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
                 // The list column is 2/5 of the page, so in a narrow
                 // window the bar can be under 250 px -- less than the
                 // labelled toggle alone, and the search field then
-                // overflowed. Below that, the segments keep their icons and
-                // say their name in a tooltip instead.
-                final compact = constraints.maxWidth < 360;
+                // overflowed. Below the cutoff the segments keep their icons
+                // and say their name in a tooltip instead. Three labelled
+                // segments need more room than two: at a 1280-wide window
+                // the column is ~460 px and "Active History Stops" plus the
+                // search field overflowed it.
+                final compact = constraints.maxWidth <
+                    (widget.onModeChanged != null ? 520 : 360);
                 return Row(
                   children: [
                     // Search field
@@ -982,33 +1077,17 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
                     // Toggle
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                      child: SegmentedButton<bool>(
-                        style: ButtonStyle(
-                          visualDensity: VisualDensity.compact,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          side: WidgetStateProperty.all(BorderSide.none),
-                        ),
-                        segments: [
-                          ButtonSegment<bool>(
-                            value: false,
-                            icon: const Icon(Icons.warning, size: 18),
-                            label: compact ? null : const Text('Active'),
-                            tooltip: compact ? 'Active' : null,
-                          ),
-                          ButtonSegment<bool>(
-                            value: true,
-                            icon: const Icon(Icons.history, size: 18),
-                            label: compact ? null : const Text('History'),
-                            tooltip: compact ? 'History' : null,
-                          ),
-                        ],
-                        selected: {_showHistory},
-                        onSelectionChanged: (Set<bool> newSelection) {
+                      child: AlarmViewModeSegments(
+                        selected: _mode,
+                        compact: compact,
+                        showStops: widget.onModeChanged != null,
+                        onChanged: (mode) {
                           setState(() {
-                            _showHistory = newSelection.first;
+                            _localMode = mode;
                             _searchQuery = '';
                             _searchBarKey.currentState?.clear();
                           });
+                          widget.onModeChanged?.call(mode);
                           widget.onViewChanged?.call();
                         },
                       ),

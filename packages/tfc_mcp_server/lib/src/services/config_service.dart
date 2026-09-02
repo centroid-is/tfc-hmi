@@ -342,6 +342,9 @@ class ConfigService implements KeyMappingLookup {
             ? (alarm['group'] as List).whereType<String>().toList()
             : const <String>[],
         'bindToGroup': alarm['bindToGroup'] as bool? ?? false,
+        // Same argument as the group: an omitted field is written back by
+        // the next update, and a missing countsAsStop means true.
+        'countsAsStop': alarm['countsAsStop'] as bool? ?? true,
       };
     });
   }

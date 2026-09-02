@@ -78,7 +78,12 @@ class AlarmFixture implements AlarmMan {
 
 /// The alarm list in a column [width] wide, the way the Alarm View page hands
 /// it 2/5 of the window.
-Widget alarmList(AlarmFixture alarms, {double width = 520, bool dark = false}) {
+Widget alarmList(
+  AlarmFixture alarms, {
+  double width = 520,
+  bool dark = false,
+  ValueChanged<AlarmViewMode>? onModeChanged,
+}) {
   final (light, darkTheme) = solarized();
   return ProviderScope(
     overrides: [alarmManProvider.overrideWith((ref) async => alarms)],
@@ -89,7 +94,7 @@ Widget alarmList(AlarmFixture alarms, {double width = 520, bool dark = false}) {
           child: SizedBox(
             width: width,
             height: 600,
-            child: const ListActiveAlarms(),
+            child: ListActiveAlarms(onModeChanged: onModeChanged),
           ),
         ),
       ),
@@ -102,8 +107,10 @@ Future<void> pumpAlarmList(
   AlarmFixture alarms, {
   double width = 520,
   bool dark = false,
+  ValueChanged<AlarmViewMode>? onModeChanged,
 }) async {
-  await tester.pumpWidget(alarmList(alarms, width: width, dark: dark));
+  await tester.pumpWidget(alarmList(alarms,
+      width: width, dark: dark, onModeChanged: onModeChanged));
   await tester.pumpAndSettle();
 }
 

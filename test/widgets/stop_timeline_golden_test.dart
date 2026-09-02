@@ -3,7 +3,7 @@ import 'dart:io' show File, Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show ByteData, FontLoader;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tfc/page_creator/assets/stop_timeline.dart';
+import 'package:tfc/widgets/stop_timeline.dart';
 import 'package:tfc/theme.dart';
 import 'package:tfc_dart/core/alarm.dart';
 import 'package:tfc_dart/core/alarm_interval.dart';
@@ -121,7 +121,7 @@ StopIntervalSource sampleSource() {
 }
 
 Widget harness(
-  StopTimelineConfig config,
+  StopTimelineSpec config,
   Brightness brightness, {
   Size size = const Size(900, 420),
   DateTimeRange? range,
@@ -164,14 +164,14 @@ void main() {
       final name = brightness == Brightness.light ? 'light' : 'dark';
 
       testWidgets('collapsed groups ($name)', (tester) async {
-        await pump(tester, harness(StopTimelineConfig(), brightness),
+        await pump(tester, harness(StopTimelineSpec(), brightness),
             const Size(960, 480));
         await expectLater(find.byType(StopTimelineView),
             matchesGoldenFile('goldens/stop_timeline_collapsed_$name.png'));
       }, skip: !Platform.isMacOS);
 
       testWidgets('drilled into Multivac ($name)', (tester) async {
-        await pump(tester, harness(StopTimelineConfig(), brightness),
+        await pump(tester, harness(StopTimelineSpec(), brightness),
             const Size(960, 480));
         // Line 3, then Multivac: the drill-down the design is built around.
         await tester.tap(find.byKey(
@@ -189,7 +189,7 @@ void main() {
     for (final brightness in [Brightness.light, Brightness.dark]) {
       final name = brightness == Brightness.light ? 'light' : 'dark';
       testWidgets('pareto table ($name)', (tester) async {
-        await pump(tester, harness(StopTimelineConfig(), brightness),
+        await pump(tester, harness(StopTimelineSpec(), brightness),
             const Size(960, 480));
         await tester
             .tap(find.byKey(const ValueKey('stop-timeline-view-table')));
@@ -200,7 +200,7 @@ void main() {
     }
 
     testWidgets('pareto ranked by count instead of lost time', (tester) async {
-      await pump(tester, harness(StopTimelineConfig(), Brightness.dark),
+      await pump(tester, harness(StopTimelineSpec(), Brightness.dark),
           const Size(960, 480));
       await tester
           .tap(find.byKey(const ValueKey('stop-timeline-view-table')));
@@ -216,7 +216,7 @@ void main() {
       await pump(
           tester,
           harness(
-              StopTimelineConfig(groups: [
+              StopTimelineSpec(groups: [
                 ['Line 3', 'Multivac']
               ]),
               Brightness.dark),
@@ -228,20 +228,20 @@ void main() {
     testWidgets('strip height drops the brush and detail row', (tester) async {
       await pump(
           tester,
-          harness(StopTimelineConfig(), Brightness.dark,
+          harness(StopTimelineSpec(), Brightness.dark,
               size: const Size(620, 150)),
           const Size(700, 240));
       await expectLater(find.byType(StopTimelineView),
           matchesGoldenFile('goldens/stop_timeline_strip.png'));
     }, skip: !Platform.isMacOS);
 
-    // The box a freshly dropped asset gets: StopTimelineConfig.preview()'s
+    // The box a freshly dropped asset gets: const StopTimelineSpec()'s
     // 40% x 30% of a 1920x1080 page. The size is only worth having as a
     // default if the chart is readable in it, so the golden is what says so.
     testWidgets('at the size it is dropped onto a page', (tester) async {
       await pump(
           tester,
-          harness(StopTimelineConfig.preview(), Brightness.dark,
+          harness(const StopTimelineSpec(), Brightness.dark,
               size: const Size(768, 324)),
           const Size(860, 400));
       await expectLater(find.byType(StopTimelineView),
@@ -259,7 +259,7 @@ void main() {
                 width: 700,
                 height: 260,
                 child: StopTimelineView(
-                  config: StopTimelineConfig(groups: [
+                  config: StopTimelineSpec(groups: [
                     ['Line 9']
                   ]),
                   tree: AlarmTree.fromConfigs(alarms),
@@ -281,7 +281,7 @@ void main() {
       await pump(
           tester,
           harness(
-            StopTimelineConfig(),
+            StopTimelineSpec(),
             Brightness.dark,
             range: DateTimeRange(
                 start: DateTime(2026, 8, 28, 22), end: DateTime(2026, 8, 29, 6)),
@@ -294,7 +294,7 @@ void main() {
     testWidgets('the period menu offers intervals and the date picker',
         (tester) async {
       // Whole-app, not the view: the menu lives in the overlay above it.
-      await pump(tester, harness(StopTimelineConfig(), Brightness.dark),
+      await pump(tester, harness(StopTimelineSpec(), Brightness.dark),
           const Size(960, 480));
       await tester
           .tap(find.byKey(const ValueKey('stop-timeline-period-menu')));

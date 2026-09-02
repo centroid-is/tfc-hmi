@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tfc/page_creator/assets/stop_timeline.dart';
+import 'package:tfc/widgets/stop_timeline.dart';
 import 'package:tfc_dart/core/alarm.dart';
 import 'package:tfc_dart/core/alarm_interval.dart';
 import 'package:tfc_dart/core/alarm_tree.dart';
@@ -67,7 +67,7 @@ StopIntervalSource source() => StopIntervalSource(
 
 Future<void> pumpTimeline(
   WidgetTester tester, {
-  StopTimelineConfig? config,
+  StopTimelineSpec? config,
   List<AlarmConfig>? configs,
   Size size = const Size(900, 420),
   DateTimeRange? range,
@@ -82,7 +82,7 @@ Future<void> pumpTimeline(
           width: size.width,
           height: size.height,
           child: StopTimelineView(
-            config: config ?? StopTimelineConfig(),
+            config: config ?? StopTimelineSpec(),
             tree: AlarmTree.fromConfigs(configs ?? alarms),
             source: source(),
             range: range,
@@ -170,7 +170,7 @@ void main() {
 
     testWidgets('the header counts only the alarms in scope', (tester) async {
       await pumpTimeline(tester,
-          config: StopTimelineConfig(groups: [
+          config: StopTimelineSpec(groups: [
             ['Infrastructure']
           ]));
       // one warning activation lives under Infrastructure; the three errors
@@ -182,7 +182,7 @@ void main() {
     testWidgets('a scoped group is re-indented to the top level',
         (tester) async {
       await pumpTimeline(tester,
-          config: StopTimelineConfig(groups: [
+          config: StopTimelineSpec(groups: [
             ['Line 3', 'Multivac']
           ]));
       expect(find.text('Multivac'), findsOneWidget);
@@ -193,7 +193,7 @@ void main() {
     testWidgets('a group that no longer exists says so rather than drawing '
         'a convincing empty chart', (tester) async {
       await pumpTimeline(tester,
-          config: StopTimelineConfig(groups: [
+          config: StopTimelineSpec(groups: [
             ['Line 9']
           ]));
       expect(
@@ -227,7 +227,7 @@ void main() {
 
     testWidgets('the custom header text is used when set', (tester) async {
       await pumpTimeline(tester,
-          config: StopTimelineConfig(headerText: 'Packing hall stops'));
+          config: StopTimelineSpec(headerText: 'Packing hall stops'));
       expect(find.text('Packing hall stops'), findsOneWidget);
       expect(find.text('Stop analysis'), findsNothing);
     });
@@ -318,7 +318,7 @@ void main() {
     testWidgets('an alarm that did not fire in the window is not listed',
         (tester) async {
       await pumpTimeline(tester,
-          config: StopTimelineConfig(groups: [
+          config: StopTimelineSpec(groups: [
             ['Infrastructure']
           ]));
       await openTable(tester);
@@ -346,88 +346,6 @@ void main() {
     });
   });
 
-  group('StopTimelineConfigForm', () {
-    testWidgets('adding a group gives the asset another one to show',
-        (tester) async {
-      final config = StopTimelineConfig();
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(body: StopTimelineConfigForm(config: config)),
-      ));
-      await tester.tap(
-          find.byKey(const ValueKey('stop-timeline-add-group')));
-      await tester.pumpAndSettle();
-
-      expect(config.groups, hasLength(1));
-
-      await tester.enterText(
-          find.byKey(const ValueKey('stop-timeline-group-0')),
-          'Line 3 / Multivac');
-      expect(config.groups.single, ['Line 3', 'Multivac']);
-    });
-
-    testWidgets('the period only takes a sensible number', (tester) async {
-      final config = StopTimelineConfig();
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(body: StopTimelineConfigForm(config: config)),
-      ));
-
-      await tester.enterText(
-          find.byKey(const ValueKey('stop-timeline-period')), '24');
-      expect(config.periodHours, 24);
-
-      // a half-typed or nonsense value must not blank the setting
-      await tester.enterText(
-          find.byKey(const ValueKey('stop-timeline-period')), '');
-      expect(config.periodHours, 24);
-      await tester.enterText(
-          find.byKey(const ValueKey('stop-timeline-period')), '0');
-      expect(config.periodHours, 24);
-    });
-
-    testWidgets('clearing the header text falls back to the default',
-        (tester) async {
-      final config = StopTimelineConfig(headerText: 'Something');
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(body: StopTimelineConfigForm(config: config)),
-      ));
-      await tester.enterText(
-          find.byKey(const ValueKey('stop-timeline-header')), '');
-      expect(config.headerText, isNull);
-    });
-
-    testWidgets('the timeline can be sized from the form', (tester) async {
-      final config = StopTimelineConfig();
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(body: StopTimelineConfigForm(config: config)),
-      ));
-
-      Finder field(String label) => find.ancestor(
-          of: find.text(label), matching: find.byType(TextFormField));
-
-      await tester.enterText(field('Width %'), '55');
-      await tester.enterText(field('Height %'), '40');
-
-      expect(config.size.width, closeTo(0.55, 1e-9));
-      expect(config.size.height, closeTo(0.40, 1e-9));
-    });
-
-    testWidgets('the timeline can be positioned from the form',
-        (tester) async {
-      final config = StopTimelineConfig();
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(body: StopTimelineConfigForm(config: config)),
-      ));
-
-      Finder field(String label) => find.ancestor(
-          of: find.text(label), matching: find.byType(TextFormField));
-
-      await tester.enterText(field('X 0-100%'), '25');
-      await tester.enterText(field('Y 0-100%'), '60');
-
-      expect(config.coordinates.x, closeTo(0.25, 1e-9));
-      expect(config.coordinates.y, closeTo(0.60, 1e-9));
-    });
-  });
 
   group('the period picker', () {
     testWidgets('the live window reads out as bare times', (tester) async {
@@ -485,7 +403,7 @@ void main() {
     });
 
     testWidgets('the interval in force is the ticked one', (tester) async {
-      await pumpTimeline(tester, config: StopTimelineConfig(periodHours: 24));
+      await pumpTimeline(tester, config: StopTimelineSpec(periodHours: 24));
       await openPeriodMenu(tester);
       CheckedPopupMenuItem<Object> item(int minutes) =>
           tester.widget<CheckedPopupMenuItem<Object>>(

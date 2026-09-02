@@ -114,5 +114,29 @@ void main() {
         matchesGoldenFile('goldens/alarm_list_all_levels_selected.png'),
       );
     });
+
+    // The page-owned wiring adds the Stops segment; this is the header the
+    // Alarm View actually shows, where the standalone captures above keep
+    // the embedded two-way form honest. 640 wide, because three labelled
+    // segments go icons-only below 520 and the labels are what is under
+    // review here.
+    testWidgets('with the Stops segment offered — light', (tester) async {
+      await pumpAlarmList(tester, _plant(), width: 640, onModeChanged: (_) {});
+
+      await expectLater(
+        find.byType(ListActiveAlarms),
+        matchesGoldenFile('goldens/alarm_list_stops_segment.png'),
+      );
+    });
+
+    testWidgets('with the Stops segment offered — dark', (tester) async {
+      await pumpAlarmList(tester, _plant(),
+          width: 640, dark: true, onModeChanged: (_) {});
+
+      await expectLater(
+        find.byType(ListActiveAlarms),
+        matchesGoldenFile('goldens/alarm_list_stops_segment_dark.png'),
+      );
+    });
   });
 }
