@@ -263,9 +263,9 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     clause: 'the stall harness, the announcement and the staleness clauses (F22a/b/d); the reaper half ("synchronized false disconnect") is 09-08\'s RED and fix, and the historian half ("historian marks the gap") is 09-09\'s db-tagged arm',
   ),
   'F23': Outstanding(
-    kind: OutstandingKind.missing,
+    kind: OutstandingKind.partial,
     owner: '09-03',
-    clause: 'gateway memory and the upstream create-delta flat across 200 kill cycles, with the twenty-session control arm',
+    clause: 'the kill-cycle case stands (registry, listeners, handles, descriptors); still owed by 09-03 task 2: the upstream create-delta sampled flat at every checkpoint, and the server-side half read as text behind an existsSync guard',
   ),
   'F25': Outstanding(
     kind: OutstandingKind.missing,
