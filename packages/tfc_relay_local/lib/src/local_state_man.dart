@@ -313,7 +313,10 @@ final class LocalStateMan implements StateManApi {
       // the announcement are three things that must happen in one order, and
       // three independent listeners on the same stream would run in whatever
       // order they happened to be registered.
-      _linkStates.add(link.stateStream.listen((state) => _onLinkState(link)));
+      // **The emitted state is carried into the handler**, not dropped so the
+      // handler can re-read the link (08-REVIEW WR-06). See [_onLinkState].
+      _linkStates
+          .add(link.stateStream.listen((state) => _onLinkState(link, state)));
       // The epoch is a second, independent thing that can change about a link:
       // 08-08's rule is that a PLC download is not a reconnection, so the two
       // streams move two different keys and neither moves the other's. The
@@ -1523,8 +1526,23 @@ final class LocalStateMan implements StateManApi {
   ///
   /// The health keys sit between the two for the same reason: they are how a
   /// panel *learns*, so they must not be ahead of the values they describe.
-  void _onLinkState(UpstreamLink link) {
-    switch (link.state) {
+  ///
+  /// **[state] is the event, and the event is what this handles** (08-REVIEW
+  /// WR-06). It used to be dropped and `link.state` re-read, which for the OPC
+  /// UA adapter is recomputed from `wrapper.effectiveStatus` at the moment the
+  /// handler runs. Broadcast delivery is asynchronous, so two transitions
+  /// raised in one synchronous run — a `disconnected` immediately followed by
+  /// a `connected`, which is what a flap looks like — were both handled as
+  /// `connected`: [applyLinkLoss] never ran, so nothing was stamped
+  /// `badCommFault`, and [applyLinkRestored] then found nothing degraded to
+  /// relabel. Every key kept `Quality.good` across a link that had gone away
+  /// and come back, vouched for by nothing.
+  ///
+  /// The OPC UA link's values were half-covered by its own `_degradeAll`,
+  /// which runs synchronously inside `_onEffectiveStatus`; the Modbus, M2400
+  /// and fake links had no second path at all.
+  void _onLinkState(UpstreamLink link, UpstreamLinkState state) {
+    switch (state) {
       case UpstreamLinkState.connected:
         applyLinkRestored(link.alias);
       case UpstreamLinkState.disconnected:
@@ -1541,7 +1559,7 @@ final class LocalStateMan implements StateManApi {
     }
     _health.onLinkEvent(link);
     _publishPlantConnected();
-    announceLinkState(link);
+    announceLinkState(link, state);
   }
 
   /// `PIPE.connected` — the plant side is up, as one bit.
@@ -1597,13 +1615,28 @@ final class LocalStateMan implements StateManApi {
   /// stated reason: so a variant can fan the announcement out per key without
   /// touching the degradation, which is the sabotage that proves the
   /// announce-once arm bites.
+  ///  * **A key with no value yet is degraded too, not skipped** (08-REVIEW
+  ///    WR-13). A tag that has been subscribed but has never produced a sample
+  ///    has a node and no reading, and skipping it left its subscriber sitting
+  ///    at `uncertainNotYetKnown` — which means "waiting does fix it" — for a
+  ///    link that is down. That is the wrong instruction, and the window is
+  ///    unbounded on a tag whose PLC never came up in the first place, which
+  ///    is precisely when somebody is staring at it. `_onUpstreamEnded`
+  ///    already stages a null-valued `badCommFault` for the stream-ended case,
+  ///    so the shape was established; this path just did not use it.
   void applyLinkLoss(String alias) {
     final batch = <String, DynamicValue>{};
     for (final key in _store.keys) {
       if (PipeKeys.isPipeKey(key)) continue;
       if (aliasOfKey(key) != alias) continue;
       final cached = _store.peek(key);
-      if (cached == null) continue;
+      if (cached == null) {
+        // Never a zero and never a false — a null payload under the fault, so
+        // the page renders "the link is down" and not a reading.
+        batch[key] =
+            DynamicValue(value: null, quality: Quality.badCommFault);
+        continue;
+      }
       if (Quality.badCommFault.band <= cached.quality.band) continue;
       batch[key] = cached.copyWith(quality: Quality.badCommFault);
     }
@@ -1630,7 +1663,14 @@ final class LocalStateMan implements StateManApi {
       final cached = _store.peek(key);
       if (cached == null) continue;
       if (!_isLinkDegraded(cached.quality)) continue;
-      batch[key] = cached.copyWith(quality: Quality.uncertainLastKnown);
+      // A key WR-13 degraded without ever having had a reading comes back
+      // "not yet known" rather than "last known": there is no last known, and
+      // naming one would point a page at a value that does not exist. Waiting
+      // genuinely does fix this one now that the link is back.
+      batch[key] = cached.copyWith(
+          quality: cached.value == null
+              ? Quality.uncertainNotYetKnown
+              : Quality.uncertainLastKnown);
     }
     _degrade(batch);
   }
@@ -1648,12 +1688,20 @@ final class LocalStateMan implements StateManApi {
   /// **at the link**. It is deliberately not redacted a second time here: one
   /// redactor used by every adapter is the property worth keeping, and a
   /// belt-and-braces pass at this call site would hide an adapter that forgot.
-  void announceLinkState(UpstreamLink link) {
+  ///
+  /// **[state] is the transition being announced**, not whatever the link
+  /// happens to report when this runs (08-REVIEW WR-06). Re-reading the link
+  /// here meant two transitions raised in one turn produced two frames saying
+  /// the same thing — so a client could receive two `connected`s and never the
+  /// `disconnected` between them, which is a flap it has no way to know about.
+  /// Defaulted to the link's current state for the callers that genuinely mean
+  /// "say where this link is now", which is what [start]'s seed does.
+  void announceLinkState(UpstreamLink link, [UpstreamLinkState? state]) {
     _statusNotifications++;
     if (_status.isClosed) return;
     _status.add(StatusParams(
       alias: link.alias,
-      state: link.state.wireName,
+      state: (state ?? link.state).wireName,
       error: link.lastError,
     ));
   }

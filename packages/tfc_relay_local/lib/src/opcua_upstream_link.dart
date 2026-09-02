@@ -793,8 +793,13 @@ final class OpcUaUpstreamLink implements UpstreamLink {
   /// act — `fake_state_man.dart:598-605` keeps them apart and so does this. At
   /// 1500 keys a per-key status fan-out is a denial of service against the
   /// screen the operator is trying to read.
+  /// Over the **monitored** set as well as the cache (08-REVIEW WR-13): a key
+  /// with a monitored item that has not yet produced a sample is in
+  /// `_monitors` and in neither `_cache` nor the composer's store, so losing
+  /// the link used to stage nothing for it and its subscriber kept waiting for
+  /// a link that was down.
   void _degradeAll() {
-    for (final key in _cache.keys.toList()) {
+    for (final key in <String>{..._cache.keys, ..._monitors.keys}) {
       _publishDegraded(key, Quality.badCommFault);
     }
   }
