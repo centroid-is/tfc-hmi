@@ -210,10 +210,18 @@ const int declaredRetainedTimers = 1;
 ///
 /// **08-13's gate closed it, and not by widening this sweep.**
 /// [unawaitedUpstreamSites] is a second sweep over the lines this one cannot
-/// see, asserting the same bound on them. This number is unchanged at eight —
+/// see, asserting the same bound on them. That number was unchanged at eight —
 /// the composition root adds no crossing of its own, because everything it
 /// touches it reaches through `LocalStateMan`.
-const int declaredUpstreamAwaitSites = 8;
+///
+/// **Nine since 08-REVIEW CR-01**, and the ninth is a deliberate edit made
+/// while reading the rule above. `LocalStateMan._readBack` performs one
+/// bounded read after an acknowledgement that carried no readback, because
+/// neither real adapter can supply one and the alternative was publishing a
+/// good-quality blank on the tag the operator had just written. It is a
+/// **read**: freeze 4's write-site count is unmoved, which is the number that
+/// would catch a retry.
+const int declaredUpstreamAwaitSites = 9;
 
 /// Lines under `lib/` that cross into the plant **without** the word `await`.
 ///

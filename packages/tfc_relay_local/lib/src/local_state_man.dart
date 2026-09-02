@@ -758,6 +758,7 @@ final class LocalStateMan implements StateManApi {
     required UpstreamRef ref,
     required DynamicValue value,
     required String cmd,
+    bool confirmByReading = true,
   }) async {
     // The last confirmed reading, kept so a refused or lost write can put it
     // back: the badge means "sent", and a write that was not sent must not
@@ -771,7 +772,14 @@ final class LocalStateMan implements StateManApi {
     try {
       final outcome =
           await link.write(ref, value, cmd: cmd, deadline: writeDeadline);
-      _confirmWrite(ref.key, sent: value, outcome: outcome, confirmed: confirmed);
+      await _confirmWrite(
+        link: link,
+        ref: ref,
+        sent: value,
+        outcome: outcome,
+        confirmed: confirmed,
+        confirmByReading: confirmByReading,
+      );
       return outcome;
     } catch (error) {
       _unbadge(ref.key, confirmed);
@@ -944,14 +952,64 @@ final class LocalStateMan implements StateManApi {
   /// non-finite write is sanitized to null under [Quality.badNonFinite] at the
   /// boundary, and re-labelling its readback good would put a blank box on the
   /// page that reads as an unbound tag rather than as a fault.
-  void _confirmWrite(
-    String key, {
+  /// ## An acknowledgement with no readback in it (08-REVIEW CR-01)
+  ///
+  /// **Neither real adapter can supply a readback**, and that is a fact about
+  /// the protocols rather than a gap in the adapters: OPC UA's write service
+  /// answers a status code and Modbus echoes a function code, so both hand
+  /// back `WriteAcknowledged(at: …)` with `readback: null`. This method used to
+  /// put that null into the store under [Quality.good] — a good-quality blank
+  /// on the tag the operator had just written, on **every successful write the
+  /// shipped gateway made**, until the next upstream sample repainted it.
+  ///
+  /// The ruling is that *applied* means applied **and read back**, so when the
+  /// acknowledgement carries no value this performs **one bounded read** and
+  /// adopts what the device answers. A read is not a retry: it does not
+  /// re-issue the command, it asks the plant what it now holds, and asking is
+  /// the only way this system is permitted to be sure. It is one read and
+  /// there is nowhere to put a second.
+  ///
+  /// If that read produces no reading either, the outcome stays [WriteApplied]
+  /// — a failed readback is not evidence the write did not land — and **the
+  /// store is left exactly as it was**. The subscription stream remains the
+  /// truth. Never a synthetic value, never the number that was typed, and
+  /// never a null under a good quality.
+  Future<void> _confirmWrite({
+    required UpstreamLink link,
+    required UpstreamRef ref,
     required DynamicValue sent,
     required WriteResult outcome,
     required DynamicValue? confirmed,
-  }) {
+    required bool confirmByReading,
+  }) async {
+    final key = ref.key;
     if (outcome is! WriteApplied) {
       _unbadge(key, confirmed);
+      return;
+    }
+    if (outcome.readback == null) {
+      if (!sent.quality.isGood) {
+        // **A bad SENT quality is evidence this side already has**, and it is
+        // not the missing-readback case at all. A non-finite write is
+        // sanitized to null under `badNonFinite` at the boundary before
+        // anything crossed, so the null on the tag is the fault the operator
+        // must see — not a blank standing in for a reading nobody took. Going
+        // off to read the device here would replace a known fault with
+        // whatever the device happens to hold, which is the confirmation
+        // laundering a refusal.
+        _adoptReadback(key, sent: sent, readback: null);
+        return;
+      }
+      final adopted =
+          confirmByReading ? await _readBack(link, ref) : null;
+      if (adopted == null) {
+        // Nothing was confirmed about the VALUE. Take the badge off — a badge
+        // left on is a permanent amber box the operator learns to ignore — and
+        // leave the reading alone for the next upstream sample to move.
+        _unbadge(key, confirmed);
+        return;
+      }
+      _adoptReadback(key, sent: sent, readback: adopted);
       return;
     }
     // **The badge comes OFF, and the readback is why.** 08-06 kept it on until
@@ -965,6 +1023,40 @@ final class LocalStateMan implements StateManApi {
     // right to: the window has to CLOSE for it to mean anything while it is
     // open.
     //
+    _adoptReadback(key, sent: sent, readback: outcome.readback);
+  }
+
+  /// **One** bounded read, to find out what the device now holds.
+  ///
+  /// Answers the payload to adopt, or **null** for "the plant did not give me
+  /// a reading" — which covers a timeout, a comms fault, a tag that has left
+  /// the address space, and the honest not-yet-known of a link that has never
+  /// delivered anything for this key. Every one of those is a reason to leave
+  /// the store alone rather than to invent a value for it.
+  ///
+  /// It cannot throw its way out: [UpstreamLink.read] is contracted never to
+  /// throw, and the `catch` is here for the adapter that breaks that contract
+  /// — a bug in an adapter must not turn a successful write into an exception
+  /// out of the write path.
+  Future<Object?> _readBack(UpstreamLink link, UpstreamRef ref) async {
+    final DynamicValue seen;
+    try {
+      seen = await link.read(ref, deadline: readDeadline);
+    } catch (_) {
+      return null;
+    }
+    if (seen.value == null) return null;
+    // A good-band answer or nothing. `uncertainLastKnown` is the link telling
+    // us it has not re-read this since it came back, which is precisely not a
+    // confirmation; adopting it would label a pre-write reading "confirmed".
+    if (!seen.quality.isGood) return null;
+    return seen.value;
+  }
+
+  /// Puts a confirmed reading on [key], under the same two guards the badge
+  /// uses.
+  void _adoptReadback(String key,
+      {required DynamicValue sent, required Object? readback}) {
     // A quality that was already bad when it was sent survives — a non-finite
     // write is sanitized to null under `badNonFinite` at the boundary, and
     // re-labelling its readback good would put a blank box on the page that
@@ -980,7 +1072,7 @@ final class LocalStateMan implements StateManApi {
     // readback that reset it would leave the operator looking at "sent a
     // moment ago" on a value nobody has heard about for a minute.
     _degrade(<String, DynamicValue>{
-      key: DynamicValue(value: outcome.readback, quality: quality),
+      key: DynamicValue(value: readback, quality: quality),
     });
   }
 
@@ -1085,6 +1177,14 @@ final class LocalStateMan implements StateManApi {
       ref: route.ref,
       value: DynamicValue(value: counter),
       cmd: newUlid(nowMs: _now().millisecondsSinceEpoch),
+      // **A tick buys no readback read**, and this is the one place that flag
+      // is false. The counter is liveness the gateway minted, not a number an
+      // operator is reading off a mimic, so there is nothing for a readback to
+      // confirm to anybody — and at 10 Hz a read per tick would double what a
+      // hold costs the PLC for the whole time somebody's finger is on the
+      // button. What a tick still gets is the honest half of CR-01: no
+      // good-quality blank is published for it either.
+      confirmByReading: false,
     );
     // `unawaited` attaches NO error handler (project memory), and an
     // unhandled error out of a tick would take down the isolate the whole
