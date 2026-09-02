@@ -23,6 +23,12 @@ class IO8Widget extends AnimatedWidget {
   final List<Color> ioLabelColors;
   final String name;
 
+  /// The slice's configured name or id, worn as a single marker tag above
+  /// the LED block — the same spot the printed terminal markers sit on the
+  /// real hardware. Empty draws nothing; [topLabels], when set, wins the
+  /// band.
+  final String markerLabel;
+
   /// Housing colour. Beckhoff's TwinSAFE terminals (EL2912, EP1918) are
   /// yellow rather than the cream every other EL terminal wears, and on a
   /// rack mimic that colour is the fastest way to tell a safety terminal
@@ -34,6 +40,7 @@ class IO8Widget extends AnimatedWidget {
     this.disconnected = false,
     this.selected = false,
     this.topLabels = ('', ''),
+    this.markerLabel = '',
     this.ioLabels = const ['I1', 'I2', 'I3', 'I4', 'I5', 'I6', 'I7', 'I8'],
     this.ioLabelColors = const [
       ioLabelColor,
@@ -63,6 +70,7 @@ class IO8Widget extends AnimatedWidget {
           disconnected: disconnected,
           selected: selected,
           topLabels: topLabels,
+          markerLabel: markerLabel,
           name: name,
           animation: animation,
           ioLabels: ioLabels,
@@ -86,6 +94,9 @@ class IO8Painter extends CustomPainter {
   final Animation<int> animation;
   final String name;
 
+  /// Single marker tag above the LED block — see [IO8Widget.markerLabel].
+  final String markerLabel;
+
   /// Housing colour — see [IO8Widget.housingColor].
   final Color housingColor;
   IO8Painter({
@@ -93,6 +104,7 @@ class IO8Painter extends CustomPainter {
     this.disconnected = false,
     this.selected = false,
     this.topLabels = ('', ''),
+    this.markerLabel = '',
     this.topLabelColors = (
       ioLabelColor,
       ioLabelColor,
@@ -238,6 +250,49 @@ class IO8Painter extends CustomPainter {
           labelH * 0.6,
         );
       }
+    } else if (markerLabel.isNotEmpty) {
+      // The slice's configured name or id, as one marker tag spanning the
+      // band the two printed terminal markers would occupy.
+      final rect =
+          Rect.fromLTWH(pad, pad, size.width - pad * 2, labelH);
+      canvas.drawRect(rect, Paint()..color = ioLabelColor);
+      canvas.drawRect(rect, innerBorderPaint);
+      // Not `drawLabel`: a plant id can outgrow the tag, and the shared
+      // helper wraps onto a second line that paints over the LED block
+      // below. One line — shrunk to fit first, because ids like
+      // `ST301.A1.09` are told apart by their tail and an ellipsis eats
+      // exactly that. Only a name too long even at the floor is ellipsized.
+      TextPainter layoutAt(double fs, {bool clamp = false}) => TextPainter(
+            text: TextSpan(
+              text: markerLabel,
+              style: TextStyle(
+                color: Colors.black,
+                fontSize: fs,
+                fontWeight: FontWeight.bold,
+                // Named for the same reason the other labels name it — a
+                // null family renders as the test font's boxes under
+                // `flutter test`.
+                fontFamily: 'Roboto',
+              ),
+            ),
+            maxLines: 1,
+            ellipsis: '…',
+            textAlign: TextAlign.center,
+            textDirection: TextDirection.ltr,
+          )..layout(
+              minWidth: clamp ? rect.width : 0,
+              maxWidth: clamp ? rect.width : double.infinity,
+            );
+
+      final baseFs = labelH * 0.6;
+      final natural = layoutAt(baseFs).width;
+      var fs = baseFs;
+      if (natural > rect.width) {
+        fs = (baseFs * rect.width / natural).clamp(labelH * 0.34, baseFs);
+      }
+      final tp = layoutAt(fs, clamp: true);
+      tp.paint(
+          canvas, Offset(rect.left, rect.top + (labelH - tp.height) / 2));
     }
 
     // --- Draw LED block ---
@@ -367,6 +422,7 @@ class IO8Painter extends CustomPainter {
       old.disconnected != disconnected ||
       old.selected != selected ||
       old.topLabels != topLabels ||
+      old.markerLabel != markerLabel ||
       old.name != name ||
       old.animation.value != animation.value ||
       !listEquals(old.ioLabels, ioLabels) ||

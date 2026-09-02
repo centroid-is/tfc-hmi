@@ -76,6 +76,13 @@ abstract class BeckhoffCXConfig extends BaseAsset {
   @AssetListConverter()
   List<Asset> subdevices = [];
 
+  // The slices are child assets: a pane opened from one slice marks that
+  // slice on the mimic, not the whole rack. Excluded from JSON like the
+  // BaseAsset getter it overrides — `subdevices` is the serialized field.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<Asset> get childAssets => subdevices;
+
   @override
   List<String> get allKeys {
     final keys = <String>{};
@@ -115,12 +122,18 @@ abstract class BeckhoffCXConfig extends BaseAsset {
                 tcColor: Colors.green,
               ),
             ),
-            // Subdevices to the right, normalized to match CX height
+            // Subdevices to the right, normalized to match CX height.
+            // Each in its own SubdeviceSubject so a tap on a slice opens a
+            // pane about that slice, and the open-pane mark rings the slice
+            // rather than the whole rack.
             if (subdevices.isNotEmpty) ...[
               for (final sub in subdevices)
-                _SubdeviceNormalized(
-                  child: sub.build(context),
-                  targetHeight: cxNativeSize.height,
+                SubdeviceSubject(
+                  subdevice: sub,
+                  child: _SubdeviceNormalized(
+                    child: sub.build(context),
+                    targetHeight: cxNativeSize.height,
+                  ),
                 ),
             ],
           ],
@@ -360,6 +373,13 @@ class BeckhoffEK1100Config extends BaseAsset {
 
   @AssetListConverter()
   List<Asset> subdevices = [];
+
+  // Same contract as [BeckhoffCXConfig.childAssets]: ring the tapped slice,
+  // not the whole rack.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<Asset> get childAssets => subdevices;
+
   BeckhoffEK1100Config();
 
   /// Native painter size for the EK1100 drawing (keeps 44:100 aspect).
@@ -388,12 +408,17 @@ class BeckhoffEK1100Config extends BaseAsset {
                 name: "EK1100",
               ),
             ),
-            // Subdevices to the right, normalized to match EK height
+            // Subdevices to the right, normalized to match EK height.
+            // Wrapped like the CX rack's: the pane and its mark belong to
+            // the tapped slice, not the block.
             if (subdevices.isNotEmpty) ...[
               for (final sub in subdevices)
-                _SubdeviceNormalized(
-                  child: sub.build(context),
-                  targetHeight: _ekNativeSize.height,
+                SubdeviceSubject(
+                  subdevice: sub,
+                  child: _SubdeviceNormalized(
+                    child: sub.build(context),
+                    targetHeight: _ekNativeSize.height,
+                  ),
                 ),
             ],
           ],
@@ -830,6 +855,7 @@ class _BeckhoffEL2008 extends ConsumerWidget {
           return IO8Widget(
             ledStates: leds,
             name: name,
+            markerLabel: config.nameOrId,
             animation: animation,
             ioLabels: const ['O1', 'O2', 'O3', 'O4', 'O5', 'O6', 'O7', 'O8'],
           );
@@ -1211,6 +1237,7 @@ class _BeckhoffEL9222 extends ConsumerWidget {
                 child: IO8Widget(
                   ledStates: el9222FaceLeds(channels[0], channels[1]),
                   name: name,
+                  markerLabel: config.nameOrId,
                   // The `!` on the face is the honest answer to "is this
                   // terminal telling me anything?" — six dark lamps are not,
                   // since dark is also what a healthy switched-off channel
@@ -1499,7 +1526,12 @@ class _BeckhoffEL1008 extends ConsumerWidget {
         Widget buildBody(Map<String, DynamicValue>? data) {
           final leds =
               (data == null) ? List.filled(8, IOState.low) : _ledStates(data);
-          return IO8Widget(ledStates: leds, name: name, animation: animation);
+          return IO8Widget(
+            ledStates: leds,
+            name: name,
+            markerLabel: config.nameOrId,
+            animation: animation,
+          );
         }
 
         return MemoStreamBuilder<Map<String, DynamicValue>>(
@@ -2075,6 +2107,7 @@ class _BeckhoffEL3054 extends ConsumerWidget {
           return IO8Widget(
             ledStates: leds,
             name: name,
+            markerLabel: config.nameOrId,
             animation: animation,
             ioLabels: const ['+', '+', 'I1', 'I2', 'I3', 'I4', '+', '+'],
             ioLabelColors: const [
@@ -2425,6 +2458,7 @@ class _BeckhoffEL2912 extends ConsumerWidget {
                 child: IO8Widget(
                   ledStates: el2912FaceLeds(status),
                   name: name,
+                  markerLabel: config.nameOrId,
                   // Beckhoff paints its safety hardware yellow, and on a rack
                   // that colour is how an electrician picks the TwinSAFE
                   // terminal out from across the room.

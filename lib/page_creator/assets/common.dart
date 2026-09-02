@@ -6,7 +6,9 @@ import 'dart:convert';
 import 'package:flutter/rendering.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/hit_boundary.dart' show AssetHitShape;
 import 'package:tfc/widgets/panes/pane_chrome.dart';
+import 'package:tfc/widgets/panes/side_pane.dart' show SidePaneSubject;
 import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -138,6 +140,14 @@ abstract class Asset {
   /// [AssetMirrorScope]).
   bool get mirrorsWithPage;
 
+  /// Assets drawn inside this asset's own box — a rack head's slices.
+  ///
+  /// `AssetStack` registers each of these under its parent's frame, so a
+  /// side pane opened from one slice of a composite asset can be marked on
+  /// that slice alone (see [SubdeviceSubject]) instead of on the whole
+  /// block. An asset that is one piece of equipment returns the empty list.
+  List<Asset> get childAssets;
+
   Widget build(BuildContext context);
   Widget configure(BuildContext context);
   Map<String, dynamic> toJson();
@@ -173,6 +183,12 @@ abstract class BaseAsset implements Asset {
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
   bool get mirrorsWithPage => false;
+
+  // Excluded like `searchKeywords`: composition metadata, not page state —
+  // a composite asset serializes its subdevice list as its own field.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<Asset> get childAssets => const [];
 
   static String _humanize(String typeName) {
     String name = typeName;
@@ -323,6 +339,63 @@ abstract class BaseAsset implements Asset {
       }
     }
     return keys.toList();
+  }
+}
+
+/// Scopes the side-pane subject — and the dashed open-pane mark — to one
+/// subdevice of a composite asset.
+///
+/// A rack head (a Beckhoff CX, an EK1100) draws its slices inside its own
+/// box, so a pane opened by tapping one slice used to inherit the whole
+/// rack's [SidePaneSubject] and the plant view ringed the entire block.
+/// Wrapping each slice in one of these does three things:
+///
+///  - names the slice as the pane's subject, so `_OpenPaneMark` looks the
+///    slice up rather than the rack (the rack registers the slice under its
+///    own frame via [Asset.childAssets]);
+///  - hangs `ObjectKey(slice)` on the subtree, which is the handle the
+///    plant view's shape probe searches the canvas for;
+///  - publishes the slice's own rectangle as its [AssetHitShape], so the
+///    ring is traced around that slice and nothing else.
+///
+/// The shape is read lazily off the slice's render box (through a
+/// [GlobalObjectKey], resolved only when a pane opens), so the rect is
+/// whatever the slice laid out to — in its native scale; the probe maps it
+/// through the rack's `FittedBox` into canvas coordinates.
+class SubdeviceSubject extends StatelessWidget {
+  /// The slice's long-lived config object — compared by identity everywhere
+  /// (frames, subject, keys), so it must be the object the page holds, not a
+  /// per-build value.
+  final Asset subdevice;
+  final Widget child;
+
+  const SubdeviceSubject({
+    super.key,
+    required this.subdevice,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final boxKey = GlobalObjectKey(subdevice);
+    return KeyedSubtree(
+      key: ObjectKey(subdevice),
+      child: AssetHitShape(
+        shape: () {
+          final box = boxKey.currentContext?.findRenderObject();
+          if (box is RenderBox && box.hasSize) {
+            return Path()..addRect(Offset.zero & box.size);
+          }
+          // Nothing laid out to trace — an empty path draws no ring rather
+          // than a wrong one.
+          return Path();
+        },
+        child: KeyedSubtree(
+          key: boxKey,
+          child: SidePaneSubject(subject: subdevice, child: child),
+        ),
+      ),
+    );
   }
 }
 
