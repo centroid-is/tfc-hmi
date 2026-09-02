@@ -285,9 +285,12 @@ void main() {
         "WHERE proc_name = 'policy_retention' "
         "AND hypertable_name = 'gw_$base'");
     expect(retention, hasLength(1));
-    expect('${retention.first.first}', contains('10 days'),
-        reason: 'the configured retention, read back from TimescaleDB\'s '
-            'job catalogue: ${retention.first.first}');
+    // The catalogue renders the interval as HH:MM:SS — 240 hours IS the
+    // configured 10 days, and 8b-02's isolation case recorded the same
+    // rendering ('240:00:00.000000' for its 10-day policy).
+    expect('${retention.first.first}', contains('240:00:00'),
+        reason: 'the configured retention (10 days = 240 h), read back from '
+            'TimescaleDB\'s job catalogue: ${retention.first.first}');
     print('E2E   retention drop_after = ${retention.first.first}');
 
     // The health keys are ordinary keys: a real panel over a real socket
@@ -418,13 +421,19 @@ void main() {
     await until(
         () async => !(chain.plant.read(levelKey)?.quality.isGood ?? true),
         describe: 'the freshness sweep noticing the silence');
-    final gapStart = DateTime.now().toUtc();
 
+    // The gap window opens at the first DECLINED tick, not at the first
+    // degraded read: `read` re-derives staleness synchronously (the sweep's
+    // judge), while the runner's held value degrades only when the sweep's
+    // periodic pass writes to the store — up to one sweep interval later.
+    // A tick in that window legitimately writes a value that was still
+    // vouched for when it was held.
     await until(
         () async =>
             (chain.plant.read(PipeKeys.collectRowsDropped)!.value! as int) >
             dropsBefore,
         describe: 'PIPE.collect.rows_dropped growing while ticks decline');
+    final gapStart = DateTime.now().toUtc();
 
     // Several sample intervals of confirmed outage.
     await Future<void>.delayed(const Duration(milliseconds: 500));

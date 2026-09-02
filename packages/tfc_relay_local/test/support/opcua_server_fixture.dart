@@ -80,6 +80,7 @@ final class OpcUaServerFixture {
     required this.port,
     required this.valueKeys,
     required this.writeKeys,
+    required this.structKeys,
     required this.treePaths,
     required this.methodPaths,
     required this.logLevel,
@@ -97,6 +98,21 @@ final class OpcUaServerFixture {
 
   /// Keys served by data-source nodes: writable, countable, failable.
   final List<String> writeKeys;
+
+  /// **8b-03.** Keys served as **structured values** with a server-registered
+  /// custom type: key → member name → initial scalar value.
+  ///
+  /// The collection e2e leg needs a struct crossing the whole chain —
+  /// `sample_members` picks columns out of it — and a flat scalar node
+  /// cannot demonstrate that in either direction. The recipe is the
+  /// binding's own three calls, verbatim from its `Basic struct read and
+  /// write` integration test: `addCustomType` registers the schema,
+  /// `addDataTypeNode` publishes it where a client can learn it, and
+  /// `addVariableNode(typeId:)` serves the encoded value. Member types are
+  /// derived from the initial values ([fixtureValue]'s rule, per member),
+  /// and only scalars are accepted — a nested struct member would need its
+  /// own registered type, and no plan has asked for one.
+  final Map<String, Map<String, Object>> structKeys;
 
   /// **08-11.** Dotted paths that get a real *hierarchy*, not a flat node.
   ///
@@ -172,6 +188,8 @@ final class OpcUaServerFixture {
   static Future<OpcUaServerFixture> start({
     Iterable<String> valueKeys = const <String>[],
     Iterable<String> writeKeys = const <String>[],
+    Map<String, Map<String, Object>> structKeys =
+        const <String, Map<String, Object>>{},
     Iterable<String> treePaths = const <String>[],
     Iterable<String> methodPaths = const <String>[],
     bool viaFaultProxy = false,
@@ -192,6 +210,7 @@ final class OpcUaServerFixture {
       port: built.port,
       valueKeys: values,
       writeKeys: writes,
+      structKeys: structKeys,
       treePaths: tree,
       methodPaths: methods,
       logLevel: logLevel,
@@ -223,6 +242,18 @@ final class OpcUaServerFixture {
 
   void _addNodes() {
     _addTree();
+    for (final entry in structKeys.entries) {
+      final key = entry.key;
+      // The type id is minted from the key, so a failure names the tag.
+      final typeId = fixtureNodeId('$key.__Type');
+      final value = DynamicValue(name: key, typeId: typeId);
+      for (final member in entry.value.entries) {
+        value[member.key] = _structMember(member.value);
+      }
+      _server.addCustomType(typeId, value);
+      _server.addDataTypeNode(typeId, '$key.__Type');
+      _server.addVariableNode(fixtureNodeId(key), value, typeId: typeId);
+    }
     for (final key in valueKeys) {
       final seed = _plainValues[key] ?? fixtureValue(0, name: key);
       _server.addVariableNode(fixtureNodeId(key), seed);
@@ -254,6 +285,20 @@ final class OpcUaServerFixture {
       );
     }
   }
+
+  /// One struct member, with its OPC UA type derived from the initial value
+  /// — [fixtureValue]'s explicit-type rule, applied per member, because a
+  /// member whose data type the server guessed would disagree with every
+  /// later sample.
+  static DynamicValue _structMember(Object raw) => switch (raw) {
+        bool value => DynamicValue(value: value, typeId: NodeId.boolean),
+        int value => DynamicValue(value: value, typeId: NodeId.int32),
+        double value => DynamicValue(value: value, typeId: NodeId.double),
+        String value => DynamicValue(value: value, typeId: NodeId.uastring),
+        _ => throw ArgumentError.value(raw, 'structKeys',
+            'struct members are scalars; a nested struct needs its own '
+                'registered type and no plan has asked for one'),
+      };
 
   /// **08-11.** Builds the object chain for [treePaths] and [methodPaths].
   ///
