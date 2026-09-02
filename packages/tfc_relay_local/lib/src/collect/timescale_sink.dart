@@ -138,6 +138,16 @@ final class TimescaleSink implements TimeseriesSink {
   /// The namespace lock, held on its own out-of-pool session for the
   /// process's life (see advisory_lock.dart's doc). Null while refused or
   /// lost — and while null, nothing is inserted.
+  ///
+  /// **The residual window, recorded honestly (WR-02):** rows already handed
+  /// to the wrapped [Database] before a lock loss sit in its bounded retry
+  /// queue, and that layer's own 500 ms flush timer drains them on pool
+  /// reconnect without consulting this lock — it cannot be told to wait
+  /// without a second adapter under the seam. Every path THIS adapter owns
+  /// (insert, [flush], the close-path flush) stands down while the lock is
+  /// not provably held, so the exposure is exactly the already-queued rows,
+  /// capped by the queue caps, all real samples with real timestamps; it
+  /// closes when re-acquisition lands or the process stops.
   AdvisoryLock? _lock;
 
   /// The re-acquire loop after a lost lock session — stored like
@@ -429,6 +439,15 @@ final class TimescaleSink implements TimeseriesSink {
   Future<void> flush() async {
     final db = _db;
     if (db == null) return;
+    final lock = _lock;
+    if (_backendFactory == null && (lock == null || !lock.isHeld)) {
+      // WR-02: the queue drains only while the namespace is provably ours.
+      // Another gateway may own these tables right now; pushing the backlog
+      // is two writers in one namespace, one layer below where the insert
+      // guard stands. The remedy is the same one: re-acquisition.
+      _reacquiring ??= _reacquireLoop().whenComplete(() => _reacquiring = null);
+      return;
+    }
     try {
       await db.flush();
     } catch (error) {
@@ -458,11 +477,17 @@ final class TimescaleSink implements TimeseriesSink {
     if (db != null) {
       // Flush first: close() does not (only dispose() would, and dispose()
       // leaves the pool open — the seam picked close(), so the flush is
-      // this adapter's job).
-      try {
-        await db.flush();
-      } catch (error) {
-        _recordFailure('close', error);
+      // this adapter's job). Unless the lock died (WR-02): a final flush
+      // into a namespace another gateway may own by now is the same two-
+      // writer defect, at the worst moment to create it.
+      final lockAtClose = _lock;
+      if (_backendFactory != null ||
+          (lockAtClose != null && lockAtClose.isHeld)) {
+        try {
+          await db.flush();
+        } catch (error) {
+          _recordFailure('close', error);
+        }
       }
       try {
         await db.close();
