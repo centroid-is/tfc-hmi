@@ -36,6 +36,13 @@ tags:
     # Upstream fault injection through the TcpProxy / FaultProxy kit. It works
     # against opc.tcp unchanged, because the injection is at the TCP level and
     # there is no TLS record layer in the way.
+  gate:
+    # The resilience gate B lane: the F22-F28 edge-case catalogue driven end to
+    # end from fake upstreams through a real gateway to real panels, plus the
+    # manifest that audits the directory. Declared here because an undeclared
+    # tag warns instead of selecting, and tfc_relay_client's own `gate`
+    # declaration does not reach this package — each dart_test.yaml declares
+    # for its own suite only.
   meta:
     # Cases that test the surface itself: freeze tests, structural sweeps, and
     # the arms that prove a check bites a deliberately broken implementation.
