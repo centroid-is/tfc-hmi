@@ -1,6 +1,7 @@
 #include "flutter_window.h"
 
 #include <windows.h>
+#include <ole2.h>
 #include <wtsapi32.h>
 
 #include <cstdio>
@@ -185,6 +186,43 @@ void FlutterWindow::DestroyController() {
   // The armed callback belonged to that engine and dies with it; the fresh
   // engine needs its own, so the flag must not survive the recreate.
   probe_armed_ = false;
+
+  // Return the Flutter child window to a clean drag-and-drop state before the
+  // engine tears its plugins down.
+  //
+  // This is the fix for the 2026-09-02 crash (see drag_drop_lifetime.h for the
+  // reference-count model, and windows/runner/test). The minidump caught the
+  // platform thread inside desktop_drop's DesktopDropPlugin destructor calling
+  // target_->Release() through a DANGLING pointer -- an execute/DEP access
+  // violation, the freed target's memory already recycled to point at itself.
+  //
+  // desktop_drop's IDropTarget is a Win32/OLE drop target: its constructor
+  // calls RegisterDragDrop(view_hwnd, this) (an AddRef) and the plugin adds a
+  // second reference; teardown is meant to undo both. That balances exactly
+  // ONCE per process. The GPU watchdog now destroys and recreates the whole
+  // FlutterViewController -- on every RDP session change (RebuildForSession
+  // change) and on device-loss recovery -- so it runs more than once, and the
+  // second cycle re-registers on a child HWND whose prior registration was
+  // never revoked. The stale registration throws the reference count off by
+  // one; the target is freed a step early and the plugin destructor then
+  // releases through the corpse. This process had rebuilt once already (an RDP
+  // disconnect at 16:25:43) when the 16:52:26 reconnect rebuilt a second time
+  // and crashed.
+  //
+  // Revoking here, while we still own the controller and its view window,
+  // releases the OS registration deterministically before the engine's plugin
+  // teardown runs, so desktop_drop's reference count is balanced across every
+  // rebuild and the next RegisterDragDrop starts from a clean HWND. Idempotent:
+  // the plugin's own destructor also revokes, and a second RevokeDragDrop just
+  // returns DRAGDROP_E_NOTREGISTERED. Harmless when nothing registered a drop
+  // target, which is why it is unconditional rather than desktop_drop-specific.
+  if (flutter_controller_ != nullptr && flutter_controller_->view() != nullptr) {
+    HWND view_hwnd = flutter_controller_->view()->GetNativeWindow();
+    if (view_hwnd != nullptr) {
+      ::RevokeDragDrop(view_hwnd);
+    }
+  }
+
   flutter_controller_ = nullptr;
 }
 
