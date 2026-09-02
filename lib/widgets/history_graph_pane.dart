@@ -237,6 +237,11 @@ class _HistoryGraphPaneState extends ConsumerState<HistoryGraphPane> {
 
               final points = <List<double>>[];
 
+              // Booleans draw as square steps: hold the previous level up to
+              // the sample that changed, then jump. The old code injected the
+              // *inverted* level at every sample — a run of identical trues
+              // rendered as a full-height sawtooth.
+              double? prevBoolY;
               for (final sample in seriesData) {
                 final value = sample.value;
                 final time = sample.time.millisecondsSinceEpoch.toDouble();
@@ -250,7 +255,10 @@ class _HistoryGraphPaneState extends ConsumerState<HistoryGraphPane> {
                 }
                 if (y != null) {
                   if (value is bool) {
-                    points.add([time, !value ? 1.0 : 0.0]);
+                    if (prevBoolY != null && prevBoolY != y) {
+                      points.add([time, prevBoolY]);
+                    }
+                    prevBoolY = y;
                   }
                   points.add([time, y]);
                 }
@@ -326,7 +334,8 @@ class _HistoryGraphPaneState extends ConsumerState<HistoryGraphPane> {
                                   graphData.isEmpty
                                       ? Center(
                                           child: Text(
-                                            'Select keys in the left pane to display on this graph',
+                                            'Tick keys in the left pane to plot them here '
+                                            '(Graph ${graphIndex + 1})',
                                             style: TextStyle(
                                               color: Theme.of(context)
                                                   .colorScheme
