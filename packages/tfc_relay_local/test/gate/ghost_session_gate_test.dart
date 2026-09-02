@@ -158,6 +158,17 @@ int _fanListenersOnChurnKeys(GateBFixture fixture) => [
       for (final key in _churnKeys) fixture.plant.listenerCount(key)
     ].fold(0, (a, b) => a + b);
 
+/// Upstream subscription creates, summed across every link.
+///
+/// **A delta of creates, never a balance** (08-PLAN-INDEX freeze 7): one
+/// logical OPC UA key is four monitored items and the binding discards the
+/// delete future, so the balance the catalogue asks for does not exist —
+/// the seeded F23 deviation in `f_row_registry.dart` quotes the clause and
+/// carries the number this case measures.
+int _createsOf(GateBFixture fixture) => [
+      for (final link in fixture.links) link.upstreamSubscriptionsCreated
+    ].fold(0, (a, b) => a + b);
+
 /// The churn side of the pipe: one `FaultProxy` in front of the long-lived
 /// gateway, one short-lived raw client per cycle dialled through it.
 ///
@@ -302,16 +313,27 @@ void main() {
       await churn.cycle();
     }
 
+    // 08-05's release-at-refcount-zero holds an armed timer for this long
+    // after the last detach. Read from the gateway's own config rather than
+    // restated, and printed so the checkpoint table carries it: every
+    // upstream sample below waits it out first, so an armed release cannot
+    // straddle a checkpoint read. (This fixture composes `LocalStateMan` at
+    // its default, which is zero — shorter than any cycle.)
+    final linger = fixture.plant.linger;
+    print('F23 upstream release linger, from the gateway\'s own config: '
+        '${linger.inMilliseconds} ms');
+
     final sessionsBaseline = fixture.sessionCount;
     final subsBaseline = fixture.server.sessions.subscriptionCount;
     final registryListenersBaseline = fixture.server.sessions.listenerCount;
     final fanListenersBaseline = _fanListenersOnChurnKeys(fixture);
     final handleBaseline = fixture.server.handles.size;
+    final createsBaseline = _createsOf(fixture);
     print('F23 baseline after $_warmupCycles warm-up cycles: '
         '$sessionsBaseline sessions, $subsBaseline subscriptions, '
         '$registryListenersBaseline registry listeners, '
         '$fanListenersBaseline fan-in listeners on the churn keys, '
-        '$handleBaseline handles');
+        '$handleBaseline handles, $createsBaseline upstream creates');
 
     // ------------------------------------------- the control arm, asserted
     // The twenty held panels are not decoration: without these floors every
@@ -342,12 +364,25 @@ void main() {
         reason: 'the warm-up must have minted both churn key sets before the '
             'table\'s size is frozen, or "constant" below would be asserting '
             'that a table nobody filled did not grow');
+    expect(createsBaseline, greaterThanOrEqualTo(_churnKeys.length),
+        reason: 'the held panels\' own subscriptions must have COST upstream '
+            'creates before the churn starts — this is the arm that proves '
+            'the counter is capable of being non-zero, so a flat delta below '
+            'cannot be a counter that never counted anything');
 
     var completed = 0;
     for (final checkpoint in _checkpoints) {
       while (completed < checkpoint) {
         await churn.cycle();
         completed++;
+      }
+
+      // The linger is accounted for explicitly: an armed release timer from
+      // the last cycle's detach must have fired (or been proven absent)
+      // before the upstream sample is believed. Zero at this fixture's
+      // config, so this is a no-op that documents the hazard.
+      if (linger > Duration.zero) {
+        await Future<void>.delayed(linger);
       }
 
       final sessions = fixture.sessionCount;
@@ -360,7 +395,10 @@ void main() {
       // end-state read of a 200-cycle run sees only the last 64 closes.
       final evictions = fixture.evictions.length;
       final reaps = fixture.heartbeatReaps.length;
+      final createsDelta = _createsOf(fixture) - createsBaseline;
 
+      print('F23 upstream creates after +$completed kill cycles: '
+          'delta $createsDelta (${_rate(createsDelta, completed)}/cycle)');
       print('F23 after +$completed kill cycles: '
           'sessions $sessions '
           '(${_rate(sessions - sessionsBaseline, completed)}/cycle), '
@@ -407,6 +445,17 @@ void main() {
               'under panels still watching; upward is an attach with no '
               'matching detach — either way it is the 08-05 chain this row '
               'exists to hold');
+      expect(createsDelta, 0,
+          reason: 'the upstream monitored-item create-delta is '
+              '$createsDelta after $completed kill cycles — '
+              '${_rate(createsDelta, completed)} per cycle. This is the '
+              'clause the catalogue wrote as "return to baseline", asserted '
+              'in the only form the design offers (a delta of creates, '
+              'never a balance — freeze 7, and the seeded F23 deviation): '
+              'a positive rate means the refcount chain released items the '
+              'held panels still watch and bought them back every cycle, '
+              'which is how weeks of nightly wash-down reboots exhaust a '
+              'PLC\'s hard monitored-item cap');
       expect(handles, handleBaseline,
           reason: 'the handle table went from $handleBaseline to $handles '
               'across $completed sessions over ${_keySets.length} distinct '
@@ -510,4 +559,45 @@ void main() {
       },
       timeout: const Timeout(Duration(minutes: 5)),
       onPlatform: const {'windows': Skip(openSocketCountSkipReason)});
+
+  test(
+      'F23c: the gateway half of this row is still standing in '
+      'tfc_relay_server — read as text, never duplicated', () {
+    // The same relative-path crossing no_retry_test.dart:182-293 makes into
+    // ../tfc_relay_server/lib, and the third use of the read-a-file-as-text
+    // pattern (fault_contract_test.dart's registry read). Gate B asserts the
+    // server-side half still exists and still names F23, because this file
+    // deliberately does NOT repeat that half: two more hundred-cycle loops
+    // against a FakeStateMan would prove nothing this package's pipe does
+    // not already prove, and the criterion would then be judged twice with
+    // neither reader sure which one counts.
+    const serverHalf = '../tfc_relay_server/test/teardown_test.dart';
+    final file = File(serverHalf);
+    // The anti-vacuity guard, and it fails by PATH, not by content: a text
+    // read of a file that is not there must never decay into "the doc no
+    // longer names F23", because those are different faults with different
+    // fixes.
+    expect(file.existsSync(), isTrue,
+        reason: 'no file at $serverHalf (resolved against '
+            '${Directory.current.path}). The server half of F23 has moved or '
+            'been renamed — find where it went and repoint this read; do not '
+            'let the assertions below report on an empty string');
+
+    final source = file.readAsStringSync();
+    expect(source.split('\n').first, contains('F23'),
+        reason: 'the server-side harness no longer opens its library doc by '
+            'naming F23, so the claim that the gateway half of this row "has '
+            'been green since Phase 3" no longer has a named owner — either '
+            'the doc moved the name or the file no longer gates the row, and '
+            'both belong in front of whoever edits it next');
+    expect(source, contains('const _checkpoints = <int>[10, 50, 100, 200];'),
+        reason: 'the server-side harness no longer declares the four '
+            'checkpoints this file copied — the two halves of F23 have '
+            'drifted, and "checkpoints are a rate" only holds while both '
+            'sides sample at the same places');
+    expect(source, contains('const _held = 20;'),
+        reason: 'the server-side harness no longer declares its held-session '
+            'control — the doctrine this file restates ("the control arm is '
+            'not decoration") would then be quoting a file that dropped it');
+  });
 }
