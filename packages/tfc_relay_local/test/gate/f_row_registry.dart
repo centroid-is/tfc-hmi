@@ -262,11 +262,6 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     owner: '09-07',
     clause: 'the stall harness, the announcement and the staleness clauses (F22a/b/d); the reaper half ("synchronized false disconnect") is 09-08\'s RED and fix, and the historian half ("historian marks the gap") is 09-09\'s db-tagged arm',
   ),
-  'F27': Outstanding(
-    kind: OutstandingKind.partial,
-    owner: '09-06',
-    clause: 'the degrade half has its case (F27a); still owed by this plan\'s task 2: five panels — one absent throughout — converging on identical values and qualities under one budget, the conflation and priority-lane clauses, and the resync-damper arm',
-  ),
 };
 
 /// Every catalogue clause the phase's green will **not** cover.
