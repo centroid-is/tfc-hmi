@@ -267,11 +267,6 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     owner: '09-03',
     clause: 'gateway memory and the upstream create-delta flat across 200 kill cycles, with the twenty-session control arm',
   ),
-  'F24': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '09-02',
-    clause: 'no stale-handle read ever answers, affected keys bad-quality until re-browse completes, other PLCs unaffected',
-  ),
   'F25': Outstanding(
     kind: OutstandingKind.missing,
     owner: '09-04',
