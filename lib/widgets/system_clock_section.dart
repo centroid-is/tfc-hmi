@@ -637,7 +637,13 @@ class _NtpServerEditorState extends State<_NtpServerEditor> {
                   shrinkWrap: true,
                   buildDefaultDragHandles: false,
                   itemCount: _servers.length,
-                  onReorderItem: (oldIndex, newIndex) => setState(() {
+                  // onReorder, not the newer onReorderItem: the ivi image
+                  // builds on Flutter 3.38.7 (docker/frontend-ivi's
+                  // FLUTTER_VERSION), which predates it. Deprecated here,
+                  // absent there — and absent loses.
+                  // ignore: deprecated_member_use
+                  onReorder: (oldIndex, newIndex) => setState(() {
+                    if (newIndex > oldIndex) newIndex -= 1;
                     _servers.insert(newIndex, _servers.removeAt(oldIndex));
                   }),
                   itemBuilder: (context, index) {

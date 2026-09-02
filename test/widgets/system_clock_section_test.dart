@@ -450,4 +450,41 @@ void main() {
     expect(find.text('Europe/Oslo'), findsOneWidget);
     expect(find.text('UTC'), findsNothing);
   });
+
+  testWidgets('reordering servers keeps the operator order', (tester) async {
+    // timesyncd tries servers in order, so the list is a preference ranking,
+    // not a set. Also guards the index adjustment onReorder needs and
+    // onReorderItem does not -- we are on onReorder because the ivi image
+    // builds on a Flutter that predates the newer callback.
+    final timeSync = FakeTimeSync(status: syncStatus(message: healthyMessage()));
+    await pumpSection(
+      tester,
+      timeDate: FakeTimeDate(),
+      timeSync: timeSync,
+      storedServers: const ['first.example', 'second.example'],
+    );
+
+    await tester.tap(find.text('Edit'));
+    await tester.pumpAndSettle();
+
+    // Drag the first entry below the second. ReorderableListView needs the
+    // gesture fed in steps: a single tester.drag() completes before the
+    // reorder machinery has taken the pointer.
+    final handle = find.byIcon(Icons.drag_handle).first;
+    final gesture = await tester.startGesture(tester.getCenter(handle));
+    await tester.pump(const Duration(milliseconds: 600));
+    for (var i = 0; i < 6; i++) {
+      await gesture.moveBy(const Offset(0, 12));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await gesture.up();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Apply'));
+    await tester.pumpAndSettle();
+
+    expect(timeSync.pushes, [
+      ['second.example', 'first.example']
+    ]);
+  });
 }
