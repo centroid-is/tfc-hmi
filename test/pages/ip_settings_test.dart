@@ -746,4 +746,192 @@ void main() {
     expect(client.fakeSettings.addedConnections, hasLength(3),
         reason: 'the profiles stay, autoconnect picks them up on link');
   });
+
+  group('renaming a connection profile', () {
+    FakeNetworkManagerDevice bondDevice(FakeSettingsConnection connection) =>
+        FakeNetworkManagerDevice(
+          interface: 'bond0',
+          deviceType: NetworkManagerDeviceType.bond,
+          activeConnection:
+              FakeActiveConnection(id: 'bond0', connection: connection),
+        );
+
+    testWidgets('an active bond is renameable from its interface card',
+        (tester) async {
+      // The saved-connections list only shows profiles that are NOT active,
+      // and the bond an operator wants to rename is normally up — so the
+      // rename has to be reachable from the card.
+      final connection = FakeSettingsConnection(id: 'bond0', settings: {
+        'connection': {
+          'id': const DBusString('bond0'),
+          'uuid': const DBusString('b1'),
+          'type': const DBusString('bond'),
+          'interface-name': const DBusString('bond0'),
+        },
+      });
+      final client = FakeNetworkManagerClient(
+        devices: [bondDevice(connection)],
+        settings: FakeNetworkManagerSettings(connections: [connection]),
+      );
+
+      await tester.pumpWidget(_buildPage(client));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Interface actions'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Rename connection…'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField), 'Plant bond');
+      await tester.tap(find.text('Rename'));
+      await tester.pumpAndSettle();
+
+      final written = connection.updates.single;
+      expect(written['connection']!['id']!.asString(), 'Plant bond');
+      expect(written['connection']!['interface-name']!.asString(), 'bond0',
+          reason: 'the profile stays bound to the bond0 device');
+    });
+
+    testWidgets('the dialog says the interface is not being renamed',
+        (tester) async {
+      // Operators reasonably expect renaming a connection called "bond0" to
+      // rename the interface; say plainly that it does not.
+      final connection = FakeSettingsConnection(id: 'bond0', settings: {
+        'connection': {
+          'id': const DBusString('bond0'),
+          'interface-name': const DBusString('bond0'),
+        },
+      });
+      final client = FakeNetworkManagerClient(
+        devices: [bondDevice(connection)],
+        settings: FakeNetworkManagerSettings(connections: [connection]),
+      );
+
+      await tester.pumpWidget(_buildPage(client));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Interface actions'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Rename connection…'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('stays bound to the bond0 interface'),
+          findsOneWidget);
+    });
+
+    testWidgets('a name already in use is refused before anything is written',
+        (tester) async {
+      final bond = FakeSettingsConnection(id: 'bond0', settings: {
+        'connection': {
+          'id': const DBusString('bond0'),
+          'uuid': const DBusString('b1'),
+          'interface-name': const DBusString('bond0'),
+        },
+      });
+      final other = FakeSettingsConnection(id: 'eno1', settings: {
+        'connection': {
+          'id': const DBusString('eno1'),
+          'uuid': const DBusString('e1'),
+          'type': const DBusString('802-3-ethernet'),
+          'interface-name': const DBusString('eno1'),
+        },
+      });
+      final client = FakeNetworkManagerClient(
+        devices: [bondDevice(bond)],
+        settings: FakeNetworkManagerSettings(connections: [bond, other]),
+      );
+
+      await tester.pumpWidget(_buildPage(client));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Interface actions'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Rename connection…'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField), 'eno1');
+      await tester.tap(find.text('Rename'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('already called'), findsOneWidget);
+      expect(bond.updates, isEmpty);
+    });
+  });
+
+  group('deleting a saved connection', () {
+    FakeSettingsConnection savedEthernet({String id = 'spare'}) =>
+        FakeSettingsConnection(id: id, settings: {
+          'connection': {
+            'id': DBusString(id),
+            'uuid': DBusString('u-$id'),
+            'type': const DBusString('802-3-ethernet'),
+            'interface-name': const DBusString('eth9'),
+          },
+          'ipv4': {'method': const DBusString('auto')},
+        });
+
+    testWidgets('a plain saved profile can be deleted', (tester) async {
+      // Previously only bonds were deletable, so a stale ethernet profile was
+      // stuck in the list for good.
+      final spare = savedEthernet();
+      final client = FakeNetworkManagerClient(
+        devices: [_staticEthernet()],
+        settings: FakeNetworkManagerSettings(connections: [spare]),
+      );
+
+      await tester.pumpWidget(_buildPage(client));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('More'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.widgetWithText(TextButton, 'Delete').hitTestable());
+      await tester.pumpAndSettle();
+
+      expect(spare.deleted, isTrue);
+    });
+
+    testWidgets('the confirmation can be declined', (tester) async {
+      final spare = savedEthernet();
+      final client = FakeNetworkManagerClient(
+        devices: [_staticEthernet()],
+        settings: FakeNetworkManagerSettings(connections: [spare]),
+      );
+
+      await tester.pumpWidget(_buildPage(client));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('More'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(spare.deleted, isFalse);
+    });
+
+    testWidgets('a saved profile can be renamed from its tile', (tester) async {
+      final spare = savedEthernet();
+      final client = FakeNetworkManagerClient(
+        devices: [_staticEthernet()],
+        settings: FakeNetworkManagerSettings(connections: [spare]),
+      );
+
+      await tester.pumpWidget(_buildPage(client));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('More'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Rename…'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField), 'Cold store spare');
+      await tester.tap(find.text('Rename'));
+      await tester.pumpAndSettle();
+
+      expect(spare.updates.single['connection']!['id']!.asString(),
+          'Cold store spare');
+    });
+  });
 }

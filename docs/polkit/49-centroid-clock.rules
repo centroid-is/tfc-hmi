@@ -1,0 +1,38 @@
+/* Let the HMI set the host clock and NTP servers.
+ *
+ * Install on the station as /etc/polkit-1/rules.d/49-centroid-clock.rules.
+ *
+ * Without this the Date & Time section on the About Linux page renders its
+ * status fine -- reading timedate1 and timesync1 needs no authorisation --
+ * but every setter fails. systemd ships all four timedate1 actions and
+ * timesync1's set-runtime-servers as `auth_admin_keep`, and the HMI container
+ * has no polkit agent to answer the prompt with, so the reply is
+ * `org.freedesktop.DBus.Error.InteractiveAuthorizationRequired`.
+ *
+ * This mirrors, deliberately, the rule Debian already ships for
+ * NetworkManager at /usr/share/polkit-1/rules.d/org.freedesktop.NetworkManager.rules
+ * -- same groups, same local+active requirement -- which is why the IP
+ * settings page has always been able to write and this one could not.
+ *
+ * Verify with, as the centroid user:
+ *
+ *   pkcheck --action-id org.freedesktop.timedate1.set-ntp --process $$
+ *
+ * Exit 0 means granted; exit 2 with "Authorization requires authentication"
+ * means the rule is not in effect.
+ */
+polkit.addRule(function(action, subject) {
+    var allowed = [
+        "org.freedesktop.timedate1.set-time",
+        "org.freedesktop.timedate1.set-timezone",
+        "org.freedesktop.timedate1.set-local-rtc",
+        "org.freedesktop.timedate1.set-ntp",
+        "org.freedesktop.timesync1.set-runtime-servers"
+    ];
+
+    if (allowed.indexOf(action.id) !== -1 &&
+        subject.local && subject.active &&
+        (subject.isInGroup("sudo") || subject.isInGroup("netdev"))) {
+        return polkit.Result.YES;
+    }
+});

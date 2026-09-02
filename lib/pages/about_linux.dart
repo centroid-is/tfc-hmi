@@ -24,11 +24,17 @@ class AboutLinuxPage extends ConsumerStatefulWidget {
   final TimeDateApi? timeDate;
   final TimeSyncApi? timeSync;
 
+  /// Returns to the connection chooser. Present because the page now
+  /// auto-connects to the local bus; without it a station that has no saved
+  /// credentials could never reach another machine's bus.
+  final VoidCallback? onSwitchConnection;
+
   const AboutLinuxPage({
     super.key,
     required this.dbusClient,
     this.timeDate,
     this.timeSync,
+    this.onSwitchConnection,
   });
 
   @override
@@ -481,6 +487,18 @@ class _AboutLinuxPageState extends ConsumerState<AboutLinuxPage> {
                   storedServers: _storedNtpServers,
                   onServersChanged: _saveNtpServers,
                 ),
+
+                if (widget.onSwitchConnection != null) ...[
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: widget.onSwitchConnection,
+                      icon: const Icon(Icons.swap_horiz, size: 18),
+                      label: const Text('Connect to another machine'),
+                    ),
+                  ),
+                ],
 
                 const SizedBox(height: 24),
 

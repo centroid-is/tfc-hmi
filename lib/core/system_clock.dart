@@ -97,6 +97,30 @@ bool isValidNtpServer(String server) {
 List<String> ntpServersToApply(List<String> stored) =>
     normaliseNtpServers(stored);
 
+/// Re-applies the stored NTP server list to timesyncd.
+///
+/// The whole reason this exists: `SetRuntimeNTPServers` is the only server
+/// setter on the bus and it is runtime-only, so timesyncd forgets the list
+/// whenever it restarts — on a plant station, every reboot. Nothing on the
+/// bus persists it, so the HMI is what remembers, and this is the re-apply.
+///
+/// Returns the list it pushed, or null when it pushed nothing. Doing nothing
+/// on an empty list is deliberate rather than lazy: pushing `[]` would
+/// *clear* servers the host itself configured, so a station that has never
+/// used this feature must be left exactly as provisioning left it.
+///
+/// [connect] is lazy so a station with no stored list never opens a
+/// connection at all.
+Future<List<String>?> applyStoredNtpServers({
+  required PreferencesApi prefs,
+  required TimeSyncApi Function() connect,
+}) async {
+  final servers = ntpServersToApply(await readNtpServers(prefs));
+  if (servers.isEmpty) return null;
+  await connect().setRuntimeNtpServers(servers);
+  return servers;
+}
+
 /// The clock half of the status, from `timedate1`.
 class SystemClockStatus {
   /// Host wall-clock time, as the host reports it. Not the HMI's own clock —

@@ -1,5 +1,6 @@
 import 'package:dbus/dbus.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc_dart/core/preferences.dart';
 import 'package:tfc/core/system_clock.dart';
 
 /// The `NTPMessage` struct exactly as `busctl` printed it on a live station
@@ -315,4 +316,86 @@ void main() {
       expect(message, contains('49-centroid-clock.rules'));
     });
   });
+
+  group('applyStoredNtpServers', () {
+    test('pushes the stored list', () async {
+      final prefs = _MemoryPrefs({
+        ntpServersPrefsKey: ['10.104.29.1', '10.104.29.2']
+      });
+      final sync = _RecordingSync();
+
+      final applied =
+          await applyStoredNtpServers(prefs: prefs, connect: () => sync);
+
+      expect(applied, ['10.104.29.1', '10.104.29.2']);
+      expect(sync.pushes, [
+        ['10.104.29.1', '10.104.29.2']
+      ]);
+    });
+
+    test('pushes nothing, and does not connect, with no stored list',
+        () async {
+      // Pushing an empty list would clear servers the host configured for
+      // itself, so a station that never used this must be left alone.
+      final sync = _RecordingSync();
+      var connected = false;
+
+      final applied = await applyStoredNtpServers(
+        prefs: _MemoryPrefs({}),
+        connect: () {
+          connected = true;
+          return sync;
+        },
+      );
+
+      expect(applied, isNull);
+      expect(sync.pushes, isEmpty);
+      expect(connected, isFalse, reason: 'no reason to open a bus connection');
+    });
+
+    test('cleans the stored list before pushing', () async {
+      final prefs = _MemoryPrefs({
+        ntpServersPrefsKey: ['  a.example ', 'a.example', '']
+      });
+      final sync = _RecordingSync();
+
+      await applyStoredNtpServers(prefs: prefs, connect: () => sync);
+
+      expect(sync.pushes, [
+        ['a.example']
+      ]);
+    });
+  });
+}
+
+class _RecordingSync implements TimeSyncApi {
+  final List<List<String>> pushes = [];
+
+  @override
+  Future<TimeSyncStatus?> readStatus() async => null;
+
+  @override
+  Future<void> setRuntimeNtpServers(List<String> servers) async =>
+      pushes.add(servers);
+}
+
+/// Just enough of [PreferencesApi] for the helper above.
+class _MemoryPrefs implements PreferencesApi {
+  final Map<String, Object?> values;
+  _MemoryPrefs(this.values);
+
+  @override
+  Future<List<String>?> getStringList(String key) async =>
+      values[key] as List<String>?;
+
+  @override
+  Future<void> setStringList(String key, List<String> value) async =>
+      values[key] = value;
+
+  @override
+  Future<void> remove(String key) async => values.remove(key);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('${invocation.memberName} is not stubbed');
 }
