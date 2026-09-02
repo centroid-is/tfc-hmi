@@ -53,6 +53,10 @@ final Directory libRoot = Directory('lib');
 final Directory libSrc = Directory('lib/src');
 final Directory testRoot = Directory('test');
 
+/// The collection subsystem (8b-01) — the scope of the fire-and-forget
+/// sweep, because that is where 8b-02's flush machinery will live.
+final Directory libCollect = Directory('lib/src/collect');
+
 // ------------------------------------------------------------- the allow-lists
 
 /// Files permitted to hold a `Timer.periodic(`, each naming the plan that
@@ -330,6 +334,37 @@ const String contractKitPackage = 'tfc_stateman_contract';
 /// nobody decided to ship.
 const int declaredUnimplementedMembers = 3;
 
+/// Files under `lib/` allowed to import the database layer — the wrap seam.
+///
+/// **Zero, and 8b-02 raises it to exactly one** by naming
+/// `collect/timescale_sink.dart` here in the same commit that creates it.
+/// The point of the seam is that the rest of the package cannot reach past
+/// it: `Database` starts a flush timer in its constructor and retries its
+/// connect until it opens, and a second import site is a second place those
+/// behaviours leak onto the gateway's value path. The sweep also flags an
+/// unrestricted `tfc_dart/tfc_dart.dart` barrel import, because the barrel
+/// re-exports the database layer wholesale — a `show` clause is what keeps
+/// a barrel import from being a back door.
+const int declaredSeamImportFiles = 0;
+
+/// Files under `lib/` spelling the literal `'gw_'` — exactly one.
+///
+/// The default prefix is the side-by-side guarantee
+/// (`collection_config.dart`'s class doc carries the four-fact argument). A
+/// default duplicated into a second place is a default that drifts, and
+/// this one drifting means gateway rows in the app's tables.
+const String prefixSpellingFile = 'collection_config.dart';
+
+/// `unawaited(` lines under `lib/src/collect/` with no error handler.
+///
+/// **Zero in this plan.** Project memory: `unawaited()` attaches no handler
+/// — a fire-and-forget future that can error needs `.catchError(` or an
+/// `onError:` on the same line, and `StateMan._monitor`
+/// (`state_man.dart:2369`) is the in-repo example of doing it right. The
+/// collect subsystem is where 8b-02's flush machinery lands, which is why
+/// the scope is pinned before there is anything in it to offend.
+const int declaredUnhandledFireAndForget = 0;
+
 /// A forwarder is forbidden in the composer, by name.
 ///
 /// `policy_state_man.dart:80-87`'s reason, which `cert_health_state_man.dart:
@@ -573,6 +608,82 @@ void main() {
               'added to StateManApi in a later phase: the new member works, '
               'unpoliced, and nothing says so. Explicit delegation makes it a '
               'compile error and therefore a decision');
+    });
+  });
+
+  group('freeze 8: the collection seam (8b-01)', () {
+    test('the three sweeps report zero over an empty directory', () {
+      final empty =
+          Directory.systemTemp.createTempSync('relay-collect-freeze-');
+      addTearDown(() => empty.deleteSync(recursive: true));
+
+      expect(seamImportFiles(empty), isEmpty);
+      expect(prefixSpellingFiles(empty), isEmpty);
+      expect(unhandledFireAndForgetSites(empty), isEmpty,
+          reason: 'pointed at an empty directory a sweep that reports an '
+              'occurrence is inventing rather than measuring');
+    });
+
+    test('the three sweeps can each see an offender', () {
+      // Two of the pins below are ZERO, so the empty-directory arm alone
+      // proves nothing: a sweep that always returns empty passes both.
+      // Seed a directory with the offences and watch each one reported —
+      // that is what makes a zero pin a measurement.
+      final seeded =
+          Directory.systemTemp.createTempSync('relay-collect-offend-');
+      addTearDown(() => seeded.deleteSync(recursive: true));
+      File('${seeded.path}/direct.dart').writeAsStringSync(
+          "import 'package:tfc_dart/core/database.dart';\n");
+      File('${seeded.path}/barrel.dart')
+          .writeAsStringSync("import 'package:tfc_dart/tfc_dart.dart';\n");
+      File('${seeded.path}/shown.dart').writeAsStringSync(
+          "import 'package:tfc_dart/tfc_dart.dart'\n"
+          '    show RetentionPolicy;\n');
+      File('${seeded.path}/prefix.dart')
+          .writeAsStringSync("const p = 'gw_';\n");
+      File('${seeded.path}/fire.dart')
+          .writeAsStringSync('void f() { unawaited(g()); }\n');
+
+      expect(seamImportFiles(seeded), hasLength(2),
+          reason: 'the direct import and the unrestricted barrel are both '
+              'back doors to Database and must both be seen; the '
+              'show-restricted barrel import is not one, and flagging it '
+              'would outlaw the constants task 1 imports on purpose');
+      expect(prefixSpellingFiles(seeded), ['prefix.dart']);
+      expect(unhandledFireAndForgetSites(seeded), hasLength(1),
+          reason: 'an unawaited( with no handler on the line is exactly '
+              'the shape this sweep exists to stop');
+    });
+
+    test('the wrap seam is one file — pinned at ZERO until 8b-02', () {
+      expect(seamImportFiles(libRoot), hasLength(declaredSeamImportFiles),
+          reason: 'the point of the seam is that the rest of the package '
+              'cannot reach past it: Database starts a flush timer in its '
+              'constructor and retries its connect until it opens, and an '
+              'import site outside collect/timescale_sink.dart puts both '
+              'on the gateway\'s value path. 8b-02 raises this to one, '
+              'naming that file, in the commit that creates it');
+    });
+
+    test('the prefix has one spelling', () {
+      expect(prefixSpellingFiles(libRoot), [prefixSpellingFile],
+          reason: 'the default prefix is the side-by-side guarantee, and a '
+              'default duplicated into a second place is a default that '
+              'drifts — this one drifting means gateway rows in the app\'s '
+              'tables with no error anywhere');
+    });
+
+    test('no unhandled fire-and-forget under lib/src/collect/', () {
+      expect(dartFilesIn(libCollect), isNotEmpty,
+          reason: 'the collect scope exists and holds .dart files, or the '
+              'pin below has been passing against nothing');
+      expect(unhandledFireAndForgetSites(libCollect),
+          hasLength(declaredUnhandledFireAndForget),
+          reason: 'unawaited() attaches no handler (project memory): a '
+              'flush future that rejects with nobody listening is an '
+              'uncaught async error on the gateway\'s one isolate. '
+              'StateMan._monitor (state_man.dart:2369) is the in-repo '
+              'example of doing it right — copy that shape');
     });
   });
 
@@ -832,6 +943,76 @@ List<String> forwarderSites(Directory directory) {
       final line = lines[i];
       if (_isAnyComment(line)) continue;
       if (!line.contains(forwarderSpelling)) continue;
+      sites.add('${file.path}:${i + 1}: ${line.trim()}');
+    }
+  }
+  return sites;
+}
+
+/// Files under [directory] whose imports reach the database layer: either
+/// seam file by path, or the `tfc_dart` barrel with no `show` clause — the
+/// barrel re-exports the database layer wholesale, so an unrestricted import
+/// of it is the same back door wearing a different URI.
+///
+/// The statement can wrap — a `show` clause on its own line is the ordinary
+/// formatting — so the whole statement is judged, not the line.
+List<String> seamImportFiles(Directory directory) {
+  final files = <String>[];
+  for (final file in dartFilesIn(directory)) {
+    final lines = file.readAsLinesSync();
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      if (_isAnyComment(line)) continue;
+      if (!line.trimLeft().startsWith('import ')) continue;
+      var statement = line;
+      var j = i;
+      while (!statement.contains(';') && ++j < lines.length) {
+        statement += ' ${lines[j]}';
+      }
+      final reachesSeam =
+          statement.contains('tfc_dart/core/database.dart') ||
+              statement.contains('tfc_dart/core/database_drift.dart') ||
+              (statement.contains('tfc_dart/tfc_dart.dart') &&
+                  !statement.contains(' show '));
+      if (reachesSeam) {
+        files.add('${file.path}:${i + 1}');
+        break;
+      }
+    }
+  }
+  return files;
+}
+
+/// Files under [directory] spelling the literal `'gw_'` outside a comment,
+/// by bare file name so the pin reads as the sentence it is.
+List<String> prefixSpellingFiles(Directory directory) {
+  final files = <String>[];
+  for (final file in dartFilesIn(directory)) {
+    for (final line in file.readAsLinesSync()) {
+      if (_isAnyComment(line)) continue;
+      if (!line.contains("'gw_'")) continue;
+      files.add(file.uri.pathSegments.last);
+      break;
+    }
+  }
+  return files;
+}
+
+/// Every non-comment `unawaited(` line under [directory] that carries
+/// neither a `.catchError(` nor an `onError` on the same line.
+///
+/// Crude and line-based like everything else here; a handler attached on a
+/// following line will be flagged, and the fix is to put it on the same
+/// line the way `collector.dart:169` and `state_man.dart:2369` both do.
+List<String> unhandledFireAndForgetSites(Directory directory) {
+  final sites = <String>[];
+  for (final file in dartFilesIn(directory)) {
+    final lines = file.readAsLinesSync();
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      if (_isAnyComment(line)) continue;
+      if (!line.contains('unawaited(')) continue;
+      if (line.contains('.catchError(') || line.contains('onError')) continue;
       sites.add('${file.path}:${i + 1}: ${line.trim()}');
     }
   }

@@ -125,6 +125,44 @@ abstract final class PipeKeys {
   /// On HLTH-03's reserved list day one.
   static const String certDaysToExpiry = '${prefix}cert.days_to_expiry';
 
+  // ---------------------------------------------------------------- group 5
+  // The collection historian (8b-01), produced by the gateway's collection
+  // runner on `LocalStateMan`.
+  //
+  // **Per-plant facts, so they live on the shared `LocalStateMan`** — ruling
+  // 9's two homes: one historian per gateway, unlike group 2's per-socket
+  // facts. And unlike the per-alias builders they ARE a finite roster, so
+  // they join [declared] where the partition arithmetic can see them.
+
+  /// The gateway is configured to historise. News, not a gauge: this
+  /// flipping is an operator decision or a config load, and a panel that
+  /// learns about it late trusts a chart that is not being fed.
+  static const String collectEnabled = '${prefix}collect.enabled';
+
+  /// The sink can reach Postgres. The historian's own [connected], scoped
+  /// by the middle segment the way [_upstream] scopes a PLC's.
+  static const String collectConnected = '${prefix}collect.connected';
+
+  /// Rows written since start — `getStats()`'s `total_writes`, served as a
+  /// key a panel can chart.
+  static const String collectRowsWritten = '${prefix}collect.rows_written';
+
+  /// Rows dropped, skipped or refused since start. **A lost row is a
+  /// counted row** (8b house rule): this is the number that makes the
+  /// no-silent-anything rule true for the historian.
+  static const String collectRowsDropped = '${prefix}collect.rows_dropped';
+
+  /// Rows waiting in the sink's buffers right now — the early warning for
+  /// [collectRowsDropped], the same pairing `getStats()` makes with
+  /// `queued_rows`.
+  static const String collectQueuedRows = '${prefix}collect.queued_rows';
+
+  /// The last sink error, **redacted**: a Postgres error carries the host,
+  /// the database and the user, and this string becomes a key value a
+  /// panel can read. The seam's `SinkStats.lastError` doc owns that rule;
+  /// 8b-02 does the redaction and tests it.
+  static const String collectLastError = '${prefix}collect.last_error';
+
   /// Every non-builder key above, in one list.
   ///
   /// The per-alias keys are deliberately absent: an alias is a runtime value,
@@ -146,6 +184,13 @@ abstract final class PipeKeys {
     eventLoopLagMs,
     // group 4 — gateway self
     certDaysToExpiry,
+    // group 5 — the collection historian
+    collectEnabled,
+    collectConnected,
+    collectRowsWritten,
+    collectRowsDropped,
+    collectQueuedRows,
+    collectLastError,
   ];
 
   // ---------------------------------------------------------------- group 3
@@ -245,6 +290,12 @@ abstract final class PipeKeys {
     connected,
     epoch,
     linkDegraded,
+    // 8b-01: the historian's news. `enabled` flipping and the Postgres
+    // connection dropping are state changes; `last_error` is why, in the
+    // same sentence — the same filing as the per-link `last_error`.
+    collectEnabled,
+    collectConnected,
+    collectLastError,
   };
 
   /// Gauges, which ride the ordinary conflated lane.
@@ -262,6 +313,11 @@ abstract final class PipeKeys {
     droppedHoldTicks,
     eventLoopLagMs,
     certDaysToExpiry,
+    // 8b-01: the historian's three counters. Fast-moving; unconflated they
+    // would be a queue, which the core value forbids outright.
+    collectRowsWritten,
+    collectRowsDropped,
+    collectQueuedRows,
   };
 
   static const String _connectedTail = 'connected';
@@ -281,6 +337,10 @@ abstract final class PipeKeys {
     _birthCountTail,
     _lastDeathAtTail,
     'link_degraded',
+    // 8b-01: the historian's on/off is news. The namespace guard in
+    // [ridesPriorityLane] still holds — an ordinary tag ending in
+    // `.enabled` is plant telemetry and is never promoted.
+    'enabled',
   };
 
   /// Does [key] ride the never-conflated lane?

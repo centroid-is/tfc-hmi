@@ -213,6 +213,94 @@ void main() {
     });
   });
 
+  group('the collect keys (8b-01)', () {
+    test('the six spellings', () {
+      // Matched by AlarmMan configuration and read by panels; a respelling
+      // compiles, keeps every suite green, and quietly stops matching —
+      // the argument of this whole file, applied to the historian.
+      expect(PipeKeys.collectEnabled, 'PIPE.collect.enabled');
+      expect(PipeKeys.collectConnected, 'PIPE.collect.connected');
+      expect(PipeKeys.collectRowsWritten, 'PIPE.collect.rows_written');
+      expect(PipeKeys.collectRowsDropped, 'PIPE.collect.rows_dropped');
+      expect(PipeKeys.collectQueuedRows, 'PIPE.collect.queued_rows');
+      expect(PipeKeys.collectLastError, 'PIPE.collect.last_error');
+    });
+
+    test('all six are on the declared roster', () {
+      // Per-plant facts on LocalStateMan (08-CONTEXT ruling 9's two homes):
+      // one historian per gateway, so unlike the per-alias builders these
+      // ARE a finite roster and belong on the declared list, where the
+      // partition arithmetic above can see them.
+      for (final key in [
+        PipeKeys.collectEnabled,
+        PipeKeys.collectConnected,
+        PipeKeys.collectRowsWritten,
+        PipeKeys.collectRowsDropped,
+        PipeKeys.collectQueuedRows,
+        PipeKeys.collectLastError,
+      ]) {
+        expect(PipeKeys.declared, contains(key),
+            reason: '$key off the roster is a key in neither lane — a key '
+                'the send buffer has no rule for');
+      }
+    });
+
+    test('news rides priority, counters conflate', () {
+      // "A degraded link must still deliver the news that it is degraded"
+      // — the historian's version: enabled flipping, the connection to
+      // Postgres dropping, and the error naming why are the news; the
+      // three row counters are telemetry a tick late costs nobody.
+      for (final news in [
+        PipeKeys.collectEnabled,
+        PipeKeys.collectConnected,
+        PipeKeys.collectLastError,
+      ]) {
+        expect(PipeKeys.ridesPriorityLane(news), isTrue,
+            reason: '$news is the news that collection state changed; on '
+                'the conflated lane it can be dropped by the very '
+                'congestion a failing historian causes');
+        expect(PipeKeys.priorityLane, contains(news),
+            reason: 'the lane set and the suffix rule must agree on $news '
+                'or the two sides of the send buffer file it differently');
+      }
+      for (final gauge in [
+        PipeKeys.collectRowsWritten,
+        PipeKeys.collectRowsDropped,
+        PipeKeys.collectQueuedRows,
+      ]) {
+        expect(PipeKeys.ridesPriorityLane(gauge), isFalse,
+            reason: '$gauge is a fast-moving counter; unconflated it is a '
+                'queue, which the core value forbids outright');
+        expect(PipeKeys.conflatedLane, contains(gauge));
+      }
+    });
+
+    test('aliasOf never mistakes collect for an upstream alias', () {
+      // `PIPE.collect.enabled` splits into four dot segments exactly like
+      // `PIPE.upstream.<alias>.<field>` — but it is not in the upstream
+      // namespace, and a health producer that read `collect` back as an
+      // alias would attribute historian trouble to a PLC called "collect".
+      for (final key in [
+        PipeKeys.collectEnabled,
+        PipeKeys.collectConnected,
+        PipeKeys.collectRowsWritten,
+        PipeKeys.collectRowsDropped,
+        PipeKeys.collectQueuedRows,
+        PipeKeys.collectLastError,
+      ]) {
+        expect(PipeKeys.aliasOf(key), isNull, reason: key);
+      }
+    });
+
+    test('a plant key ending in .enabled is not promoted', () {
+      // The suffix rule gains `enabled`; the namespace guard must still
+      // hold or every conveyor's enable bit rides the unconflated lane.
+      expect(PipeKeys.ridesPriorityLane('ST101.CN01.MOT01.enabled'), isFalse,
+          reason: 'plant telemetry on the never-conflated lane is how that '
+              'lane becomes a queue');
+    });
+  });
+
   group('agreement with the rest of the workspace', () {
     test('the certificate key is spelled the way every deployment spells it',
         () {
