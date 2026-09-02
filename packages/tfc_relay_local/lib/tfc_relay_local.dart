@@ -31,6 +31,7 @@ library;
 // the TimescaleDB adapter behind it is 8b-02's, and it is the only file in
 // this package allowed to import the database layer (freeze_test.dart).
 export 'src/collect/collection_config.dart';
+export 'src/collect/collection_plan.dart';
 export 'src/epoch.dart';
 export 'src/fanin.dart';
 export 'src/freshness_sweep.dart';
