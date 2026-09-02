@@ -30,6 +30,7 @@ import '../page_creator/page.dart';
 import '../core/startup_url.dart';
 import '../providers/preferences.dart' show localPreferencesProvider;
 import '../models/menu_item.dart';
+import 'package:tfc_access/tfc_access.dart' show AccessGroup, AccessGroupInfo;
 import '../route_registry.dart';
 import '../routes.dart';
 import '../providers/current_page_assets.dart';
@@ -4444,6 +4445,31 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// its place in the tree, and stays editable here. Only whether
   /// `getRootMenuItems` hands it to the app's menu and router does, which the
   /// running app picks up on its next start (as the dialog's subtitle warns).
+  /// Publishes [pagePath] for [group], or for everyone when null.
+  ///
+  /// Same shape as [_setPagePublished]: history first, then the page map, and
+  /// the running app picks it up on its next start via
+  /// `declareMenuRouteGroups`. Clearing goes through `clearRequiredGroup`
+  /// because `copyWith(requiredGroup: null)` means "leave it alone".
+  void _setPageRequiredGroup(
+    String pagePath,
+    AccessGroup? group,
+    StateSetter dialogSetState,
+  ) {
+    final page = _temporaryPages[pagePath];
+    if (page == null || page.menuItem.requiredGroup == group) return;
+    _saveToHistory();
+    setState(() {
+      _temporaryPages[pagePath] = page.copyWith(
+        menuItem: group == null
+            ? page.menuItem.copyWith(clearRequiredGroup: true)
+            : page.menuItem.copyWith(requiredGroup: group),
+      );
+      _updateCurrentJson();
+    });
+    dialogSetState(() {});
+  }
+
   void _setPagePublished(
     String pagePath,
     bool published,
@@ -4556,6 +4582,38 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                 dialogContext: dialogContext,
               ),
             ),
+          // Published for a group, or for everyone. A popup rather than a
+          // dialog: one tap to see the choice, one to make it. Entries carry
+          // their own onTap because PopupMenuButton.onSelected never fires for
+          // a null value, and null -- Everyone -- is a choice here.
+          Builder(builder: (context) {
+            final group = _temporaryPages[pageName]?.menuItem.requiredGroup;
+            return PopupMenuButton<AccessGroup?>(
+              tooltip: group == null
+                  ? 'Published for everyone'
+                  : 'Published for ${group.label}',
+              icon: Icon(
+                group == null ? Icons.lock_open : Icons.lock_outline,
+                size: 18,
+                color: group == null
+                    ? null
+                    : Theme.of(dialogContext).colorScheme.primary,
+              ),
+              itemBuilder: (context) => [
+                PopupMenuItem<AccessGroup?>(
+                  onTap: () =>
+                      _setPageRequiredGroup(pageName, null, dialogSetState),
+                  child: const Text('Everyone'),
+                ),
+                for (final g in AccessGroup.values)
+                  PopupMenuItem<AccessGroup?>(
+                    onTap: () =>
+                        _setPageRequiredGroup(pageName, g, dialogSetState),
+                    child: Text(g.label),
+                  ),
+              ],
+            );
+          }),
           IconButton(
             icon: Icon(
               isDraft ? Icons.visibility_off : Icons.visibility,
