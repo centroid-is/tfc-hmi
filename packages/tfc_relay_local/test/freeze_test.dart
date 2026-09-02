@@ -196,22 +196,29 @@ const int declaredUpstreamAwaitSites = 7;
 ///
 /// The `no_retry_test.dart:182-293` seam shape, scoped to this package.
 ///
-/// **Two, and the second one is the point of the first.**
+/// **Three: one composer, and one per writable protocol.**
 ///
 ///  * `LocalStateMan._crossIntoThePlant` (08-06) — the composer's one crossing,
 ///    which the engage write, every hold tick and the release write all funnel
 ///    through.
-///  * `OpcUaUpstreamLink.write` (08-07) — the adapter's one crossing into the
-///    actual socket.
+///  * `OpcUaUpstreamLink.write` (08-07) — the OPC UA adapter's one crossing
+///    into the actual socket.
+///  * `DeviceClientUpstreamLink.performWrite` (08-10) — the same, for the
+///    `DeviceClient`-backed protocols. **One site for both of them**, because
+///    the Modbus link and the M2400 link share a base and the M2400 never
+///    reaches it: it is `supportsWrites: false` and refuses above this line.
 ///
-/// Two layers, one call site each, and neither may become "one per protocol
-/// with a wrapper around them" — the wrapper is where a retry goes. Anyone
-/// adding a third site trips this pin rather than a code review, which is the
-/// whole reason the number is written down (T-08-22). The **behavioural** half
-/// of the same property is `opcua_fault_test.dart`'s write-during-reconnect
-/// arm: this pin counts call sites, that arm counts what reached the wire
-/// while `ClientWrapper` was re-establishing a session underneath it.
-const int declaredUpstreamWriteSites = 2;
+/// The rule the number enforces is unchanged and is not "three": it is **one
+/// call site per layer per transport**, and no site may become "one per
+/// protocol with a wrapper around them" — the wrapper is where a retry goes.
+/// Anyone adding a fourth site trips this pin rather than a code review, which
+/// is the whole reason the number is written down (T-08-22). The
+/// **behavioural** half of the same property is `opcua_fault_test.dart`'s
+/// write-during-reconnect arm: this pin counts call sites, that arm counts what
+/// reached the wire while `ClientWrapper` was re-establishing a session
+/// underneath it — and `modbus_link_test.dart`'s `writes` list is the same
+/// count on the other transport.
+const int declaredUpstreamWriteSites = 3;
 
 /// The dev-dependency test kit that must never be reachable from `lib/`.
 const String contractKitPackage = 'tfc_stateman_contract';

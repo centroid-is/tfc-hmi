@@ -31,6 +31,7 @@ export 'src/freshness_sweep.dart';
 export 'src/ingest.dart';
 export 'src/key_router.dart';
 export 'src/local_state_man.dart';
+export 'src/modbus_upstream_link.dart';
 export 'src/opcua_upstream_link.dart';
 export 'src/pipe_health.dart';
 export 'src/upstream_link.dart';
