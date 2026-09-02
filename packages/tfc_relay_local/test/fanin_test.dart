@@ -97,14 +97,26 @@ void main() {
       expect(man.read(st101Key)!.quality, Quality.good);
     });
 
-    test('a key the router refuses reads NULL under errorConfig — never a zero',
-        () {
+    test('a key NO MAPPING claims reads NULL under uncertainNotYetKnown — '
+        'never a zero, and never errorConfig either', () {
       final answer = man.read(unmappedKey);
       expect(answer, isNotNull,
-          reason: 'a refused key is a different fact from "nothing has arrived '
-              'yet": the gateway has affirmatively established it cannot serve '
-              'this name, and null would read as the transient case');
-      expect(answer!.quality, Quality.errorConfig);
+          reason: 'a refused key is a different fact from "no answer at all": '
+              'the gateway has an opinion about this name and the caller must '
+              'be able to render it');
+      // **Changed by 08-11, and the contract suite is why.**
+      // `checkUnknownKeyReportsConfigErrorNotThrow` requires a key nothing has
+      // arrived for to be distinguishable from a tag that was deleted, on the
+      // argument that `value_store.dart:35-39` already makes: `errorConfig` is
+      // the one NON-TRANSIENT code, and "labelling that a configuration error
+      // would tell the operator to go fix a page that is fine, and would teach
+      // them that the one non-transient error code heals on its own." A
+      // gateway's keymapping is live-editable, so `unmapped` genuinely heals —
+      // and `RouteRefusal` already draws that line, calling `aliasDisabled`
+      // "deliberately distinguishable from unmapped". The other four refusals
+      // keep `errorConfig`; `reserved_prefix_test.dart` is where one of them
+      // is pinned.
+      expect(answer!.quality, Quality.uncertainNotYetKnown);
       expect(answer.value, isNull,
           reason: 'never zero and never false. On a plant floor a good-quality '
               '0 on a mistyped speed tag is a stopped conveyor, and a '
@@ -121,10 +133,13 @@ void main() {
       expect(answer.value, isNull);
     });
 
-    test('readFresh on a refused key answers errorConfig rather than throwing',
-        () async {
+    test('readFresh on an unmapped key answers a bad-quality value rather than '
+        'throwing', () async {
       final answer = await man.readFresh(unmappedKey);
-      expect(answer.quality, Quality.errorConfig);
+      expect(answer.quality, Quality.uncertainNotYetKnown);
+      expect(answer.quality.isGood, isFalse,
+          reason: 'the code changed in 08-11; what must not change is that a '
+              'key the gateway cannot serve never reads good');
       expect(answer.value, isNull);
     });
 
@@ -140,8 +155,13 @@ void main() {
               'fault belongs');
       expect(answers[st101Key]!.value, 11);
       expect(answers[st101Key]!.quality, Quality.good);
-      expect(answers[st201Key]!.quality, Quality.errorConfig);
-      expect(answers[unmappedKey]!.quality, Quality.errorConfig);
+      expect(answers[st201Key]!.quality, Quality.errorConfig,
+          reason: 'a tag the LINK stopped claiming is still IN the keymapping, '
+              'so the refusal is a mapping pointing at something that is not '
+              'there — go fix the config, not wait a moment');
+      expect(answers[unmappedKey]!.quality, Quality.uncertainNotYetKnown,
+          reason: 'a name the keymapping has never heard of is the transient '
+              'one — see the read case above');
     });
 
     test('one bad key does not fail the batch — the good one still carries its '
@@ -158,11 +178,18 @@ void main() {
     test('keys is the router key set UNION the PIPE keys this instance produces',
         () {
       expect(man.keys, containsAll([st101Key, st201Key]));
-      expect(man.keys, isNot(contains(PipeKeys.connected)));
-
-      // 08-09 produces these; this plan proves the union rule is a union.
-      man.applyUpstreamBatch({PipeKeys.connected: DynamicValue(value: true)});
+      // `PIPE.connected` is produced by THIS instance since 08-11 — the
+      // plant-side half of the pipe-wide bit, true only when every configured
+      // link is up (ruling 9 splits per-client facts from per-plant ones, and
+      // this is a per-plant one). So the union rule is demonstrated with a key
+      // nothing produces instead, which is the stronger arrangement anyway:
+      // the old version seeded the very key it then looked for.
+      const inventedHealthKey = 'PIPE.invented.later';
       expect(man.keys, contains(PipeKeys.connected));
+      expect(man.keys, isNot(contains(inventedHealthKey)));
+
+      man.applyUpstreamBatch({inventedHealthKey: DynamicValue(value: true)});
+      expect(man.keys, contains(inventedHealthKey));
       expect(man.keys, containsAll([st101Key, st201Key]),
           reason: 'a union, not a replacement — cert_health_state_man.dart:'
               '317-320');
@@ -218,14 +245,19 @@ void main() {
     }
 
     // 08-06's three entries — `write`, `writeStatus`, `holdToRun` — came off
-    // this ledger in the commits that closed them, which is the ledger being
-    // self-deleting rather than merely honest. Their behaviour is
-    // `write_test.dart`'s and `hold_test.dart`'s subject now. Four left, all
-    // 08-11's and Phase 10's.
-    owes('browse', '08-11', () => man.browse);
-    owes('timeseries', '08-11', () => man.timeseries);
-    owes('historyViews', '08-11', () => man.historyViews);
-    owes('preferences', '08-11', () => man.preferences);
+    // this ledger in the commits that closed them, and 08-11's `browse` came
+    // off in the commit that landed `local_browse.dart`. That is the ledger
+    // being self-deleting rather than merely honest. Three left, and their
+    // owner is a LATER PHASE: `supportsDataServices: false` on the contract
+    // leg deletes the seven cases behind them, which is not the same as
+    // implementing them, so the ledger says 10-01 rather than saying zero.
+    owes('timeseries', '10-01', () => man.timeseries);
+    owes('historyViews', '10-01', () => man.historyViews);
+    owes('preferences', '10-01', () => man.preferences);
+
+    test('browse is no longer owed — it answers a BrowseApi', () {
+      expect(man.browse, isA<LocalBrowse>());
+    });
   });
 
   _faninGroup();

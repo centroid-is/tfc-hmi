@@ -1,0 +1,137 @@
+/// The fourth contract leg: the same suite, over the gateway's plant side.
+///
+/// Three implementations already pass it — the reference fake, the in-memory
+/// channel and the real WebSocket. This is the fourth and the first with a
+/// plant behind it, which is the moment `LocalStateMan` stops being this
+/// phase's code and becomes an implementation of the interface the whole
+/// project is built around.
+///
+/// The kit was designed for exactly this. `browseFixture` is a parameter
+/// *"because a gateway browsing a real ST101 over OPC UA passes its own"*
+/// (`tfc_stateman_contract.dart`), and `StateManHarness` is declared in the kit
+/// rather than in any implementation so the kit keeps its defining property: it
+/// imports no implementation, and the factory below is the only coupling to
+/// one.
+///
+/// **One fake upstream link.** 08-CONTEXT ruling 8, and the conflicting pair of
+/// freshness checks that forced it, are written out in
+/// `support/harnessed_local_state_man.dart`. The per-alias half of the property
+/// is `link_loss_test.dart`'s (08-09). Both; neither substitutes.
+///
+/// **Why the counts are asserted and not the greenness.** Copied from
+/// `ws_contract_test.dart`, because the argument transfers unchanged: a harness
+/// has one cheap way to look green, and it is to declare a capability false.
+/// So two numbers from two different places — what the umbrella *registered*
+/// under the flags it was given, and what the runner actually *started* — are
+/// both compared against a number the kit computes, never against a literal,
+/// *"because a literal is a number somebody updates to match"*.
+@TestOn('vm')
+@Tags(['contract'])
+library;
+
+import 'package:test/test.dart';
+import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
+
+import 'support/harnessed_local_state_man.dart';
+
+void main() {
+  var ran = 0;
+
+  final before = contractCasesRegistered;
+  group('the whole contract, over LocalStateMan and one fake upstream link',
+      () {
+    setUp(() => ran++);
+    runStateManContract(
+      makeHarnessedLocalStateMan,
+      // The plant link takes writes; the read-only key's link does not, which
+      // is what makes `checkReadOnlyKeyIsRejectedNotThrown` a device-level
+      // refusal rather than a staged one.
+      supportsWrites: true,
+      readOnlyKey: contractReadOnlyKey,
+      supportsBrowse: true,
+      // The gateway's own tree, per the parameter's own doc.
+      browseFixture: gatewayBrowseFixture,
+      // ---------------------------------------------------------------------
+      // FALSE, and the reason belongs at the call site.
+      //
+      // Phase 10 owns timeseries, history views and preferences: there is no
+      // historian and no preference store behind this package, and
+      // `LocalStateMan`'s three getters throw an `UnimplementedError` naming
+      // `10-01` as the plan that owes them. `freeze_test.dart`'s
+      // `declaredUnimplementedMembers` is 3 for that reason and says so.
+      //
+      // `expectUnreachable` is the wrong mechanism here and the kit says why:
+      // it passes a case *only* by failing with exactly JSON-RPC `-32601`.
+      // This implementation is in-process. There is no wire, no envelope and
+      // no error code to produce — `expectUnreachable` would turn seven
+      // honest skips into seven cases failing for a reason that is not true
+      // of this peer. The flag deletes them and the run report says so, which
+      // is the honest description of a gap Phase 10 closes.
+      //
+      // The consequence is arithmetic and is asserted below: this leg
+      // registers `allContractChecks.length` minus the seven data-services
+      // cases, and the gap is pinned BY NAME so a second capability quietly
+      // going false cannot hide inside the same number.
+      supportsDataServices: false,
+      // 08-06 task 3 landed `holdToRun`, so the deadman is real here.
+      supportsHoldToRun: true,
+      // Nothing is declared unreachable: see above.
+      expectUnreachable: const <String>{},
+    );
+  });
+  final registered = contractCasesRegistered - before;
+
+  group('the run itself', () {
+    /// What the flags above entitle this leg to run — computed by the kit from
+    /// the same flags, never written down as a number.
+    final entitled = contractCases(
+      supportsWrites: true,
+      readOnlyKey: contractReadOnlyKey,
+      supportsBrowse: true,
+      supportsDataServices: false,
+      supportsHoldToRun: true,
+    );
+
+    test('every check the flags entitle this leg to ran against LocalStateMan',
+        () {
+      expect(registered, entitled.length,
+          reason: 'the umbrella registered $registered of ${entitled.length} '
+              'checks the declared capabilities entitle this leg to. A '
+              'smaller number does not mean the gateway does less — it means '
+              'a capability was switched off rather than met, and the cases '
+              'behind it are unjudged against the one implementation with a '
+              'plant behind it. Fix the forwarding; do not lower the flag');
+    });
+
+    test('every registered check actually started', () {
+      expect(ran, entitled.length,
+          reason: '$ran of $registered registered cases actually ran. The '
+              'difference is a case registered and then skipped, which the '
+              'registration count cannot see: the report shows a skip reason, '
+              'the suite stays green, and the property is as unjudged as it '
+              'would have been with the capability off');
+    });
+
+    test('the only gap against the full roster is the seven data-services '
+        'cases, named', () {
+      final gap = allContractChecks.keys.toSet().difference(entitled.keys.toSet());
+
+      expect(gap, dataServicesChecks.keys.toSet(),
+          reason: 'this leg is short of the full roster by cases that are not '
+              'the seven Phase 10 owns. That is a second capability gone '
+              'false, hiding inside the first one\'s arithmetic — which is '
+              'exactly what comparing a single count against a single number '
+              'cannot see, and why the gap is pinned by name as well as by '
+              'size');
+      expect(registered + gap.length, allContractChecks.length,
+          reason: 'registered plus the named gap must reconcile to the whole '
+              'roster; if it does not, a check exists that is neither run nor '
+              'accounted for');
+      // ignore: avoid_print
+      print('leg 4 (LocalStateMan): $registered of '
+          '${allContractChecks.length} checks registered and $ran ran; the '
+          '${gap.length} data-services cases are off behind '
+          'supportsDataServices: false, owned by 10-01');
+    });
+  });
+}

@@ -321,6 +321,7 @@ void main() {
       expect(retryShapedWrites(empty), isEmpty);
       expect(unimplementedMemberSites(empty), isEmpty);
       expect(forwarderSites(empty), isEmpty);
+      expect(harnessLeverSites(empty), isEmpty);
       expect(literalPortLines(empty), isEmpty,
           reason: 'pointed at an empty directory a sweep that reports an '
               'occurrence is inventing rather than measuring, and nothing it '
@@ -437,6 +438,20 @@ void main() {
       expect(anonymous, isEmpty,
           reason: 'an UnimplementedError with no plan id in it is a TODO, and '
               'a TODO is a thing nobody owns');
+    });
+
+    test('no lever from the test-only control surface is declared in lib/', () {
+      expect(harnessLeverSites(libSrc), isEmpty,
+          reason: 'a `StateManHarness` lever is declared on a production '
+              'class. Those six members exist to make a value appear or a link '
+              'fall over, and on a class a connected session can reach they '
+              'are an unauthenticated write path into every operator\'s '
+              'screen: setValue on a speed tag is a stopped conveyor reading '
+              'as running, minted by the gateway itself and indistinguishable '
+              'from a real sample (T-08-42). They belong on the test-only '
+              'wrapper in test/support/, and 08-11 added this sweep because '
+              'the shortest path to a green contract leg is to put them here '
+              'and nothing else was watching');
     });
 
     test('no file under lib/ forwards with noSuchMethod', () {
@@ -621,6 +636,47 @@ List<String> unimplementedMemberSites(Directory directory) {
       final line = lines[i];
       if (_isAnyComment(line)) continue;
       if (!line.contains('UnimplementedError(')) continue;
+      sites.add('${file.path}:${i + 1}: ${line.trim()}');
+    }
+  }
+  return sites;
+}
+
+/// The six `StateManHarness` levers, as they would be spelled in a class body.
+///
+/// **Six and not nine.** `staleAfter`, `roundTrips` and `statusNotifications`
+/// are the surface's three *observables*, and two of them are already
+/// legitimate members of `LocalStateMan` — `staleAfter` is the deadline this
+/// source declares and `statusNotifications` is 08-09's binding, forwarded by
+/// the harness rather than invented by it. Reading a count is not a way to move
+/// a plant. The six below are.
+const List<String> harnessLevers = <String>[
+  'setValue',
+  'setValues',
+  'setQuality',
+  'dropKey',
+  'disconnectUpstream',
+  'reconnectUpstream',
+];
+
+/// Every non-comment line under [directory] declaring one of [harnessLevers].
+///
+/// Matches a **declaration**, not a call: `lib/` may perfectly well call
+/// something named `setValue` on a client it wraps, and forbidding the word
+/// would be a sweep nobody could keep green. What must not exist is a member
+/// with one of these names on a class a session can reach.
+List<String> harnessLeverSites(Directory directory) {
+  final declaration = RegExp(
+      r'^\s*(?:@override\s+)?(?:void|Future<void>|set)\s+(' +
+          harnessLevers.join('|') +
+          r')\s*[(=]');
+  final sites = <String>[];
+  for (final file in dartFilesIn(directory)) {
+    final lines = file.readAsLinesSync();
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      if (_isAnyComment(line)) continue;
+      if (!declaration.hasMatch(line)) continue;
       sites.add('${file.path}:${i + 1}: ${line.trim()}');
     }
   }
