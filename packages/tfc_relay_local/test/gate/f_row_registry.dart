@@ -267,11 +267,6 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     owner: '09-03',
     clause: 'gateway memory and the upstream create-delta flat across 200 kill cycles, with the twenty-session control arm',
   ),
-  'F24': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '09-02',
-    clause: 'no stale-handle read ever answers, affected keys bad-quality until re-browse completes, other PLCs unaffected',
-  ),
   'F25': Outstanding(
     kind: OutstandingKind.missing,
     owner: '09-04',
@@ -286,11 +281,6 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     kind: OutstandingKind.missing,
     owner: '09-06',
     clause: 'fifty keys on four aliases degrade with exactly one status notification and bounded log growth; five panels, one absent throughout, converge on identical values and qualities',
-  ),
-  'F28': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '09-02',
-    clause: 'one poisoned batch end to end: the frame encodes, poisoned keys carry badNonFinite/uncertainEncoding, every other key keeps flowing, the session stays up',
   ),
 };
 

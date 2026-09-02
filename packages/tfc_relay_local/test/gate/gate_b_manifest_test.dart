@@ -248,7 +248,17 @@ const _notAGateCase = <String, String>{
 /// each exempted name to gate no row *under the grammar*, so the day somebody
 /// renumbers a probe into a row this file says so, instead of the row count
 /// quietly going up by an arm.
-const _supportingCases = <String, String>{};
+const _supportingCases = <String, String>{
+  'the gate-B pipe probe (supporting case, gates no row)':
+      'the fixture\'s non-vacuity probe (09-02 task 1): it proves the pipe '
+          'every row stands on is not a mirage — two panels reach ready, a '
+          'value set on a link arrives at both with its real payload and '
+          'quality, the plant driver\'s sweep count advances, and the socket '
+          'count settles back to the case\'s own baseline after an ordered '
+          'teardown. It injects no fault and asserts no catalogue clause, so '
+          'numbering it would report the catalogue as covering a scenario it '
+          'does not — the exact inflation the row grammar exists to prevent',
+};
 
 void main() {
   final directory = Directory(_gateDir);
