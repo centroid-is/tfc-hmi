@@ -71,6 +71,18 @@ Examples
     # just the seven OPC UA clients, or just one of them
     python3 tools/hmi_profiler.py cpu --isolate _isolateEntryPoint
     python3 tools/hmi_profiler.py cpu --isolate '#4'
+
+Running *this* copy against a station without touching its image
+    The sidecar is a stock python3 plus this one file, so the file can come
+    down the pipe instead of out of the image. Nothing is written anywhere:
+
+        ssh centroid@<station> 'cd ~/sildarvinnsla && docker compose run \\
+            --no-deps --rm -T --entrypoint python3 profiler - cpu \\
+            --isolate all --seconds 30' < tools/hmi_profiler.py
+
+    `--no-deps` is not optional. Without it compose recreates the `flutter`
+    service this container depends on, and a live plant screen goes black.
+    `-T` keeps stdin attached with no TTY, which is what `python3 -` needs.
 """
 
 from __future__ import annotations
