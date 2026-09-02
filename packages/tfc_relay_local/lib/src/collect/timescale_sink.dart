@@ -187,6 +187,14 @@ final class TimescaleSink implements TimeseriesSink {
   /// Rows lost at the seam itself (a table name the layer below refuses).
   int _sinkDropped = 0;
 
+  /// What the wrapped `Database` still held — queued, dropped or poisoned —
+  /// at the moment [close] let go of it (IN-01). Its stats vanish with it,
+  /// and without this capture a post-close [stats] read would report every
+  /// row ever handed over as written, including the ones the final flush
+  /// could not push. "A lost row is a counted row" has to survive shutdown,
+  /// because shutdown is exactly when a post-mortem reads these numbers.
+  int _lostAtClose = 0;
+
   String? _lastError;
 
   /// What has been ensured, so a repeat with the same retention issues
@@ -393,7 +401,13 @@ final class TimescaleSink implements TimeseriesSink {
 
   @override
   Future<void> insert(String table, DateTime time, Object? value) async {
-    if (!config.enabled || _closed) return;
+    if (!config.enabled) return;
+    if (_closed) {
+      // IN-01: a straggler handed to a closed sink is a lost row, and a
+      // lost row is a counted row — never a silent return.
+      _sinkDropped++;
+      return;
+    }
     final db = _db;
     if (db == null) {
       if (_lockRefused) {
@@ -489,6 +503,18 @@ final class TimescaleSink implements TimeseriesSink {
           _recordFailure('close', error);
         }
       }
+      // IN-01: whatever the flush could not push (or the guard above kept
+      // back) is about to be discarded by db.close() with its counters —
+      // fold it into this adapter's own drop count while the numbers can
+      // still be read.
+      try {
+        final dbStats = db.getStats();
+        _lostAtClose = ((dbStats['queued_rows'] as int?) ?? 0) +
+            ((dbStats['dropped_rows'] as int?) ?? 0) +
+            ((dbStats['poisoned_rows'] as int?) ?? 0);
+      } catch (error) {
+        _recordFailure('close', error);
+      }
       try {
         await db.close();
       } catch (error) {
@@ -513,10 +539,10 @@ final class TimescaleSink implements TimeseriesSink {
     final dbQueued = (dbStats?['queued_rows'] as int?) ?? 0;
     final dbDropped = ((dbStats?['dropped_rows'] as int?) ?? 0) +
         ((dbStats?['poisoned_rows'] as int?) ?? 0);
-    final written = _handedOver - dbQueued - dbDropped;
+    final written = _handedOver - dbQueued - dbDropped - _lostAtClose;
     return SinkStats(
       rowsWritten: written < 0 ? 0 : written,
-      rowsDropped: dbDropped + _preDropped + _sinkDropped,
+      rowsDropped: dbDropped + _preDropped + _sinkDropped + _lostAtClose,
       rowsQueued: dbQueued + _preBuffer.length,
       lastError: _lastError,
     );

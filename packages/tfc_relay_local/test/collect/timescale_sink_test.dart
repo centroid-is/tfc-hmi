@@ -368,6 +368,42 @@ void main() {
           budget: const Duration(seconds: 5));
     });
 
+    test('rows the final flush could not push are counted losses, and '
+        'post-close stats do not report them as written (IN-01)', () async {
+      final backend = FakeWriteBackend();
+      final sink = TimescaleSink(
+        enabledConfig(),
+        backendFactory: (_) async => Database(backend),
+        sleep: shortSleep,
+      );
+      await sink.start();
+      await within(sink.connected.firstWhere((up) => up),
+          'the sink coming up over an accepting backend',
+          budget: const Duration(seconds: 5));
+
+      backend.down = true;
+      for (var i = 1; i <= 3; i++) {
+        await sink.insert('gw_t', DateTime.utc(2026, 1, i), i.toDouble());
+      }
+      await within(sink.close(), 'close() completing over a down backend',
+          budget: const Duration(seconds: 5));
+
+      expect(backend.stored, isEmpty,
+          reason: 'nothing reached the backend — the fixture is the loss '
+              'case, or this asserts nothing');
+      expect(sink.stats.rowsWritten, 0,
+          reason: 'every row ever handed over reported as written — '
+              'including the three just discarded by db.close() — is the '
+              'lie an incident post-mortem would read (IN-01)');
+      expect(sink.stats.rowsDropped, 3,
+          reason: 'a lost row is a counted row, wherever it was lost — '
+              'including at the moment of shutdown');
+
+      // A straggler after close is a lost row too, not a silent return.
+      await sink.insert('gw_t', DateTime.utc(2026, 2, 1), 4.0);
+      expect(sink.stats.rowsDropped, 4);
+    });
+
     test('ensureTable is idempotent — the second identical call issues '
         'nothing new', () async {
       final backend = FakeWriteBackend();
