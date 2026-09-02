@@ -341,6 +341,44 @@ void main() {
           reason: 'redaction is not muteness: the failure class survives, '
               'so an operator can still tell a refusal from a timeout');
     });
+
+    test('a five-character token in a socket message is not laundered into '
+        'a SQLSTATE (IN-04)', () async {
+      final sink = TimescaleSink(
+        enabledConfig(),
+        backendFactory: (_) async =>
+            throw Exception('SocketException: connect failed, port = 42840'),
+        sleep: shortSleep,
+      );
+      addTearDown(sink.close);
+      await sink.start();
+      await eventually(() => sink.stats.lastError != null,
+          'a connect failure surfacing in lastError');
+      expect(sink.stats.lastError, isNot(contains('SQLSTATE')),
+          reason: 'a port number matched by shape alone would be served as '
+              '"SQLSTATE 42840" — the pattern must not claim standard-fixed '
+              'provenance for a token it did not verify (IN-04)');
+    });
+
+    test('a genuine driver SQLSTATE survives, anchored to the driver\'s own '
+        'message shape', () async {
+      final sink = TimescaleSink(
+        enabledConfig(),
+        // ServerException.toString() is '\$severity \$code: \$message'
+        // (postgres exceptions.dart:160); this is that shape, as it also
+        // survives an isolate hop as a plain string.
+        backendFactory: (_) async =>
+            throw Exception('Severity.error 22003: value out of range'),
+        sleep: shortSleep,
+      );
+      addTearDown(sink.close);
+      await sink.start();
+      await eventually(() => sink.stats.lastError != null,
+          'a connect failure surfacing in lastError');
+      expect(sink.stats.lastError, contains('SQLSTATE 22003'),
+          reason: 'anchoring must not cost the one detail the redaction '
+              'deliberately keeps: the standard-fixed failure code');
+    });
   });
 
   group('shutdown and idempotence', () {

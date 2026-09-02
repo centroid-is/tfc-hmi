@@ -643,9 +643,18 @@ final class TimescaleSink implements TimeseriesSink {
       return;
     }
     final type = error.runtimeType.toString();
-    final sqlState = RegExp(r'\b(08|22|23|28|3D|42|53|57)[0-9A-Z]{3}\b')
-        .firstMatch(error.toString())
-        ?.group(0);
+    // The code is taken typed when the driver's exception arrives intact,
+    // and otherwise only from the driver's own message shape —
+    // `ServerException.toString()` is '$severity $code: $message'
+    // (postgres exceptions.dart:160), which is also how the code survives
+    // an isolate hop as a string. A bare five-character token elsewhere in
+    // a message (a port, a pid) must not be laundered into a claim of
+    // standard-fixed provenance (IN-04).
+    final sqlState = error is pg.ServerException
+        ? error.code
+        : RegExp(r'Severity\.\w+\s+((?:08|22|23|28|3D|42|53|57)[0-9A-Z]{3}):')
+            .firstMatch(error.toString())
+            ?.group(1);
     final detail = sqlState == null ? type : '$type, SQLSTATE $sqlState';
     _lastError = 'collect: $phase failed: $detail (details withheld: raw '
         'driver errors can name the host, database and user)';
