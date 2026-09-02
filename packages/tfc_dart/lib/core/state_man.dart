@@ -2576,15 +2576,35 @@ class StateMan {
         // BadDeviceFailure) or simply stayed silent. "Timed out" alone does
         // not distinguish those, and they have different causes.
         await firstEmission.future.timeout(
-          const Duration(seconds: 5),
+          const Duration(seconds: 8),
           onTimeout: () {
+            // Two very different things end up here, because `firstEmission`
+            // only completes on a *value*: a server that stayed silent, and
+            // one that answered with an error. They need opposite responses.
             final last = _subscriptions[key]?._lastRawError;
-            throw TimeoutException(
-                'no first value for "$key" within 5s '
-                '(last raw stream error: ${last ?? "none -- server silent"})');
+            if (last != null) {
+              // The server gave a hard answer (BadNodeIdUnknown,
+              // BadDeviceFailure, ...). That is a subscription which will not
+              // start working on its own, so it is worth tearing down and
+              // rebuilding -- on the backoff ladder, which walks a key that
+              // keeps failing out to one attempt per 10 minutes.
+              throw TimeoutException(
+                  'no first value for "$key" within 8s '
+                  '(raw stream error: $last)');
+            }
+            // Silence is NOT a dead subscription. Do not throw/re-subscribe:
+            // re-subscribing cancels + recreates the monitored items, and
+            // doing that across hundreds of keys under the startup flood
+            // churns the worker/server and STARVES the heavily-loaded servers
+            // (lines 1/3) so their initial values never settle. Keep the
+            // existing subscription -- the value arrives on the stream once
+            // the flood clears, and the key comes online then.
+            logger.w('[$srv] $key: no first value within 8s '
+                '(server silent, no stream error); '
+                'keeping subscription, awaiting value');
           },
         );
-        logger.i('[$alias] Subscribed $key (replaced previous: $hadPrevious)');
+        logger.i('[$srv] Subscribed $key (replaced previous: $hadPrevious)');
 
         return ads.stream;
       } catch (e) {
@@ -2612,7 +2632,7 @@ class StateMan {
 /// Backoff ladder for a key whose subscribe keeps failing: 1s, then 10s, then
 /// 60s, then 600s for as long as it keeps failing.
 ///
-/// A flat retry interval is what froze the HMI. Each attempt costs a 5s
+/// A flat retry interval is what froze the HMI. Each attempt costs an 8s
 /// first-value timeout, four fresh monitored items on the server, a
 /// fire-and-forget delete and several log lines -- and nothing ever gave up.
 /// One run measured 13,013 subscribe attempts against 122 successes, with a
