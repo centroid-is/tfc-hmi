@@ -97,6 +97,15 @@ create_alarm returns the alarm `uid`, and alarm beacon assets bind BY uid:
 create the alarm first, then the asset. Replacing an alarm means replacing
 its asset as a pair.
 
+## Looking at the screen
+
+screenshot_window returns a PNG of the HMI window as the operator sees it --
+live theme, fonts, painters and values. render_page does the same for any
+page from list_pages, rendered offscreen without disturbing the operator.
+Look before you judge a layout; reconstructing a page from its config is
+guesswork. Both only exist when the server is hosted inside the app, and both
+cap the image at ~2 MB of base64, re-rendering smaller if it would not fit.
+
 ## Transport and limits
 
 Streamable HTTP at http://127.0.0.1:8765/mcp. initialize ->

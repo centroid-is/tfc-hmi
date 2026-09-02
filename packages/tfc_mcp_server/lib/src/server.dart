@@ -10,6 +10,7 @@ import 'interfaces/alarm_reader.dart';
 import 'interfaces/drawing_index.dart';
 import 'interfaces/plc_code_index.dart';
 import 'interfaces/node_browser.dart';
+import 'interfaces/screen_capturer.dart';
 import 'interfaces/state_reader.dart';
 import 'interfaces/tech_doc_index.dart';
 import 'logging/stderr_logger.dart';
@@ -50,6 +51,7 @@ import 'tools/page_write_tools.dart';
 import 'tools/ping_tool.dart';
 import 'tools/proposal_feedback_tools.dart';
 import 'tools/browse_tools.dart';
+import 'tools/screenshot_tools.dart';
 import 'tools/tag_tools.dart';
 import 'tools/tool_registry.dart';
 import 'tools/tool_toggles.dart';
@@ -79,6 +81,10 @@ class TfcMcpServer {
     /// Live address-space browsing. Null in standalone/database-only mode,
     /// where there is no PLC session to browse.
     NodeBrowser? nodeBrowser,
+
+    /// Renders the running UI to a PNG. Null in standalone/database-only
+    /// mode, where there is no window and nothing to photograph.
+    ScreenCapturer? screenCapturer,
     McpToolToggles toggles = McpToolToggles.allEnabled,
     McpServer? mcpServer,
     log.Logger? logger,
@@ -189,6 +195,12 @@ class TfcMcpServer {
     }
     if (toggles.techDocsEnabled && techDocService != null) {
       registerTechDocTools(registry, techDocService);
+    }
+    // Only when something can actually draw. A standalone server has no
+    // window, and a tool that always answers "no window" is worse than a
+    // tool that is honestly absent from tools/list.
+    if (toggles.screenshotsEnabled && screenCapturer != null) {
+      registerScreenshotTools(registry, screenCapturer);
     }
 
     // ── Composite diagnostic tool ────────────────────────────────────────

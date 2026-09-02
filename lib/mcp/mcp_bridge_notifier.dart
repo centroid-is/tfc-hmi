@@ -17,6 +17,7 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         TechDocIndex,
         McpToolToggles,
         NodeBrowser,
+        ScreenCapturer,
         ProposalFeedbackBus;
 
 import '../llm/llm_models.dart';
@@ -233,6 +234,7 @@ class McpBridgeNotifier extends ChangeNotifier {
     DrawingIndex? drawingIndex,
     PlcCodeIndex? plcCodeIndex,
     TechDocIndex? techDocIndex,
+    ScreenCapturer? screenCapturer,
     McpToolToggles? toggles,
   }) async {
     // Guard: skip if an in-process client is already active or connecting.
@@ -271,6 +273,7 @@ class McpBridgeNotifier extends ChangeNotifier {
         drawingIndex: drawingIndex,
         plcCodeIndex: plcCodeIndex,
         techDocIndex: techDocIndex,
+        screenCapturer: screenCapturer,
         toggles: toggles ?? McpToolToggles.allEnabled,
         onProposal: _onProposal,
         feedbackBus: feedbackBus,
@@ -582,6 +585,7 @@ class McpBridgeNotifier extends ChangeNotifier {
     PlcCodeIndex? plcCodeIndex,
     TechDocIndex? techDocIndex,
     NodeBrowser? nodeBrowser,
+    ScreenCapturer? screenCapturer,
   }) async {
     if (_sseServer.isRunning) return;
 
@@ -598,6 +602,7 @@ class McpBridgeNotifier extends ChangeNotifier {
         plcCodeIndex: plcCodeIndex,
         techDocIndex: techDocIndex,
         nodeBrowser: nodeBrowser,
+        screenCapturer: screenCapturer,
         onProposal: _onProposal,
         feedbackBus: feedbackBus,
       );

@@ -17,12 +17,15 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
 
 import '../core/feature_flags.dart';
 import '../mcp/alarm_man_alarm_reader.dart';
+import '../mcp/app_screen_capturer.dart';
 import '../mcp/mcp_lifecycle_state.dart';
 import '../mcp/mcp_bridge_notifier.dart';
 import '../mcp/state_man_node_browser.dart';
 import '../mcp/state_man_state_reader.dart';
+import '../pages/page_view.dart' show PlantPageView;
 import 'alarm.dart';
 import 'database.dart' show databaseProvider;
+import 'page_manager.dart' show pageManagerProvider;
 import 'plc.dart' show plcCodeIndexProvider;
 import 'preferences.dart' show localPreferencesProvider, preferencesProvider;
 import 'proposal.dart' show describeProposalFeedback;
@@ -223,6 +226,16 @@ Future<void> _startServer(McpBridgeNotifier bridge, int port,
 
   final config = await ref.read(mcpConfigProvider.future);
 
+  // What the operator is looking at, and what any configured page would look
+  // like, as PNGs. Page keys are read live on every call so a page accepted
+  // from a proposal is renderable without restarting the app.
+  final screenCapturer = AppScreenCapturer(
+    pageKeys: () =>
+        ref.read(pageManagerProvider).valueOrNull?.pages.keys.toList() ??
+        const <String>[],
+    buildPage: (pageKey) => PlantPageView(pageName: pageKey),
+  );
+
   await bridge.startSseServer(
     port,
     stateReader: stateReader,
@@ -234,6 +247,7 @@ Future<void> _startServer(McpBridgeNotifier bridge, int port,
     drawingIndex: DriftDrawingIndex(database),
     plcCodeIndex: ref.read(plcCodeIndexProvider),
     techDocIndex: DriftTechDocIndex(database),
+    screenCapturer: screenCapturer,
   );
 }
 

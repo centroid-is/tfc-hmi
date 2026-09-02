@@ -47,6 +47,7 @@ import 'package:tfc/chat/chat_overlay.dart';
 import 'package:tfc/chat/elicitation_dialog.dart';
 import 'package:tfc/drawings/drawing_overlay.dart';
 import 'package:tfc/providers/chat.dart';
+import 'package:tfc/mcp/app_capture.dart';
 import 'package:tfc/providers/mcp_bridge.dart';
 import 'package:tfc/providers/navigator_key.dart';
 import 'package:tfc/providers/page_manager.dart';
@@ -713,95 +714,103 @@ class MyApp extends ConsumerWidget {
       routeInformationParser: BeamerParser(),
       routeInformationProvider: routeInformationProvider,
       builder: (context, navigatorChild) {
-        return Consumer(
-          builder: (context, ref, _) {
-            final drawingVisible = kKnowledgeEnabled && ref.watch(drawingVisibleProvider);
-            final chatVisible = kChatEnabled && ref.watch(chatVisibleProvider);
-            // Use select() to only rebuild when the SSE server running
-            // state or port changes, NOT on every McpBridgeNotifier
-            // notification (tool list updates, connection state
-            // transitions, etc.).
-            final mcpRunning = ref.watch(mcpBridgeProvider.select(
-              (b) => b.isRunning,
-            ));
-            final mcpPort = ref.watch(mcpBridgeProvider.select(
-              (b) => b.currentState.port,
-            ));
-            final chatEnabled = kChatEnabled && (ref.watch(mcpChatEnabledProvider).valueOrNull ?? false);
+        // Everything the operator sees, under one RepaintBoundary, so the
+        // MCP `screenshot_window` tool can photograph it -- and with a slot
+        // beside it where `render_page` draws a page offscreen. Here rather
+        // than lower down because this is the highest point that still has
+        // the theme, and the lowest that still has the overlays (proposal
+        // banner, chat) which are part of the picture.
+        return AppCaptureScope(
+          child: Consumer(
+            builder: (context, ref, _) {
+              final drawingVisible = kKnowledgeEnabled && ref.watch(drawingVisibleProvider);
+              final chatVisible = kChatEnabled && ref.watch(chatVisibleProvider);
+              // Use select() to only rebuild when the SSE server running
+              // state or port changes, NOT on every McpBridgeNotifier
+              // notification (tool list updates, connection state
+              // transitions, etc.).
+              final mcpRunning = ref.watch(mcpBridgeProvider.select(
+                (b) => b.isRunning,
+              ));
+              final mcpPort = ref.watch(mcpBridgeProvider.select(
+                (b) => b.currentState.port,
+              ));
+              final chatEnabled = kChatEnabled && (ref.watch(mcpChatEnabledProvider).valueOrNull ?? false);
 
-            return Stack(
-              children: [
-                navigatorChild!, // existing HMI content
-                const ProposalBanner(),
-                if (kKnowledgeEnabled && drawingVisible) const DrawingOverlay(),
-                if (kChatEnabled && chatEnabled && chatVisible) const ChatOverlay(),
-                // Chat FAB and MCP indicator — hidden when a nav
-                // dropdown popup is open so the FAB does not render
-                // on top of the menu (the FAB lives above the
-                // Navigator's Overlay in the widget tree).
-                ValueListenableBuilder<bool>(
-                  valueListenable: NavDropdown.isAnyMenuOpen,
-                  builder: (context, navMenuOpen, _) {
-                    return Stack(
-                      children: [
-                        // Chat FAB (when chat enabled but overlay closed)
-                        if (kChatEnabled && chatEnabled && !chatVisible && !navMenuOpen)
-                          Positioned(
-                            bottom: 90,
-                            right: 16,
-                            child: FloatingActionButton(
-                              key: const ValueKey<String>('chat-fab'),
-                              onPressed: () => ref.read(chatVisibleProvider.notifier).state = true,
-                              // tooltip removed: MaterialApp.builder is above
-                              // Navigator's Overlay, so Tooltip crashes with
-                              // "No Overlay widget found".
-                              tooltip: null,
-                              // heroTag disabled: Hero requires a Navigator
-                              // ancestor, but this FAB is above the Navigator
-                              // in the widget tree (MaterialApp.builder Stack).
-                              heroTag: null,
-                              child: const Icon(Icons.chat),
-                            ),
-                          ),
-                        // MCP server status indicator (debug only). Under the
-                        // logo, top right: at the bottom it sat on the last nav
-                        // destination below ~1100 px wide, and just above the
-                        // bar it covered whatever a page keeps in its bottom
-                        // right corner (the key repository's Export button).
-                        if (kDebugMode && mcpRunning && !navMenuOpen)
-                          Positioned(
-                            top: 58,
-                            right: 8,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: Colors.green.withValues(alpha: 0.9),
-                                borderRadius: BorderRadius.circular(12),
+              return Stack(
+                children: [
+                  navigatorChild!, // existing HMI content
+                  const ProposalBanner(),
+                  if (kKnowledgeEnabled && drawingVisible) const DrawingOverlay(),
+                  if (kChatEnabled && chatEnabled && chatVisible) const ChatOverlay(),
+                  // Chat FAB and MCP indicator — hidden when a nav
+                  // dropdown popup is open so the FAB does not render
+                  // on top of the menu (the FAB lives above the
+                  // Navigator's Overlay in the widget tree).
+                  ValueListenableBuilder<bool>(
+                    valueListenable: NavDropdown.isAnyMenuOpen,
+                    builder: (context, navMenuOpen, _) {
+                      return Stack(
+                        children: [
+                          // Chat FAB (when chat enabled but overlay closed)
+                          if (kChatEnabled && chatEnabled && !chatVisible && !navMenuOpen)
+                            Positioned(
+                              bottom: 90,
+                              right: 16,
+                              child: FloatingActionButton(
+                                key: const ValueKey<String>('chat-fab'),
+                                onPressed: () => ref.read(chatVisibleProvider.notifier).state = true,
+                                // tooltip removed: MaterialApp.builder is above
+                                // Navigator's Overlay, so Tooltip crashes with
+                                // "No Overlay widget found".
+                                tooltip: null,
+                                // heroTag disabled: Hero requires a Navigator
+                                // ancestor, but this FAB is above the Navigator
+                                // in the widget tree (MaterialApp.builder Stack).
+                                heroTag: null,
+                                child: const Icon(Icons.chat),
                               ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(Icons.hub, color: Colors.white, size: 14),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    'MCP :${mcpPort ?? '?'}',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w500,
+                            ),
+                          // MCP server status indicator (debug only). Under the
+                          // logo, top right: at the bottom it sat on the last nav
+                          // destination below ~1100 px wide, and just above the
+                          // bar it covered whatever a page keeps in its bottom
+                          // right corner (the key repository's Export button).
+                          if (kDebugMode && mcpRunning && !navMenuOpen)
+                            Positioned(
+                              top: 58,
+                              right: 8,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.green.withValues(alpha: 0.9),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(Icons.hub, color: Colors.white, size: 14),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      'MCP :${mcpPort ?? '?'}',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w500,
+                                      ),
                                     ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             ),
-                          ),
-                      ],
-                    );
-                  },
-                ),
-              ],
-            );
-          },
+                        ],
+                      );
+                    },
+                  ),
+                ],
+              );
+            },
+          ),
         );
       },
     );
