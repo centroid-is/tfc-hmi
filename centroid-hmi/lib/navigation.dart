@@ -8,6 +8,8 @@ import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import 'package:tfc/core/feature_flags.dart';
+
+export 'package:tfc/core/startup_url.dart' show resolveStartupPath;
 import 'package:tfc/models/menu_item.dart';
 import 'package:tfc/routes.dart';
 
@@ -99,19 +101,6 @@ List<MenuItem> buildTopLevelMenuItems({
 /// or unpublished since the operator picked it must not strand the app on
 /// "not found" at boot. Everything else falls back to `/`, which always
 /// routes — Home, or the RouteRedirect stub standing in for a deleted Home.
-String resolveStartupPath(String stored, {required List<MenuItem> menuItems}) {
-  if (stored == '/') return '/';
-  return _menuHasRoutablePath(menuItems, stored) ? stored : '/';
-}
-
-bool _menuHasRoutablePath(List<MenuItem> items, String path) {
-  for (final item in items) {
-    if (item.path == path && !item.isNavigationSection) return true;
-    if (_menuHasRoutablePath(item.children, path)) return true;
-  }
-  return false;
-}
-
 /// Depth-first first path in [items] — where `/` and refused pages fall back
 /// to when the Home page itself is gone. Null when no page is reachable at
 /// all.

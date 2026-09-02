@@ -1,5 +1,7 @@
 import 'package:tfc_dart/core/preferences.dart';
 
+import '../models/menu_item.dart';
+
 /// SharedPreferences key holding the URL the app opens on at startup. Local
 /// to the machine on purpose — stations sharing one database front different
 /// equipment, so each picks its own startup page (in the page editor's Pages
@@ -52,4 +54,24 @@ Future<void> migrateStartupUrlToDeviceLocal({
   if (localValue != null) {
     await local.setString(startupUrlPrefsKey, localValue);
   }
+}
+
+/// The startup URL the app should actually open — [stored] when the menu can
+/// still route it, [startupUrlDefault] otherwise.
+///
+/// One validation for both users of the answer: boot (`main.dart`) and the
+/// sign-out return (`BaseScaffold`). A startup page deleted or unpublished
+/// since it was picked must fall back identically in both places, or signing
+/// out would land somewhere booting does not.
+String resolveStartupPath(String stored, {required List<MenuItem> menuItems}) {
+  if (stored == startupUrlDefault) return startupUrlDefault;
+  return _menuHasRoutablePath(menuItems, stored) ? stored : startupUrlDefault;
+}
+
+bool _menuHasRoutablePath(List<MenuItem> items, String path) {
+  for (final item in items) {
+    if (item.path == path && !item.isNavigationSection) return true;
+    if (_menuHasRoutablePath(item.children, path)) return true;
+  }
+  return false;
 }

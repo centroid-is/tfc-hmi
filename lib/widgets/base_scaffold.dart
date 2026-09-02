@@ -14,12 +14,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'nav_dropdown.dart';
 import 'access_denied_prompt.dart';
 import 'access_status_action.dart';
+import '../core/startup_url.dart';
 import '../models/menu_item.dart';
+import '../providers/preferences.dart';
 import '../route_registry.dart';
 import '../providers/access.dart';
 import '../providers/theme.dart';
 import '../providers/alarm.dart';
 import '../providers/nav_alarm.dart';
+import 'package:tfc_access/tfc_access.dart' show AccessSession;
 import 'package:tfc_dart/core/alarm.dart';
 import 'alarm.dart';
 import 'nav_alarm_badge.dart';
@@ -286,8 +289,43 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
         });
   }
 
+  /// Beams back to the station's startup page — the sign-out return.
+  ///
+  /// An anonymous session must not be left staring at a raised page it
+  /// cannot reach from its own menu; the kiosk answer is the boot answer,
+  /// resolved by the same [resolveStartupPath] validation `main.dart` runs,
+  /// so a startup page deleted since it was picked falls back to `/` here
+  /// exactly as it does at boot.
+  ///
+  /// Reading the device-local store is an await; the scaffold can unmount
+  /// (this very beam unmounts it) and the session can re-elevate during it,
+  /// so both are re-checked after.
+  Future<void> _returnToStartupPage() async {
+    final stored = await readStartupUrl(ref.read(localPreferencesProvider));
+    if (!mounted) return;
+    if (ref.read(accessSessionProvider).valueOrNull?.isElevated ?? false) {
+      return;
+    }
+    final target =
+        resolveStartupPath(stored, menuItems: RouteRegistry().menuItems);
+    final beamer = Beamer.of(context);
+    if (beamer.configuration.uri.path == target) return;
+    beamer.beamToNamed(target);
+  }
+
   @override
   Widget build(BuildContext context) {
+    // The sign-out return, and the inactivity expiry's too: both paths end at
+    // the same elevated-to-anonymous transition, so one listener covers the
+    // app-bar button and the timer alike. Registered in build — riverpod
+    // re-registers it per rebuild and removes it on unmount.
+    ref.listen<AsyncValue<AccessSession>>(accessSessionProvider,
+        (previous, next) {
+      final wasElevated = previous?.valueOrNull?.isElevated ?? false;
+      final isElevated = next.valueOrNull?.isElevated ?? false;
+      if (wasElevated && !isElevated) unawaited(_returnToStartupPage());
+    });
+
     // Retrieve the provider (if any)
     final globalLeftProvider = _tryGetGlobalAppBarLeftWidgetProvider(context);
 
