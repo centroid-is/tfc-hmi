@@ -236,8 +236,16 @@ final class CollectionRunner {
           if (row == null) {
             // A good-band sample none of whose members resolve is a real
             // sample lost to configuration: counted. A placeholder or
-            // degraded value that resolves nothing lost no row.
-            if (value.quality.band == 0) _countSkip();
+            // degraded value that resolves nothing lost no row — but it IS
+            // the plant no longer confirming this key, so the held value
+            // must degrade with it (CR-01): every consumer of `latest`
+            // re-checks the band, and a raw unextracted struct held here
+            // can never be inserted, only decline a tick or a gate-open.
+            if (value.quality.band == 0) {
+              _countSkip();
+            } else {
+              latest = value;
+            }
             return;
           }
           sample = row;
@@ -251,6 +259,14 @@ final class CollectionRunner {
 
         if (sample.quality.band != 0) {
           _countSkip();
+          // The held value must track the key's CURRENT state (CR-01):
+          // change mode judges the band at arrival time, and letting a
+          // pre-degradation `latest` survive here means the gate-open hook
+          // — whose variables are OTHER keys that can repaint good first —
+          // inserts a band-0 reading at now() for a key that is currently
+          // dark. Interval mode already holds the current truth by updating
+          // unconditionally above; this is the same rule on this branch.
+          latest = sample;
           return;
         }
         if (gate != null && !gate.isOpen) {

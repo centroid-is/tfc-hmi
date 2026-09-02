@@ -17,6 +17,8 @@ library;
 import 'dart:async';
 
 import 'package:test/test.dart';
+import 'package:tfc_dart/core/boolean_expression.dart'
+    show Expression, ExpressionConfig;
 import 'package:tfc_dart/core/collector.dart' show CollectEntry;
 import 'package:tfc_dart/core/state_man.dart' show KeyMappingEntry, KeyMappings;
 import 'package:tfc_dart/tfc_dart.dart' show RetentionPolicy;
@@ -44,6 +46,7 @@ KeyMappingEntry collectedEntry(
   String? name,
   Duration? interval,
   List<String>? members,
+  ExpressionConfig? expression,
   RetentionPolicy? retention,
 }) =>
     KeyMappingEntry(
@@ -54,15 +57,25 @@ KeyMappingEntry collectedEntry(
               name: name,
               sampleInterval: interval,
               sampleMembers: members,
+              sampleExpression: expression,
             )
           : CollectEntry(
               key: key,
               name: name,
               sampleInterval: interval,
               sampleMembers: members,
+              sampleExpression: expression,
               retention: retention,
             ),
     );
+
+/// A keymapping entry that is routable but not collected — a gate variable.
+KeyMappingEntry plainEntry(String key) => KeyMappingEntry(
+    opcuaNode: opcUaEntry(alias: plantAlias, identifier: key).opcuaNode);
+
+/// An expression over [formula], as the keymapping editor stores one.
+ExpressionConfig expr(String formula) =>
+    ExpressionConfig(value: Expression(formula: formula));
 
 typedef Plant = ({LocalStateMan plant, FakeUpstreamLink link});
 
@@ -231,6 +244,90 @@ void main() {
       expect(r.sink.accepted, isEmpty,
           reason: 'all four bands are driven: good inserts, uncertain, bad '
               'and error do not');
+    });
+  });
+
+  group('the held value tracks the key\'s CURRENT state (CR-01)', () {
+    const gateKey = 'ST101.CN06.RUN.flag';
+
+    test('a degraded arrival while the gate is closed invalidates the held '
+        'value: the gate opening inserts nothing, and the skip was counted',
+        () async {
+      final r = rig({
+        speedKey:
+            collectedEntry(speedKey, expression: expr('$gateKey == true')),
+        gateKey: plainEntry(gateKey),
+      });
+      await r.runner.start();
+      await pump();
+
+      // The machine is stopped: the gate reads false.
+      feed(r.plant, gateKey, false);
+      await pump(10);
+
+      // A good value arrives while the gate is closed — held, not written,
+      // not counted (a closed gate is configuration doing its job).
+      feed(r.plant, speedKey, 5.0);
+      await pump(10);
+      expect(r.sink.accepted, isEmpty);
+      expect(r.runner.skippedSamples, 0);
+
+      // The key goes dark: link loss stages badCommFault. The skip counts.
+      feed(r.plant, speedKey, null, quality: Quality.badCommFault);
+      await until(() => r.runner.skippedSamples == 1);
+
+      // The machine restarts and the gate variable repaints good BEFORE the
+      // entry's own key does — the outage-restore ordering, no exotic
+      // timing needed.
+      feed(r.plant, gateKey, true);
+      await pump(30);
+
+      expect(r.sink.accepted, isEmpty,
+          reason: 'the held value is a reading the plant stopped confirming; '
+              'inserting it at now() writes a good-quality row for a tag '
+              'that was dark at that instant — a reading that never '
+              'happened (CR-01)');
+      expect(r.runner.skippedSamples, 1);
+
+      // Recovery: a fresh good value with the gate open is a row again.
+      feed(r.plant, speedKey, 6.0);
+      await until(() => r.sink.accepted.length == 1);
+      expect(r.sink.accepted.single.value, 6.0);
+    });
+
+    test('the same outage through the member-extraction path: a degraded '
+        'sample none of whose members resolve still invalidates the hold',
+        () async {
+      final r = rig({
+        structKey: collectedEntry(structKey,
+            members: const ['motor.speed'],
+            expression: expr('$gateKey == true')),
+        gateKey: plainEntry(gateKey),
+      });
+      await r.runner.start();
+      await pump();
+
+      feed(r.plant, gateKey, false);
+      await pump(10);
+
+      feed(r.plant, structKey, {
+        'motor': {'speed': 10},
+      });
+      await pump(10);
+      expect(r.sink.accepted, isEmpty);
+
+      // The outage value is a null struct: no member resolves, so the
+      // sample never reaches the band check — the hold must be invalidated
+      // on this path too, or the gate opening replays the pre-outage row.
+      feed(r.plant, structKey, null, quality: Quality.badCommFault);
+      await pump(10);
+
+      feed(r.plant, gateKey, true);
+      await pump(30);
+      expect(r.sink.accepted, isEmpty,
+          reason: 'a degraded arrival whose members do not resolve is still '
+              'the plant no longer confirming this key — the held row from '
+              'before the outage must not be written at now() (CR-01)');
     });
   });
 
