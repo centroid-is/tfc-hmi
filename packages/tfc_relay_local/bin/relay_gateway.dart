@@ -152,10 +152,21 @@ Future<void> main(List<String> args) async {
     // a connection. Then `Gateway.stop` does what it always did: the server
     // (so panels see a closed socket, not confident stale numbers), then the
     // plant and its links.
+    // Each link of the chain runs even when the one before it threw
+    // (IN-05): a subscription cancel throwing out of runner.stop() must not
+    // abandon the sink's final flush and the gateway's own teardown.
+    // gatewayShutdown still sees the first throw (it exits anyway, logging
+    // it) — the finallys only keep the later links from being collateral.
     stop: () async {
-      await runner?.stop();
-      await sink?.close();
-      await gateway.stop();
+      try {
+        await runner?.stop();
+      } finally {
+        try {
+          await sink?.close();
+        } finally {
+          await gateway.stop();
+        }
+      }
     },
     stopped: stopped,
     onSignal: (signal) => log.i('$signal: stopping'),
