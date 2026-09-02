@@ -174,6 +174,14 @@ final class CollectionRunner {
     if (_stopped) return;
     await _subscriptions.remove(entry.key)?.cancel();
     await _gates.remove(entry.key)?.stop();
+    // The cancel-the-previous guard, BEFORE the mode split — regardless of
+    // the NEW entry's mode (CR-02). Inside `if (interval != null)` it only
+    // ever ran on interval→interval re-collects: an edit that REMOVED the
+    // interval orphaned the old timer with a frozen `latest` and a stopped
+    // gate, inserting that frozen band-0 value at a fresh now() every tick
+    // until stop() — the flat-line lie the class doc promises this method
+    // prevents (collector.dart:294-298's lesson, completed).
+    _sampleTimers.remove(entry.key)?.cancel();
 
     // Retention is registered once per table, before the first insert can
     // create the table untyped. An entry 8b-01 marked `adjusted` carries a
@@ -308,10 +316,11 @@ final class CollectionRunner {
         // a gap plus a number, never a flat line.
         if (heldIsArrival) _countSkip();
       });
-      // The cancel-the-previous guard, in the shipped position
-      // (collector.dart:297): a re-collect after a mapping edit must not
-      // leave the first timer orphaned and inserting alongside its
-      // replacement.
+      // Belt to the top-of-method cancel's braces: two collectEntry calls
+      // for one key can interleave across the ensureTable await, and the
+      // loser's timer must not be silently overwritten while alive. The
+      // cancel that carries the re-collect guarantee is the unconditional
+      // one at the top (CR-02) — do not rely on this line for it.
       _sampleTimers[entry.key]?.cancel();
       _sampleTimers[entry.key] = timer;
     }

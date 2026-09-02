@@ -752,5 +752,41 @@ void main() {
               'inserts after stop are its doubled rows');
       expect(r.runner.liveSampleTimers, 0);
     });
+
+    test('a re-collect that switches interval → change mode cancels the old '
+        'timer: zero ticks from it afterwards (CR-02)', () async {
+      final r = rig({speedKey: collectedEntry(speedKey, interval: tick)});
+      await r.runner.start();
+      await pump();
+      feed(r.plant, speedKey, 9.0);
+      await until(() => r.sink.accepted.length >= 2,
+          reason: 'the interval entry is collecting before the edit');
+
+      // A mapping edit removes sample_interval: the same key re-collects in
+      // change mode. The old timer's closure holds the OLD call's frozen
+      // `latest`; if it survives, it writes that frozen band-0 value at a
+      // fresh now() every tick until stop() — the flat-line fabrication the
+      // class doc says the guard prevents.
+      await r.runner.collectEntry(CollectionEntry(
+        key: speedKey,
+        table: 'gw_$speedKey',
+      ));
+      await pump();
+      expect(r.runner.liveSampleTimers, 0,
+          reason: 'the replacement is change mode: no timer may remain, '
+              'and liveSampleTimers must reflect the truth');
+
+      final atSwitch = r.sink.accepted.length;
+      await pump(150);
+      expect(r.sink.accepted.length, atSwitch,
+          reason: 'ZERO ticks from the old timer after the switch — every '
+              'row here is the orphaned first timer inserting a frozen '
+              'value alongside its replacement (CR-02)');
+
+      // The replacement still collects, on change.
+      feed(r.plant, speedKey, 10.0);
+      await until(() => r.sink.accepted.length == atSwitch + 1);
+      expect(r.sink.accepted.last.value, 10.0);
+    });
   });
 }
