@@ -65,9 +65,15 @@ class _Lane {
 /// is pure presentation over data it is given, so a golden can render a whole
 /// shift without an `AlarmMan`, a `StateMan` or a database behind it.
 class StopTimeline extends ConsumerStatefulWidget {
-  const StopTimeline({super.key, this.config = const StopTimelineSpec()});
+  const StopTimeline(
+      {super.key, this.config = const StopTimelineSpec(), this.clock});
 
   final StopTimelineSpec config;
+
+  /// Fixed clock for tests and goldens: bounds the fetch window and is
+  /// handed to the view, whose live edge and once-a-second repaint it also
+  /// stills. Live when null.
+  final DateTime? clock;
 
   @override
   ConsumerState<StopTimeline> createState() => _StopTimelineState();
@@ -108,7 +114,7 @@ class _StopTimelineState extends ConsumerState<StopTimeline> {
   DateTimeRange _fetchWindow() {
     final range = _range;
     if (range != null) return range;
-    final now = DateTime.now();
+    final now = widget.clock ?? DateTime.now();
     return DateTimeRange(start: now.subtract(_span), end: now);
   }
 
@@ -188,6 +194,7 @@ class _StopTimelineState extends ConsumerState<StopTimeline> {
       interval: _interval,
       onRangeChanged: _setRange,
       onIntervalChanged: _setInterval,
+      clock: widget.clock,
     );
   }
 }

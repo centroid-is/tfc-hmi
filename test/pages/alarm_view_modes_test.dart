@@ -1,7 +1,9 @@
-/// The alarm page's three readings: Active, History, and Stops — the stop
-/// analysis that used to be a page-creator asset nobody could find. This
-/// pins the mode round-trip (list → timeline → list), that the way back
-/// survives the list unmounting, and that the loader drops alarms the
+/// The alarm page's two readings: the alarm lists, and Stops — the stop
+/// analysis that used to be a page-creator asset nobody could find. The
+/// Alarms/Stops control is the page's own header row, deliberately not a
+/// third segment of the list's Active/History toggle (that one picks which
+/// *list* is shown and lives in the list's search bar). This pins the
+/// round-trip (list → timeline → list) and that the loader drops alarms the
 /// editor marked `countsAsStop: false`.
 library;
 
@@ -48,16 +50,11 @@ AlarmActive _active(AlarmConfig config, DateTime at, {DateTime? ended}) =>
 /// The slice of [AlarmMan] the page reads: the list's two streams, and the
 /// config + history the stop timeline loads.
 class _FakeAlarmMan implements AlarmMan {
-  _FakeAlarmMan({
-    required this.config,
-    this.active = const {},
-    this.recent = const [],
-  });
+  _FakeAlarmMan({required this.config, this.active = const {}});
 
   @override
   final AlarmManConfig config;
   final Set<AlarmActive> active;
-  final List<AlarmActive> recent;
 
   @override
   Stream<Set<AlarmActive>> activeAlarms() => Stream.value(active);
@@ -75,7 +72,7 @@ class _FakeAlarmMan implements AlarmMan {
     DateTime? from,
     DateTime? to,
   }) async =>
-      recent;
+      const [];
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -84,10 +81,12 @@ class _FakeAlarmMan implements AlarmMan {
 Future<void> _pumpPage(WidgetTester tester, _FakeAlarmMan alarmMan) async {
   final delegate = BeamerDelegate(
     locationBuilder: RoutesLocationBuilder(routes: {
-      '/': (context, state, data) => const BeamPage(
-            key: ValueKey('/'),
+      // A fixed clock, so the timeline never starts its once-a-second live
+      // repaint and the tests can pumpAndSettle.
+      '/': (context, state, data) => BeamPage(
+            key: const ValueKey('/'),
             title: 'Alarm View',
-            child: AlarmViewPage(),
+            child: AlarmViewPage(debugClock: DateTime(2026, 9, 1, 12)),
           ),
     }).call,
   );
@@ -134,19 +133,16 @@ void main() {
     expect(find.byType(ListActiveAlarms), findsOneWidget);
     expect(find.byType(StopTimelineView), findsNothing);
 
-    // Never pumpAndSettle with the timeline up: its live clock is a periodic
-    // timer, so the tree deliberately never settles.
     await tester.tap(find.text('Stops'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pumpAndSettle();
 
     expect(find.byType(StopTimelineView), findsOneWidget);
     expect(find.byType(ListActiveAlarms), findsNothing,
         reason: 'the timeline is the whole page, not a third pane');
 
-    // The list is gone, but the segments are not — they moved to the stop
-    // view's own header row.
-    await tester.tap(find.text('History'));
+    // The list is gone, but the page's own header row is not — the way
+    // back never unmounts with the list.
+    await tester.tap(find.text('Alarms'));
     await tester.pumpAndSettle();
 
     expect(find.byType(ListActiveAlarms), findsOneWidget);
@@ -169,36 +165,11 @@ void main() {
     await _pumpPage(tester, man);
 
     await tester.tap(find.text('Stops'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pumpAndSettle();
 
     expect(find.text('conveyor-jam'), findsOneWidget);
     expect(find.text('door-open'), findsNothing,
         reason: 'countsAsStop: false keeps the advisory out of the '
             'stop analysis at the source');
-
-    // Dispose the timeline so its live-clock timer is cancelled before the
-    // test ends.
-    await tester.tap(find.text('Active'));
-    await tester.pumpAndSettle();
-  });
-
-  testWidgets('the standalone list keeps its two-way toggle', (tester) async {
-    // Embedded with no page owning the mode there is nowhere to put a
-    // timeline, so no Stops segment is offered.
-    final man = _FakeAlarmMan(config: AlarmManConfig(alarms: [stop]));
-    await tester.pumpWidget(ProviderScope(
-      overrides: [alarmManProvider.overrideWith((ref) async => man)],
-      child: const MaterialApp(
-        home: Scaffold(
-          body: SizedBox(width: 520, height: 600, child: ListActiveAlarms()),
-        ),
-      ),
-    ));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Active'), findsOneWidget);
-    expect(find.text('History'), findsOneWidget);
-    expect(find.text('Stops'), findsNothing);
   });
 }

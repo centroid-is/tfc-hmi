@@ -5,7 +5,11 @@ import '../widgets/stop_timeline.dart';
 import 'package:tfc_dart/core/alarm.dart';
 
 class AlarmViewPage extends StatefulWidget {
-  const AlarmViewPage({Key? key}) : super(key: key);
+  /// Fixed clock handed to the stop analysis, for goldens and tests. Live
+  /// when null.
+  final DateTime? debugClock;
+
+  const AlarmViewPage({Key? key, this.debugClock}) : super(key: key);
 
   @override
   State<AlarmViewPage> createState() => _AlarmViewPageState();
@@ -14,19 +18,21 @@ class AlarmViewPage extends StatefulWidget {
 class _AlarmViewPageState extends State<AlarmViewPage> {
   AlarmActive? _selectedAlarm;
 
-  /// Active, history — or the stop analysis, which is the same alarm system
-  /// read as downtime instead of as a list. It lives here as a sub-view
-  /// because the question it answers ("why was the line down?") is asked on
-  /// this page, not on a mimic page.
-  AlarmViewMode _mode = AlarmViewMode.active;
+  /// Whether the page shows the stop analysis — the same alarm system read
+  /// as downtime instead of as a list. It lives here as a sub-view because
+  /// the question it answers ("why was the line down?") is asked on this
+  /// page, not on a mimic page. Deliberately not a third segment of the
+  /// list's Active/History toggle: that toggle picks which *list* is shown,
+  /// and sits inside the list's own search bar.
+  bool _showStops = false;
 
   /// Set once the operator has closed the detail pane on purpose; from then
   /// on the page stops choosing for them until they pick an alarm again.
   bool _operatorCleared = false;
 
-  void _setMode(AlarmViewMode mode) {
+  void _setStops(bool stops) {
     setState(() {
-      _mode = mode;
+      _showStops = stops;
       // A different reading is a different question; the selection belonged
       // to the old one.
       _selectedAlarm = null;
@@ -49,76 +55,97 @@ class _AlarmViewPageState extends State<AlarmViewPage> {
 
   @override
   Widget build(BuildContext context) {
-    if (_mode == AlarmViewMode.stops) {
-      return BaseScaffold(
-        title: 'Stop Analysis',
-        body: Padding(
+    return BaseScaffold(
+      title: _showStops ? 'Stop Analysis' : 'Active Alarms',
+      // Its own repaint boundary so a golden of the body captures the body,
+      // not the window it happens to share with the app bar's live clock.
+      body: RepaintBoundary(
+        key: const ValueKey('alarm-view-body'),
+        child: Padding(
           padding: const EdgeInsets.all(16.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // The same control the list header carries, so leaving the
-              // stop view is the same gesture as entering it.
+              // The page's own header row: which reading of the alarm system
+              // is on screen. Full-size and labelled — this is a top-level
+              // destination switch for an operator at a panel, not a dense
+              // filter — and in the same place in both views, so leaving the
+              // stop analysis is the same gesture as entering it.
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  AlarmViewModeSegments(
-                    selected: AlarmViewMode.stops,
-                    onChanged: _setMode,
+                  SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment<bool>(
+                        value: false,
+                        icon: Icon(Icons.notifications_outlined),
+                        label: Text('Alarms'),
+                      ),
+                      ButtonSegment<bool>(
+                        value: true,
+                        icon: Icon(Icons.align_horizontal_left),
+                        label: Text('Stops'),
+                      ),
+                    ],
+                    selected: {_showStops},
+                    onSelectionChanged: (selection) =>
+                        _setStops(selection.first),
                   ),
                 ],
               ),
               const SizedBox(height: 12),
-              const Expanded(child: StopTimeline()),
+              Expanded(
+                child: _showStops
+                    ? StopTimeline(clock: widget.debugClock)
+                    : Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Active Alarms List (left pane)
+                          Expanded(
+                            flex: 2,
+                            child: ListActiveAlarms(
+                              onShow: (alarm) {
+                                setState(() {
+                                  _selectedAlarm = alarm;
+                                  _operatorCleared = false;
+                                });
+                              },
+                              onViewChanged: () {
+                                setState(() {
+                                  _selectedAlarm = null;
+                                });
+                              },
+                              onActiveAlarms: _onActiveAlarms,
+                            ),
+                          ),
+                          const SizedBox(width: 24),
+                          // Active Alarm View (right pane)
+                          Expanded(
+                            flex: 3,
+                            child: _selectedAlarm != null
+                                ? ViewActiveAlarm(
+                                    alarm: _selectedAlarm!,
+                                    onClose: () {
+                                      setState(() {
+                                        _selectedAlarm = null;
+                                        _operatorCleared = true;
+                                      });
+                                    },
+                                  )
+                                : Center(
+                                    child: Text(
+                                      'Select an alarm to view details',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleMedium,
+                                    ),
+                                  ),
+                          ),
+                        ],
+                      ),
+              ),
             ],
           ),
-        ),
-      );
-    }
-    return BaseScaffold(
-      title: 'Active Alarms',
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Active Alarms List (left pane)
-            Expanded(
-              flex: 2,
-              child: ListActiveAlarms(
-                mode: _mode,
-                onModeChanged: _setMode,
-                onShow: (alarm) {
-                  setState(() {
-                    _selectedAlarm = alarm;
-                    _operatorCleared = false;
-                  });
-                },
-                onActiveAlarms: _onActiveAlarms,
-              ),
-            ),
-            const SizedBox(width: 24),
-            // Active Alarm View (right pane)
-            Expanded(
-              flex: 3,
-              child: _selectedAlarm != null
-                  ? ViewActiveAlarm(
-                      alarm: _selectedAlarm!,
-                      onClose: () {
-                        setState(() {
-                          _selectedAlarm = null;
-                          _operatorCleared = true;
-                        });
-                      },
-                    )
-                  : Center(
-                      child: Text(
-                        'Select an alarm to view details',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                    ),
-            ),
-          ],
         ),
       ),
     );
