@@ -382,11 +382,24 @@ const String contractKitPackage = 'tfc_stateman_contract';
 /// the same argument, and the same `StateError` naming a composition with no
 /// database rather than an `UnimplementedError` naming a plan.
 ///
-/// **One remains: `preferences`, owed by 10-09 task 3** — the plan that wires
-/// that getter and decrements this number, not 10-05, which shipped the
-/// server-side handlers and left the getter throwing. A ledger that names a
-/// finished plan as the owner is a ledger nobody can act on.
-const int declaredUnimplementedMembers = 1;
+/// **10-09 task 3 took it to ZERO**, in the commit that made
+/// `LocalStateMan.preferences` answer a `PreferenceStore`. Nothing under
+/// `lib/src` throws an `UnimplementedError` any more.
+///
+/// The number stays, and stays at zero, for the reason every other zero in
+/// this file stays: a sweep whose count is zero proves nothing on its own, so
+/// the pin is paired with the offender arm that seeds a temp directory and
+/// checks the sweep can still see one. Deleting the constant would delete the
+/// property along with the debt.
+///
+/// **Reaching zero is not the same as the three data-services members being
+/// unconditional.** `timeseries` and `historyViews` throw a `StateError`, and
+/// `preferences` an `UnsupportedError`, when the gateway was composed without
+/// a database. Those are deployment facts naming a composition, not unwritten
+/// code naming a plan, and this sweep deliberately does not count them — see
+/// `fanin_test.dart`'s three "no longer owed" cases, each of which asserts the
+/// member is composable as well as that it refuses.
+const int declaredUnimplementedMembers = 0;
 
 /// Files under `lib/` allowed to import the database layer — the wrap seam.
 ///
@@ -654,6 +667,28 @@ void main() {
               'decrement it rather than discover it. A member that starts '
               'working without this number moving is a member nobody decided '
               'to ship');
+    });
+
+    test('the unimplemented-member sweep can still see an offender', () {
+      // declaredUnimplementedMembers is ZERO as of 10-09 task 3, so the pin
+      // above proves nothing on its own: a sweep that always returns empty
+      // passes it, and so does one pointed at the wrong directory. The
+      // ledger was the thing that used to keep this sweep honest, and now
+      // that the ledger is empty this arm is.
+      final seeded = Directory.systemTemp.createTempSync('relay-owed-');
+      addTearDown(() => seeded.deleteSync(recursive: true));
+      File('${seeded.path}/owed.dart').writeAsStringSync(
+          "Object get thing => throw UnimplementedError('99-01 owes thing');\n");
+      File('${seeded.path}/prose.dart').writeAsStringSync(
+          '/// This member used to throw UnimplementedError( and no longer does.\n');
+
+      final sites = unimplementedMemberSites(seeded);
+      expect(sites, hasLength(1),
+          reason: 'the throw must be seen and the doc comment must not — a '
+              'sweep that flagged prose would make it impossible to write '
+              'down that a member STOPPED being owed, which is exactly what '
+              'local_state_man.dart now says in three places');
+      expect(sites.single, contains('99-01'));
     });
 
     test('every unimplemented member names an owning plan', () {

@@ -14,6 +14,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:logger/logger.dart';
+import 'package:tfc_dart/core/secure_storage/secure_storage.dart'
+    show SecureStorage;
 import 'package:tfc_dart/core/state_man.dart' show KeyMappings;
 // The adapter is deliberately not on the package barrel (the seam type
 // `TimeseriesSink` is the public surface); the composition root reaches it by
@@ -23,6 +25,7 @@ import 'package:tfc_relay_protocol/tfc_relay_protocol.dart'
 import 'package:tfc_relay_local/src/collect/timescale_sink.dart';
 import 'package:tfc_relay_local/src/data/collection_plan_resolver.dart';
 import 'package:tfc_relay_local/src/data/history_view_store.dart';
+import 'package:tfc_relay_local/src/data/preference_store.dart';
 import 'package:tfc_relay_local/src/data/timescale_reader.dart';
 import 'package:tfc_relay_local/tfc_relay_local.dart';
 
@@ -92,13 +95,26 @@ Future<void> main(List<String> args) async {
   final views = held == null
       ? null
       : HistoryViewStore(database: () => held.database, log: log.w);
+  // Installed BEFORE any `Preferences` is built, and process-wide because
+  // that is the only scope `SecureStorage` has. `Preferences.create` asks
+  // `SecureStorage.getInstance()` unconditionally and OUTSIDE the try that
+  // guards the rest of it (`preferences.dart:219-220`), and the default on
+  // Linux and macOS is a keychain-backed store. This gateway must never read
+  // or write secret material — SEC-01, keys are mounted files — so refusing
+  // is both the honest backend and one fewer thing a headless box has to
+  // have. A refusal here is a bug in this process, not a deployment problem.
+  SecureStorage.setInstance(const NoSecretStorage());
+  final prefs = held == null
+      ? null
+      : PreferenceStore(database: () => held.database, log: log.w);
 
   final gateway = await buildGateway(config,
       mappings: mappings,
       log: log,
       resolver: resolver,
       timeseries: history,
-      historyViews: views);
+      historyViews: views,
+      preferences: prefs);
 
   // Once, at boot, naming every offender — HLTH-03 (T-08-51). Not one line per
   // panel that asks for one, and not a refusal to start: the rest of the file

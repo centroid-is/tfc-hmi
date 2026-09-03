@@ -45,6 +45,7 @@ import 'package:tfc_relay_server/tfc_relay_server.dart';
 
 import 'collect/collection_config.dart';
 import 'key_router.dart';
+import 'data/preference_store.dart';
 import 'local_browse.dart';
 import 'local_state_man.dart';
 import 'm2400_upstream_link.dart';
@@ -566,6 +567,7 @@ Future<Gateway> buildGateway(
   required SeriesResolver resolver,
   TimeseriesApi? timeseries,
   HistoryViewApi? historyViews,
+  PreferenceStore? preferences,
   void Function(Object error, StackTrace stack, String where)? onError,
 }) async {
   final refused = reservedKeyMappingNames(mappings);
@@ -621,6 +623,14 @@ Future<Gateway> buildGateway(
     // to the composition root's `TimescaleSink`, which is started, torn down
     // and flushed around this call.
     historyViews: historyViews,
+    // The shared preference table, from the same borrowed connection again,
+    // and passed in for the third time for the same reason. It is a
+    // `PreferenceStore` and not a bare `PreferencesApi` because
+    // `LocalStateMan.dispose` has to be able to CLOSE it: the change feed
+    // holds a channel subscription on `AppDatabase`'s shared notification
+    // connection, and an interface with no close on it would leave that
+    // attached to a disposed gateway.
+    preferences: preferences,
   );
   final server = RelayServer(
     // **The identity this whole phase exists to make true.** The server's

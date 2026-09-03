@@ -54,15 +54,22 @@
 /// retry anywhere, and readback as the only confirmation — the badge on a
 /// value says "sent", and only an upstream sample says "confirmed".
 ///
-/// ## What this plan does not implement yet
+/// ## Nothing here is unimplemented any more
 ///
-/// `holdToRun` is 08-06 task 3's; `browse`, `timeseries`,
-/// `historyViews` and `preferences` are 08-11's and Phase 10's. Each throws an
-/// `UnimplementedError` naming the plan that owes it, and the count is a
-/// declared constant in `freeze_test.dart` that must reach zero. This is
-/// 07-01's `gateOutstanding` doctrine: a self-deleting list with an owner beats
-/// a red suite, because a phase whose own gate is red cannot tell a new failure
-/// from a known one.
+/// `holdToRun` was 08-06 task 3's, `browse` 08-11's, and `timeseries`,
+/// `historyViews` and `preferences` were Phase 10's — 10-07, 10-08 and 10-09
+/// task 3 respectively. Each threw an `UnimplementedError` naming the plan
+/// that owed it, and each throw was deleted by the commit that made the member
+/// answer. `declaredUnimplementedMembers` in `freeze_test.dart` reached
+/// **zero** in 10-09's, which is where this paragraph changed tense.
+///
+/// That was 07-01's `gateOutstanding` doctrine and it worked: a self-deleting
+/// list with an owner beats a red suite, because a phase whose own gate is red
+/// cannot tell a new failure from a known one. The three data-services members
+/// now refuse a gateway composed **without a database** instead, which is a
+/// deployment fact rather than unwritten code — see [timeseries],
+/// [historyViews] and [preferences], and note that the last of the three
+/// deliberately does not use the same exception as the other two.
 library;
 
 import 'dart:async';
@@ -387,6 +394,12 @@ final class LocalStateMan implements StateManApi {
     }
     _linkEpochs.clear();
     await _status.close();
+    // Before the links, because it is the only thing here holding a
+    // subscription on a connection this object does not own: the preference
+    // feed's channel rides `AppDatabase`'s shared notification socket, and a
+    // disposed gateway that left it attached is Trap 5 on this side — a
+    // listener on a shared source that only one path cancels.
+    await _preferences?.close();
     await _fanIn.dispose();
     _sweep.dispose();
     _store.dispose();
@@ -1436,11 +1449,43 @@ final class LocalStateMan implements StateManApi {
 
   // ----------------------------------------------------------- not this phase
 
+  /// Stored preferences, when this deployment has a database.
+  ///
+  /// The same instance every time it is asked for — `browse`'s rule, and here
+  /// it is load-bearing rather than tidy: a session subscribes to
+  /// `preferences.onPreferencesChanged` (`relay_session.dart:899`), and a
+  /// getter that rebuilt would hand every session a different feed, each with
+  /// its own channel subscription on the shared notification connection.
+  ///
+  /// **An [UnsupportedError], and NOT the [StateError] that [timeseries] and
+  /// [historyViews] answer with.** The three absences are the same absence —
+  /// no `collection:` block, so no database object exists at all — but this
+  /// member is reached differently. `RelaySession` calls
+  /// `data.watchPreferences()` on **every** session, unconditionally, and
+  /// `data_handlers.dart:216` catches exactly `on UnsupportedError` for "a
+  /// source with no preference store"; nothing else there is caught. A
+  /// `StateError` would therefore escape session setup on every gateway with
+  /// no `collection:` block, which is the default deployment — the whole
+  /// plant would fail to connect over a member nobody asked for.
+  ///
+  /// That this getter *used* to throw at all was survivable for the same
+  /// reason and by accident: `UnimplementedError implements UnsupportedError`
+  /// (`dart:core` `errors.dart:595`), so the ledger's placeholder was being
+  /// swallowed by that catch all along. Worth knowing before anyone
+  /// "harmonises" the three refusals.
   @override
-  PreferencesApi get preferences =>
-      throw UnimplementedError('10-01 owes LocalStateMan.preferences — Phase '
-          '10 owns the stored preferences, and no method here may request '
-          'secret material');
+  PreferencesApi get preferences {
+    final store = _preferences;
+    if (store == null) {
+      throw UnsupportedError('this gateway was composed without a database, '
+          'so it has no shared preference store to serve. Give it a '
+          '`collection:` block with an endpoint and `enabled: true`; a '
+          'gateway with no such block constructs no database object at all, '
+          'deliberately (collection_config.dart\'s class doc). Device-local '
+          'settings are deliberately not on this pipe either way');
+    }
+    return store;
+  }
 
   final PreferenceStore? _preferences;
 
