@@ -34,6 +34,7 @@
 @Timeout(Duration(minutes: 5))
 library;
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:postgres/postgres.dart' as pg;
@@ -216,6 +217,50 @@ void main() {
           reason: 'an allow-list that is not honoured is a settings page '
               'wiping the gateway\'s own routing configuration');
       expect(await store.getString('${ns}keep'), 'three');
+    });
+
+    test('clearing many keys announces them in ONE turn, not one frame each',
+        () async {
+      final keys = <String>{for (var i = 0; i < 8; i++) '${ns}burst$i'};
+      for (final key in keys) {
+        await store.setString(key, 'x');
+      }
+      // `data_handlers._scheduleFlush`'s exact mechanism, reproduced here
+      // rather than described: a `Timer.run` one-shot, which runs only after
+      // the microtask queue has drained, so everything announced in one turn
+      // of the event loop lands in one frame. 10-05 chose Timer.run over
+      // scheduleMicrotask for this reason and measured the alternative at
+      // five hundred frames for a five-hundred-key clear (T-10-19), which
+      // `relay_session.dart:416-424` turns into close(4004) — a settings page
+      // evicting every panel in the plant and reporting it as backpressure.
+      final flushes = <List<String>>[];
+      var pending = <String>[];
+      var scheduled = false;
+      final sub = store.onPreferencesChanged.listen((key) {
+        pending.add(key);
+        if (scheduled) return;
+        scheduled = true;
+        Timer.run(() {
+          flushes.add(pending);
+          pending = <String>[];
+          scheduled = false;
+        });
+      });
+      addTearDown(sub.cancel);
+
+      await store.clear(allowList: keys);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+
+      expect(flushes, hasLength(1),
+          reason: 'one frame for the burst. A clear that awaited a round trip '
+              'per key would yield to the event loop between them, the flush '
+              'timer would fire in each gap, and the coalescing 10-05 built '
+              'would be defeated by the caller rather than by the mechanism');
+      expect(flushes.single, unorderedEquals(keys));
+      for (final key in keys) {
+        expect(await rowCount(key), 0,
+            reason: 'and the rows still have to be gone');
+      }
     });
 
     test('getAll answers the values that are in the table', () async {
