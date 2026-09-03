@@ -1,0 +1,498 @@
+import 'dart:math' as math;
+import 'dart:ui';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/page_creator/assets/link_geometry.dart';
+
+/// Anchors backed by a plain map, so a test can say exactly where a device is
+/// without standing up a page.
+class _FakeAnchors implements LinkAnchors {
+  _FakeAnchors({Map<String, Rect>? boxes, Map<String, Offset>? ports})
+      : boxes = boxes ?? {},
+        ports = ports ?? {};
+
+  final Map<String, Rect> boxes;
+
+  /// Keyed `'assetId/port'`.
+  final Map<String, Offset> ports;
+
+  @override
+  Offset? portPosition(String assetId, String? port) =>
+      ports['$assetId/$port'] ?? boxes[assetId]?.centerRight;
+
+  @override
+  Offset? assetOrigin(String assetId) => boxes[assetId]?.topLeft;
+}
+
+/// Samples a path into points, for asserting about ink rather than about the
+/// call sequence that produced it.
+List<Offset> _sample(Path p, {double step = 1}) {
+  final out = <Offset>[];
+  for (final m in p.computeMetrics()) {
+    for (var d = 0.0; d < m.length; d += step) {
+      final t = m.getTangentForOffset(d);
+      if (t != null) out.add(t.position);
+    }
+    final t = m.getTangentForOffset(m.length);
+    if (t != null) out.add(t.position);
+  }
+  return out;
+}
+
+double _pathLength(Path p) {
+  var total = 0.0;
+  for (final m in p.computeMetrics()) {
+    total += m.length;
+  }
+  return total;
+}
+
+void main() {
+  const canvas = Size(1000, 800);
+
+  group('roundedPolyline', () {
+    test('a two-point run is the straight line between them', () {
+      final path = roundedPolyline([const Offset(10, 10), const Offset(90, 10)],
+          20 /* radius, irrelevant with no corner */);
+      expect(_pathLength(path), closeTo(80, 0.01));
+    });
+
+    test('zero radius leaves the corner sharp', () {
+      final pts = [
+        const Offset(0, 0),
+        const Offset(100, 0),
+        const Offset(100, 100)
+      ];
+      expect(_pathLength(roundedPolyline(pts, 0)), closeTo(200, 0.01));
+    });
+
+    test('a right-angle fillet shortens the run by the expected amount', () {
+      // Two 100px legs meeting at 90 degrees with r = 20: each leg gives up
+      // 20px of tangent, and the quarter arc that replaces the 40px removed is
+      // 2*pi*20/4 long.
+      final pts = [
+        const Offset(0, 0),
+        const Offset(100, 0),
+        const Offset(100, 100)
+      ];
+      final expected = 200 - 40 + (math.pi * 20 / 2);
+      expect(_pathLength(roundedPolyline(pts, 20)), closeTo(expected, 0.5));
+    });
+
+    test('the arc bulges towards the inside of the corner, not the outside',
+        () {
+      // The corner point itself must no longer be on the ink: a fillet cuts
+      // the corner off. Drawing the arc the other way is the classic sweep-flag
+      // bug and produces a loop that is easy to miss on a thin stroke.
+      final pts = [
+        const Offset(0, 0),
+        const Offset(100, 0),
+        const Offset(100, 100)
+      ];
+      final ink = _sample(roundedPolyline(pts, 20));
+      final nearestToCorner =
+          ink.map((p) => (p - const Offset(100, 0)).distance).reduce(math.min);
+      // The arc's closest approach to a filleted right angle is r*(sqrt2 - 1).
+      expect(nearestToCorner, closeTo(20 * (math.sqrt2 - 1), 0.6));
+      // And every sample stays inside the leg box, so nothing overshoots.
+      for (final p in ink) {
+        expect(p.dx, lessThanOrEqualTo(100.01));
+        expect(p.dy, greaterThanOrEqualTo(-0.01));
+      }
+    });
+
+    test('turning the other way bulges the other way too', () {
+      final up = _sample(roundedPolyline([
+        const Offset(0, 0),
+        const Offset(100, 0),
+        const Offset(100, -100),
+      ], 20));
+      for (final p in up) {
+        expect(p.dy, lessThanOrEqualTo(0.01));
+      }
+    });
+
+    test('a radius too big for its segments is clamped, not honoured', () {
+      // 10px legs cannot carry a 100px radius. Without the clamp the tangent
+      // runs past both neighbours and the path folds back on itself.
+      final pts = [
+        const Offset(0, 0),
+        const Offset(10, 0),
+        const Offset(10, 10)
+      ];
+      final path = roundedPolyline(pts, 100);
+      final ink = _sample(path, step: 0.5);
+      for (final p in ink) {
+        expect(p.dx, inInclusiveRange(-0.01, 10.01));
+        expect(p.dy, inInclusiveRange(-0.01, 10.01));
+      }
+      // Still shorter than the sharp corner, so a fillet did happen.
+      expect(_pathLength(path), lessThan(20));
+    });
+
+    test('two tight corners on one short segment do not overlap', () {
+      // Each corner may take at most half the segment they share, so the run
+      // stays monotonic along x instead of doubling back.
+      final pts = [
+        const Offset(0, 0),
+        const Offset(40, 0),
+        const Offset(60, 40),
+        const Offset(100, 40),
+      ];
+      final ink = _sample(roundedPolyline(pts, 60), step: 0.5);
+      for (var i = 1; i < ink.length; i++) {
+        expect(ink[i].dx, greaterThanOrEqualTo(ink[i - 1].dx - 0.01),
+            reason: 'run doubled back at sample $i');
+      }
+    });
+
+    test('a collinear vertex is passed straight through', () {
+      final pts = [
+        const Offset(0, 0),
+        const Offset(50, 0),
+        const Offset(100, 0)
+      ];
+      expect(_pathLength(roundedPolyline(pts, 20)), closeTo(100, 0.01));
+    });
+
+    test('a duplicated vertex does not produce NaN', () {
+      final pts = [
+        const Offset(0, 0),
+        const Offset(50, 0),
+        const Offset(50, 0),
+        const Offset(100, 0),
+      ];
+      final len = _pathLength(roundedPolyline(pts, 20));
+      expect(len.isNaN, isFalse);
+      expect(len, closeTo(100, 0.01));
+    });
+  });
+
+  group('LinkRunFrame', () {
+    test('place and locate are inverses', () {
+      final f = LinkRunFrame(const Offset(100, 100), const Offset(300, 200));
+      final p = f.place(0.4, -0.2);
+      final back = f.locate(p);
+      expect(back.t, closeTo(0.4, 1e-9));
+      expect(back.n, closeTo(-0.2, 1e-9));
+    });
+
+    test('a zero-length run degrades instead of producing NaN', () {
+      final f = LinkRunFrame(const Offset(50, 50), const Offset(50, 50));
+      final p = f.place(0.5, 0.5);
+      expect(p.dx.isNaN, isFalse);
+      expect(p.dy.isNaN, isFalse);
+      expect(f.locate(const Offset(10, 10)).t, 0);
+    });
+  });
+
+  group('LinkRun.resolve', () {
+    test('an unbound end falls back to its stored page coordinate', () {
+      final run = LinkRun(
+        from: LinkEnd(x: 0.1, y: 0.5),
+        to: LinkEnd(x: 0.9, y: 0.5),
+      );
+      final r = run.resolve(canvas, LinkAnchors.none);
+      expect(r.points.first, const Offset(100, 400));
+      expect(r.points.last, const Offset(900, 400));
+    });
+
+    test('a bound end takes the port position', () {
+      final anchors = _FakeAnchors(ports: {'ek/X2': const Offset(200, 100)});
+      final run = LinkRun(
+        from: LinkEnd(assetId: 'ek', port: 'X2', x: 0.1, y: 0.5),
+        to: LinkEnd(x: 0.9, y: 0.5),
+      );
+      expect(run.resolve(canvas, anchors).points.first, const Offset(200, 100));
+    });
+
+    test('an end bound to a missing asset falls back rather than vanishing',
+        () {
+      // A terminal deleted out from under a cable must leave the cable where
+      // it was drawn, not collapse it to the canvas origin.
+      final run = LinkRun(
+        from: LinkEnd(assetId: 'gone', port: 'X2', x: 0.25, y: 0.25),
+        to: LinkEnd(x: 0.9, y: 0.5),
+      );
+      expect(run.resolve(canvas, LinkAnchors.none).points.first,
+          const Offset(250, 200));
+    });
+
+    test('points line up with waypoint indices', () {
+      final run = LinkRun(
+        from: LinkEnd(x: 0, y: 0),
+        to: LinkEnd(x: 1, y: 0),
+        waypoints: [LinkWaypoint.onRun(0.25, 0), LinkWaypoint.onRun(0.75, 0)],
+      );
+      final r = run.resolve(canvas, LinkAnchors.none);
+      expect(r.points, hasLength(4));
+      expect(r.points[1].dx, closeTo(250, 0.01));
+      expect(r.points[2].dx, closeTo(750, 0.01));
+      expect(r.corners, hasLength(2));
+    });
+  });
+
+  group('waypoints follow what they are told to follow', () {
+    LinkRun runWith(LinkWaypoint w) => LinkRun(
+          from: LinkEnd(assetId: 'a', port: 'X2'),
+          to: LinkEnd(assetId: 'b', port: 'X1'),
+          waypoints: [w],
+        );
+
+    test('a run-frame corner rides both ends', () {
+      final anchors = _FakeAnchors(ports: {
+        'a/X2': const Offset(100, 100),
+        'b/X1': const Offset(300, 100),
+      });
+      final run = runWith(LinkWaypoint.onRun(0.5, 0));
+      expect(run.resolve(canvas, anchors).points[1], const Offset(200, 100));
+
+      // Move the far end: the corner moves with the frame.
+      anchors.ports['b/X1'] = const Offset(500, 100);
+      expect(run.resolve(canvas, anchors).points[1], const Offset(300, 100));
+    });
+
+    test('a run-frame corner near one end mostly follows that end', () {
+      // The blend is what makes the run frame the right default: a corner at
+      // t = 0.1 belongs to the near device far more than to the far one.
+      final anchors = _FakeAnchors(ports: {
+        'a/X2': const Offset(0, 0),
+        'b/X1': const Offset(1000, 0),
+      });
+      final run = runWith(LinkWaypoint.onRun(0.1, 0));
+      final before = run.resolve(canvas, anchors).points[1];
+
+      anchors.ports['a/X2'] = const Offset(0, 100); // near end moves 100 down
+      final afterNear = run.resolve(canvas, anchors).points[1];
+      expect(afterNear.dy - before.dy, closeTo(90, 0.5));
+
+      anchors.ports['a/X2'] = const Offset(0, 0);
+      anchors.ports['b/X1'] = const Offset(1000, 100); // far end moves instead
+      final afterFar = run.resolve(canvas, anchors).points[1];
+      expect(afterFar.dy - before.dy, closeTo(10, 0.5));
+    });
+
+    test('a pinned corner ignores the far end entirely', () {
+      final anchors = _FakeAnchors(
+        boxes: {'a': const Rect.fromLTWH(100, 100, 60, 40)},
+        ports: {
+          'a/X2': const Offset(160, 120),
+          'b/X1': const Offset(500, 120),
+        },
+      );
+      final run = runWith(LinkWaypoint.pinned('a', 0.25, 0.05));
+      final before = run.resolve(canvas, anchors).points[1];
+
+      anchors.ports['b/X1'] = const Offset(900, 700);
+      expect(run.resolve(canvas, anchors).points[1], before);
+    });
+
+    test('a pinned corner translates rigidly with its own asset', () {
+      final anchors = _FakeAnchors(
+        boxes: {'a': const Rect.fromLTWH(100, 100, 60, 40)},
+        ports: {
+          'a/X2': const Offset(160, 120),
+          'b/X1': const Offset(500, 120),
+        },
+      );
+      final run = runWith(LinkWaypoint.pinned('a', 0.1, 0.1));
+      final before = run.resolve(canvas, anchors).points[1];
+
+      anchors.boxes['a'] = const Rect.fromLTWH(140, 170, 60, 40);
+      anchors.ports['a/X2'] = const Offset(200, 190);
+      final after = run.resolve(canvas, anchors).points[1];
+      expect(after - before, const Offset(40, 70));
+    });
+
+    test('a pin whose asset is gone falls back to the run frame', () {
+      final anchors = _FakeAnchors(ports: {
+        'a/X2': const Offset(0, 0),
+        'b/X1': const Offset(400, 0),
+      });
+      final run = runWith(LinkWaypoint.pinned('deleted', 0.1, 0.1));
+      final p = run.resolve(canvas, anchors).points[1];
+      expect(p.dx.isNaN, isFalse);
+      // Placed on the run, not at the canvas origin.
+      expect(p.dx, inInclusiveRange(0, 400));
+    });
+  });
+
+  group('editing', () {
+    late _FakeAnchors anchors;
+    late LinkRun run;
+
+    setUp(() {
+      anchors = _FakeAnchors(
+        boxes: {
+          'a': const Rect.fromLTWH(0, 0, 100, 50),
+          'b': const Rect.fromLTWH(600, 0, 100, 50),
+        },
+        ports: {
+          'a/X2': const Offset(100, 0),
+          'b/X1': const Offset(600, 0),
+        },
+      );
+      run = LinkRun(
+        from: LinkEnd(assetId: 'a', port: 'X2'),
+        to: LinkEnd(assetId: 'b', port: 'X1'),
+      );
+    });
+
+    test('a new corner lands in the segment it was dropped nearest', () {
+      run.waypoints.add(LinkWaypoint.onRun(0.5, 0.2));
+      // Segment 1 runs from the corner to the far end; drop near its middle.
+      final resolved = run.resolve(canvas, anchors);
+      final target = (resolved.points[1] + resolved.points[2]) / 2;
+      final at = run.insertWaypoint(target, canvas: canvas, anchors: anchors);
+      expect(at, 1);
+      expect(run.waypoints, hasLength(2));
+      expect(
+          run.resolve(canvas, anchors).points[2].dx, closeTo(target.dx, 0.5));
+    });
+
+    test('an inserted corner follows the run by default', () {
+      run.insertWaypoint(const Offset(300, 40),
+          canvas: canvas, anchors: anchors);
+      expect(run.waypoints.single.isPinned, isFalse);
+      expect(run.waypoints.single.t, isNotNull);
+      expect(run.waypoints.single.dx, isNull);
+    });
+
+    test('moving a corner keeps whichever rule already held it', () {
+      run.waypoints.add(LinkWaypoint.pinned('a', 0.2, 0.1));
+      run.moveWaypoint(0, const Offset(250, 90),
+          canvas: canvas, anchors: anchors);
+      expect(run.waypoints.single.pinnedTo, 'a');
+      expect(run.resolve(canvas, anchors).points[1],
+          within(distance: 0.5, from: const Offset(250, 90)));
+    });
+
+    test('repinning does not move the corner on screen', () {
+      run.waypoints.add(LinkWaypoint.onRun(0.4, 0.15));
+      final before = run.resolve(canvas, anchors).points[1];
+
+      run.repin(0, 'a', canvas: canvas, anchors: anchors);
+      expect(run.waypoints.single.pinnedTo, 'a');
+      expect(run.resolve(canvas, anchors).points[1],
+          within(distance: 0.01, from: before));
+
+      run.repin(0, null, canvas: canvas, anchors: anchors);
+      expect(run.waypoints.single.pinnedTo, isNull);
+      expect(run.resolve(canvas, anchors).points[1],
+          within(distance: 0.01, from: before));
+    });
+
+    test('repinning nulls the coordinate pair it no longer uses', () {
+      // Two live coordinate systems on one corner is how it ends up in two
+      // places; the inactive pair has to actually be gone.
+      run.waypoints.add(LinkWaypoint.onRun(0.4, 0.15));
+      run.repin(0, 'a', canvas: canvas, anchors: anchors);
+      expect(run.waypoints.single.t, isNull);
+      expect(run.waypoints.single.n, isNull);
+      expect(run.waypoints.single.dx, isNotNull);
+
+      run.repin(0, null, canvas: canvas, anchors: anchors);
+      expect(run.waypoints.single.dx, isNull);
+      expect(run.waypoints.single.dy, isNull);
+      expect(run.waypoints.single.t, isNotNull);
+    });
+  });
+
+  group('hit testing', () {
+    test('distance is measured to the run, not to its bounding box', () {
+      final run = LinkRun(
+        from: LinkEnd(x: 0, y: 0),
+        to: LinkEnd(x: 1, y: 1),
+      );
+      final r = run.resolve(canvas, LinkAnchors.none);
+      // The far corner of the box is nowhere near the diagonal.
+      expect(r.distanceTo(const Offset(1000, 0)), greaterThan(500));
+      expect(r.distanceTo(const Offset(500, 400)), lessThan(1));
+    });
+
+    test('the outline is a closed ring around the run', () {
+      final run = LinkRun(
+        from: LinkEnd(x: 0.1, y: 0.5),
+        to: LinkEnd(x: 0.9, y: 0.5),
+      );
+      final outline = run.resolve(canvas, LinkAnchors.none).outline(width: 24);
+
+      // Closed, so AssetHitShape's ring walk finds it at all.
+      expect(outline.computeMetrics().first.isClosed, isTrue);
+      // Wide enough to be tappable off the centreline, and bounded.
+      expect(outline.contains(const Offset(500, 400)), isTrue);
+      expect(outline.contains(const Offset(500, 409)), isTrue);
+      expect(outline.contains(const Offset(500, 430)), isFalse);
+    });
+
+    test('the outline follows a bend rather than cutting the corner', () {
+      final run = LinkRun(
+        from: LinkEnd(x: 0.1, y: 0.2),
+        to: LinkEnd(x: 0.9, y: 0.8),
+        waypoints: [LinkWaypoint.onRun(0.5, 0.3)],
+      );
+      final resolved = run.resolve(canvas, LinkAnchors.none);
+      final outline = resolved.outline(width: 24);
+      expect(outline.contains(resolved.points[1]), isTrue);
+      // The straight line between the two ends is not on the cable here.
+      final chord = (resolved.points.first + resolved.points.last) / 2;
+      expect(outline.contains(chord), isFalse);
+    });
+  });
+
+  group('bounds', () {
+    test('covers every point of the run', () {
+      final run = LinkRun(
+        from: LinkEnd(x: 0.2, y: 0.5),
+        to: LinkEnd(x: 0.8, y: 0.5),
+        waypoints: [LinkWaypoint.onRun(0.5, -0.4)],
+      );
+      final b = run.boundsIn(canvas, LinkAnchors.none, pad: 6);
+      for (final p in run.resolve(canvas, LinkAnchors.none).points) {
+        expect(b.contains(p), isTrue, reason: '$p outside $b');
+      }
+      // The padding is real, so the stroke's caps are inside the box too.
+      expect(b.left, lessThan(200));
+    });
+  });
+
+  group('serialization', () {
+    test('round-trips through JSON', () {
+      final run = LinkRun(
+        from: LinkEnd(assetId: 'ek1100', port: 'X2', x: 0.1, y: 0.2),
+        to: LinkEnd(assetId: 'ep2338', port: 'X1', x: 0.8, y: 0.7),
+        waypoints: [
+          LinkWaypoint.onRun(0.3, -0.1),
+          LinkWaypoint.pinned('ek1100', 0.05, 0.02),
+        ],
+        radius: 0.03,
+      );
+      final back = LinkRun.fromJson(run.toJson());
+
+      expect(back.from.assetId, 'ek1100');
+      expect(back.from.port, 'X2');
+      expect(back.to.assetId, 'ep2338');
+      expect(back.radius, 0.03);
+      expect(back.waypoints, hasLength(2));
+      expect(back.waypoints[0].t, closeTo(0.3, 1e-9));
+      expect(back.waypoints[0].pinnedTo, isNull);
+      expect(back.waypoints[1].pinnedTo, 'ek1100');
+      expect(back.waypoints[1].dx, closeTo(0.05, 1e-9));
+      expect(back.waypoints[1].t, isNull);
+    });
+
+    test('a run stored before waypoints existed reads as a straight cable', () {
+      final json = LinkRun().toJson()..remove('waypoints');
+      expect(LinkRun.fromJson(json).waypoints, isEmpty);
+    });
+
+    test('copy does not share waypoints with the original', () {
+      final run = LinkRun(waypoints: [LinkWaypoint.onRun(0.5, 0)]);
+      final c = run.copy();
+      c.waypoints.single.t = 0.9;
+      c.waypoints.add(LinkWaypoint.onRun(0.2, 0));
+      expect(run.waypoints, hasLength(1));
+      expect(run.waypoints.single.t, 0.5);
+    });
+  });
+}
