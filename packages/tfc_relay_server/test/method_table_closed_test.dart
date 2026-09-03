@@ -40,6 +40,8 @@
 /// check works is not to open the class so a test can misuse it.
 library;
 
+import 'dart:io';
+
 import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_relay_server/src/handle_table.dart';
@@ -50,6 +52,13 @@ import 'package:tfc_stateman_contract/channel_harness.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 
 import 'support/permissive_resolver.dart';
+
+/// The file carrying the method-not-found fallback and 06-04's two reasons.
+final _fallbackComment = File('lib/src/relay_session.dart');
+
+/// The client's forwarding layer, read across the package boundary the way
+/// `handler_table_test.dart:316-329` reads the contract kit.
+final _clientSubApis = File('../tfc_relay_client/lib/src/client_sub_apis.dart');
 
 /// A session over an in-memory channel, with no client on the far end.
 ///
@@ -273,6 +282,54 @@ void main() {
               'every dotted name in the ledger becomes undeclared surface, '
               'which is the honest answer and the reason the equality is '
               'stated in both directions at once');
+    });
+  });
+
+  group('the two claims that expired when the table closed', () {
+    test('the sweep is reading the files it thinks it is', () {
+      // Both arms below are greps, and a grep against a file that is not
+      // there passes silently. Pin the paths first, so a failure means the
+      // claim came back rather than that the reader moved.
+      expect(_fallbackComment.existsSync(), isTrue,
+          reason: 'the gateway session is not at ${_fallbackComment.path} '
+              'relative to this package root. `dart test` runs from the '
+              'package root, so check the directory the run was invoked from '
+              'before believing the arm below');
+      expect(_clientSubApis.existsSync(), isTrue,
+          reason: 'the client\'s sub-API file is not at '
+              '${_clientSubApis.path}. This is a sibling package read the way '
+              '`handler_table_test.dart` reads the contract kit, and if the '
+              'layout changed this arm has to move with it rather than '
+              'passing vacuously');
+    });
+
+    test('the fallback no longer calls its -32601 the gap-proving mechanism',
+        () {
+      expect(_fallbackComment.readAsStringSync(), isNot(contains('gap-proving')),
+          reason: '06-04 kept the method-not-found fallback for two reasons '
+              'and the first of them was that the contract kit\'s '
+              'expectUnreachableMethod pins -32601 exactly, which made it '
+              'Phase 10\'s gap-proving mechanism. Phase 10 is over and both '
+              'gap lists are empty, so that reason is spent — the paragraph '
+              'has to say so, or the next reader either trusts a mechanism '
+              'that no longer has anything to prove or deletes the '
+              'registration as vestigial. The second reason has not expired '
+              'and is why the registration stays. If a gap ever genuinely '
+              'reopens, delete this arm deliberately rather than wording '
+              'around the token');
+    });
+
+    test('the client no longer claims the gateway answers -32601 to all of them',
+        () {
+      expect(_clientSubApis.readAsStringSync(), isNot(contains('32601')),
+          reason: 'client_sub_apis.dart told its reader that there is no '
+              'server handler for any of these thirty-four methods and that '
+              'every one of them surfaces the gateway\'s own -32601. That was '
+              'true for six phases and stopped being true in 10-05. A comment '
+              'that says a feature is missing outlives the feature arriving: '
+              'the next person to debug a data-service call reads it, '
+              'believes the gateway has no handler, and goes looking on the '
+              'wrong side of the socket');
     });
   });
 }
