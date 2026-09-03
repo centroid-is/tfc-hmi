@@ -35,8 +35,6 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 import 'package:tfc_relay_client/src/client_config.dart';
-import 'package:tfc_relay_client/src/client_sub_apis.dart'
-    show DataServiceMethods;
 import 'package:tfc_relay_client/src/connection_supervisor.dart';
 import 'package:tfc_relay_client/src/failure_taxonomy.dart';
 import 'package:tfc_relay_client/src/remote_state_man.dart';
@@ -469,8 +467,11 @@ void main() {
           client.preferences.onPreferencesChanged.listen(changed.add);
       addTearDown(listening.cancel);
 
-      gateway.notifyLive(
-          DataServiceMethods.preferencesChanged, {'key': 'ui.theme'});
+      // Phase 10 migrated the frame to a key list wholesale — see
+      // `preferences_changed_test.dart` for the fan-out this case now rides.
+      gateway.notifyLive(DataServiceMethods.preferencesChanged, {
+        'keys': ['ui.theme'],
+      });
 
       await _until('the announcement to reach the stream',
           () => changed.isNotEmpty);

@@ -50,63 +50,30 @@ import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 /// The wire names of the data services.
 ///
-/// Declared here and not in `tfc_relay_protocol`'s [Methods], because
-/// `api_surface_test.dart` freezes that table against a hand-written literal so
-/// each addition is a deliberate edit to a test that explains its cost. Phase 10
-/// is the phase that pays it; these are the names it will register, taken from
-/// the contract harness's own set with its `harness.` prefix removed.
-abstract final class DataServiceMethods {
-  static const browseFetchRoots = 'browse.fetchRoots';
-  static const browseFetchChildren = 'browse.fetchChildren';
-  static const browseFetchDetail = 'browse.fetchDetail';
-  static const browseResolvePath = 'browse.resolvePath';
-
-  static const timeseriesQuery = 'timeseries.queryTimeseriesData';
-  static const timeseriesQueryMultiple =
-      'timeseries.queryTimeseriesDataMultiple';
-  static const timeseriesQueryDownsampled =
-      'timeseries.queryTimeseriesDataDownsampled';
-  static const timeseriesCountMultiple = 'timeseries.countTimeseriesDataMultiple';
-
-  static const historyCreateView = 'historyViews.createHistoryView';
-  static const historyUpdateView = 'historyViews.updateHistoryView';
-  static const historyDeleteView = 'historyViews.deleteHistoryView';
-  static const historySelectViews = 'historyViews.selectHistoryViews';
-  static const historyGetKeys = 'historyViews.getHistoryViewKeys';
-  static const historyGetGraphs = 'historyViews.getHistoryViewGraphs';
-  static const historyGetKeyNames = 'historyViews.getHistoryViewKeyNames';
-  static const historyAddPeriod = 'historyViews.addHistoryViewPeriod';
-  static const historyDeletePeriod = 'historyViews.deleteHistoryViewPeriod';
-  static const historyListPeriods = 'historyViews.listHistoryViewPeriods';
-  static const historyRetentionHorizon = 'historyViews.getGlobalRetentionHorizon';
-
-  static const prefGetKeys = 'preferences.getKeys';
-  static const prefGetAll = 'preferences.getAll';
-  static const prefGetBool = 'preferences.getBool';
-  static const prefGetInt = 'preferences.getInt';
-  static const prefGetDouble = 'preferences.getDouble';
-  static const prefGetString = 'preferences.getString';
-  static const prefGetStringList = 'preferences.getStringList';
-  static const prefContainsKey = 'preferences.containsKey';
-  static const prefSetBool = 'preferences.setBool';
-  static const prefSetInt = 'preferences.setInt';
-  static const prefSetDouble = 'preferences.setDouble';
-  static const prefSetString = 'preferences.setString';
-  static const prefSetStringList = 'preferences.setStringList';
-  static const prefRemove = 'preferences.remove';
-  static const prefClear = 'preferences.clear';
-
-  /// The gateway's notification that a preference changed somewhere else.
-  static const preferencesChanged = 'preferences.changed';
-}
+/// Phase 10 moved them to `tfc_relay_protocol`'s `methods.dart`, where the
+/// gateway can reach them too; re-exported here so call sites that took them
+/// from this file still find them.
+export 'package:tfc_relay_protocol/tfc_relay_protocol.dart'
+    show DataServiceMethods;
 
 /// The JSON-RPC error code a stored value of the wrong type comes back under.
+///
+/// The gateway's `ServerErrorCodes.typeMismatch` (`error_codes.dart:94-100`).
 ///
 /// Declared here rather than imported for the reason `connection_supervisor`
 /// gives about the version-mismatch code: the number is the contract, and a
 /// production file may not reach into a package this one depends on only for
 /// its tests.
-const int _typeMismatch = -32001;
+///
+/// **It read `-32001` until Phase 10, and that was a real bug rather than a
+/// near miss.** `-32001` is the *contract harness*'s type-mismatch code
+/// (`rpc_names.dart:53`), borrowed from the kit's own peer when these classes
+/// were ported from it; on this wire it is `ServerErrorCodes.helloRequired`.
+/// So the check fired on exactly the wrong things in both directions:
+/// `PreferencesApi`'s promised `TypeError` never surfaced for a mismatch, and
+/// a call that arrived before the handshake was re-raised to a settings page
+/// as a type error about a value nobody had read.
+const int _typeMismatch = -32010;
 
 /// One request over the pipe: a method name, its parameters, its answer.
 ///
@@ -446,6 +413,14 @@ final class ClientPreferencesApi implements PreferencesApi {
   /// Called from the notification handler and nowhere else, which is what keeps
   /// "every change this reports arrived over the pipe" true rather than
   /// approximately true.
+  ///
+  /// One key at a time on purpose, even though the frame carries a list since
+  /// Phase 10: the handler fans the list out and calls this once per key, so
+  /// `onPreferencesChanged` stays a `Stream<String>` and contract check 13 is
+  /// untouched. **Do not add a buffer here.** Coalescing a burst into one
+  /// frame is the gateway's job (10-05 task 2); doing it again on this side
+  /// would delay an edit an operator is waiting to see and save nothing,
+  /// because the frames are already across.
   void announce(String key) {
     if (_changes.isClosed) return;
     _changes.add(key);
