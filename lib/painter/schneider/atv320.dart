@@ -11,16 +11,47 @@ class ATV320 extends CustomPainter {
   final String name;
   final String displayText; // Add this field
   final String topLabel; // Add this field for the top label
+
+  /// Point size of the inline label, in the painter's design space (mm at
+  /// 96 dpi), so it is independent of how large the drive is drawn on screen.
+  final double labelFontSize;
   final Color fillColor = atvBodyGrey;
 
   ATV320({
     required this.name,
     this.displayText = 'ATV3',
     this.topLabel = '',
+    this.labelFontSize = defaultLabelFontSize,
   }); // Add topLabel parameter
 
-  /// Maximum characters drawn per inline-label line.
+  /// Point size the inline label has always been drawn at, and the size the
+  /// line budget and line spacing below are calibrated against.
+  static const double defaultLabelFontSize = 20.0;
+
+  /// Range the label size may be configured over. The floor keeps the label
+  /// legible; the ceiling is where two stacked lines still clear the LCD
+  /// screen, which starts 35.5mm down the body — line two lands at
+  /// 8mm + 7mm x (size / 20) and is about 1.32em tall.
+  static const double minLabelFontSize = 8.0;
+  static const double maxLabelFontSize = 36.0;
+
+  /// Maximum characters drawn per inline-label line at
+  /// [defaultLabelFontSize]. See [labelCharsPerLine] for other sizes.
   static const int maxLabelCharsPerLine = 14;
+
+  /// How many characters of label fit across the 45mm-wide drive body at
+  /// [fontSize].
+  ///
+  /// Courier advances 0.6em per character, so the budget is simply how many
+  /// of those fit the body width — which reproduces [maxLabelCharsPerLine] at
+  /// [defaultLabelFontSize]. Without this the label would spill past the body
+  /// as soon as the size was raised.
+  static int labelCharsPerLine(double fontSize) {
+    const double bodyWidthPx = 45.0 * (96.0 / 25.4);
+    final int chars = (bodyWidthPx / (fontSize * 0.6)).floor();
+    // Below four there is no room for a word plus its "..." ellipsis.
+    return math.max(4, chars);
+  }
 
   /// Splits [topLabel] into the (at most two) lines drawn on the drive body.
   ///
@@ -29,11 +60,14 @@ class ATV320 extends CustomPainter {
   /// are capped at two, with an ellipsis on the second. Anything that does not
   /// yield two lines that way — including a label carrying only a stray or
   /// trailing newline — falls back to the historical behaviour: split on
-  /// spaces into at most two lines of [maxLabelCharsPerLine] characters,
+  /// spaces into at most two lines of [labelCharsPerLine] characters,
   /// truncating with "..." on overflow.
   @visibleForTesting
-  static List<String> splitTopLabel(String topLabel) {
-    const int maxCharsPerLine = maxLabelCharsPerLine;
+  static List<String> splitTopLabel(
+    String topLabel, {
+    double fontSize = defaultLabelFontSize,
+  }) {
+    final int maxCharsPerLine = labelCharsPerLine(fontSize);
 
     String clip(String line) => line.length > maxCharsPerLine
         ? '${line.substring(0, maxCharsPerLine)}...'
@@ -365,7 +399,11 @@ class ATV320 extends CustomPainter {
 
     // Add customizable label on top of the device
     if (topLabel.isNotEmpty) {
-      final lines = splitTopLabel(topLabel);
+      final lines = splitTopLabel(topLabel, fontSize: labelFontSize);
+
+      // 7mm apart at the default size; the gap tracks the size so raising it
+      // does not stack the two lines on top of each other.
+      final double lineGapMm = 7.0 * (labelFontSize / defaultLabelFontSize);
 
       for (int i = 0; i < lines.length; i++) {
         final linePainter = TextPainter(
@@ -373,9 +411,9 @@ class ATV320 extends CustomPainter {
           textAlign: TextAlign.center,
           text: TextSpan(
             text: lines[i],
-            style: const TextStyle(
+            style: TextStyle(
               color: Colors.white,
-              fontSize: 20.0,
+              fontSize: labelFontSize,
               fontWeight: FontWeight.bold,
               fontFamily: 'Courier', // Monospace font
             ),
@@ -383,8 +421,8 @@ class ATV320 extends CustomPainter {
         );
         linePainter.layout();
 
-        // Line 1 sits 8mm from the top of the drive, line 2 at 15mm.
-        final double lineY = top + ((i == 0 ? 8.0 : 15.0) * pxPerMm);
+        // Line 1 sits 8mm from the top of the drive, line 2 a gap below it.
+        final double lineY = top + ((8.0 + (i == 0 ? 0.0 : lineGapMm)) * pxPerMm);
         final double lineX =
             left + (widthPixels / 2.0) - (linePainter.width / 2.0);
         linePainter.paint(canvas, Offset(lineX, lineY));
@@ -628,6 +666,7 @@ class ATV320 extends CustomPainter {
     return name != old.name ||
         displayText != old.displayText ||
         topLabel != old.topLabel ||
+        labelFontSize != old.labelFontSize ||
         fillColor != old.fillColor;
   }
 }
@@ -637,11 +676,15 @@ class ATV320Widget extends StatelessWidget {
   final String displayText; // Add this field
   final String topLabel; // Add this field
 
+  /// Point size of the inline label. See [ATV320.labelFontSize].
+  final double labelFontSize;
+
   const ATV320Widget({
     super.key,
     required this.name,
     this.displayText = 'ATV3',
     this.topLabel = '',
+    this.labelFontSize = ATV320.defaultLabelFontSize,
   }); // Add topLabel parameter
 
   @override
@@ -662,6 +705,7 @@ class ATV320Widget extends StatelessWidget {
               name: name,
               displayText: displayText,
               topLabel: topLabel,
+              labelFontSize: labelFontSize,
             ),
           ),
         );
