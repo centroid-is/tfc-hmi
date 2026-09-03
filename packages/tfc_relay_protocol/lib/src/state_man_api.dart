@@ -33,7 +33,10 @@
 ///    surfaces as a per-key subscribe rejection and `Quality.errorConfig` on
 ///    the value, not as a second query path a caller must remember to consult.
 ///  * **Timeseries keeps `tableName`.** The four signatures come verbatim from
-///    working code (`packages/tfc_dart/lib/core/database.dart:722,755,837,1035`).
+///    working code (`packages/tfc_dart/lib/core/database.dart:1305,1338,1463,
+///    1620` — re-measured at 10-11; the signatures did not move, only the
+///    line numbers, and the file has grown since Phase 1 recorded 722, 755,
+///    837 and 1035).
 ///    Whether the wire speaks key space or table space is a Phase 10 question;
 ///    renaming a parameter now would silently change a signature that is being
 ///    frozen.
@@ -254,8 +257,13 @@ abstract interface class BrowseApi {
 
 /// Historical samples, for charts.
 ///
-/// The four signatures are verbatim from `database.dart:722,755,837,1035`,
-/// including the parameter name `tableName`. There is no method that takes a
+/// The four signatures are verbatim from `database.dart:1305` (Multiple),
+/// `:1338` (the single-series read), `:1463` (Downsampled) and `:1620`
+/// (Count) — measured at 10-11, when the phase that implements them ran the
+/// gate. The four are cited in file order rather than in the order they are
+/// declared below, and the older numbers 722/755/837/1035 in this file's
+/// history are the same four methods before `database.dart` grew.
+/// Including the parameter name `tableName`. There is no method that takes a
 /// statement, an expression or a filter string: charts ask for a named series
 /// over a time range, and every argument here is a value the gateway
 /// validates. That is a deliberate limit on what a client can make the
@@ -293,7 +301,11 @@ abstract interface class TimeseriesApi {
 /// Saved history views: their keys, graphs and time windows.
 ///
 /// The eleven method names and their semantics are mirrored verbatim from
-/// `packages/tfc_dart/lib/core/database_drift.dart:393-561`; their return
+/// `packages/tfc_dart/lib/core/database_drift.dart:585-779` (re-measured at
+/// 10-11: `createHistoryView` at `:585` through `getGlobalRetentionHorizon`
+/// ending at `:779`, the whole "Convenience API for History Views" block.
+/// Phase 1 recorded 393-561, which is the same eleven methods before the file
+/// grew); their return
 /// types are not, because those are ORM row classes out of a generated file
 /// that can neither live in a zero-dependency package nor cross a socket with
 /// their field names intact. The plain records in `history_view.dart` are the
