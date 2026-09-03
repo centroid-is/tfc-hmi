@@ -307,9 +307,11 @@ Future<void> _startApp([bool debugMode = false]) async {
   final topLevelMenuItems = buildTopLevelMenuItems(
     isLinux: Platform.isLinux,
     pageMenuItems: extraMenuItems,
-    // History View sits under Advanced unless the operator promoted it to
-    // the top level in the page editor (recorded in the top-level order).
+    // History View and Reports sit under Advanced unless the operator
+    // promoted them to the top level in the page editor (recorded in the
+    // top-level order).
     historyAtTopLevel: historyViewIsTopLevel(pageManager.topLevelOrder),
+    reportsAtTopLevel: reportsIsTopLevel(pageManager.topLevelOrder),
   );
   for (final menuItem in topLevelMenuItems) {
     registry.addMenuItem(menuItem);
