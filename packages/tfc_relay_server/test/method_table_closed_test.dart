@@ -75,6 +75,52 @@ RelaySession _session() {
   return session;
 }
 
+/// The data-service half of a session's ledger.
+///
+/// Selected by the dot, and the rule is worth stating because the whole
+/// equality below rests on it. Every data-service name is `family.methodName`
+/// (`methods.dart:73-76`) and **nothing else on this wire has a dot in it** —
+/// the nine names that predate Phase 10 are `hello`, `ping`, `subscribe`,
+/// `unsubscribe`, `write`, `writeStatus`, `read`, `readFresh`, `readMany`, and
+/// the one client notification is `h`.
+///
+/// Selecting by the dot rather than by intersecting with
+/// `DataServiceMethods.all` is the difference between a check and a tautology:
+/// an intersection would quietly drop a registered `historyViews.dropTable`
+/// instead of reporting it, which is precisely direction two. It also means
+/// `preferences.changed` — dotted, and declared in the same class but in none
+/// of its sets — fails this comparison by name if a handler is ever attached
+/// to it, which is the point of the arm below.
+Set<String> dataServiceNames(Set<String> ledger) =>
+    ledger.where((name) => name.contains('.')).toSet();
+
+/// Every harness lever [ledger] can reach, in either spelling.
+///
+/// Iterated from `HarnessMethods.levers`, never restated: the set is declared
+/// as data upstream (`rpc_names.dart:378-381`) *for this*, so a thirteenth
+/// lever is covered on the day it is added.
+///
+/// **Both spellings, and the second is the one that would really happen.**
+/// The declared constants carry `HarnessMethods.prefix` — `harness.` — which is
+/// a greppable boundary rather than a defence. The realistic accident is a
+/// lever promoted to a wire name by dropping that prefix, exactly the way the
+/// thirty-four data services lost theirs when they moved to `methods.dart`
+/// (`client_sub_apis.dart:12-16`); an intersection against the prefixed
+/// spelling alone would watch the door nobody would use. The returned set
+/// carries whichever spelling was found, so the failure names it.
+Set<String> leversOnTheWire(Set<String> ledger) => {
+      for (final lever in HarnessMethods.levers) ...[
+        if (ledger.contains(lever)) lever,
+        if (ledger.contains(_unprefixed(lever))) _unprefixed(lever),
+      ],
+    };
+
+/// [name] without the harness prefix — the spelling it would carry if somebody
+/// moved it onto the real table.
+String _unprefixed(String name) => name.startsWith(HarnessMethods.prefix)
+    ? name.substring(HarnessMethods.prefix.length)
+    : name;
+
 void main() {
   group('the data-service ledger is closed in both directions', () {
     test('the dotted half of the ledger is exactly the declared thirty-four',
