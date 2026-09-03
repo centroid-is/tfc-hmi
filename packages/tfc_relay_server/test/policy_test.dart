@@ -163,6 +163,66 @@ FakeBrowse _browseTree() => FakeBrowse(
       },
     );
 
+// ---------------------------------------------------------------------------
+// Recorded history, for the timeseries surface (10-03).
+// ---------------------------------------------------------------------------
+
+/// The instant the seeded series starts at. Fixed and UTC.
+final _tsBase = DateTime.utc(2026, 8, 13, 6);
+
+/// A series name the fixtures' resolver maps to **no** key at all.
+///
+/// The third thing a station can ask about, alongside "hidden" and "never
+/// existed": a name that is well formed, that the gateway has no mapping for,
+/// and that must therefore be answered as a series that does not exist — while
+/// still being *counted*, because 10-CONTEXT amendment 6 requires an unmappable
+/// table to be visible rather than merely refused.
+const _unmapped = 'CN09.MOT01.speed';
+
+int _ms(DateTime at) => at.millisecondsSinceEpoch;
+
+/// Both real tags have history, so no timeseries case can pass by asking about
+/// a series that was never recorded in the first place.
+FakeTimeseries _seededHistory() => FakeTimeseries()
+  ..seed(_key, [
+    for (var i = 0; i < 5; i++)
+      TimeseriesData<num>(1200 + i, _tsBase.add(Duration(minutes: i))),
+  ])
+  ..seed(_hidden, [
+    for (var i = 0; i < 5; i++)
+      TimeseriesData<num>(900 + i, _tsBase.add(Duration(minutes: i))),
+  ]);
+
+/// A resolver that maps the two real tags and refuses everything else.
+///
+/// `PermissiveSeriesResolver` maps every name to itself, which is honest for
+/// this file's browse tree but cannot express "no mapping" — and "no mapping"
+/// is the whole of what the unmappable cases are about. Everything it does map
+/// it maps to itself, so the hiding comparison is unchanged for the names that
+/// resolve.
+final class _MapsTheRealTags implements SeriesResolver {
+  const _MapsTheRealTags();
+
+  static const _mapped = {_key, _hidden, _ghost};
+
+  @override
+  ResolvedSeries? resolve(String wireName) {
+    final address = SeriesAddress.parse(wireName);
+    if (!_mapped.contains(address.series)) return null;
+    return ResolvedSeries(
+        table: address.series,
+        member: address.member,
+        plantKey: address.series);
+  }
+
+  @override
+  String? keyForTable(String table) =>
+      _mapped.contains(table) ? table : null;
+
+  @override
+  String? keyForNode(String nodeId) => nodeId;
+}
+
 /// A panel next to a machine, and a display on a wall.
 const _panel = Identity(stationId: 'ST101', role: Role.operate);
 const _display = Identity(stationId: 'HALL-DISPLAY', role: Role.view);
@@ -238,14 +298,19 @@ final class _Gateway {
   static Future<_Gateway> start({
     KeyPolicy policy = const AllVisibleOperatorWrites(),
     Identity identity = _panel,
+    SeriesResolver resolver = const PermissiveSeriesResolver(),
   }) async {
-    final plant = FakeStateMan(browse: _browseTree());
+    final plant =
+        FakeStateMan(browse: _browseTree(), timeseries: _seededHistory());
     final server = RelayServer(
-      // Identity mapping: this file's tree names its leaves after the plant
-      // keys they are, so `keyForNode` returning its argument is the honest
-      // answer rather than a fixture's shortcut. `permissive_resolver.dart`
-      // carries the sentence about what it would mean in production.
-      resolver: const PermissiveSeriesResolver(),
+      // Identity mapping by default: this file's tree names its leaves after
+      // the plant keys they are, so `keyForNode` returning its argument is the
+      // honest answer rather than a fixture's shortcut.
+      // `permissive_resolver.dart` carries the sentence about what it would
+      // mean in production. The timeseries cases override it with
+      // `_MapsTheRealTags`, which is the same mapping plus the one thing a
+      // permissive resolver cannot express: a name it will not map.
+      resolver: resolver,
       api: plant,
       config: ServerConfig(tick: ServerConfig.minTick),
       validator: _AlwaysStation(identity),
@@ -373,6 +438,15 @@ const List<_Surface> _surfaces = [
   // anywhere in the tree, what did resolvePath say, and what did the detail
   // pane get", and hidden and nonexistent have to agree on all three.
   (name: 'browse', ask: _askBrowse),
+  // 10-03. The eighth, and it fits the existing shape without reshaping the
+  // loop: a timeseries method is keyed by a *series name*, this file's tree
+  // and its resolver both name a series after the plant key it records, so
+  // "ask this surface about a tag" is a well-formed request here in exactly
+  // the way it is for the other seven. What it compares is all four
+  // timeseries methods at once, for browse's reason: a filter fitted to the
+  // single-series path and forgotten on the multi-series one would hide a
+  // tag from one chart and hand its history to the next.
+  (name: 'timeseries', ask: _askTimeseries),
 ];
 
 /// Whatever the gateway said, refusal or answer, in one comparable shape.
@@ -489,6 +563,58 @@ Future<Object?> _askBrowse(
           params: {'node': _probeNodeFor(key).toJson()},
           what: 'the detail of $key');
       return {'listed': listed, 'path': chain, 'detail': detail};
+    }, key);
+
+/// All four timeseries methods, as one comparable answer.
+///
+/// Four rather than one, and the reason is browse's: a filter fitted to
+/// `queryTimeseriesData` and forgotten on `queryTimeseriesDataMultiple` hides
+/// a series from one chart and hands its history to the next, and the
+/// multi-series path is the one every real chart with more than one line
+/// uses.
+///
+/// The window is wide enough to contain everything [_seededHistory] records,
+/// so an empty answer here means the *filter* emptied it rather than the
+/// window.
+Future<Object?> _askTimeseries(
+        _Gateway gateway, _Station station, String key) =>
+    _outcome(() async {
+      final to = _tsBase.add(const Duration(hours: 1));
+      final one = await station.request(DataServiceMethods.timeseriesQuery,
+          params: {'table': key, 'to': _ms(to), 'from': _ms(_tsBase)},
+          what: 'the recorded series for $key');
+      final many =
+          await station.request(DataServiceMethods.timeseriesQueryMultiple,
+              params: {
+                'tables': [key],
+                'to': _ms(to),
+                'from': _ms(_tsBase),
+              },
+              what: 'the multi-series answer for $key');
+      final downsampled = await station.request(
+          DataServiceMethods.timeseriesQueryDownsampled,
+          params: {
+            'table': key,
+            'from': _ms(_tsBase),
+            'to': _ms(to),
+            'maxPoints': 100,
+          },
+          what: 'the downsampled series for $key');
+      final counts =
+          await station.request(DataServiceMethods.timeseriesCountMultiple,
+              params: {
+                'table': key,
+                'intervalMs': const Duration(minutes: 1).inMilliseconds,
+                'howMany': 10,
+                'since': _ms(_tsBase),
+              },
+              what: 'the recording strip for $key');
+      return {
+        'one': one,
+        'many': many,
+        'downsampled': downsampled,
+        'counts': counts,
+      };
     }, key);
 
 /// The key list, read off the production decorator.
@@ -742,18 +868,176 @@ void main() {
     });
   });
 
+  group('a series the gateway cannot map is a series that does not exist', () {
+    test('an unmapped series answers exactly as a hidden one does', () async {
+      final gateway = await _Gateway.start(
+          policy: const _HidesTags({_hidden}),
+          resolver: const _MapsTheRealTags());
+      final station = await gateway.station();
+
+      final forUnmapped = await _askTimeseries(gateway, station, _unmapped);
+      final forHidden = await _askTimeseries(gateway, station, _hidden);
+
+      expect(_withoutKeyName(forUnmapped! as Map<String, Object?>, _unmapped),
+          equals(_withoutKeyName(forHidden! as Map<String, Object?>, _hidden)),
+          reason: 'a series with no mapping was told apart from one the '
+              'station may not see. Both must be the answer a series that '
+              'does not exist gets, and the reason they must agree is that '
+              'the difference is an oracle: the first says "this gateway '
+              'does not collect that", which is a fact about the collection '
+              'plan, and the second says "there is history here you may not '
+              'have", which is the enumeration the hiding rule closes. '
+              'Compared structurally rather than restated as a literal, so a '
+              'later phase changing the nonexistent shape has to change both');
+    });
+
+    test('an unmapped series answers exactly as a nonexistent one does',
+        () async {
+      final gateway = await _Gateway.start(resolver: const _MapsTheRealTags());
+      final station = await gateway.station();
+
+      final forUnmapped = await _askTimeseries(gateway, station, _unmapped);
+      final forGhost = await _askTimeseries(gateway, station, _ghost);
+
+      expect(_withoutKeyName(forUnmapped! as Map<String, Object?>, _unmapped),
+          equals(_withoutKeyName(forGhost! as Map<String, Object?>, _ghost)),
+          reason: 'under the *shipped* policy, which hides nothing, an '
+              'unmappable series must still be indistinguishable from a '
+              'mapped series with no samples. Otherwise a station learns '
+              'which names the collection plan contains without ever being '
+              'refused anything');
+    });
+
+    test('the multi-series path answers an empty entry, never an omission',
+        () async {
+      final gateway = await _Gateway.start(
+          policy: const _HidesTags({_hidden}),
+          resolver: const _MapsTheRealTags());
+      final station = await gateway.station();
+
+      final answered = _asMap(await station.request(
+          DataServiceMethods.timeseriesQueryMultiple,
+          params: {
+            'tables': [_key, _hidden, _unmapped],
+            'to': _ms(_tsBase.add(const Duration(hours: 1))),
+            'from': _ms(_tsBase),
+          },
+          what: 'one visible, one hidden and one unmappable series'));
+
+      expect(answered.keys, containsAll([_key, _hidden, _unmapped]),
+          reason: 'check 8\'s rule holds for hidden and unmappable series '
+              'too: an absent entry and an empty entry are different answers '
+              'and only one of them is true. An omission would also be a '
+              'perfect existence oracle — the chart would learn exactly which '
+              'of the three names the gateway is willing to serve');
+      expect(answered[_hidden], isEmpty);
+      expect(answered[_unmapped], isEmpty);
+      expect(answered[_key], isNotEmpty,
+          reason: 'and the visible series is still answered, or the filter '
+              'is emptying everything and the two assertions above are true '
+              'for the wrong reason');
+    });
+
+    test('the unmappable count moves exactly once per unmappable query, and '
+        'is readable without a debugger', () async {
+      final gateway = await _Gateway.start(resolver: const _MapsTheRealTags());
+      final station = await gateway.station();
+      final tally = gateway.server.seriesTally;
+
+      final before = tally.unmappableQueries;
+      await station.request(DataServiceMethods.timeseriesQuery,
+          params: {
+            'table': _unmapped,
+            'to': _ms(_tsBase.add(const Duration(hours: 1))),
+          },
+          what: 'one query for a series with no mapping');
+
+      expect(tally.unmappableQueries, before + 1,
+          reason: 'the wire answer for an unmappable series is deliberately '
+              'silent, so this count is the only place the gap is visible. '
+              '10-CONTEXT amendment 6 requires an unmappable table to be '
+              '*visible*, not merely refused, and the refusal itself cannot '
+              'name what it refused without breaking the hiding rule — so '
+              'the gateway-side count is the reconciliation. A chart pointed '
+              'at a pre-cutover table looks exactly like a database problem '
+              'the first time it happens, and this is what makes it one '
+              'query instead of one afternoon');
+      expect(tally.unmappableNames, contains(_unmapped),
+          reason: 'a bare count says something is wrong; the name says which '
+              'series to add to the collection plan. This is read off the '
+              'server, never sent');
+
+      await station.request(DataServiceMethods.timeseriesQuery,
+          params: {
+            'table': _key,
+            'to': _ms(_tsBase.add(const Duration(hours: 1))),
+          },
+          what: 'one query for a series that does map');
+
+      expect(tally.unmappableQueries, before + 1,
+          reason: 'a series that resolves must not be counted. A count that '
+              'rose on every query would be a count nobody could read '
+              'anything out of');
+    });
+
+    test('a member address is resolved once, and canSee is asked about the '
+        'series', () async {
+      final gateway = await _Gateway.start(
+          policy: const _HidesTags({_hidden}),
+          resolver: const _MapsTheRealTags());
+      final station = await gateway.station();
+      final tally = gateway.server.seriesTally;
+
+      final visible = await station.request(
+          DataServiceMethods.timeseriesQuery,
+          params: {
+            'table': '$_key:speed',
+            'to': _ms(_tsBase.add(const Duration(hours: 1))),
+            'from': _ms(_tsBase),
+          },
+          what: 'one member of a visible series');
+      final hidden = await station.request(DataServiceMethods.timeseriesQuery,
+          params: {
+            'table': '$_hidden:speed',
+            'to': _ms(_tsBase.add(const Duration(hours: 1))),
+            'from': _ms(_tsBase),
+          },
+          what: 'one member of a hidden series');
+
+      expect(visible, isNotEmpty,
+          reason: '`<series>:<member>` is the addressing 10-CONTEXT ruling 2 '
+              'settled on. The member is stripped before the table is '
+              'resolved, so a member address reaches the same table the bare '
+              'name does — otherwise every struct chart in the plant reads as '
+              'a series that does not exist');
+      expect(hidden, isEmpty,
+          reason: 'and canSee is asked about the *series* key, not about the '
+              'member. A policy is written about tags; "CN02.MOT01.speed" is '
+              'a tag and "CN02.MOT01.speed:speed" is a chart\'s way of '
+              'selecting a column out of one. Asking about the second would '
+              'answer true for every hidden struct in the plant');
+      expect(tally.unmappableQueries, 0,
+          reason: 'a member of a series that maps is not an unmappable '
+              'series; counting it would fill the diagnostic with names that '
+              'are fine');
+    });
+  });
+
   group('a hidden key is a key that does not exist', () {
     test('a hidden key is indistinguishable from a key that does not exist',
         () async {
-      final gateway = await _Gateway.start(policy: const _HidesTags({_hidden}));
+      final gateway = await _Gateway.start(
+          policy: const _HidesTags({_hidden}),
+          resolver: const _MapsTheRealTags());
       gateway.plant.setValue(_key, 1200);
       gateway.plant.setValue(_hidden, 900);
       final station = await gateway.station();
 
       // Anti-vacuity: a loop over an empty list asserts nothing, and the
       // count is named so that *deleting* a surface is as visible as adding
-      // one. Seven since 10-02 added browse.
-      expect(_surfaces, hasLength(7),
+      // one. Seven since 10-02 added browse, eight since 10-03 added
+      // timeseries.
+      expect(_surfaces, hasLength(8),
           reason: 'the loop below covers ${_surfaces.length} surfaces. Each '
               'one is a way to ask about a tag and therefore a way to learn '
               'that it exists; a surface missing from this list is one '
@@ -802,6 +1086,34 @@ void main() {
           reason: 'a served tag carries no rejection map — the state the '
               'hidden one is being compared against is a genuinely healthy '
               'read');
+    });
+
+    test('the seeded history is really there under the shipped policy',
+        () async {
+      // The timeseries surface's own anti-vacuity companion, and it is
+      // separate from the `read` one above because it can fail on its own:
+      // the loop would pass against a gateway whose history was empty for
+      // *every* tag, and an empty historian is a plausible fixture bug.
+      final gateway = await _Gateway.start(resolver: const _MapsTheRealTags());
+      final station = await gateway.station();
+
+      final answered = await station.request(
+          DataServiceMethods.timeseriesQuery,
+          params: {
+            'table': _hidden,
+            'to': _ms(_tsBase.add(const Duration(hours: 1))),
+            'from': _ms(_tsBase),
+          },
+          what: 'the hidden tag\'s history, unhidden');
+
+      expect(answered, hasLength(5),
+          reason: 'the series the hiding case conceals has nothing recorded '
+              'in the first place, so that case is comparing two empty '
+              'answers and asserting nothing');
+      expect(((answered! as List).first as Map)['v'], 900,
+          reason: 'and the samples must be the ones seeded, so that "empty" '
+              'under the hiding policy is a filter having run rather than a '
+              'window that never contained anything');
     });
 
     test('a hidden key\'s write is not answered forbidden', () async {

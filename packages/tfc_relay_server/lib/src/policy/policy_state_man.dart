@@ -75,6 +75,7 @@ import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import '../auth/identity.dart';
 import 'key_policy.dart';
+import 'series_mapping_tally.dart';
 
 /// The shared source, seen through one session's policy.
 ///
@@ -96,6 +97,7 @@ final class PolicyStateMan implements StateManApi {
     required this.source,
     required this.policy,
     required this.resolver,
+    required this.tally,
     required this.identityOf,
   });
 
@@ -124,6 +126,15 @@ final class PolicyStateMan implements StateManApi {
   ///
   /// Required, no default. See `relay_server.dart`'s `resolver` parameter.
   final SeriesResolver resolver;
+
+  /// Where a series this gateway cannot map is recorded.
+  ///
+  /// **Gateway-wide, not per session**, and required for the same reason
+  /// [resolver] is: a tally created here by default would reset every time a
+  /// panel reconnected, which is exactly the number that has to accumulate.
+  /// See [SeriesMappingTally] for why a count exists at all when the wire
+  /// answer is deliberately silent.
+  final SeriesMappingTally tally;
 
   /// Who is asking, read **late**.
   ///

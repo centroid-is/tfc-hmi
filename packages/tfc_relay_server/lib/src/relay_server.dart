@@ -43,6 +43,7 @@ import 'handle_table.dart';
 import 'health/cert_health_state_man.dart';
 import 'health/session_health_state_man.dart';
 import 'policy/key_policy.dart';
+import 'policy/series_mapping_tally.dart';
 import 'relay_session.dart';
 import 'server_config.dart';
 import 'session_sink.dart';
@@ -192,6 +193,22 @@ final class RelayServer {
   /// machine, about commands the gateway had received and forwarded. The
   /// argument in full is in `write_outcome_log.dart`.
   late final WriteOutcomeLog writeOutcomes;
+
+  /// What this gateway has been asked for that it has no series mapping for.
+  ///
+  /// **One per gateway, and the surface an engineer reads.** The wire answer
+  /// for an unmappable series is deliberately indistinguishable from a series
+  /// that does not exist (T-10-12), so this is the only place the gap is
+  /// visible — see [SeriesMappingTally] for both halves of that argument.
+  /// 10-07 builds the real resolver over 8b's collection plan and 10-10 the
+  /// reader; both read this to tell "nothing recorded" from "never mapped".
+  /// Announced through [onError] with [StackTrace.empty] — the package's one
+  /// notification seam, and the shape `error_reporter.dart` reserves for a
+  /// *condition* a peer can produce at will rather than a defect. Once per
+  /// distinct name, never per query: a dashboard polling one broken chart is
+  /// one mapping gap, not one a second.
+  late final SeriesMappingTally seriesTally =
+      SeriesMappingTally(report: onError);
 
   /// The last subscription generation this gateway minted.
   int _generations = 0;
@@ -692,6 +709,7 @@ final class RelayServer {
         // One log for the whole gateway: a reconnecting panel is a new session
         // asking about a write the previous one issued.
         writeOutcomes: writeOutcomes,
+        seriesTally: seriesTally,
         // One counter for the gateway, so no two establishments anywhere on it
         // share a generation — including across the reconnect that replaces
         // one session with another (04-REVIEW CR-04).

@@ -41,6 +41,7 @@ import 'handle_table.dart';
 import 'health/session_health_state_man.dart';
 import 'policy/key_policy.dart';
 import 'policy/policy_state_man.dart';
+import 'policy/series_mapping_tally.dart';
 import 'server_config.dart';
 import 'session_handlers.dart';
 import 'subscription_registry.dart';
@@ -122,6 +123,7 @@ final class RelaySession {
     this._emitFrame,
     this._onClosing,
     this._writeOutcomes,
+    this._seriesTally,
     this._mintGeneration,
   );
 
@@ -166,6 +168,7 @@ final class RelaySession {
     required SeriesResolver resolver,
     List<String> serverSupported = const [protocolVersion],
     WriteOutcomeLog? writeOutcomes,
+    SeriesMappingTally? seriesTally,
     int Function()? mintGeneration,
     Future<void> Function(int code, String reason)? closeChannel,
     void Function(String frame)? emitFrame,
@@ -211,6 +214,7 @@ final class RelaySession {
       onClosing,
       writeOutcomes ??
           WriteOutcomeLog(ttl: config.writeOutcomeTtl, now: clock),
+      seriesTally ?? SeriesMappingTally(),
       mintGeneration,
     )
       .._onError = onError
@@ -359,6 +363,7 @@ final class RelaySession {
     source: _source,
     policy: policy,
     resolver: resolver,
+    tally: _seriesTally,
     // Late-read, the `epochOf` / `ownerOf` idiom below: the identity is minted
     // by `_hello`, which cannot have run when this object is built.
     identityOf: () => _identity,
@@ -435,6 +440,16 @@ final class RelaySession {
   /// lifetime 04-REVIEW CR-02 is about, so a session built that way can only
   /// ever answer about writes it handled itself.
   final WriteOutcomeLog _writeOutcomes;
+
+  /// Where a series this gateway cannot map is recorded.
+  ///
+  /// Server-owned and shared across sessions, like [_writeOutcomes] and for a
+  /// related reason: the number that matters is "is anything still asking for
+  /// a series the collection plan does not produce", and a per-socket copy
+  /// would be reset by every reconnect. The default here is a fresh one so a
+  /// session built by hand in a test is not obliged to supply one; `RelayServer`
+  /// always does.
+  final SeriesMappingTally _seriesTally;
 
   /// This session's value handlers, held because they own the hold-to-run map
   /// and [_teardown] has to release it. Null only between construction and
