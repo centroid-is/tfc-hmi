@@ -594,9 +594,20 @@ final class DataHandlers {
               .getKeys(allowList: _allowList(params, DataServiceMethods.prefGetKeys)))
           .toList();
 
-  /// Every key and value, filtered the same way.
-  Future<Object?> prefGetAll(rpc.Parameters params) => source.preferences
-      .getAll(allowList: _allowList(params, DataServiceMethods.prefGetAll));
+  /// Every key and value, filtered the same way — and **[_sized]**, because
+  /// this is the second place a `ResultTooLarge` is raised.
+  ///
+  /// It was not wrapped when the mapping landed: 10-03 wrapped the four
+  /// timeseries methods and nothing else raised one yet. 10-10's byte ceiling
+  /// does, and unwrapped it would leave the handler uncaught and reach the
+  /// wire through `relay_session.dart`'s catch-all as `handlerFailed`
+  /// (-32011) — which the wire documents as possibly transient. A settings
+  /// page over a store larger than the cap would then retry forever something
+  /// no retry can fix, on every panel that opened it.
+  Future<Object?> prefGetAll(rpc.Parameters params) => _sized(
+      DataServiceMethods.prefGetAll,
+      () => source.preferences.getAll(
+          allowList: _allowList(params, DataServiceMethods.prefGetAll)));
 
   /// A stored bool, or null when the key is absent.
   ///
