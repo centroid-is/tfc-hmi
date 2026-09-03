@@ -151,10 +151,12 @@ final class DataHandlers {
     final table = _series(params, 'table', method);
     final to = _requiredInstant(params, 'to', method);
     final from = _instant(params, 'from', method);
+    final orderBy = _orderBy(params, method);
+    _requireForwardWindow(from, to, method);
     return _points(await _sized(
         method,
-        () => source.timeseries.queryTimeseriesData(table, to,
-            orderBy: params['orderBy'].valueOr(null) as String?, from: from)));
+        () => source.timeseries
+            .queryTimeseriesData(table, to, orderBy: orderBy, from: from)));
   }
 
   /// The same window for several series in one round trip, keyed by name.
@@ -176,10 +178,12 @@ final class DataHandlers {
     final tables = _seriesList(params, 'tables', method);
     final to = _requiredInstant(params, 'to', method);
     final from = _instant(params, 'from', method);
+    final orderBy = _orderBy(params, method);
+    _requireForwardWindow(from, to, method);
     final answers = await _sized(
         method,
         () => source.timeseries.queryTimeseriesDataMultiple(tables, to,
-            orderBy: params['orderBy'].valueOr(null) as String?, from: from));
+            orderBy: orderBy, from: from));
     return {
       for (final table in tables) table: _points(answers[table] ?? const []),
     };
@@ -191,7 +195,15 @@ final class DataHandlers {
     final table = _series(params, 'table', method);
     final from = _requiredInstant(params, 'from', method);
     final to = _requiredInstant(params, 'to', method);
-    final maxPoints = _requiredInt(params, 'maxPoints', method);
+    final maxPoints = _requiredInt(params, 'maxPoints', method,
+        atLeast: ServerConfig.minTimeseriesPoints,
+        atMost: config.maxTimeseriesPoints,
+        why: 'below ${ServerConfig.minTimeseriesPoints} the downsampler '
+            'computes zero buckets and silently falls back to the unbounded '
+            'raw query, which is the one thing this method exists to avoid; '
+            'above ${config.maxTimeseriesPoints} the caller is not drawing a '
+            'chart, because a chart has hundreds of pixels');
+    _requireForwardWindow(from, to, method);
     return _points(await _sized(
         method,
         () => source.timeseries.queryTimeseriesDataDownsampled(table, from, to,
@@ -209,8 +221,20 @@ final class DataHandlers {
   Future<Object?> timeseriesCountMultiple(rpc.Parameters params) async {
     const method = DataServiceMethods.timeseriesCountMultiple;
     final table = _series(params, 'table', method);
-    final intervalMs = _requiredInt(params, 'intervalMs', method);
-    final howMany = _requiredInt(params, 'howMany', method);
+    final intervalMs = _requiredInt(params, 'intervalMs', method,
+        atLeast: 1,
+        atMost: config.maxTimeseriesIntervalMs,
+        why: 'a bucket narrower than a millisecond truncates to zero and is a '
+            'division by zero one bucket later; a bucket wider than a day '
+            'spans more window than any retention horizon here holds, so '
+            'every bucket comes back empty and the strip reads as "the '
+            'recorder stopped"');
+    final howMany = _requiredInt(params, 'howMany', method,
+        atLeast: 1,
+        atMost: config.maxTimeseriesBuckets,
+        why: 'this method builds one SELECT COUNT(*) per bucket and joins '
+            'them with UNION ALL, so it is the number of subqueries in one '
+            'statement rather than a page size');
     final since = _instant(params, 'since', method);
     final counts = await _sized(
         method,
@@ -225,17 +249,90 @@ final class DataHandlers {
 
   // ------------------------------------------------------------------ shared
 
-  /// A wire series name out of [name].
+  /// The only two orderings a client may ask for.
   ///
-  /// A non-empty string is all this asks for; the grammar and the allow-list
-  /// are `hostile_params_test.dart`'s subject and live further down this file.
-  static String _series(rpc.Parameters params, String name, String method) {
+  /// **One string, one place.** This is the whole allow-list; every ordering
+  /// decision in this package reads it, and `hostile_params_test.dart` is the
+  /// file that proves it bites.
+  static const _orderings = {'time ASC', 'time DESC'};
+
+  /// The ordering [params] asked for, or null for "none asked for".
+  ///
+  /// ## Refused, never sanitized
+  ///
+  /// `orderBy` reaches
+  /// `'SELECT $cols FROM "$tableName"$whereClause$orderByClause'` in
+  /// `database_drift.dart`'s `tableQuery`, unescaped, in a position where a
+  /// subquery is legal grammar — so `'time ASC, (SELECT 1)'` is not an
+  /// injection that has to escape a quote first, it is simply a longer
+  /// `ORDER BY` clause. Mapping the frozen signature onto the wire without
+  /// this check would ship the `query(sql)` RPC the project forbids, wearing a
+  /// signature nobody reads as one.
+  ///
+  /// A *sanitizer* invites the question of whether it is complete. A two-value
+  /// allow-list does not, and nothing is lost by it: the contract's own fake
+  /// implements ordering as `_descending(orderBy) ? reversed : forward`, which
+  /// is two values and a default. Case is **not** normalised and whitespace is
+  /// **not** collapsed, because each of those is a transformation and a
+  /// transformation is the first step of a sanitizer.
+  ///
+  /// ## And it is here rather than in the database
+  ///
+  /// `tfc_dart`'s database layer is shared with an application that has always
+  /// passed its own literals. Moving the check down would either change that
+  /// application's behaviour or leave this gateway trusting that it had. The
+  /// gateway does not trust a client-supplied SQL fragment; it refuses one, at
+  /// the boundary, before the source is reached.
+  static String? _orderBy(rpc.Parameters params, String method) {
+    final raw = params['orderBy'].valueOr(null);
+    // Null is a legitimate value — "no ordering asked for" — and the client
+    // sends the key even when it is null so the two stay distinguishable. No
+    // default is invented here: the frozen signature already declares one, and
+    // inventing a second would take the distinction away from the source.
+    if (raw == null) return null;
+    if (raw is String && _orderings.contains(raw)) return raw;
+    throw _refuse(
+        method,
+        '$method accepts "orderBy" as exactly one of ${_orderings.join(' or ')}'
+        ', or absent. It is refused rather than sanitized or completed: this '
+        'string is interpolated into a SQL ORDER BY clause, where a subquery '
+        'is legal grammar, so anything outside the allow-list is a statement '
+        'fragment the caller chose. Case is not normalised and whitespace is '
+        'not collapsed, because both are transformations and a transformation '
+        'is the first step of a sanitizer');
+  }
+
+  /// A wire series name out of [name], parsed.
+  ///
+  /// **The grammar belt**, and it is the handler's half of a two-belt
+  /// arrangement. This one refuses a string that is not a *name*: more than
+  /// one colon, an empty series, a trailing colon — the `SeriesAddress`
+  /// grammar, enforced through the resolver so the parse happens in exactly
+  /// one place. 10-07's reader carries the other belt, refusing a name that is
+  /// well formed but outside the collection plan before it can reach a
+  /// statement. Both belts are cheap and two belts is the house convention on
+  /// ingress (`value_handlers.dart:189-192`).
+  ///
+  /// **A malformed name may be echoed; an unmapped one may not.** "You spelled
+  /// it wrong" and "there is no such series" are different facts: the first is
+  /// something the caller already knows, and the second, said out loud, would
+  /// let a station enumerate the historian one name at a time. So a name that
+  /// resolves to **null** is deliberately *not* refused here — it is answered
+  /// as a series that does not exist, one layer down, in `_PolicyTimeseries`,
+  /// which also counts it so the gap is diagnosable (T-10-12, 10-CONTEXT
+  /// amendment 6).
+  String _series(rpc.Parameters params, String name, String method) {
     final raw = params[name].valueOr(null);
     if (raw is! String || raw.isEmpty) {
       throw _refuse(
           method,
           '$method needs a non-empty string "$name": the series to read, '
           'named as `<series>` or `<series>:<member>`');
+    }
+    try {
+      resolver.resolve(raw);
+    } on FormatException catch (malformed) {
+      throw _refuse(method, '$method refused "$name": ${malformed.message}');
     }
     return raw;
   }
@@ -267,17 +364,55 @@ final class DataHandlers {
           '${config.maxKeysPerSubscribe}; split the request or raise '
           'maxKeysPerSubscribe');
     }
-    return [
-      for (var i = 0; i < raw.length; i++)
-        if (raw[i] case final String entry when entry.isNotEmpty)
-          entry
-        else
-          throw _refuse(
-              method,
-              '$method\'s "$name" carries a non-string or empty entry at '
-              'index $i: every entry names a series, as `<series>` or '
-              '`<series>:<member>`'),
-    ];
+    final names = <String>[];
+    for (var i = 0; i < raw.length; i++) {
+      final entry = raw[i];
+      if (entry is! String || entry.isEmpty) {
+        throw _refuse(
+            method,
+            '$method\'s "$name" carries a non-string or empty entry at '
+            'index $i: every entry names a series, as `<series>` or '
+            '`<series>:<member>`');
+      }
+      // The whole call, not the one entry — unlike `readMany`, whose per-key
+      // rejection map exists because a page config carries ~1500 hand-edited
+      // keys and one typo must not cost the call. A chart asks for the four
+      // series it is drawing, and a malformed one is a bug in the chart.
+      try {
+        resolver.resolve(entry);
+      } on FormatException catch (malformed) {
+        throw _refuse(
+            method,
+            '$method refused "$name" entry $i: ${malformed.message}');
+      }
+      names.add(entry);
+    }
+    return names;
+  }
+
+  /// Refuses a window whose start is after its end.
+  ///
+  /// **Refused, not answered empty.** The honest answer to "everything
+  /// between 08:00 and 06:00" is that the question is wrong; an empty list
+  /// would be read as "nothing was recorded in that window", which is a
+  /// statement about the plant rather than about the request.
+  ///
+  /// The downsampled path needs it most: `queryTimeseriesDataDownsampled`
+  /// opens with `from.isBefore(to) ? from : to` and quietly answers the window
+  /// the caller did not ask for, so two callers sending opposite arguments get
+  /// identical answers and neither is told which one it got.
+  ///
+  /// A zero-width window is accepted — "what was recorded at exactly this
+  /// moment" is a real question — so the test is *after*, not *not-before*.
+  static void _requireForwardWindow(
+      DateTime? from, DateTime to, String method) {
+    if (from == null || !from.isAfter(to)) return;
+    throw _refuse(
+        method,
+        '$method was given a window whose "from" ($from) is after its "to" '
+        '($to). It is refused rather than answered empty, and rather than '
+        'silently swapped: an empty answer reads as "nothing was recorded", '
+        'which is a claim about the plant instead of about the request');
   }
 
   /// A required instant out of [name], as epoch milliseconds.
@@ -314,9 +449,16 @@ final class DataHandlers {
     return DateTime.fromMillisecondsSinceEpoch(raw, isUtc: true);
   }
 
-  /// A required integer out of [name]. Bounds are applied by the caller.
-  static int _requiredInt(
-      rpc.Parameters params, String name, String method) {
+  /// A required integer out of [name], inside `[atLeast, atMost]` inclusive.
+  ///
+  /// Each of the three integers this family carries multiplies work the
+  /// *database* does, so each is read as a bound rather than coerced, and each
+  /// band carries [why] — the sentence that says what the number outside it
+  /// would have made the database do. A bare "out of range" is a refusal
+  /// nobody can act on, and the reason is the part 10-07 and 10-10 will read
+  /// when they widen one.
+  static int _requiredInt(rpc.Parameters params, String name, String method,
+      {required int atLeast, required int atMost, required String why}) {
     final raw = params[name].valueOr(null);
     if (raw is! int) {
       throw _refuse(
@@ -324,6 +466,11 @@ final class DataHandlers {
           '$method needs an integer "$name", not ${raw.runtimeType}. It '
           'scales the work the database does, so it is read as a bound '
           'rather than coerced');
+    }
+    if (raw < atLeast || raw > atMost) {
+      throw _refuse(
+          method,
+          '$method\'s "$name" was $raw, outside $atLeast..$atMost: $why');
     }
     return raw;
   }
