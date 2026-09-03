@@ -8,14 +8,17 @@
 ///               stuck until hand-toggled); historian marks the gap; clients
 ///               shown "gateway stalled", not "you disconnected"
 ///
-/// **What this file delivers, and what it does not.** This file gates the
+/// **What this file delivers.** This file gates the whole row: the
 /// announcement (F22a), the operator sentence (F22b), staleness-that-clears-
-/// unaided (F22c), and — since 09-08 — the reaper clause itself (F22d): the
-/// row's headline "synchronized false disconnect on every client", reproduced
-/// by our own reaper rather than by the freeze if `tickOnce`'s wake-up sweep
-/// blames the panels for the gateway's own silence. The historian "marks the
-/// gap" clause is 09-09's `db`-tagged arm, still outstanding as
-/// `OutstandingKind.partial` in `f_row_registry.dart`.
+/// unaided (F22c), the reaper clause (F22d, 09-08) — the row's headline
+/// "synchronized false disconnect on every client", reproduced by our own
+/// reaper rather than by the freeze if `tickOnce`'s wake-up sweep blames the
+/// panels for the gateway's own silence — and, since 09-09, the historian
+/// clause (F22e): the freeze is a hole in the history, never a flat line,
+/// asserted by one SQL query over a window spanning the freeze against a real
+/// TimescaleDB. F22e is `db`-tagged PER CASE (the rest of the file stays in
+/// the pure-Dart lane) and rides 8b-03's env-addressed `timescale_fixture` —
+/// 09-CONTEXT ruling 2's arm, taken rather than its fallback.
 ///
 /// **The arm letters are delivery order, not clause order.** The plan named
 /// these arms a/b/d, reserving c for the reaper clause. The frozen manifest's
@@ -66,13 +69,16 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
+import 'package:postgres/postgres.dart' as pg;
 import 'package:test/test.dart';
 import 'package:tfc_relay_client/tfc_relay_client.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import '../support/gate_b_fixture.dart' show gateBPage, until, within;
 import '../support/stall_harness.dart';
+import '../support/timescale_fixture.dart';
 
 /// The `reason` a stalled gateway announces itself under — one of
 /// `ResyncParams`' documented vocabulary (`messages.dart:455-464`). Spelled
@@ -715,4 +721,177 @@ void main() {
     await until('the plant to advance again after the resume',
         () => (panels.first.read(_watch)!.value as int) > atResume);
   }, timeout: const Timeout(Duration(minutes: 3)));
+
+  // --------------------------------------------------------------- F22e
+  //
+  // The historian clause — "historian marks the gap". Collection runs against
+  // a REAL hypertable (8b-03's env-addressed fixture, brought up inside this
+  // case only — the rest of the file stays in the pure-Dart lane) while the
+  // gateway that owns the sink, the runner and its sample timers is frozen by
+  // Isolate.pause. The sink runs `useIsolate: false` inside the frozen isolate
+  // ON PURPOSE: a sink on its own isolate would keep writing through a freeze
+  // this arm exists to see. After the resume, ONE query over a window spanning
+  // the freeze asserts the gap: rows on both sides, zero inside. A flat line
+  // of repeated last-known values through that window is the failure — it is
+  // what makes the night the backup froze the gateway unexplainable afterwards
+  // (Ignition's Veeam-snapshot incident, the row's own citation).
+  //
+  // The second half of the assertion is the counter: the freeze degrades the
+  // held values (the sweep's elapsed clock keeps running while the isolate
+  // does not), so the first post-resume ticks DECLINE on quality and count —
+  // `PIPE.collect.rows_dropped` moves. There is no `rows_skipped_quality` key
+  // and none is minted: quality skips ride the dropped counter (8b ruling; the
+  // six-key roster is pinned by the protocol suite).
+  //
+  // The plant driver is quiesced for exactly the window being judged: stopped
+  // one command before the pause, restarted one command after the counter is
+  // read. Without that, the wake-up race between the overdue driver (50 ms)
+  // and the overdue freshness sweep decides whether a fresh publish repaints
+  // the key good before any tick can decline — the drop assertion would
+  // measure the scheduler. With it, the post-resume window holds exactly what
+  // a real PLC's first publishing interval holds: nothing yet, and a held
+  // value the freeze made stale. The gap itself needs no quiesce — a paused
+  // isolate runs no sample timer, which is the whole clause.
+  test('F22e: historian marks the gap — a frozen gateway leaves a hole in '
+      'the history, quality-coded and counted, never a flat line', () async {
+    final freeze = _freeze();
+    // Values the freeze left behind must DEGRADE before the driver refreshes
+    // them, so staleAfter sits well under the freeze; the sweep runs every
+    // staleAfter/4 (500 ms), so the first post-resume decline lands within
+    // ~600 ms of the resume.
+    const staleAfter = Duration(seconds: 2);
+    const sampleInterval = Duration(milliseconds: 100);
+
+    // 8b-03's fixture: Compose where Docker exists, TIMESCALEDB_EXTERNAL
+    // where it does not — host and port from the environment, never literals.
+    final fx = await TimescaleFixture.start();
+    addTearDown(fx.stop);
+    final admin = await fx.connect(applicationName: 'f22e-admin');
+    addTearDown(admin.close);
+    final base =
+        'f22e_gap_${Random().nextInt(0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
+    addTearDown(() async {
+      await admin.execute('DROP TABLE IF EXISTS "gw_$base" CASCADE');
+      await admin.execute('DROP TABLE IF EXISTS "$base" CASCADE');
+    });
+    Future<int> rowsBetween(DateTime? from, DateTime? to) async {
+      final where = <String>[
+        if (from != null) '"time" > \'${from.toIso8601String()}\'',
+        if (to != null) '"time" < \'${to.toIso8601String()}\'',
+      ].join(' AND ');
+      try {
+        final rows = await admin.execute(
+            'SELECT count(*) FROM "gw_$base"${where.isEmpty ? '' : ' WHERE $where'}');
+        return rows.first.first! as int;
+      } on Object catch (error) {
+        if (error.toString().contains('42P01')) return 0; // not created yet
+        rethrow;
+      }
+    }
+
+    final gw = await StalledGateway.spawn(
+      aliases: _aliases,
+      keysPerAlias: _keysPerAlias,
+      heartbeatDeadline: const Duration(seconds: 15),
+      staleAfter: staleAfter,
+      collect: (
+        host: fx.host,
+        port: fx.port,
+        database: fx.database,
+        username: fx.username,
+        password: fx.password,
+        table: base,
+        key: _watch,
+        sampleInterval: sampleInterval,
+      ),
+    );
+    expect(gw.collectFailures, isEmpty,
+        reason: 'the collection chain did not stand up inside the gateway '
+            'isolate — every assertion below would judge a historian that '
+            'never wrote: ${gw.collectFailures}');
+
+    // Anti-vacuity: the same count query, over a window with NO freeze in it,
+    // returns a dense series — without this the gap below is also what a
+    // collector that wrote nothing at all produces.
+    final trendStart = DateTime.now().toUtc();
+    await within(
+        Future(() async {
+          while (await rowsBetween(trendStart, null) < 6) {
+            await Future<void>.delayed(const Duration(milliseconds: 100));
+          }
+        }),
+        'the trend to run dense before the freeze '
+        '(6 rows at a ${sampleInterval.inMilliseconds} ms interval)',
+        budget: const Duration(seconds: 30));
+    final dropsBefore = await gw.ask('drops') as int;
+
+    // Quiesce, then freeze. The 300 ms settle after pause() lets any tick
+    // already queued in the gateway's event loop land BEFORE the window
+    // opens, so every row stamped inside [gapStart, gapEnd] would be a row
+    // written for the frozen interval — which is exactly what must not exist.
+    await gw.ask('quiesce');
+    gw.pause();
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    final gapStart = DateTime.now().toUtc();
+    await Future<void>.delayed(freeze);
+    gw.resume();
+
+    // The counter moves when the sweep degrades the held value and a tick
+    // declines it. Bounded poll, deliberately NOT a failing window: under the
+    // write-through sabotage the counter never moves, and the case must reach
+    // the gap assertion below so the flat line is caught by the query, not by
+    // a timeout here.
+    var dropsAfter = dropsBefore;
+    final declineBudget = Stopwatch()..start();
+    while (dropsAfter <= dropsBefore &&
+        declineBudget.elapsed < const Duration(seconds: 10)) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      dropsAfter = await gw.ask('drops') as int;
+    }
+    final gapEnd = DateTime.now().toUtc();
+    await gw.ask('drive');
+
+    // Rows resume on the far side of the window once the plant publishes
+    // fresh values again.
+    await within(
+        Future(() async {
+          while (await rowsBetween(gapEnd, null) < 2) {
+            await Future<void>.delayed(const Duration(milliseconds: 100));
+          }
+        }),
+        'the trend to resume after the resume',
+        budget: const Duration(seconds: 30));
+
+    // ONE query over the window spanning the freeze, and the two flanks.
+    final inGap = await rowsBetween(gapStart, gapEnd);
+    final before = await rowsBetween(trendStart, gapStart);
+    final after = await rowsBetween(gapEnd, null);
+    print('F22e: freeze ${freeze.inMilliseconds} ms inside a '
+        '${gapEnd.difference(gapStart).inMilliseconds} ms window '
+        '${gapStart.toIso8601String()} .. ${gapEnd.toIso8601String()}; '
+        'rows before/inside/after = $before / $inGap / $after; '
+        'PIPE.collect.rows_dropped $dropsBefore -> $dropsAfter');
+
+    expect(inGap, 0,
+        reason: '$inGap rows carry timestamps inside the frozen window. A '
+            'value written through the gateway\'s own freeze is a flat, '
+            'plausible trend somebody later reads as "the line was running '
+            'steady" — the historian marking the gap is the difference '
+            'between an incident that can be explained and one that cannot');
+    expect(dropsAfter, greaterThan(dropsBefore),
+        reason: 'the gap is not COUNTED: PIPE.collect.rows_dropped never '
+            'moved, so an operator asking "why is there no data across the '
+            'freeze" has a hole with no number beside it. Quality skips ride '
+            'the dropped counter — there is no separate skipped-quality key');
+    expect(before, greaterThanOrEqualTo(6),
+        reason: 'only $before rows landed in the no-freeze window, so the '
+            'series was never dense and the empty gap above is also what a '
+            'dead collector produces — the arm is vacuous');
+    expect(after, greaterThanOrEqualTo(2),
+        reason: 'rows never resumed after the resume: the freeze did not '
+            'leave a gap, it killed collection outright, which is a different '
+            'failure than the one this arm certifies');
+  },
+      tags: 'db',
+      timeout: const Timeout(Duration(minutes: 5)));
 }
