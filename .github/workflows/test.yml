@@ -394,6 +394,31 @@ jobs:
         dart analyze
         dart test --exclude-tags db
 
+    # 09-01's lane-budget arm for gate B, opt-in for the same reason gate A's
+    # is (measuring the lane means running it, a second full lane on top of
+    # the step above); exactly one job watches the number. Its own env var —
+    # GATE_B_LANE_BUDGET, never GATE_LANE_BUDGET — because the two gates are
+    # measured in different packages, and two lanes sharing one expectation
+    # is how a cost jump stops being attributable to a phase. The gate cases
+    # themselves run on all three platforms inside the ordinary step above;
+    # this step MEASURES, it does not select. It lands after that step so the
+    # package has had `dart pub get`.
+    #
+    # The arm has two anti-recursion guards and needs both: it clears
+    # GATE_B_LANE_BUDGET in the child it spawns, and the child excludes the
+    # `meta` tag this manifest carries. Renaming that tag turns this one job
+    # into an unbounded recursion of `dart test` processes rather than into a
+    # failing assertion (gate_b_manifest_test.dart, "the sweep itself"). The
+    # child also excludes `db` — the F22e historian arm belongs to the
+    # tfc-dart-test job's db leg, and this job has no database and must not
+    # grow one.
+    - name: Gate-B-lane wall-clock budget
+      if: runner.os == 'Linux'
+      working-directory: packages/tfc_relay_local
+      env:
+        GATE_B_LANE_BUDGET: "1"
+      run: dart test test/gate/gate_b_manifest_test.dart
+
   tfc-dart-test:
     strategy:
       fail-fast: false
@@ -538,6 +563,35 @@ jobs:
         # suite collapsing without tripping on every new test 8b-03 adds.
         if [ "$ran" -lt 8 ]; then
           echo "::error::relay collection ran only $ran db-tagged tests, expected ~10 — the db tag is not selecting"
+          exit 1
+        fi
+
+    # Gate B's db leg (09-09): F22e, the F22 historian clause — one query
+    # over a window spanning a gateway freeze against the TimescaleDB this
+    # job already provisions three ways across three platforms. Beside 8b's
+    # step on purpose, with the same TIMESCALEDB_EXTERNAL threading: the
+    # only CI job with a database is the only place a db-tagged gate arm can
+    # run, and a gate whose rows are chosen by CI convenience stops being a
+    # gate. The count floor lives in the same step, in jbtm-test's shape,
+    # because `dart test --tags db` that selects nothing exits green — a
+    # renamed tag or a moved directory would otherwise pass silently, which
+    # is a step that proves nothing on the day it stops selecting.
+    - name: Test tfc_relay_local gate db leg (F22e, the historian arm)
+      shell: bash
+      working-directory: packages/tfc_relay_local
+      env:
+        TIMESCALEDB_EXTERNAL: ${{ matrix.timescaledb_external }}
+      run: |
+        dart test test/gate --tags db --file-reporter "json:gate-db-report.json"
+        [ -f gate-db-report.json ] || { echo "::error::no gate-db-report.json — the gate db leg never produced a report"; exit 1; }
+        total=$(grep -o '"type":"testStart"' gate-db-report.json | wc -l)
+        loading=$(grep -o '"name":"loading ' gate-db-report.json | wc -l)
+        ran=$((total - loading))
+        echo "gate db leg tests reported: $ran"
+        # 1 as of 09-09 (F22e). The floor is the whole point of the reporter:
+        # a leg that selected nothing must fail here, not exit green.
+        if [ "$ran" -lt 1 ]; then
+          echo "::error::the gate db leg ran $ran tests — the db tag selected nothing in test/gate and exited green"
           exit 1
         fi
 
