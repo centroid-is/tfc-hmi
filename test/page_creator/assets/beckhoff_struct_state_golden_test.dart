@@ -39,10 +39,12 @@ import '../../helpers/golden_tolerance.dart';
 ///   a configured name and a key-delivered one sit at the same place, is a
 ///   layout question, not a `find.text` question.
 ///
-/// The grid dialog opens at its own default size and scrolls, so the two grid
-/// images show rows 1-3 — channels 1 to 6. The named channels are placed
-/// inside that window on purpose: both directions of the precedence rule are
-/// visible without scrolling the dialog the operator has not scrolled either.
+/// The two pane images are where the descriptions live now. The floating
+/// "Channel detail" grid they used to live behind is gone: it was ~900px of
+/// force buttons and filter fields around them, and this plant's PLC accepts
+/// no override, so it was a control surface for a capability that does not
+/// exist. What is left is a name, a description and a lamp per channel, in
+/// three fixed columns, all eight visible without opening anything.
 
 /// Loads real fonts so the channel names render as letterforms rather than
 /// the test font's boxes — the names ARE the change here, so Ahem boxes
@@ -191,16 +193,16 @@ void main() {
       );
     });
 
-    /// The EL1008's channel grid, two taps in, where the descriptions live.
+    /// The EL1008's pane, one tap in, where the descriptions live now.
     /// [configured] is what the page author set on the asset; the key always
     /// delivers `Key ch1..8` underneath it.
     Future<void> openGrid(
       WidgetTester tester, {
       List<String>? configured,
     }) async {
-      // Tall enough for all four grid rows and wide enough that the docked
-      // pane behind the dialog is not sliced by the canvas edge.
-      await frame(tester, const Size(1500, 1000));
+      // The pane docks to the right at its own width; the canvas only has to
+      // be tall enough to hold all eight channel rows without scrolling.
+      await frame(tester, const Size(900, 900));
 
       final config = BeckhoffEL1008Config(
         nameOrId: 'ST101.A1.03',
@@ -232,30 +234,27 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      // Tap 1 docks the pane; tap 2 expands the channel grid, which is where
-      // the per-channel names are drawn.
+      // One tap. The names are in the pane itself now.
       await tester.tap(find.byType(IO8Widget));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Channel detail'));
       await tester.pumpAndSettle();
     }
 
     // Nothing set on the asset: every row wears the key-delivered name. The
     // control for the image below.
-    testWidgets('the grid with only key-delivered channel names',
+    testWidgets('the pane with only key-delivered channel names',
         (tester) async {
       await openGrid(tester, configured: null);
 
       await expectLater(
         find.byType(MaterialApp),
-        matchesGoldenFile('goldens/beckhoff_el1008_grid_key_names.png'),
+        matchesGoldenFile('goldens/beckhoff_el1008_pane_key_names.png'),
       );
     });
 
     // Plant-shaped names on three channels, the rest left to the key: the
-    // mixed case a real page produces, and the one where a long string has
-    // to share a row with the channel's lamp and force control.
-    testWidgets('the grid with asset-configured channel names',
+    // mixed case a real page produces, and the one that says whether a long
+    // string still leaves its lamp somewhere to sit.
+    testWidgets('the pane with asset-configured channel names',
         (tester) async {
       await openGrid(tester, configured: const [
         'Kettle high level',
@@ -268,7 +267,63 @@ void main() {
 
       await expectLater(
         find.byType(MaterialApp),
-        matchesGoldenFile('goldens/beckhoff_el1008_grid_asset_names.png'),
+        matchesGoldenFile('goldens/beckhoff_el1008_pane_asset_names.png'),
+      );
+    });
+
+    // The EP2338's pane: the case the terminals do not have, where a point
+    // carries both directions on one pin. Two lamps per row, round for the
+    // input and square for the output, against one description — the port is
+    // one physical thing and gets one name.
+    testWidgets('the EP2338 pane pairs in and out against one name',
+        (tester) async {
+      await frame(tester, const Size(900, 900));
+
+      final struct = DynamicValue();
+      for (var n = 0; n < 8; n++) {
+        struct['I$n'] = n == 1 || n == 5;
+        struct['O$n'] = n == 3;
+      }
+
+      final config = BeckhoffEPBoxConfig(
+        variantModel: EPBoxVariant.ep2338,
+        nameOrId: 'RM05',
+        stateKey: _epStateKey,
+        descriptionsKey: _epDescriptionsKey,
+        // Two named on the asset, one more off the key, the rest unnamed —
+        // the state a real page is actually in.
+        channelDescriptions: const ['', 'Erector jam photocell', '', 'Erector clamp'],
+      );
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          stateManProvider.overrideWith((ref) async => _StubStateMan({
+                _epStateKey: struct,
+                _epDescriptionsKey: DynamicValue.fromList(
+                    const ['', '', 'Erector ready', '', '', 'Pallet present']),
+              })),
+        ],
+        child: MaterialApp(
+          theme: light,
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 220,
+                height: 340,
+                child: Builder(builder: (context) => config.build(context)),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(EPBoxWidget));
+      await tester.pumpAndSettle();
+
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/beckhoff_ep2338_pane.png'),
       );
     });
 

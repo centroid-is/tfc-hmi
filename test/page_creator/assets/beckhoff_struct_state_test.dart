@@ -332,13 +332,12 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      // Tap 1 opens the docked pane; tap 2 expands the channel grid into
-      // its floating dialog, which is where the descriptions live.
+      // One tap. The descriptions are in the pane itself now — the floating
+      // channel grid they used to live behind is gone, along with the force
+      // buttons that were the only reason it needed 900px.
       await tester.tap(find.byType(IO8Widget));
       await tester.pumpAndSettle();
       expect(find.byType(SidePane), findsOneWidget);
-      await tester.tap(find.text('Channel detail'));
-      await tester.pumpAndSettle();
     }
 
     testWidgets('a configured description renders at its channel and beats '
@@ -354,6 +353,22 @@ void main() {
       // Channels the config leaves empty keep the key-delivered names.
       expect(find.text('Key ch1'), findsOneWidget);
       expect(find.text('Key ch8'), findsOneWidget);
+      // And every channel still carries its own PLC name beside whatever it
+      // is called, so a described channel is still findable as I3.
+      expect(find.text('I3'), findsOneWidget);
+      expect(find.text('I8'), findsOneWidget);
+    });
+
+    testWidgets('the pane offers no way to force a channel', (tester) async {
+      await openGrid(tester, configured: null);
+
+      // The PLC accepts no override, so the surface that offered one is
+      // gone: no expand tile, no dialog, no Auto/Low/High.
+      expect(find.text('Channel detail'), findsNothing);
+      // 'Auto' was the segmented force control's neutral position; it has no
+      // other home in this pane. ('High' does — it is the count tile.)
+      expect(find.text('Auto'), findsNothing);
+      expect(find.text('Force'), findsNothing);
     });
 
     testWidgets('with nothing configured, the key-delivered names stand',
@@ -415,8 +430,10 @@ void main() {
       expect(find.text('Erector ready (asset)'), findsOneWidget);
       expect(find.text('Erector ready (key)'), findsNothing);
       expect(find.text('Erector jam photocell'), findsOneWidget);
-      // Ports nobody named still fall back to where they land on the box.
-      expect(find.text('Plug 2 A'), findsOneWidget);
+      // Ports nobody named show their PLC name alone; named ones show it too,
+      // in the gutter beside the name the plant gave them.
+      expect(find.text('I2'), findsOneWidget);
+      expect(find.text('I1'), findsOneWidget);
     });
   });
 }

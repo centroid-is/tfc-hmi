@@ -961,17 +961,18 @@ class _BeckhoffEL2008 extends ConsumerWidget {
                       LinkedHashMap.fromEntries([
                         MapEntry("raw", config.rawStateKey),
                         MapEntry("force", config.forceValuesKey),
+                        MapEntry("descriptions", config.descriptionsKey),
                       ]),
                       ref,
                     ),
                     statesOf: (data) => data == null
                         ? List.filled(8, IOState.low)
                         : _ledStates(data),
-                    gridSummary: 'Force and descriptions for all 8 channels',
-                    gridSize: const Size(940, 460),
-                    gridBuilder: (_) => IoGridViewport(
-                      child: _channelGrid(context, ref, stateMan),
-                    ),
+                    // ST_EL2008 numbers its members from one.
+                    channelName: (i) => 'O${i + 1}',
+                    descriptionOf: (data, i) => beckhoffChannelDescription(
+                        config.channelDescriptions, data?["descriptions"], i),
+                    isOutput: true,
                   );
                 },
                 child: buildBody(data),
@@ -983,67 +984,6 @@ class _BeckhoffEL2008 extends ConsumerWidget {
     );
   }
 
-  /// The per-channel grid, lifted out of the `AlertDialog` this used to be.
-  /// Force writes and descriptions are unchanged — only the host moved.
-  Widget _channelGrid(
-      BuildContext context, WidgetRef ref, StateMan stateMan) {
-    return MemoStreamBuilder<Map<String, DynamicValue>>(
-      keys: [stateMan, config],
-      stream: _combinedStream(
-        LinkedHashMap.fromEntries([
-          MapEntry("raw", config.rawStateKey),
-          MapEntry("force", config.forceValuesKey),
-          MapEntry("descriptions", config.descriptionsKey),
-        ]),
-        ref,
-      ),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData || snapshot.hasError) {
-          return const SizedBox.shrink();
-        }
-        final map = snapshot.data!;
-        List<bool>? rawStates = beckhoffChannelStates(map["raw"]);
-
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (int i = 0; i < 8; i = i + 2)
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  RowIOView(
-                    leftRaw: rawStates?[i] ?? false,
-                    rightRaw: rawStates?[i + 1] ?? false,
-                    leftProcessed: null,
-                    rightProcessed: null,
-                    leftSelected: map["force"]?[i].asInt ?? 0,
-                    rightSelected: map["force"]?[i + 1].asInt ?? 0,
-                    animationValue: animation,
-                    leftOnChanged: (value) async {
-                      map["force"]![i].value = value;
-                      await stateMan.write(
-                          config.forceValuesKey!, map["force"]!);
-                    },
-                    rightOnChanged: (value) async {
-                      map["force"]![i + 1].value = value;
-                      await stateMan.write(
-                          config.forceValuesKey!, map["force"]!);
-                    },
-                    leftDescription: beckhoffChannelDescription(
-                        config.channelDescriptions, map["descriptions"], i),
-                    rightDescription: beckhoffChannelDescription(
-                        config.channelDescriptions, map["descriptions"], i + 1),
-                    leftFilterEdit: null,
-                    rightFilterEdit: null,
-                  ),
-                  const SizedBox(height: 6),
-                ],
-              ),
-          ],
-        );
-      },
-    );
-  }
 }
 
 @JsonSerializable(explicitToJson: true)
@@ -1726,17 +1666,17 @@ class _BeckhoffEL1008 extends ConsumerWidget {
                       LinkedHashMap.fromEntries([
                         MapEntry("raw", config.rawStateKey),
                         MapEntry("force", config.forceValuesKey),
+                        MapEntry("descriptions", config.descriptionsKey),
                       ]),
                       ref,
                     ),
                     statesOf: (data) => data == null
                         ? List.filled(8, IOState.low)
                         : _ledStates(data),
-                    gridSummary: 'Force and descriptions for all 8 channels',
-                    gridSize: const Size(940, 460),
-                    gridBuilder: (_) => IoGridViewport(
-                      child: _channelGrid(context, ref, stateMan),
-                    ),
+                    // ST_EL1008 numbers its members from one.
+                    channelName: (i) => 'I${i + 1}',
+                    descriptionOf: (data, i) => beckhoffChannelDescription(
+                        config.channelDescriptions, data?["descriptions"], i),
                   );
                 },
                 child: buildBody(data),
@@ -1748,102 +1688,6 @@ class _BeckhoffEL1008 extends ConsumerWidget {
     );
   }
 
-  /// The per-channel grid, lifted out of the `AlertDialog` this used to be.
-  /// Force writes and descriptions are unchanged — only the host moved.
-  Widget _channelGrid(
-      BuildContext context, WidgetRef ref, StateMan stateMan) {
-    return MemoStreamBuilder<Map<String, DynamicValue>>(
-      keys: [stateMan, config],
-      stream: _combinedStream(
-        LinkedHashMap.fromEntries([
-          MapEntry("raw", config.rawStateKey),
-          MapEntry("processed", config.processedStateKey),
-          MapEntry("force", config.forceValuesKey),
-          MapEntry("descriptions", config.descriptionsKey),
-          MapEntry("on_filters", config.onFiltersKey),
-          MapEntry("off_filters", config.offFiltersKey),
-        ]),
-        ref,
-      ),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData || snapshot.hasError) {
-          return const SizedBox.shrink();
-        }
-        final map = snapshot.data!;
-        // No processed state under the struct exposure — the grid's
-        // "processed" halves already fall back to raw (see [RowIOView]), and
-        // nothing else read it.
-        List<bool>? rawStates = beckhoffChannelStates(map["raw"]);
-
-        return Column(
-          children: [
-            for (int i = 0; i < 8; i = i + 2)
-              Padding(
-                padding: EdgeInsets.only(
-                    bottom: i < 6
-                        ? 2.0
-                        : 0.0), // Reduced spacing, no padding on last item
-                child: RowIOView(
-                  leftRaw: rawStates?[i] ?? false,
-                  rightRaw: rawStates?[i + 1] ?? false,
-                  leftProcessed: null,
-                  rightProcessed: null,
-                  leftSelected: map["force"]?[i].asInt ?? 0,
-                  rightSelected: map["force"]?[i + 1].asInt ?? 0,
-                  animationValue: animation,
-                  leftOnChanged: (value) async {
-                    map["force"]![i].value = value;
-                    await stateMan.write(config.forceValuesKey!, map["force"]!);
-                  },
-                  rightOnChanged: (value) async {
-                    map["force"]![i + 1].value = value;
-                    await stateMan.write(config.forceValuesKey!, map["force"]!);
-                  },
-                  leftDescription: beckhoffChannelDescription(
-                      config.channelDescriptions, map["descriptions"], i),
-                  rightDescription: beckhoffChannelDescription(
-                      config.channelDescriptions, map["descriptions"], i + 1),
-                  leftFilterEdit: map.containsKey("on_filters") &&
-                          map.containsKey("off_filters")
-                      ? FilterEdit(
-                          onFilter: map["on_filters"]?[i].asInt ?? 0,
-                          offFilter: map["off_filters"]?[i].asInt ?? 0,
-                          onChangedOnFilter: (value) async {
-                            map["on_filters"]![i].value = value;
-                            await stateMan.write(
-                                config.onFiltersKey!, map["on_filters"]!);
-                          },
-                          onChangedOffFilter: (value) async {
-                            map["off_filters"]![i].value = value;
-                            await stateMan.write(
-                                config.offFiltersKey!, map["off_filters"]!);
-                          },
-                        )
-                      : null,
-                  rightFilterEdit: map.containsKey("on_filters") &&
-                          map.containsKey("off_filters")
-                      ? FilterEdit(
-                          onFilter: map["on_filters"]?[i + 1].asInt ?? 0,
-                          offFilter: map["off_filters"]?[i + 1].asInt ?? 0,
-                          onChangedOnFilter: (value) async {
-                            map["on_filters"]![i + 1].value = value;
-                            await stateMan.write(
-                                config.onFiltersKey!, map["on_filters"]!);
-                          },
-                          onChangedOffFilter: (value) async {
-                            map["off_filters"]![i + 1].value = value;
-                            await stateMan.write(
-                                config.offFiltersKey!, map["off_filters"]!);
-                          },
-                        )
-                      : null,
-                ),
-              ),
-          ],
-        );
-      },
-    );
-  }
 }
 
 class IOForceButton extends StatelessWidget {

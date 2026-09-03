@@ -174,10 +174,11 @@ class EPBoxPainter extends CustomPainter {
       final centre = Offset(design.width / 2, firstPlug + plug * plugPitch);
       socket(centre, 6);
 
-      // The lamp captions carry the plug number as well as the side — '1A',
-      // '1B'. A bare number under each socket sat exactly between its own
-      // plug and the next one's lamps, close enough to either to be read as
-      // belonging to the wrong one.
+      // The lamp captions are the PLC's own member names — 'I0'..'I7', in
+      // channel order down the box. The plug-and-side names ('1A', '1B')
+      // read off the moulding, but nobody looking at this page is holding
+      // the box: they are holding a variable list, and the caption has to be
+      // the string they can search for there.
       for (int side = 0; side < 2; side++) {
         final lampX = side == 0 ? 5.0 : 25.0;
         final lamp = Rect.fromCenter(
@@ -191,7 +192,7 @@ class EPBoxPainter extends CustomPainter {
         );
         canvas.drawRect(lamp, stroke);
         text(
-          '${plug + 1}${side == 0 ? 'A' : 'B'}',
+          'I${plug * 2 + side}',
           Offset(lampX - 3.5, centre.dy + 0.5),
           fontSize: 2.8,
           width: 7,
