@@ -20,7 +20,7 @@
 /// Two properties are enforced here:
 ///
 ///  * **Closure, in both directions.** The session registers exactly these
-///    thirteen names. One direction alone is half a check: a declared name
+///    seventeen names. One direction alone is half a check: a declared name
 ///    with no
 ///    handler answers METHOD_NOT_FOUND from a table claiming to carry it, and
 ///    a handler under a name nobody wrote down is surface nobody counted. The
@@ -64,8 +64,9 @@
 /// **Phase 10 plan 02** made the first of those edits: the four `browse.*`
 /// names. It is the shape every later data-service plan copies — the handler
 /// bodies land, this literal grows in the same commit, and the contract legs'
-/// gap lists shrink by the checks the handlers just made reachable. Twenty of
-/// the thirty-four (timeseries, history views, preferences) are still to come.
+/// gap lists shrink by the checks the handlers just made reachable. **Plan 03
+/// made the second**, the four `timeseries.*` names, and sixteen of the
+/// thirty-four (history views, preferences) are still to come.
 library;
 
 import 'package:json_rpc_2/error_code.dart' as rpc_errors;
@@ -85,7 +86,7 @@ import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 import 'support/permissive_resolver.dart';
 import 'support/ws_harness.dart';
 
-/// Every method a connected client may call, as of Phase 10 plan 02.
+/// Every method a connected client may call, as of Phase 10 plan 03.
 ///
 /// Hand-written. Not derived. See the library doc for why — and note that the
 /// four `browse.*` names below are bare strings for exactly that reason, even
@@ -109,6 +110,15 @@ const Set<String> expectedHandlerTable = {
   'browse.fetchChildren',
   'browse.fetchDetail',
   'browse.resolvePath',
+  // Phase 10 plan 03. The timeseries four, and the reason three more contract
+  // checks stopped being proven-unreachable in the commit that added them.
+  // Two of these four carry a string the database interpolates into SQL, so
+  // the same commit that made them callable put the allow-list in front of
+  // them — see `hostile_params_test.dart`.
+  'timeseries.queryTimeseriesData',
+  'timeseries.queryTimeseriesDataMultiple',
+  'timeseries.queryTimeseriesDataDownsampled',
+  'timeseries.countTimeseriesDataMultiple',
 };
 
 /// Every name the server *sends* as a notification, and therefore may never
@@ -205,8 +215,8 @@ void main() {
               'registration.');
     });
 
-    test('the table is exactly the thirteen names a client may call today', () {
-      // The sentence is unchanged in shape and still true: thirteen names a
+    test('the table is exactly the seventeen names a client may call today', () {
+      // The sentence is unchanged in shape and still true: seventeen names a
       // client may *call*. `h` is not one of them — it is announced, never
       // called — so it is taken out of the ledger by name here rather than
       // being added to the literal, which would say a client may ask the
@@ -218,7 +228,7 @@ void main() {
               'failure prints the whole table rather than a difference');
     });
 
-    test('the registered table is the thirteen callable names plus the client '
+    test('the registered table is the seventeen callable names plus the client '
         'notifications', () {
       expect(_session().registeredMethods, everyRegisterableName,
           reason: 'the ledger is the union, because json_rpc_2 dispatches a '
@@ -322,6 +332,20 @@ void main() {
           'type': 'variable',
         },
         'targetId': 'ST101.CN01.MOT01.setpoint',
+        // The timeseries seven (Phase 10 plan 03). `to` and `from` are epoch
+        // **milliseconds**, not ISO strings — that is the wire's instant
+        // encoding (`client_sub_apis.dart` sends `msOf`), and a string here
+        // would be refused on its contents rather than dispatched, which
+        // still passes this sweep but for the wrong reason. `from` is before
+        // `to` and the three integers are inside their ceilings, so the
+        // dispatch is a real one on every one of the four names.
+        'table': 'st101_cn01_mot01_setpoint',
+        'tables': ['st101_cn01_mot01_setpoint'],
+        'from': 1_786_600_800_000, // 2026-08-13T06:00:00Z
+        'to': 1_786_604_400_000, //   2026-08-13T07:00:00Z
+        'maxPoints': 1000,
+        'intervalMs': 60_000,
+        'howMany': 10,
       };
 
       final methodNotFound = <String>[];

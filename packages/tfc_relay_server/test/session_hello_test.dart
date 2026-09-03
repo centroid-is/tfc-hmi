@@ -350,7 +350,7 @@ void main() {
             'a deadline and the pump would be pure cost');
   });
 
-  test('the handler table is exactly the thirteen names a client may call, '
+  test('the handler table is exactly the seventeen names a client may call, '
       'plus the one it announces', () async {
     final link = _link();
     addTearDown(link.dispose);
@@ -374,17 +374,25 @@ void main() {
           DataServiceMethods.browseFetchChildren,
           DataServiceMethods.browseFetchDetail,
           DataServiceMethods.browseResolvePath,
+          // 10-03: the timeseries four. Constants here for the same reason
+          // the browse four are — this file pins the ledger, not the wire
+          // spelling.
+          DataServiceMethods.timeseriesQuery,
+          DataServiceMethods.timeseriesQueryMultiple,
+          DataServiceMethods.timeseriesQueryDownsampled,
+          DataServiceMethods.timeseriesCountMultiple,
           // 05-05: the hold tick, a client→server notification. It is in the
           // ledger because json_rpc_2 dispatches an un-idded frame through
           // the same table, and it is not a name a client may *call* — see
           // `surface_test.dart`, which keeps the two in separate literals.
           Methods.holdTick,
         },
-        reason: 'the wire surface is a closed set of fourteen registrations: '
+        reason: 'the wire surface is a closed set of eighteen registrations: '
             '03-05 added subscribe and unsubscribe, 03-08 froze it, 04-02 '
             'added the five value methods the contract leg cannot run '
-            'without, and 10-02 the four browse ones that retired six of the '
-            'thirteen proven-unreachable checks. A handler nobody counted is '
-            'surface nobody reviewed');
+            'without, 10-02 the four browse ones that retired six of the '
+            'thirteen proven-unreachable checks, and 10-03 the four '
+            'timeseries ones that retired three more. A handler nobody '
+            'counted is surface nobody reviewed');
   });
 }

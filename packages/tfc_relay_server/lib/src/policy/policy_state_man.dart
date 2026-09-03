@@ -47,7 +47,7 @@
 /// was consolidated into one helper in 06-04 first, and it is what
 /// `policy_test.dart`'s indistinguishability case exists to keep true.
 ///
-/// ## The four sub-APIs: one filters, three are still transparent
+/// ## The four sub-APIs: two filter, two are still transparent
 ///
 /// `browse`, `timeseries`, `historyViews` and `preferences` return wrappers.
 /// They are wrapped rather than returned bare so the "no unwrapped source to
@@ -61,20 +61,22 @@
 /// testing nothing, which `suite_integrity_test.dart:104-108` calls worse than
 /// an absent one.
 ///
-/// **10-02 registered the four `browse.*` handlers, so browse now filters**
-/// and has cases that can see it (`policy_test.dart`'s browse group, and
-/// browse as the seventh entry in the indistinguishability loop). The other
-/// three still delegate, each saying so at its own declaration, and the plans
-/// that make their methods reachable are the plans that fill them in: 10-03
-/// for timeseries, 10-04 for history views, 10-05 for preferences. The rule
-/// stands unchanged — a filter lands in the commit that makes the surface
-/// reachable, never before it and never after.
+/// **10-02 registered the four `browse.*` handlers, so browse filters**, and
+/// **10-03 the four `timeseries.*` ones, so timeseries does too** — each with
+/// cases that can see it, and each as an entry in the indistinguishability
+/// loop (browse seventh, timeseries eighth). The other two still delegate,
+/// each saying so at its own declaration, and the plans that make their
+/// methods reachable are the plans that fill them in: 10-04 for history
+/// views, 10-05 for preferences. The rule stands unchanged — a filter lands
+/// in the commit that makes the surface reachable, never before it and never
+/// after.
 library;
 
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import '../auth/identity.dart';
 import 'key_policy.dart';
+import 'series_mapping_tally.dart';
 
 /// The shared source, seen through one session's policy.
 ///
@@ -96,6 +98,7 @@ final class PolicyStateMan implements StateManApi {
     required this.source,
     required this.policy,
     required this.resolver,
+    required this.tally,
     required this.identityOf,
   });
 
@@ -116,14 +119,26 @@ final class PolicyStateMan implements StateManApi {
   /// How a node id and a table name become the plant key [canSee] is asked
   /// about.
   ///
-  /// The browse filter needs it and nothing else in this class does yet:
-  /// `keys` is already a list of plant keys, so the five surfaces that inherit
-  /// hiding from it never had a translation problem. Browse walks the upstream
-  /// address space instead, where every identifier belongs to the server that
-  /// published it, and 10-03 and 10-04 will need the same object for tables.
+  /// The browse and timeseries filters need it and nothing else in this class
+  /// does: `keys` is already a list of plant keys, so the five surfaces that
+  /// inherit hiding from it never had a translation problem. Browse walks the
+  /// upstream address space, where every identifier belongs to the server that
+  /// published it; timeseries is keyed by a series name, which has to become a
+  /// table and a plant key before `canSee` can be asked anything. History
+  /// views need no translation at all — a view is already a list of plant
+  /// keys.
   ///
   /// Required, no default. See `relay_server.dart`'s `resolver` parameter.
   final SeriesResolver resolver;
+
+  /// Where a series this gateway cannot map is recorded.
+  ///
+  /// **Gateway-wide, not per session**, and required for the same reason
+  /// [resolver] is: a tally created here by default would reset every time a
+  /// panel reconnected, which is exactly the number that has to accumulate.
+  /// See [SeriesMappingTally] for why a count exists at all when the wire
+  /// answer is deliberately silent.
+  final SeriesMappingTally tally;
 
   /// Who is asking, read **late**.
   ///
@@ -232,7 +247,8 @@ final class PolicyStateMan implements StateManApi {
   BrowseApi get browse => _PolicyBrowse(source.browse, resolver, canSee);
 
   @override
-  TimeseriesApi get timeseries => _PolicyTimeseries(source.timeseries);
+  TimeseriesApi get timeseries =>
+      _PolicyTimeseries(source.timeseries, resolver, canSee, tally);
 
   @override
   HistoryViewApi get historyViews => _PolicyHistoryViews(source.historyViews);
@@ -254,9 +270,10 @@ final class PolicyStateMan implements StateManApi {
 }
 
 // ---------------------------------------------------------------------------
-// The four sub-APIs. Browse filters as of 10-02; the other three are still
-// wrapped and delegating, and say so at their own declarations. See the
-// library doc for why each of those words is deliberate.
+// The four sub-APIs. Browse filters as of 10-02 and timeseries as of 10-03;
+// the other two are still wrapped and delegating, and say so at their own
+// declarations. See the library doc for why each of those words is
+// deliberate.
 // ---------------------------------------------------------------------------
 
 /// Navigating the address space, **with the hiding rule applied** (10-02).
@@ -354,49 +371,169 @@ final class _PolicyBrowse implements BrowseApi {
   }
 }
 
-/// Historical samples. **Still transparent — 10-03 owns the filter**, and this
-/// class hides nothing today: it delegates every member and says so here so
-/// the file never claims coverage it does not have.
+/// Historical samples, **with the hiding rule applied** (10-03).
 ///
-/// The decision browse needed is already made — [SeriesResolver] is on
-/// [PolicyStateMan] and 10-02 threaded it — but the translation is a different
-/// one: these methods are keyed by `tableName`, not by node id, so what 10-03
-/// consults is `keyForTable`, and 10-CONTEXT amendment 6 makes an unmappable
-/// table **fail-closed**: not served until mapped. That is the opposite of
-/// browse's rule for an unmappable *node*, where a folder legitimately maps to
-/// nothing, and the two must not be made uniform by whoever writes the second
-/// one.
+/// Browse's translation problem, one step further on. These methods are keyed
+/// by a **series name**, not by a plant key and not by a node id, so the
+/// question `canSee` needs — which tag do these samples belong to — has to be
+/// asked of [SeriesResolver] first. `resolve` is what is consulted rather than
+/// `keyForTable`, and that is deliberate: it strips a `<series>:<member>`
+/// address and looks the table up in one call, so the member-stripping and the
+/// lookup cannot drift apart across two call sites, and the plant key travels
+/// out attached to the table it belongs to
+/// (`series_address.dart`'s `ResolvedSeries` — "travelling together is what
+/// makes forgetting the check a compile error rather than a policy hole").
+///
+/// Three rules.
+///
+///  1. **A hidden series is an empty series** — never a refusal. Same
+///     argument as everywhere else in this file: a refusal names what it
+///     refused, and a station that can tell "hidden" from "nothing recorded"
+///     can enumerate the historian by asking.
+///  2. **A series the resolver cannot map at all is answered the same way,
+///     and is counted.** This is the pairing 10-CONTEXT amendment 6 forces
+///     and it is the one a later reader is most likely to try to "fix", so
+///     both halves are stated here:
+///
+///      * The **wire** answer must be indistinguishable from a series that
+///        does not exist, because a refusal naming an unmapped table would
+///        enumerate the historian exactly as a `forbidden` would (T-10-12).
+///      * The **gateway** must not be silent about it, because fail-closed
+///        with nothing to read is a chart that renders flat for months while
+///        nobody knows a table was never mapped.
+///
+///     The reconciliation is [SeriesMappingTally]: silence outward, a count
+///     and a name inward. Making the refusal informative breaks the first
+///     half; dropping the count breaks the second. Neither is an improvement.
+///
+///     The honest limit, from research §C.2: the mapping covers what the
+///     *gateway* collects, so a chart pointed at a pre-cutover table the
+///     application's own collector wrote gets nothing until the migration runs
+///     or the configuration declares a read-side alias. That is the correct
+///     default, and the first time it happens it will look like a database
+///     problem (Trap 7). The count is what makes it one query instead of one
+///     afternoon.
+///  3. **An entry is still returned for every requested series on the
+///     multiple path.** A hidden or unmappable series is an *empty* entry,
+///     never an omission — an omission would be a perfect existence oracle,
+///     and it would also break the rule the contract check names ("an absent
+///     entry and an empty entry are different answers and only one of them is
+///     true"). The gateway's handler builds the map from the request as well,
+///     so this holds twice over; both belts are cheap.
+///
+/// Note the asymmetry with browse, and do not make the two uniform: an
+/// unmappable *node* is left alone there, because a folder legitimately maps
+/// to no key, while an unmappable *series* is fail-closed here, because a
+/// series always names something recorded.
+///
+/// Written as explicit member-by-member delegation — **never `noSuchMethod`**
+/// — for the reason the class doc above gives.
+///
+/// Under the shipped [AllVisibleOperatorWrites] with a resolver that maps
+/// everything, this class is a no-op: which is why the three timeseries
+/// contract checks are unchanged by it, and is the acceptance shape 06-08
+/// established.
 final class _PolicyTimeseries implements TimeseriesApi {
-  const _PolicyTimeseries(this._source);
+  const _PolicyTimeseries(this._source, this._resolver, this._canSee,
+      this._tally);
 
   final TimeseriesApi _source;
+  final SeriesResolver _resolver;
+
+  /// [PolicyStateMan.canSee], passed as a function rather than as the whole
+  /// decorator so this class cannot reach anything else on it.
+  final bool Function(String key) _canSee;
+
+  final SeriesMappingTally _tally;
+
+  /// The physical table behind [wireName], or null when this station gets the
+  /// answer a series that does not exist gets.
+  ///
+  /// The two null paths are different facts and only one of them is recorded:
+  /// an unmappable series is counted, a hidden one is not. Hiding is a
+  /// deliberate configuration and needs no diagnostic; a missing mapping is a
+  /// gap somebody has to close.
+  ///
+  /// A [FormatException] cannot arrive here from the wire — `DataHandlers`
+  /// refuses a malformed series name before this is reached, which is the
+  /// grammar belt — but it is caught rather than thrown, because an embedder
+  /// holding this decorator directly is a caller too and a policy layer that
+  /// threw on a bad name would turn a typo into a handler failure.
+  String? _table(String wireName) {
+    final ResolvedSeries? resolved;
+    try {
+      resolved = _resolver.resolve(wireName);
+    } on FormatException {
+      _tally.record(wireName);
+      return null;
+    }
+    if (resolved == null) {
+      _tally.record(wireName);
+      return null;
+    }
+    // The key, not the member: a policy is written about tags, and
+    // `CN02.MOT01.speed:speed` is a chart selecting a column out of one.
+    return _canSee(resolved.plantKey) ? resolved.table : null;
+  }
 
   @override
   Future<List<TimeseriesData>> queryTimeseriesData(
-          String tableName, DateTime to,
-          {String? orderBy = 'time ASC', DateTime? from}) =>
-      _source.queryTimeseriesData(tableName, to, orderBy: orderBy, from: from);
+      String tableName, DateTime to,
+      {String? orderBy = 'time ASC', DateTime? from}) async {
+    final table = _table(tableName);
+    if (table == null) return const [];
+    return _source.queryTimeseriesData(table, to,
+        orderBy: orderBy, from: from);
+  }
 
+  /// Rule 3: one entry per requested name, keyed by **the name the caller
+  /// used** rather than by the table it resolved to.
+  ///
+  /// The source is asked only about the series that survive the filter, and
+  /// only once each — a hidden series must not cost a round trip either, for
+  /// `readFresh`'s reason (§E.2 item 2): the round trip is itself a side
+  /// channel.
   @override
   Future<Map<String, List<TimeseriesData>>> queryTimeseriesDataMultiple(
-          List<String> tableNames, DateTime to,
-          {String? orderBy = 'time ASC', DateTime? from}) =>
-      _source.queryTimeseriesDataMultiple(tableNames, to,
-          orderBy: orderBy, from: from);
+      List<String> tableNames, DateTime to,
+      {String? orderBy = 'time ASC', DateTime? from}) async {
+    final visible = <String, String>{};
+    for (final name in tableNames) {
+      final table = _table(name);
+      if (table != null) visible[name] = table;
+    }
+    final answers = visible.isEmpty
+        ? const <String, List<TimeseriesData>>{}
+        : await _source.queryTimeseriesDataMultiple(
+            visible.values.toSet().toList(), to,
+            orderBy: orderBy, from: from);
+    return {
+      for (final name in tableNames)
+        name: visible[name] == null
+            ? const []
+            : answers[visible[name]] ?? const [],
+    };
+  }
 
   @override
   Future<List<TimeseriesData>> queryTimeseriesDataDownsampled(
-          String tableName, DateTime from, DateTime to,
-          {int maxPoints = 1000}) =>
-      _source.queryTimeseriesDataDownsampled(tableName, from, to,
-          maxPoints: maxPoints);
+      String tableName, DateTime from, DateTime to,
+      {int maxPoints = 1000}) async {
+    final table = _table(tableName);
+    if (table == null) return const [];
+    return _source.queryTimeseriesDataDownsampled(table, from, to,
+        maxPoints: maxPoints);
+  }
 
   @override
   Future<Map<DateTime, int>> countTimeseriesDataMultiple(
-          String tableName, Duration interval, int howMany,
-          {DateTime? since}) =>
-      _source.countTimeseriesDataMultiple(tableName, interval, howMany,
-          since: since);
+      String tableName, Duration interval, int howMany,
+      {DateTime? since}) async {
+    final table = _table(tableName);
+    if (table == null) return const {};
+    return _source.countTimeseriesDataMultiple(table, interval, howMany,
+        since: since);
+  }
 }
 
 /// Saved history views. **Still transparent — 10-04 owns the filter**, and
