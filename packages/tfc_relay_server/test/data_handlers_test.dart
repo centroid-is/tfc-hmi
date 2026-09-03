@@ -30,6 +30,21 @@
 /// the surface as what they answer. The hostile half lives in
 /// `hostile_params_test.dart`; what is here is the ordinary shape of an answer
 /// and the one refusal that is about size rather than about shape.
+///
+/// **10-04** adds the history-view eleven, and two of the cases below carry a
+/// weight no other case in this file does.
+///
+/// The contract kit covers nine of the eleven through two checks. It covers
+/// **neither** `historyViews.getGlobalRetentionHorizon` **nor**
+/// `timeseries.countTimeseriesDataMultiple`, and it may not be made to:
+/// `data_services_contract.dart:4-30` is an explicit scope boundary forbidding
+/// an eighth data-services case there, on the argument that a weak version of a
+/// Phase 10 property frozen as contract is harder to correct than an honest
+/// silence. So for those two methods **this file is the only judge there is**.
+/// A gateway could answer both of them wrong — a horizon an hour off, a bucket
+/// map keyed the wrong way — and every leg of the contract suite would stay
+/// green. Each of the two cases says so at its own site, because the sentence
+/// is only useful where somebody is about to edit the thing.
 library;
 
 import 'package:json_rpc_2/error_code.dart' as rpc_error;
@@ -85,8 +100,12 @@ final class _Kit {
   final FakeStateMan api;
 }
 
-_Kit _kit({FakeBrowse? browse, FakeTimeseries? timeseries}) {
-  final api = FakeStateMan(browse: browse, timeseries: timeseries);
+_Kit _kit(
+    {FakeBrowse? browse,
+    FakeTimeseries? timeseries,
+    FakeHistoryViews? historyViews}) {
+  final api = FakeStateMan(
+      browse: browse, timeseries: timeseries, historyViews: historyViews);
   addTearDown(api.dispose);
   return _Kit(
       DataHandlers(
@@ -95,6 +114,14 @@ _Kit _kit({FakeBrowse? browse, FakeTimeseries? timeseries}) {
           resolver: const PermissiveSeriesResolver()),
       api);
 }
+
+/// The two plant keys the history-view cases plot.
+///
+/// Plant keys, **not** table names: a view is a list of tags an engineer
+/// picked off the tree, which is why this family is the one data service that
+/// never consults the series resolver.
+const _viewKeyA = 'CN01.MOT01.speed';
+const _viewKeyB = 'CN02.SEN01.temp';
 
 rpc.Parameters _params(String method, Map<String, Object?> value) =>
     rpc.Parameters(method, value);
@@ -570,7 +597,15 @@ void main() {
     });
   });
 
-  group('timeseries.countTimeseriesDataMultiple', () {
+  // **No contract check covers this method either.** It is the second of the
+  // two — `historyViews.getGlobalRetentionHorizon` is the other — and for the
+  // same reason: `data_services_contract.dart:4-30` forbids an eighth
+  // data-services case upstream, and none of the seven that exist calls it. So
+  // the case below is not one judgement among several; it is the only one. A
+  // bucket map keyed the wrong way passes every leg of the contract suite and
+  // fails on a panel, inside a decoder that is not catching.
+  group('timeseries.countTimeseriesDataMultiple — uncovered upstream, judged '
+      'here', () {
     test('answers a map keyed by the bucket instant as epoch milliseconds',
         () async {
       final kit = _kit(timeseries: FakeTimeseries()..seed(_series, _minutely(5)));
@@ -599,6 +634,337 @@ void main() {
       expect(answer.keys.map(int.parse).toList()..sort(),
           [for (var i = 0; i < 5; i++) _ms(_base.add(Duration(minutes: i)))],
           reason: 'the buckets are the minutes the samples landed in');
+    });
+  });
+
+  group('history views round-trip over the handler bodies', () {
+    test('a view survives create, list, read back and delete', () async {
+      final kit = _kit();
+
+      final id = await kit.handlers.historyCreateView(
+          _params(DataServiceMethods.historyCreateView, {
+        'name': 'Vaktir',
+        'keys': [_viewKeyA, _viewKeyB],
+        'keyConfigs': {
+          _viewKeyA: const HistoryViewKeyRecord(
+                  key: _viewKeyA,
+                  alias: 'Færiband 1',
+                  useSecondYAxis: true,
+                  graphIndex: 1)
+              .toJson(),
+        },
+        'graphConfigs': historyViewGraphsToJson(const {
+          1: HistoryViewGraphRecord(
+              graphIndex: 1, name: 'Hitastig', yAxisUnit: '°C'),
+        }),
+      }));
+
+      expect(id, isA<int>(),
+          reason: 'creating a view answers its id as a number. Without one '
+              'the caller cannot address the view it just made, and the panel '
+              'has to guess by listing and matching on a name an operator may '
+              'well have used twice');
+
+      final listed = _objects(await kit.handlers
+          .historySelectViews(_params(DataServiceMethods.historySelectViews, {})));
+      expect(listed.map((view) => view['id']), contains(id),
+          reason: 'the view the picker offers is the one that was saved');
+      expect(listed.single['name'], 'Vaktir');
+      expect(listed.single['createdAt'], isA<int>(),
+          reason: 'every instant on this wire is epoch milliseconds, in both '
+              'directions and in every record. An ISO string here decodes on '
+              'the client through `(raw as num)` and throws inside a decoder '
+              'nothing is catching');
+
+      final keys = _object(await kit.handlers.historyGetKeys(
+          _params(DataServiceMethods.historyGetKeys, {'viewId': id})));
+      expect(keys.keys, containsAll([_viewKeyA, _viewKeyB]));
+      expect(_object(keys[_viewKeyA])['alias'], 'Færiband 1',
+          reason: 'the legend label the engineer typed has to survive the '
+              'round trip, or the chart re-labels itself with raw tag names '
+              'the next time the page opens');
+      expect(_object(keys[_viewKeyA])['useSecondYAxis'], isTrue,
+          reason: 'a series saved against the second Y axis coming back on '
+              'the first puts a temperature and a motor speed on one scale, '
+              'and the temperature becomes a flat line at the bottom');
+      expect(_object(keys[_viewKeyB])['alias'], _viewKeyB,
+          reason: 'a key saved with no alias comes back aliased to its own '
+              'name — `row.alias ?? row.key`, defaulted inside the record\'s '
+              'constructor so no call site has to remember it');
+
+      final graphs = _object(await kit.handlers.historyGetGraphs(
+          _params(DataServiceMethods.historyGetGraphs, {'viewId': id})));
+      expect(graphs.keys, ['1'],
+          reason: 'graph configuration is keyed by graph *index*, an int, and '
+              'JSON objects key by String — so the map crosses with String '
+              'keys and is converted back exactly once, at the boundary, by '
+              '`historyViewGraphsFromJson`. A key left as an int here is a '
+              'map json_rpc_2 cannot encode');
+      expect(_object(graphs['1'])['yAxisUnit'], '°C',
+          reason: 'without the unit the chart draws numbers with nothing '
+              'saying what they are');
+
+      final names = await kit.handlers.historyGetKeyNames(
+          _params(DataServiceMethods.historyGetKeyNames, {'viewId': id}));
+      expect(names, containsAll([_viewKeyA, _viewKeyB]),
+          reason: 'the name-only accessor and the record accessor must agree '
+              'about what this view plots; they are two reads of one row set '
+              'and a caller picks whichever it needs');
+
+      await kit.handlers.historyDeleteView(
+          _params(DataServiceMethods.historyDeleteView, {'id': id}));
+
+      expect(
+          _objects(await kit.handlers.historySelectViews(
+              _params(DataServiceMethods.historySelectViews, {}))),
+          isEmpty,
+          reason: 'the deleted view is still in the picker');
+      expect(
+          _object(await kit.handlers.historyGetKeys(
+              _params(DataServiceMethods.historyGetKeys, {'viewId': id}))),
+          isEmpty,
+          reason: 'the delete has to take the key rows with it. Rows that '
+              'outlive their view are how a deleted view comes back as a '
+              'partial one after the next restart — a chart with a name, no '
+              'title and two mystery lines');
+    });
+
+    test('a view can be renamed and re-keyed, and the old keys go', () async {
+      final kit = _kit();
+      final id = await kit.handlers.historyCreateView(
+          _params(DataServiceMethods.historyCreateView, {
+        'name': 'Vaktir',
+        'keys': [_viewKeyA],
+      }));
+
+      await kit.handlers.historyUpdateView(
+          _params(DataServiceMethods.historyUpdateView, {
+        'id': id,
+        'name': 'Vaktir, endurskoðað',
+        'keys': [_viewKeyB],
+      }));
+
+      final listed = _objects(await kit.handlers.historySelectViews(
+          _params(DataServiceMethods.historySelectViews, {})));
+      expect(listed.single['name'], 'Vaktir, endurskoðað');
+      expect(listed.single['updatedAt'], isA<int>(),
+          reason: 'an edited view carries an updatedAt where a fresh one '
+              'carries none, and the picker sorts and labels by exactly that '
+              'distinction');
+      expect(
+          await kit.handlers.historyGetKeyNames(
+              _params(DataServiceMethods.historyGetKeyNames, {'viewId': id})),
+          [_viewKeyB],
+          reason: 'update *replaces* the key list rather than adding to it. A '
+              'union would make removing a line from a chart impossible '
+              'through the only method that exists for it');
+    });
+
+    test('a saved time window survives add, list and delete, to the '
+        'microsecond', () async {
+      final kit = _kit();
+      final id = await kit.handlers.historyCreateView(
+          _params(DataServiceMethods.historyCreateView, {
+        'name': 'Vaktir',
+        'keys': [_viewKeyA],
+      }));
+
+      // **July on purpose.** A local-time constructor is invisible on a
+      // machine sitting at UTC — Reykjavík is UTC+0 all year, and this suite
+      // runs there — so the month alone does not prove anything and the case
+      // does not rely on it. What it relies on is the *wire integer*: the
+      // handler must emit exactly `start.millisecondsSinceEpoch` of the UTC
+      // instant that went in, which is a claim no timezone can make true or
+      // false by accident. The July instants are still worth having, because
+      // on a CI runner in a DST zone a local-time constructor fails this case
+      // by a whole hour and names itself.
+      final start = DateTime.utc(2026, 7, 15, 6);
+      final end = DateTime.utc(2026, 7, 15, 14);
+
+      final periodId = await kit.handlers.historyAddPeriod(
+          _params(DataServiceMethods.historyAddPeriod, {
+        'viewId': id,
+        'name': 'Vakt 1',
+        'start': _ms(start),
+        'end': _ms(end),
+      }));
+      expect(periodId, isA<int>());
+
+      final periods = _objects(await kit.handlers.historyListPeriods(
+          _params(DataServiceMethods.historyListPeriods, {'viewId': id})));
+      expect(periods, hasLength(1));
+      expect(periods.single['id'], periodId,
+          reason: 'a window that comes back under a different id than adding '
+              'it returned means deleting it addresses something else');
+      expect(periods.single['viewId'], id);
+      expect(periods.single['name'], 'Vakt 1');
+
+      expect(periods.single['startAt'], _ms(start),
+          reason: 'the exact epoch millisecond that went in. An operator '
+              'returning to a saved shift lands on the wrong one if this is '
+              'off by an hour, and every conclusion drawn from the chart is '
+              'about the wrong hours — with nothing on screen saying so');
+      expect(periods.single['endAt'], _ms(end));
+      expect(
+          DateTime.fromMillisecondsSinceEpoch(periods.single['startAt']! as int,
+              isUtc: true),
+          start,
+          reason: 'and it decodes back to the same instant, equal to the '
+              'microsecond rather than merely close. `DateTime` equality is '
+              'exact, so this is the assertion that would catch a rounding '
+              'through seconds');
+      expect(
+          DateTime.fromMillisecondsSinceEpoch(periods.single['endAt']! as int,
+                  isUtc: true)
+              .isUtc,
+          isTrue,
+          reason: 'decoded as UTC, which is what makes the comparison above a '
+              'comparison of instants rather than of wall clocks');
+
+      await kit.handlers.historyDeletePeriod(
+          _params(DataServiceMethods.historyDeletePeriod, {'id': periodId}));
+      expect(
+          _objects(await kit.handlers.historyListPeriods(
+              _params(DataServiceMethods.historyListPeriods, {'viewId': id}))),
+          isEmpty,
+          reason: 'the deleted window is still listed on the view');
+    });
+
+    test('deleting a view takes its saved windows with it', () async {
+      final kit = _kit();
+      final id = await kit.handlers.historyCreateView(
+          _params(DataServiceMethods.historyCreateView, {
+        'name': 'Vaktir',
+        'keys': [_viewKeyA],
+      }));
+      await kit.handlers.historyAddPeriod(
+          _params(DataServiceMethods.historyAddPeriod, {
+        'viewId': id,
+        'name': 'Vakt 1',
+        'start': _ms(_base),
+        'end': _ms(_base.add(const Duration(hours: 8))),
+      }));
+
+      await kit.handlers.historyDeleteView(
+          _params(DataServiceMethods.historyDeleteView, {'id': id}));
+
+      expect(
+          _objects(await kit.handlers.historyListPeriods(
+              _params(DataServiceMethods.historyListPeriods, {'viewId': id}))),
+          isEmpty,
+          reason: 'the cascade is spelled out by hand in the database layer '
+              'rather than trusted to a foreign key, so it is a behaviour '
+              'this gateway has to carry across rather than inherit');
+    });
+  });
+
+  // **No contract check covers this method.** `data_services_contract.dart`'s
+  // scope boundary (`:4-30`) forbids an eighth data-services case there, and
+  // the two checks that do exist never call the retention horizon — so if this
+  // handler is wrong, every leg of the contract suite stays green and the
+  // first report is an operator saying a chart "goes back further than it
+  // should". These two cases are the whole of the judgement on it.
+  group('historyViews.getGlobalRetentionHorizon — uncovered upstream, judged '
+      'here', () {
+    test('null stays null, and is not an instant at the epoch', () async {
+      final kit = _kit();
+
+      final answer = await kit.handlers.historyRetentionHorizon(
+          _params(DataServiceMethods.historyRetentionHorizon, {}));
+
+      expect(answer, isNull,
+          reason: '"nothing has been discarded yet" and "everything since '
+              '1970 is gone" are opposite answers, and 0 is a perfectly valid '
+              'epoch millisecond — so a handler that defaulted null to 0 '
+              'would tell a chart that all of history has been dropped. The '
+              'client\'s decoder is written against exactly this distinction '
+              '(`client_sub_apis.dart`: `raw == null ? null : timeOf(raw)`)');
+    });
+
+    test('a horizon crosses as the exact epoch millisecond, in UTC', () async {
+      final horizon = DateTime.utc(2026, 7, 15, 6, 30);
+      final kit = _kit(
+          historyViews: FakeHistoryViews()..setRetentionHorizon(horizon));
+
+      final answer = await kit.handlers.historyRetentionHorizon(
+          _params(DataServiceMethods.historyRetentionHorizon, {}));
+
+      expect(answer, _ms(horizon),
+          reason: 'the horizon is the line a chart draws between "nothing '
+              'happened" and "nothing was kept", so an hour of drift moves '
+              'that line across a whole shift. The upstream implementation '
+              'builds it as `DateTime.now().subtract(maxDur)` '
+              '(`database_drift.dart:775`) — a *local* instant — and this '
+              'handler must not repeat that shape: epoch milliseconds are '
+              'absolute, but a local DateTime handed to a client that decodes '
+              'as UTC is off by the server\'s offset');
+      expect(
+          DateTime.fromMillisecondsSinceEpoch(answer! as int, isUtc: true),
+          horizon,
+          reason: 'and it decodes back to the same instant exactly');
+    });
+  });
+
+  group('a malformed view id is refused, never carried into the database', () {
+    for (final (label, value) in <(String, Object?)>[
+      ('absent', null),
+      ('a string', '1'),
+      ('a decimal', 1.5),
+      ('a list', <Object?>[1]),
+    ]) {
+      test('a viewId that is $label is INVALID_PARAMS', () async {
+        final kit = _kit();
+
+        final error = await _refusal(
+            () => kit.handlers.historyGetKeys(_params(
+                DataServiceMethods.historyGetKeys,
+                {if (value != null) 'viewId': value})),
+            'a getHistoryViewKeys whose viewId is $label');
+
+        expect(error.code, rpc_error.INVALID_PARAMS,
+            reason: 'and not handlerFailed: `params["viewId"].asInt` would '
+                'raise an RpcException with no `data`, which json_rpc_2 then '
+                'fills with the offending request — the shape this whole file '
+                'exists to avoid');
+        expect(error.message, contains('viewId'),
+            reason: 'the refusal names the parameter, or the caller is '
+                'reading a stack trace to find out which of four ids it got '
+                'wrong');
+        expect((error.data! as Map)['request'], isA<String>(),
+            reason: 'pre-substituted, like every other refusal on this wire');
+      });
+    }
+
+    test('a graph index that will not parse is refused, never dropped',
+        () async {
+      final kit = _kit();
+
+      final error = await _refusal(
+          () => kit.handlers.historyCreateView(
+                  _params(DataServiceMethods.historyCreateView, {
+                'name': 'Vaktir',
+                'keys': [_viewKeyA],
+                'graphConfigs': {
+                  'top': {'graphIndex': 0, 'name': 'Hitastig'},
+                },
+              })),
+          'a createHistoryView whose graphConfigs key is not a number');
+
+      expect(error.code, rpc_error.INVALID_PARAMS);
+      expect(error.message, contains('graphConfigs'));
+      expect(
+          _objects(await kit.handlers.historySelectViews(
+              _params(DataServiceMethods.historySelectViews, {}))),
+          isEmpty,
+          reason: 'and nothing was created. This is the arm that keeps the '
+              'refusal honest: upstream\'s `createHistoryView` parses these '
+              'keys with `int.tryParse` and **silently skips** an entry that '
+              'fails (`database_drift.dart:610`), so a chart saving four '
+              'graphs would get three back with nothing said. The wire is '
+              'typed `Map<int, HistoryViewGraphRecord>`, which is what makes '
+              'that drop unreachable from a client speaking this protocol — '
+              'and refusing here is what keeps it unreachable from one that '
+              'is not');
     });
   });
 
@@ -674,6 +1040,10 @@ List<Map<String, Object?>> _samples(Object? raw) => [
 /// One decoded JSON object, cast where the handler hands back `Object?`.
 Map<String, Object?> _object(Object? raw) =>
     (raw! as Map).cast<String, Object?>();
+
+/// One decoded list of JSON objects — a view list, a period list.
+List<Map<String, Object?>> _objects(Object? raw) =>
+    [for (final entry in raw! as List) _object(entry)];
 
 /// A source that refuses every raw query as too large.
 ///

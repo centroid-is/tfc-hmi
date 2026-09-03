@@ -350,7 +350,7 @@ void main() {
             'a deadline and the pump would be pure cost');
   });
 
-  test('the handler table is exactly the seventeen names a client may call, '
+  test('the handler table is exactly the twenty-eight names a client may call, '
       'plus the one it announces', () async {
     final link = _link();
     addTearDown(link.dispose);
@@ -381,18 +381,32 @@ void main() {
           DataServiceMethods.timeseriesQueryMultiple,
           DataServiceMethods.timeseriesQueryDownsampled,
           DataServiceMethods.timeseriesCountMultiple,
+          // 10-04: the history-view eleven, the largest family and the only
+          // write-shaped one this phase that is not a preference.
+          DataServiceMethods.historyCreateView,
+          DataServiceMethods.historyUpdateView,
+          DataServiceMethods.historyDeleteView,
+          DataServiceMethods.historySelectViews,
+          DataServiceMethods.historyGetKeys,
+          DataServiceMethods.historyGetGraphs,
+          DataServiceMethods.historyGetKeyNames,
+          DataServiceMethods.historyAddPeriod,
+          DataServiceMethods.historyDeletePeriod,
+          DataServiceMethods.historyListPeriods,
+          DataServiceMethods.historyRetentionHorizon,
           // 05-05: the hold tick, a client→server notification. It is in the
           // ledger because json_rpc_2 dispatches an un-idded frame through
           // the same table, and it is not a name a client may *call* — see
           // `surface_test.dart`, which keeps the two in separate literals.
           Methods.holdTick,
         },
-        reason: 'the wire surface is a closed set of eighteen registrations: '
-            '03-05 added subscribe and unsubscribe, 03-08 froze it, 04-02 '
-            'added the five value methods the contract leg cannot run '
-            'without, 10-02 the four browse ones that retired six of the '
-            'thirteen proven-unreachable checks, and 10-03 the four '
-            'timeseries ones that retired three more. A handler nobody '
+        reason: 'the wire surface is a closed set of twenty-nine '
+            'registrations: 03-05 added subscribe and unsubscribe, 03-08 '
+            'froze it, 04-02 added the five value methods the contract leg '
+            'cannot run without, 10-02 the four browse ones that retired six '
+            'of the thirteen proven-unreachable checks, 10-03 the four '
+            'timeseries ones that retired three more, and 10-04 the eleven '
+            'history-view ones that retired two more. A handler nobody '
             'counted is surface nobody reviewed');
   });
 }

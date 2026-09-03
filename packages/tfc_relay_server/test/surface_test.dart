@@ -20,7 +20,7 @@
 /// Two properties are enforced here:
 ///
 ///  * **Closure, in both directions.** The session registers exactly these
-///    seventeen names. One direction alone is half a check: a declared name
+///    twenty-eight names. One direction alone is half a check: a declared name
 ///    with no
 ///    handler answers METHOD_NOT_FOUND from a table claiming to carry it, and
 ///    a handler under a name nobody wrote down is surface nobody counted. The
@@ -65,8 +65,9 @@
 /// names. It is the shape every later data-service plan copies — the handler
 /// bodies land, this literal grows in the same commit, and the contract legs'
 /// gap lists shrink by the checks the handlers just made reachable. **Plan 03
-/// made the second**, the four `timeseries.*` names, and sixteen of the
-/// thirty-four (history views, preferences) are still to come.
+/// made the second**, the four `timeseries.*` names; **plan 04 the third**, the
+/// eleven `historyViews.*` names, and fifteen of the thirty-four (preferences)
+/// are still to come.
 library;
 
 import 'package:json_rpc_2/error_code.dart' as rpc_errors;
@@ -86,7 +87,7 @@ import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 import 'support/permissive_resolver.dart';
 import 'support/ws_harness.dart';
 
-/// Every method a connected client may call, as of Phase 10 plan 03.
+/// Every method a connected client may call, as of Phase 10 plan 04.
 ///
 /// Hand-written. Not derived. See the library doc for why — and note that the
 /// four `browse.*` names below are bare strings for exactly that reason, even
@@ -119,6 +120,26 @@ const Set<String> expectedHandlerTable = {
   'timeseries.queryTimeseriesDataMultiple',
   'timeseries.queryTimeseriesDataDownsampled',
   'timeseries.countTimeseriesDataMultiple',
+  // Phase 10 plan 04. The history-view eleven — the largest family and the
+  // only write-shaped one in this phase that is not a preference: four of
+  // these mutate rows a chart reads. Two contract checks stopped being
+  // proven-unreachable in the commit that added them, and **two of the eleven
+  // are covered by no contract check at all**
+  // (`historyViews.getGlobalRetentionHorizon`, and `timeseries` has the other
+  // one) — their cases live in `data_handlers_test.dart`, because
+  // `data_services_contract.dart:4-30` forbids an eighth data-services case
+  // upstream.
+  'historyViews.createHistoryView',
+  'historyViews.updateHistoryView',
+  'historyViews.deleteHistoryView',
+  'historyViews.selectHistoryViews',
+  'historyViews.getHistoryViewKeys',
+  'historyViews.getHistoryViewGraphs',
+  'historyViews.getHistoryViewKeyNames',
+  'historyViews.addHistoryViewPeriod',
+  'historyViews.deleteHistoryViewPeriod',
+  'historyViews.listHistoryViewPeriods',
+  'historyViews.getGlobalRetentionHorizon',
 };
 
 /// Every name the server *sends* as a notification, and therefore may never
@@ -215,9 +236,10 @@ void main() {
               'registration.');
     });
 
-    test('the table is exactly the seventeen names a client may call today', () {
-      // The sentence is unchanged in shape and still true: seventeen names a
-      // client may *call*. `h` is not one of them — it is announced, never
+    test('the table is exactly the twenty-eight names a client may call today',
+        () {
+      // The sentence is unchanged in shape and still true: twenty-eight names
+      // a client may *call*. `h` is not one of them — it is announced, never
       // called — so it is taken out of the ledger by name here rather than
       // being added to the literal, which would say a client may ask the
       // gateway to tick.
@@ -228,8 +250,8 @@ void main() {
               'failure prints the whole table rather than a difference');
     });
 
-    test('the registered table is the seventeen callable names plus the client '
-        'notifications', () {
+    test('the registered table is the twenty-eight callable names plus the '
+        'client notifications', () {
       expect(_session().registeredMethods, everyRegisterableName,
           reason: 'the ledger is the union, because json_rpc_2 dispatches a '
               'notification through the same table a request goes through. A '
@@ -346,6 +368,25 @@ void main() {
         'maxPoints': 1000,
         'intervalMs': 60_000,
         'howMany': 10,
+        // The history-view five (Phase 10 plan 04). `keys` above is reused —
+        // it is a list of plant keys in both places, which is what a view
+        // plots — and `name` is the view's own label. `viewId` and `id` are
+        // both 1 because the sweep runs the eleven names in the order they
+        // are declared above: `createHistoryView` runs first and
+        // `FakeHistoryViews` hands out ids from 1, so every later name in the
+        // family addresses a view that really was created a moment earlier.
+        // That matters more here than it looks: an id addressing nothing
+        // still *dispatches*, so the sweep would pass either way — but a
+        // dispatch that reaches a real row is the one that would catch a
+        // handler wired to the wrong source.
+        'viewId': 1,
+        'id': 1,
+        'name': 'Vaktir',
+        // Epoch **milliseconds**, like `from` and `to` and for the same
+        // reason: a saved window is two instants and this wire has exactly
+        // one instant encoding. `start` is before `end`.
+        'start': 1_786_600_800_000, // 2026-08-13T06:00:00Z
+        'end': 1_786_604_400_000, //   2026-08-13T07:00:00Z
       };
 
       final methodNotFound = <String>[];
