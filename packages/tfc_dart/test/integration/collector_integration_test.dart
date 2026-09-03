@@ -9,6 +9,7 @@ import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/boolean_expression.dart';
 
 import 'docker_compose.dart';
+import 'eventually.dart';
 
 /// Polls [condition] every 50 ms until it returns true or [timeout] elapses.
 Future<void> waitUntil(
@@ -394,28 +395,24 @@ void main() {
       final stream =
           collector.collectStream(testKey, since: const Duration(hours: 2));
 
-      int count = 0;
-      stream.listen((data) {
-        count++;
-        if (count == 1) {
-          expect(data.length, 2);
-          expect(data[0].value, 'historical1');
-          expect(data[1].value, 'historical2');
-        } else if (count == 2) {
-          expect(data.length, 3);
-          expect(data[0].value, 'historical1');
-          expect(data[1].value, 'historical2');
-          expect(data[2].value, 'realtime1');
-        }
-      });
+      // Latest emission, not emission ordinals — see the note on the complex
+      // DynamicValue test above.
+      List<dynamic>? latest;
+      final sub = stream.listen((data) => latest = data);
+      addTearDown(sub.cancel);
 
-      // Wait for initial DB query to complete and emit historical data
-      await waitUntil(() => count >= 1);
+      await eventually(() => latest, hasLength(2),
+          reason: 'the stream replays both historical rows first');
+      expect(latest![0].value, 'historical1');
+      expect(latest![1].value, 'historical2');
 
       streamController.add(DynamicValue(value: 'realtime1'));
-      await waitUntil(() => count >= 2);
 
-      expect(count, 2);
+      await eventually(() => latest, hasLength(3),
+          reason: 'the live sample joins the two historical ones');
+      expect(latest![0].value, 'historical1');
+      expect(latest![1].value, 'historical2');
+      expect(latest![2].value, 'realtime1');
       // Clean up
       streamController.close();
       collector.stopCollect(entry);
@@ -491,44 +488,32 @@ void main() {
       final stream =
           collector.collectStream(testKey, since: const Duration(hours: 2));
 
-      int count = 0;
-      stream.listen((data) {
-        count++;
-        if (count == 1) {
-          expect(data.length, 1);
-          expect(data[0].value, 'historical');
-        } else if (count == 2) {
-          expect(data.length, 2);
-          expect(data[0].value, 'historical');
-          expect(data[1].value, 'update1');
-        } else if (count == 3) {
-          expect(data.length, 3);
-          expect(data[0].value, 'historical');
-          expect(data[1].value, 'update1');
-          expect(data[2].value, 'update2');
-        } else if (count == 4) {
-          expect(data.length, 4);
-          expect(data[0].value, 'historical');
-          expect(data[1].value, 'update1');
-          expect(data[2].value, 'update2');
-          expect(data[3].value, 'update3');
-        }
-      });
+      // Latest emission, not emission ordinals — see the note on the complex
+      // DynamicValue test above.
+      List<dynamic>? latest;
+      final sub = stream.listen((data) => latest = data);
+      addTearDown(sub.cancel);
 
-      // Wait for initial DB query to complete and emit historical data
-      await waitUntil(() => count >= 1);
+      await eventually(() => latest, hasLength(1),
+          reason: 'the stream replays the historical row first');
+      expect(latest![0].value, 'historical');
 
-      // Add multiple real-time updates
-      streamController.add(DynamicValue(value: 'update1'));
-      await waitUntil(() => count >= 2);
+      // Each update is added only once the previous one has arrived, so the
+      // accumulated list is asserted at every step rather than only at the
+      // end — that is what makes this test about *accumulation* and not just
+      // about the final count.
+      var expected = <String>['historical'];
+      for (final update in ['update1', 'update2', 'update3']) {
+        streamController.add(DynamicValue(value: update));
+        expected = [...expected, update];
 
-      streamController.add(DynamicValue(value: 'update2'));
-      await waitUntil(() => count >= 3);
-
-      streamController.add(DynamicValue(value: 'update3'));
-      await waitUntil(() => count >= 4);
-
-      expect(count, 4);
+        await eventually(() => latest, hasLength(expected.length),
+            reason: 'expected the stream to accumulate $expected');
+        expect(
+          [for (final d in latest!) d.value],
+          expected,
+        );
+      }
 
       // Clean up
       streamController.close();
@@ -566,24 +551,30 @@ void main() {
       final stream =
           collector.collectStream(testKey, since: const Duration(hours: 2));
 
-      int count = 0;
-      stream.listen((data) {
-        count++;
-        if (count == 1) {
-          expect(data.length, 1);
-          expect(data[0].value, complexHistoricalData);
-        } else if (count == 2) {
-          expect(data.length, 2);
-          expect(data[0].value, complexHistoricalData);
-          expect(data[1].value, isA<Map>());
-          expect(data[1].value['temperature'], 26.0);
-          expect(data[1].value['humidity'], 65.0);
-          expect(data[1].value['pressure'], 1012.0);
-        }
-      });
+      // Hold the latest emission rather than asserting inside the listener.
+      //
+      // This test used to number the emissions and assert on the ordinal —
+      // "the 1st emission has 1 row, the 2nd has 2". That coupled the
+      // assertions to *how many times the stream happened to fire*, which is
+      // not something the test controls: one extra frame (an empty initial
+      // emission before the historical query resolves, a re-query, a
+      // debounce boundary) shifted every expectation by one and CI failed
+      // with "expected 1, actual 0" then "expected 2, actual 1".
+      //
+      // What the test actually means is "eventually the stream carries the
+      // historical row, and eventually it carries both". Assert that, and the
+      // emission count stops mattering. Asserting on the newest value also
+      // moves the failure into the test body, where `expect` belongs — thrown
+      // from inside a stream listener it is reported against whatever
+      // happened to be running.
+      List<dynamic>? latest;
+      final sub = stream.listen((data) => latest = data);
+      addTearDown(sub.cancel);
 
-      // Wait for initial DB query to complete and emit historical data
-      await waitUntil(() => count >= 1);
+      // The historical row, once the initial DB query has resolved.
+      await eventually(() => latest, hasLength(1),
+          reason: 'the stream must first replay what was already in the table');
+      expect(latest![0].value, complexHistoricalData);
 
       // Add complex real-time data
       final complexRealtimeData = DynamicValue.fromMap(
@@ -594,9 +585,16 @@ void main() {
         }),
       );
       streamController.add(complexRealtimeData);
-      await waitUntil(() => count >= 2);
 
-      expect(count, 2);
+      // And then the live one alongside it.
+      await eventually(() => latest, hasLength(2),
+          reason: 'the live sample must join the historical one');
+      expect(latest![0].value, complexHistoricalData);
+      expect(latest![1].value, isA<Map>());
+      expect(latest![1].value['temperature'], 26.0);
+      expect(latest![1].value['humidity'], 65.0);
+      expect(latest![1].value['pressure'], 1012.0);
+
       // Clean up
       streamController.close();
       collector.stopCollect(entry);
@@ -629,22 +627,15 @@ void main() {
       final stream =
           collector.collectStream(testKey, since: const Duration(hours: 2));
 
-      int count = 0;
-      stream.listen((data) {
-        count++;
-        if (count == 1) {
-          expect(data.length, 1);
-          expect(data[0].value, historicalArrayData);
-        } else if (count == 2) {
-          expect(data.length, 2);
-          expect(data[0].value, historicalArrayData);
-          expect(data[1].value, isA<List<dynamic>>());
-          expect(data[1].value, [5.1, 6.3, 7.8, 8.4]);
-        }
-      });
+      // Latest emission, not emission ordinals — see the note on the complex
+      // DynamicValue test above.
+      List<dynamic>? latest;
+      final sub = stream.listen((data) => latest = data);
+      addTearDown(sub.cancel);
 
-      // Wait for initial DB query to complete and emit historical data
-      await waitUntil(() => count >= 1);
+      await eventually(() => latest, hasLength(1),
+          reason: 'the stream replays the historical array first');
+      expect(latest![0].value, historicalArrayData);
 
       // Add real-time array data
       final realtimeArrayData = DynamicValue.fromList([
@@ -654,9 +645,12 @@ void main() {
         DynamicValue(value: 8.4),
       ]);
       streamController.add(realtimeArrayData);
-      await waitUntil(() => count >= 2);
 
-      expect(count, 2);
+      await eventually(() => latest, hasLength(2),
+          reason: 'the live array joins the historical one');
+      expect(latest![0].value, historicalArrayData);
+      expect(latest![1].value, isA<List<dynamic>>());
+      expect(latest![1].value, [5.1, 6.3, 7.8, 8.4]);
       // Clean up
       streamController.close();
       collector.stopCollect(entry);

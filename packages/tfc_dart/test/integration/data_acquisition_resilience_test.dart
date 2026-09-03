@@ -19,6 +19,7 @@ import 'package:tfc_dart/core/database_drift.dart';
 import 'package:tfc_dart/core/state_man.dart';
 
 import 'docker_compose.dart';
+import 'eventually.dart';
 
 void main() {
   group('Data Acquisition Resilience', () {
@@ -130,12 +131,23 @@ void main() {
         await collector.collectEntryImpl(entry, streamController.stream,
             skipFirstSample: false);
 
-        // Insert one value while DB is up (creates table)
+        // Insert one value while DB is up (creates table).
+        //
+        // The collector's listener fires an *unawaited* insert, so there is
+        // no future to await between adding to the stream and the row being
+        // buffered. A fixed 200 ms here is what made this test fail on CI
+        // one row short: flush() flushed an empty buffer because the listener
+        // had not run yet, and the query then found nothing.
         streamController.add(DynamicValue(value: 'init'));
-        await Future.delayed(const Duration(milliseconds: 200));
-        await database.flush();
-
-        var data = await _queryTable(database, tableName);
+        var data = await eventually(
+          () async {
+            await database.flush();
+            return _queryTable(database, tableName);
+          },
+          hasLength(1),
+          reason: 'the seed row must land before the DB is stopped — '
+              'everything after this depends on the table existing',
+        );
         expect(data.length, 1);
 
         // Stop database — keep it down for the entire insert phase.
@@ -300,11 +312,25 @@ void main() {
         await collector.collectEntryImpl(entry, streamController.stream,
             skipFirstSample: false);
 
-        // Insert values (will be buffered, not flushed yet)
+        // Insert values (will be buffered, not flushed yet).
         for (var i = 0; i < 3; i++) {
           streamController.add(DynamicValue(value: 'item_$i'));
-          await Future.delayed(const Duration(milliseconds: 50));
         }
+
+        // Wait for all three to reach the write buffer before disposing.
+        //
+        // This is the whole test: dispose() must flush what is *pending*, so
+        // the three rows have to be pending before it is called. Sleeping
+        // 50 ms per item did not guarantee that — the inserts are unawaited,
+        // and on a loaded runner the third had not been buffered yet, so
+        // dispose flushed two and the test failed asserting three. Waiting on
+        // the buffer depth asks the question the test actually means.
+        await eventually(
+          () => database.queuedRowCount,
+          greaterThanOrEqualTo(3),
+          reason: 'all three rows must be pending before dispose() is called, '
+              'or this asserts on a flush that had nothing to lose',
+        );
 
         // Don't call flush - just dispose
         await database.dispose();
