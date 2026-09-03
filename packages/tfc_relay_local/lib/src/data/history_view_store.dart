@@ -175,16 +175,20 @@ final class HistoryViewStore implements HistoryViewApi {
     };
   }
 
+  /// The key names of view [viewId], in whatever order the database returns.
+  ///
+  /// **Delegated, and deliberately not sorted.** Neither this query nor
+  /// `getHistoryViewKeys` carries an `ORDER BY` upstream, so both answer in
+  /// the database's order — which for a freshly written view is insertion
+  /// order and is not promised to be anything. Imposing an order here would
+  /// make this accessor disagree with the record accessor, which is the one
+  /// thing a caller holding both can actually notice. What is asserted in
+  /// `history_view_read_test.dart` is therefore that the two agree and that
+  /// neither moves between calls; a caller that needs a deterministic order
+  /// has to sort, and now has this sentence saying so.
   @override
-  Future<List<String>> getHistoryViewKeyNames(int viewId) async {
-    // The borrow happens BEFORE the interim refusal, so "the historian is not
-    // up" is one answer across all eleven methods for as long as the interim
-    // lasts. Three of these are owed by this plan's later tasks; an
-    // `UnsupportedError` and not an `UnimplementedError`, because the ledger
-    // in `freeze_test.dart` counts the second by name and a member owed by
-    // the next commit of the same plan is not a member nobody owns.
-    database() ?? _noHistorian();
-    throw UnsupportedError('10-08 task 2 owes getHistoryViewKeyNames');
+  Future<List<String>> getHistoryViewKeyNames(int viewId) {
+    return (database() ?? _noHistorian()).db.getHistoryViewKeyNames(viewId);
   }
 
   @override
@@ -202,16 +206,48 @@ final class HistoryViewStore implements HistoryViewApi {
   }
 
   @override
-  Future<void> deleteHistoryViewPeriod(int id) async {
-    database() ?? _noHistorian();
-    throw UnsupportedError('10-08 task 2 owes deleteHistoryViewPeriod');
+  Future<void> deleteHistoryViewPeriod(int id) {
+    return (database() ?? _noHistorian()).db.deleteHistoryViewPeriod(id);
   }
 
+  /// Every saved window on [viewId], oldest first.
+  ///
+  /// **The ordering is added here, and unlike [getHistoryViewKeyNames] it is
+  /// not optional.** `HistoryViewApi.listHistoryViewPeriods` says "oldest
+  /// first" in as many words (`state_man_api.dart:341`) and the upstream query
+  /// carries no `ORDER BY`, so somebody owes it; the store is the last place
+  /// that can pay before the wire. Sorted by [HistoryViewPeriodRecord.startAt]
+  /// and tie-broken by id, so two windows saved over the same instant come
+  /// back in the order they were created rather than in an order that changes
+  /// between calls.
+  ///
+  /// Every instant is `.toUtc()`'d, and the three of them for one reason: the
+  /// wire is UTC epoch milliseconds everywhere, `DateTime ==` compares the
+  /// `isUtc` flag as well as the value, and `createdAt` is stamped by drift
+  /// with a local `DateTime.now()`. A window that came back an hour off would
+  /// land an operator on the wrong shift, and every conclusion they drew from
+  /// the chart would be about the wrong hours.
   @override
   Future<List<HistoryViewPeriodRecord>> listHistoryViewPeriods(
       int viewId) async {
-    database() ?? _noHistorian();
-    throw UnsupportedError('10-08 task 2 owes listHistoryViewPeriods');
+    final rows =
+        await (database() ?? _noHistorian()).db.listHistoryViewPeriods(viewId);
+    final periods = [
+      for (final row in rows)
+        HistoryViewPeriodRecord(
+          id: row.id,
+          viewId: row.viewId,
+          name: row.name,
+          startAt: row.startAt.toUtc(),
+          endAt: row.endAt.toUtc(),
+          createdAt: row.createdAt.toUtc(),
+        ),
+    ];
+    periods.sort((a, b) {
+      final byStart = a.startAt.compareTo(b.startAt);
+      return byStart != 0 ? byStart : a.id.compareTo(b.id);
+    });
+    return periods;
   }
 
   @override
