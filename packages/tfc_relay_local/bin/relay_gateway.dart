@@ -21,6 +21,8 @@ import 'package:tfc_dart/core/state_man.dart' show KeyMappings;
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart'
     show ResolvedSeries, SeriesResolver;
 import 'package:tfc_relay_local/src/collect/timescale_sink.dart';
+import 'package:tfc_relay_local/src/data/collection_plan_resolver.dart';
+import 'package:tfc_relay_local/src/data/timescale_reader.dart';
 import 'package:tfc_relay_local/tfc_relay_local.dart';
 
 Future<void> main(List<String> args) async {
@@ -62,8 +64,28 @@ Future<void> main(List<String> args) async {
       (jsonDecode(File(config.keyMappingsPath).readAsStringSync()) as Map)
           .cast<String, dynamic>());
 
+  // Collection and history are ONE database connection, and the two halves are
+  // built in this order for one reason: the reader needs the router's ingest
+  // verdict to know which keys the plan may contain, and the router only
+  // exists once `buildGateway` has run. So the sink and the reader are built
+  // first — neither touches a database yet — and the mapping is installed into
+  // [LateSeriesResolver] the moment the router exists, before the server is
+  // started and therefore before any request can arrive.
+  TimescaleSink? sink;
+  final collection = config.collection;
+  if (collection != null && collection.enabled) {
+    sink = TimescaleSink(collection, publisherId: config.server.publisherId);
+  }
+  final held = sink;
+  final resolver = LateSeriesResolver();
+  final history = held == null
+      ? null
+      // The supplier, not the instance: `sink.start()` returns before it has
+      // connected (WR-03), and the instance is replaced on reconnect.
+      : TimescaleReader(database: () => held.database, resolver: resolver);
+
   final gateway = await buildGateway(config,
-      mappings: mappings, log: log, resolver: const NoSeriesMapped());
+      mappings: mappings, log: log, resolver: resolver, timeseries: history);
 
   // Once, at boot, naming every offender — HLTH-03 (T-08-51). Not one line per
   // panel that asks for one, and not a refusal to start: the rest of the file
@@ -82,11 +104,8 @@ Future<void> main(List<String> args) async {
 
   // Collection: built only when the config's deliberate two-field act says
   // so — no block, or enabled: false, means no database object exists at all.
-  TimescaleSink? sink;
   CollectionRunner? runner;
-  final collection = config.collection;
-  if (collection != null && collection.enabled) {
-    sink = TimescaleSink(collection, publisherId: config.server.publisherId);
+  if (sink != null && collection != null) {
     // `unroutable:` is the router ingest's own verdict — the keys whose
     // mappings were refused at the door. Passed rather than re-derived, so
     // the plan cannot drift from `KeyRouter`'s rules; `Gateway.refusedKeys`
@@ -96,6 +115,19 @@ Future<void> main(List<String> args) async {
       collection,
       unroutable: gateway.plant.router.lastIngest.rejected.keys.toSet(),
     );
+    // **ONE plan object, read and written from.** The write side samples into
+    // `CollectionEntry.table`; the read side maps a chart's plant key back to
+    // the same string. Two plans built from the same file would agree until
+    // the day one of them was built differently, and from that day the
+    // gateway would serve history out of a table it never wrote.
+    //
+    // Installed before `gateway.server.start()` below, so no request is ever
+    // answered against an uninstalled resolver — and the resolver refuses
+    // everything until it is, rather than mapping anything by default.
+    resolver.install(CollectionPlanResolver(
+      plan: plan,
+      router: gateway.plant.router,
+    ));
     await sink.start();
     runner = CollectionRunner(
       plan: plan,
@@ -122,7 +154,7 @@ Future<void> main(List<String> args) async {
           '"${collection.tablePrefix}"-prefixed tables '
           '(${plan.rejected.length} rejected, ${plan.adjusted.length} '
           'retention-adjusted, ${started.entryFailures.length} failed to '
-          'start)');
+          'start), and serving history for the same ${plan.entries.length}');
     }).catchError((Object error, StackTrace stack) {
       log.e('collection failed to start', error: error, stackTrace: stack);
     }));
@@ -189,38 +221,52 @@ Future<void> main(List<String> args) async {
   await sigterm?.cancel();
 }
 
-/// The mapping this gateway has until 10-07 builds the real one: **none**.
+/// The gateway's mapping, installed once — and **refusing everything until it
+/// is**.
 ///
-/// Named for what it does, which is `AllVisibleOperatorWrites`' and
-/// `PermissiveTokenValidator`'s rule (`key_policy.dart:120-127`) and matters
-/// more here than for either of them: a resolver is the one seam where the
-/// wrong default is silent. Every lookup answers null, which
-/// `SeriesResolver`'s contract defines as **refuse** — 10-CONTEXT amendment 6:
-/// an unmappable table is not served until it is mapped. So the gateway that
-/// runs at the plant today serves no history it cannot account for, and says
-/// so by the name of the object in this file.
+/// This exists to break one ordering knot and nothing else. `RelayServer`
+/// takes its resolver as a required constructor argument (10-02, deliberately:
+/// a resolver is the one seam where a permissive default is silent), and the
+/// real resolver cannot be built until `buildGateway` has fed the `KeyRouter`,
+/// because the collection plan needs the router's own ingest verdict for
+/// `unroutable:` and re-deriving that verdict here would be a second spelling
+/// of `KeyRouter`'s rules.
 ///
-/// It lives in `bin/` rather than in a `lib/` deliberately. A sweep in
-/// `handler_table_test.dart` asserts that no relay package's `lib/` implements
-/// this interface, because the first implementation to land in one is the one
-/// every composition root reaches for. This is the composition root, it is the
-/// only caller, and nothing can import it.
+/// **Not a fallback.** Before [install] every lookup answers null, which
+/// `SeriesResolver`'s contract defines as refuse (10-CONTEXT amendment 6: an
+/// unmappable table is not served until it is mapped), and installing twice is
+/// a [StateError] rather than a silent replacement. `main` installs
+/// immediately after `buildGateway` returns and before `gateway.server.start()`,
+/// so the uninstalled state is not reachable by any request — and a gateway
+/// that does not historise never installs one, which is the correct answer for
+/// a deployment with no database.
 ///
-/// 10-07 replaces it with a resolver over 8b's collection config, whose
-/// `collect` entries already name both the plant key and the `gw_`-prefixed
-/// table. When that lands, this class is deleted rather than kept as a
-/// fallback: a fallback is how a deployment ends up running the wrong one.
-final class NoSeriesMapped implements SeriesResolver {
-  const NoSeriesMapped();
+/// It lives in `bin/` rather than in a `lib/` deliberately: nothing can import
+/// a `bin/` file, so this cannot become the resolver a second composition root
+/// reaches for. The real one is `CollectionPlanResolver`, in
+/// `tfc_relay_local/lib/src/data/`, and it is the only implementation in any
+/// relay `lib/`.
+final class LateSeriesResolver implements SeriesResolver {
+  SeriesResolver? _installed;
+
+  void install(SeriesResolver resolver) {
+    if (_installed != null) {
+      throw StateError('the series mapping is installed once, by the '
+          'composition root. A second install is two answers to "which '
+          'tables does this gateway serve", and the one that wins is '
+          'whichever ran last');
+    }
+    _installed = resolver;
+  }
 
   @override
-  ResolvedSeries? resolve(String wireName) => null;
+  ResolvedSeries? resolve(String wireName) => _installed?.resolve(wireName);
 
   @override
-  String? keyForTable(String table) => null;
+  String? keyForTable(String table) => _installed?.keyForTable(table);
 
   @override
-  String? keyForNode(String nodeId) => null;
+  String? keyForNode(String nodeId) => _installed?.keyForNode(nodeId);
 }
 
 /// `--config <path>` or `--config=<path>`. Both, because both get typed.

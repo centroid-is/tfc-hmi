@@ -135,6 +135,30 @@ final class TimescaleSink implements TimeseriesSink {
   Database? _db;
   StreamSubscription<bool>? _dbStateSub;
 
+  /// The wrapped connection, **for reading only**, or null while the connect
+  /// loop has not landed.
+  ///
+  /// The one seam 10-07's `TimescaleReader` reaches through, and the reason it
+  /// exists is the reason it is a getter and not a constructor argument
+  /// somewhere: a gateway that both historises and serves history must do both
+  /// over **one** pool. A second `Database` would double this process's
+  /// connection count against a plant Postgres and give 8b's `SELECT
+  /// application_name, count(*) FROM pg_stat_activity GROUP BY 1` a second
+  /// name to account for (T-10-28), on a server the application's own
+  /// collector is also connected to.
+  ///
+  /// Null is a real, ordinary state and callers must handle it rather than
+  /// wait on it: [start] returns immediately and the connect loop runs in the
+  /// background (WR-03), so a query in that window is answered "not connected,
+  /// worth retrying" — never a hang and never a refusal.
+  ///
+  /// **Reading only.** Nothing outside this file may insert through it or
+  /// touch retention; `freeze_test.dart` sweeps `lib/src/data/` for both
+  /// doors, and 8b's whole side-by-side verdict rests on the gateway's
+  /// retention policies being decided in exactly one place, which is
+  /// [ensureTable] above.
+  Database? get database => _db;
+
   /// The namespace lock, held on its own out-of-pool session for the
   /// process's life (see advisory_lock.dart's doc). Null while refused or
   /// lost — and while null, nothing is inserted.
