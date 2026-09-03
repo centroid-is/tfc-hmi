@@ -280,4 +280,254 @@ void main() {
               'a null the picker can render as a dash');
     });
   });
+
+  group('the FK cascade upstream depends on', () {
+    test('all three child tables really do declare ON DELETE CASCADE',
+        () async {
+      // A characterisation case, not a round trip: `deleteHistoryView`'s doc
+      // comment argues that upstream's four un-transacted statements have not
+      // yet left a half-deleted view behind BECAUSE the first statement
+      // already cascades, and that the transaction added on this side is for
+      // the deployments where it does not. That argument is only worth having
+      // written down if it is true of this schema, so it is asked rather than
+      // read off the table definitions. The day a migration drops one of
+      // these, this case says so instead of the doc quietly becoming wrong.
+      final rows = await admin.execute(
+          'SELECT c.conrelid::regclass::text AS child, '
+          // ::text on confdeltype because it is a Postgres "char" and the
+          // driver hands an undecoded byte back for it.
+          'c.confdeltype::text AS ondelete '
+          'FROM pg_constraint c '
+          "WHERE c.contype = 'f' "
+          "AND c.confrelid = 'history_view'::regclass "
+          'ORDER BY 1');
+      final byChild = {
+        for (final row in rows) row[0]! as String: row[1]! as String,
+      };
+
+      expect(byChild.keys, hasLength(3),
+          reason: 'three tables hang off history_view and each needs its own '
+              'foreign key; ${byChild.keys.toList()} were found');
+      for (final child in byChild.keys) {
+        expect(byChild[child], 'c',
+            reason: '$child references history_view with confdeltype '
+                '"${byChild[child]}" rather than "c" (CASCADE). Upstream '
+                'deletes the parent first and its other three statements then '
+                'match nothing, so without the cascade a delete leaves this '
+                'table\'s rows behind — reachable by nothing and deletable by '
+                'nothing');
+      }
+    });
+  });
+
+  group('getHistoryViewKeys and the alias default', () {
+    late int id;
+
+    setUp(() async {
+      id = await newView(
+        'Aliasar',
+        ['explicit', 'absent', 'same'],
+        {
+          'explicit':
+              const HistoryViewKeyRecord(key: 'explicit', alias: 'Skýrt'),
+          // No alias at all: the record's constructor substitutes the key.
+          'absent': const HistoryViewKeyRecord(key: 'absent'),
+          // An alias that happens to equal the key — indistinguishable from
+          // the row above once written, which is the finding rather than an
+          // oversight.
+          'same': const HistoryViewKeyRecord(key: 'same', alias: 'same'),
+        },
+      );
+    });
+
+    test('an explicit alias, an absent one and one equal to the key', () async {
+      final keys = await store.getHistoryViewKeys(id);
+
+      expect(keys['explicit']!.alias, 'Skýrt');
+      expect(keys['absent']!.alias, 'absent',
+          reason: 'a key saved with no alias needs something to render in the '
+              'legend, and its own name is it — drift\'s `row.alias ?? '
+              'row.key` and HistoryViewKeyRecord\'s constructor agree, and '
+              'the store must implement neither of them a third time');
+      expect(keys['same']!.alias, 'same');
+
+      // The third arm is not about the values coming back — 'absent' and
+      // 'same' are different keys and so are their aliases. It is about the
+      // ROWS: a key saved with no alias and a key saved with an alias equal to
+      // its own name are written identically, because the record's
+      // constructor has already substituted the key before the store sees it.
+      // Asked on disk, because that is the only place the two could still
+      // have differed.
+      final onDisk = await admin.execute(
+          pg.Sql.named('SELECT key, alias FROM history_view_key '
+              'WHERE view_id = @id ORDER BY key'),
+          parameters: {'id': id});
+      expect(
+          {for (final row in onDisk) row[0] as String: row[1] as String?},
+          {'absent': 'absent', 'explicit': 'Skýrt', 'same': 'same'},
+          reason: 'the wire cannot express "this key has no alias", only '
+              '"its alias equals its key" — so "absent" is not recoverable '
+              'after the first save, and the row written for it is '
+              'byte-identical to the one written for a deliberate alias of '
+              'the same spelling');
+    });
+
+    test('the axis placement and graph index survive as themselves', () async {
+      final other = await newView('Ásar', [
+        'a'
+      ], {
+        'a': const HistoryViewKeyRecord(
+            key: 'a', useSecondYAxis: true, graphIndex: 3),
+      });
+
+      final keys = await store.getHistoryViewKeys(other);
+      expect(keys['a']!.useSecondYAxis, isTrue,
+          reason: 'a temperature saved against the second Y axis and read '
+              'back on the first is a flat line at the bottom of a motor '
+              'speed\'s scale');
+      expect(keys['a']!.graphIndex, 3);
+    });
+  });
+
+  group('getHistoryViewGraphs and the name that is null in the database', () {
+    test('an unnamed graph is NULL on disk and the empty string on the wire',
+        () async {
+      final id = await newView('Nafnlaust', const [], null, {
+        0: const HistoryViewGraphRecord(graphIndex: 0, yAxisUnit: 'rpm'),
+        1: const HistoryViewGraphRecord(
+            graphIndex: 1, name: 'Hiti', yAxisUnit: '°C'),
+      });
+
+      final onDisk = await admin.execute(
+          pg.Sql.named('SELECT graph_index, name FROM history_view_graph '
+              'WHERE view_id = @id ORDER BY graph_index'),
+          parameters: {'id': id});
+      expect(onDisk.map((r) => r[1]).toList(), [null, 'Hiti'],
+          reason: 'the decision is that the empty string is written as NULL, '
+              'because the column is nullable and the application\'s own HMI '
+              'reads these rows directly. Asserted on disk and not only '
+              'through the round trip, because the round trip cannot tell the '
+              'two apart');
+
+      final graphs = await store.getHistoryViewGraphs(id);
+      expect(graphs[0]!.name, '',
+          reason: 'the record\'s name is a non-nullable String defaulting to '
+              'the empty string, mirroring drift\'s own `row.name ?? \'\'`');
+      expect(graphs[1]!.name, 'Hiti');
+      expect(graphs[0]!.yAxisUnit, 'rpm');
+      expect(graphs[0]!.yAxis2Unit, '',
+          reason: 'an axis nobody labelled renders blank; it does not break '
+              'the chart and it is not null');
+    });
+  });
+
+  group('getHistoryViewKeyNames', () {
+    test('agrees with the record accessor and does not move between calls',
+        () async {
+      final id = await newView('Nöfn', ['k.a', 'k.b', 'k.c']);
+
+      final names = await store.getHistoryViewKeyNames(id);
+      final records = await store.getHistoryViewKeys(id);
+
+      expect(names.toSet(), {'k.a', 'k.b', 'k.c'},
+          reason: 'the name-only accessor disagrees with the record accessor '
+              'about what this view plots');
+      expect(names.toSet(), records.keys.toSet());
+      expect(await store.getHistoryViewKeyNames(id), names,
+          reason: 'stable across calls. Neither drift query carries an ORDER '
+              'BY, so the order is the database\'s and this asserts that it '
+              'does not move under a caller rather than claiming it is '
+              'sorted — a caller that needs a deterministic order must sort');
+    });
+  });
+
+  group('a saved window', () {
+    test('comes back equal to the microsecond, DST transition and all',
+        () async {
+      final id = await newView('Vaktir', ['k']);
+
+      // Europe/London, 2026-03-29: the clocks go forward at 01:00 UTC, so the
+      // local wall clock jumps 01:00 -> 02:00 and 01:30 local DOES NOT EXIST
+      // that day. Anything that round-tripped this instant through a local
+      // wall clock could not put it back.
+      final start = DateTime.utc(2026, 3, 29, 1, 0, 0, 123, 456);
+      // America/New_York, 2026-11-01: the clocks go back at 06:00 UTC, so
+      // 01:30 local happens TWICE. The inverse hazard: a wall clock that
+      // round-trips has two instants to choose from and no way to pick.
+      final end = DateTime.utc(2026, 11, 1, 6, 30, 0, 789, 12);
+
+      final periodId =
+          await store.addHistoryViewPeriod(id, 'Vakt 1', start, end);
+      expect(periodId, greaterThan(0),
+          reason: 'without an id the window cannot be deleted again');
+
+      final periods = await store.listHistoryViewPeriods(id);
+      expect(periods, hasLength(1));
+      final saved = periods.single;
+
+      expect(saved.id, periodId,
+          reason: 'the window came back under an id other than the one adding '
+              'it returned, so deleting it would address something else');
+      expect(saved.viewId, id);
+      expect(saved.name, 'Vakt 1');
+      expect(saved.startAt.isUtc, isTrue,
+          reason: 'every DateTime on this wire is UTC, and DateTime == '
+              'compares the flag as well as the instant');
+      expect(saved.startAt, start,
+          reason: 'EXACTLY, not within a tolerance — a tolerance is how an '
+              'hour of drift hides. The instant is inside Europe/London\'s '
+              '2026-03-29 spring-forward, where the local wall clock this '
+              'would have gone through does not exist');
+      expect(saved.endAt, end,
+          reason: 'the instant is inside America/New_York\'s 2026-11-01 '
+              'fall-back, where the local wall clock happens twice');
+      expect(saved.startAt.microsecond, 456,
+          reason: 'microseconds, spelled out: Postgres stores them and Dart '
+              'carries them, so a store that truncated would be losing '
+              'precision the database was willing to keep');
+      expect(saved.endAt.microsecond, 12);
+      expect(saved.createdAt.isUtc, isTrue,
+          reason: 'stamped by drift with DateTime.now(), a LOCAL instant');
+    });
+
+    test('several windows come back oldest first', () async {
+      final id = await newView('Röð', ['k']);
+      final march = DateTime.utc(2026, 3, 1, 6);
+      final august = DateTime.utc(2026, 8, 12, 6);
+      final may = DateTime.utc(2026, 5, 4, 6);
+
+      // Inserted newest, oldest, middle — so an implementation that returned
+      // insertion order would pass a sorted-input case and fail this one.
+      await store.addHistoryViewPeriod(
+          id, 'Ágúst', august, august.add(const Duration(hours: 8)));
+      await store.addHistoryViewPeriod(
+          id, 'Mars', march, march.add(const Duration(hours: 8)));
+      await store.addHistoryViewPeriod(
+          id, 'Maí', may, may.add(const Duration(hours: 8)));
+
+      final periods = await store.listHistoryViewPeriods(id);
+      expect(periods.map((p) => p.name).toList(), ['Mars', 'Maí', 'Ágúst'],
+          reason: 'HistoryViewApi.listHistoryViewPeriods says "oldest first" '
+              '(state_man_api.dart:341) and neither drift query carries an '
+              'ORDER BY, so the store owes the ordering the interface '
+              'promises');
+    });
+
+    test('deleting one window leaves the others and the view alone', () async {
+      final id = await newView('Eyðing', ['k']);
+      final keep = await store.addHistoryViewPeriod(id, 'Geyma',
+          DateTime.utc(2026, 1, 1), DateTime.utc(2026, 1, 2));
+      final drop = await store.addHistoryViewPeriod(id, 'Eyða',
+          DateTime.utc(2026, 2, 1), DateTime.utc(2026, 2, 2));
+
+      await store.deleteHistoryViewPeriod(drop);
+
+      final periods = await store.listHistoryViewPeriods(id);
+      expect(periods.map((p) => p.id).toList(), [keep],
+          reason: 'the deleted window is still listed, or it took its '
+              'neighbour with it');
+      expect(await countRows('history_view', 'id', id), 1,
+          reason: 'deleting a saved window deleted the view it was saved on');
+    });
+  });
 }
