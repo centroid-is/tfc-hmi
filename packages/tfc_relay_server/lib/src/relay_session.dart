@@ -34,6 +34,7 @@ import 'package:stream_channel/stream_channel.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import 'auth/identity.dart';
+import 'data_handlers.dart';
 import 'error_codes.dart';
 import 'error_reporter.dart';
 import 'handle_table.dart';
@@ -112,6 +113,7 @@ final class RelaySession {
     this.buffer,
     this.validator,
     this.policy,
+    this.resolver,
     this._gate,
     this._lastSeen,
     this._now,
@@ -161,6 +163,7 @@ final class RelaySession {
     required ConflatingSendBuffer buffer,
     TokenValidator validator = const PermissiveTokenValidator(),
     KeyPolicy policy = const AllVisibleOperatorWrites(),
+    required SeriesResolver resolver,
     List<String> serverSupported = const [protocolVersion],
     WriteOutcomeLog? writeOutcomes,
     int Function()? mintGeneration,
@@ -198,6 +201,7 @@ final class RelaySession {
       buffer,
       validator,
       policy,
+      resolver,
       HelloGate(serverSupported: serverSupported),
       lastSeen,
       clock,
@@ -354,6 +358,7 @@ final class RelaySession {
   late final PolicyStateMan api = PolicyStateMan(
     source: _source,
     policy: policy,
+    resolver: resolver,
     // Late-read, the `epochOf` / `ownerOf` idiom below: the identity is minted
     // by `_hello`, which cannot have run when this object is built.
     identityOf: () => _identity,
@@ -395,6 +400,15 @@ final class RelaySession {
   /// `PolicyStateMan` built in [_start]; nothing else in this class asks it a
   /// question directly.
   final KeyPolicy policy;
+
+  /// How a node id and a table name become a plant key.
+  ///
+  /// Held here rather than reached for through the server, exactly as
+  /// [validator] and [policy] are and for the same reason: the session
+  /// deliberately does not know what a server is. What consults it is the
+  /// [PolicyStateMan] built below and the [DataHandlers] built in [_start];
+  /// nothing in this class asks it a question directly.
+  final SeriesResolver resolver;
 
   final HelloGate _gate;
   final _LastSeen _lastSeen;
@@ -742,15 +756,18 @@ final class RelaySession {
     _lastSeen.gateOn(() => _sessionId != null);
     // Every one of these goes through `_on`, and there is no second path.
     //
-    // The table is nine names. Phase 3 registered four; 04-02 added `write`,
-    // `writeStatus`, `read`, `readFresh` and `readMany`, pulled forward from
-    // Phase 5 because 04-RESEARCH Finding 4 ran the method sweep against a
-    // live gateway and found all five answering `-32601`, which put 28 of the
-    // contract suite's 44 checks out of reach over the real transport. Only
-    // the plumbing moved: Phase 5 still owns write *semantics* (three-state
-    // depth beyond forwarding, idempotency windows, hold-to-run), Phase 6 owns
-    // authorization, and Phase 10 adds the data services. 03-08's rule stands
-    // — the set is frozen against a hand-written literal in `surface_test.dart`
+    // The table is thirteen names. Phase 3 registered four; 04-02 added
+    // `write`, `writeStatus`, `read`, `readFresh` and `readMany`, pulled
+    // forward from Phase 5 because 04-RESEARCH Finding 4 ran the method sweep
+    // against a live gateway and found all five answering `-32601`, which put
+    // 28 of the contract suite's 44 checks out of reach over the real
+    // transport. Only the plumbing moved: Phase 5 still owns write *semantics*
+    // (three-state depth beyond forwarding, idempotency windows, hold-to-run)
+    // and Phase 6 owns authorization. 10-02 added the four `browse.*` names in
+    // `_registerDataServices` below, which retired six of the thirteen checks
+    // the contract legs had been proving unreachable; the other twenty
+    // data-service names land in 10-03 through 10-05. 03-08's rule stands —
+    // the set is frozen against a hand-written literal in `surface_test.dart`
     // so each addition is a deliberate edit to a test that explains its cost.
     final handlers = SessionHandlers(
       api: api,
@@ -823,6 +840,7 @@ final class RelaySession {
     // summary line per session, rather than thrown once per frame into the
     // error handler (05-REVIEW WR-03).
     _onNotification(Methods.holdTick, values.holdTick);
+    _registerDataServices(DataHandlers(source: api, resolver: resolver));
     // Method-not-found. **This fallback's armor is inert, and the code below
     // is kept anyway** (06-04, 06-RESEARCH §H.2, measured).
     //
@@ -872,6 +890,30 @@ final class RelaySession {
     unawaited(peer.listen().then(
         (_) => _transportEnded(),
         onError: (Object _) => _transportEnded()));
+  }
+
+  /// The data services, **named one registration at a time**.
+  ///
+  /// Not a loop over a map of name → closure, and the argument is
+  /// `served_state_man.dart:366-372`'s, which this whole file family copies:
+  /// the registration **is** the access-control decision (T-02-22), so a loop
+  /// would move the list of what this peer answers out of the place a reviewer
+  /// reads and into a place a caller supplies. Thirty-four lines when the
+  /// table is closed, and every one of them a line somebody had to write.
+  ///
+  /// Through [_on] like everything else, with no second path
+  /// (`subscribe_test.dart:450-453`). `_on` is what applies the handshake gate
+  /// and the error armor; `peer.registerMethod` here would register an
+  /// **ungated** method, and `ws_malformed_test.dart:529-593`'s pre-hello
+  /// sweep is a sweep rather than a list precisely so it catches one.
+  ///
+  /// 10-02 registers four of the thirty-four. 10-03 adds timeseries, 10-04 the
+  /// history views, 10-05 the preferences and the one notification they send.
+  void _registerDataServices(DataHandlers data) {
+    _on(DataServiceMethods.browseFetchRoots, data.browseFetchRoots);
+    _on(DataServiceMethods.browseFetchChildren, data.browseFetchChildren);
+    _on(DataServiceMethods.browseFetchDetail, data.browseFetchDetail);
+    _on(DataServiceMethods.browseResolvePath, data.browseResolvePath);
   }
 
   /// The client's end vanished — a graceful close, a reset, a yanked cable.

@@ -59,6 +59,7 @@ import 'package:tfc_relay_server/tfc_relay_server.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'support/fault_fixture.dart';
+import 'support/permissive_resolver.dart';
 
 /// The key every arm watches, character-identical to `fault_contract_test`'s.
 ///
@@ -296,6 +297,7 @@ Future<void> _reissue(FaultFixture fixture, FaultTls good) async {
   final port = fixture.server.port;
   await fixture.server.close();
   final replacement = RelayServer(
+    resolver: const PermissiveSeriesResolver(),
     api: fixture.served,
     config: ServerConfig(
       tick: ServerConfig.minTick,

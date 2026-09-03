@@ -98,6 +98,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../support/fault_fixture.dart';
 import '../support/gate_bands.dart';
 import '../support/gate_fixture.dart';
+import '../support/permissive_resolver.dart';
 
 /// How many keys the smoke row's page carries.
 ///
@@ -335,6 +336,7 @@ Future<int> _listener(FaultTls mount) async {
   addTearDown(plant.dispose);
   plant.setValue(_key, _before);
   final server = RelayServer(
+    resolver: const PermissiveSeriesResolver(),
     api: plant,
     config: ServerConfig(
       tick: ServerConfig.minTick,
@@ -384,6 +386,7 @@ Future<void> _reissue(FaultFixture fixture, FaultTls good) async {
   final port = fixture.server.port;
   await fixture.server.close();
   final replacement = RelayServer(
+    resolver: const PermissiveSeriesResolver(),
     api: fixture.served,
     config: ServerConfig(
       tick: ServerConfig.minTick,

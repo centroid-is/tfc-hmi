@@ -62,6 +62,8 @@ import 'package:tfc_stateman_contract/testing/fake_data_services.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 
+import 'permissive_resolver.dart';
+
 /// The close a *client* observed, which is the only close worth asserting on
 /// for a close the server initiated (`web_socket_channel` #1698).
 ///
@@ -401,6 +403,7 @@ RelayFixture relayFixture({
   // the failure [_PlantAddressSpace] exists to prevent.
   final page = <String>{...contractKeys, ..._stationKeys(), ...served.keys};
   final server = RelayServer(
+    resolver: const PermissiveSeriesResolver(),
     api: _PlantAddressSpace(served, page.difference(unservedKeys)),
     config: config ?? ServerConfig(tick: ServerConfig.minTick),
     // Discards rather than `reportToStderr`: several contract cases provoke

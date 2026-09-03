@@ -114,31 +114,34 @@ const _benignThrottle = 4 * 1024 * 1024;
 /// properties and one `writeStatus` property — all of them reachable, because
 /// the gateway handler behind them landed in the same phase (05-05) rather
 /// than being deferred. The WS leg's own comment carries the argument in full.
-const int reachableThroughTheProxy = 37;
+///
+/// 37 until 10-02, when the four `browse.*` handlers landed and the six browse
+/// checks moved out of the gap list below and into this number, in the same
+/// commit on both legs. Same-commit is not tidiness here: the two legs
+/// cross-check each other by text (the last case in this file), so a
+/// half-flipped pair reports a leg disagreement — the loudest failure this
+/// suite has — for a change that is actually correct on both sides.
+const int reachableThroughTheProxy = 43;
 
 /// Every check this leg does not pass, by name — all of them for one cause.
 ///
-/// **The gateway has no handler.** `browse.*`, `timeseries.*`, `historyViews.*`
-/// and `preferences.*` answer -32601 method-not-found; Phase 10 owns them. The
-/// list is identical to `ws_contract_test.dart`'s, and identical on purpose: a
-/// proxy in the path cannot add or remove a handler, so any difference between
-/// the two lists is a leg that has drifted rather than a transport that
-/// behaves differently.
+/// **The gateway has no handler.** `timeseries.*`, `historyViews.*` and
+/// `preferences.*` answer -32601 method-not-found; 10-03 through 10-05 own
+/// them. The list is identical to `ws_contract_test.dart`'s, and identical on
+/// purpose: a proxy in the path cannot add or remove a handler, so any
+/// difference between the two lists is a leg that has drifted rather than a
+/// transport that behaves differently.
+///
+/// The six `browse.*` entries were deleted in 10-02, in the same commit as the
+/// WS leg's and as the handlers themselves.
 ///
 /// These are **not** skipped and **not** red. Each is handed to
 /// `runStateManContract`'s `expectUnreachable`, which runs it and asserts it
 /// fails with exactly -32601 — so the suite is green *because* the gap is
 /// precisely what this list claims.
 const List<String> unreachableThroughTheProxy = <String>[
-  // browse — six checks, no `browse.*` handler on the gateway.
-  'the address space has a top level, and every root is identifiable',
-  "expanding a folder yields that folder's children, not another's",
-  "a node's detail carries its data type, and a variable's carries a reading",
-  'a resolved path runs root to leaf, and every step is a real edge',
-  'a target that does not exist resolves to null, not empty and not a throw',
-  'folders and variables expand; methods do not',
   // data services — seven checks: no `timeseries.*`, `historyViews.*` or
-  // `preferences.*` handler either.
+  // `preferences.*` handler.
   'a recorded series comes back inside the window, oldest first',
   'every requested series gets an entry, including the silent ones',
   'a downsampled series is bounded and still reaches both ends of the window',

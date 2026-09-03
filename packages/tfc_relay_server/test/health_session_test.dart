@@ -53,6 +53,7 @@ import 'package:web_socket_channel/io.dart';
 
 import 'support/certs.dart';
 import 'support/panels.dart';
+import 'support/permissive_resolver.dart';
 
 /// Trap 17 again: an unreachable address takes 75 s to fail on macOS.
 const _dialBudget = Duration(seconds: 10);
@@ -90,6 +91,7 @@ void main() {
     KeyPolicy policy = const AllVisibleOperatorWrites(),
   }) {
     final server = RelayServer(
+      resolver: const PermissiveSeriesResolver(),
       api: plant,
       config: ServerConfig(tick: ServerConfig.minTick, tls: tls),
       policy: policy,

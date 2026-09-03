@@ -48,6 +48,8 @@ import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'support/permissive_resolver.dart';
+
 /// The ceiling on any dial or upgrade here (trap 17). A hang guard, not a
 /// measurement.
 const _dialBudget = Duration(seconds: 10);
@@ -68,6 +70,7 @@ void main() {
   Future<RelayServer> startServer({List<String>? allowedOrigins}) async {
     final served = FakeStateMan();
     final server = RelayServer(
+      resolver: const PermissiveSeriesResolver(),
       api: served,
       config: allowedOrigins == null
           ? ServerConfig(tick: ServerConfig.minTick)

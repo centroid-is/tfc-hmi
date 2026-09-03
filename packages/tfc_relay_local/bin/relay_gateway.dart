@@ -18,6 +18,8 @@ import 'package:tfc_dart/core/state_man.dart' show KeyMappings;
 // The adapter is deliberately not on the package barrel (the seam type
 // `TimeseriesSink` is the public surface); the composition root reaches it by
 // its src path, exactly as 8b-02 recorded.
+import 'package:tfc_relay_protocol/tfc_relay_protocol.dart'
+    show ResolvedSeries, SeriesResolver;
 import 'package:tfc_relay_local/src/collect/timescale_sink.dart';
 import 'package:tfc_relay_local/tfc_relay_local.dart';
 
@@ -60,8 +62,8 @@ Future<void> main(List<String> args) async {
       (jsonDecode(File(config.keyMappingsPath).readAsStringSync()) as Map)
           .cast<String, dynamic>());
 
-  final gateway =
-      await buildGateway(config, mappings: mappings, log: log);
+  final gateway = await buildGateway(config,
+      mappings: mappings, log: log, resolver: const NoSeriesMapped());
 
   // Once, at boot, naming every offender — HLTH-03 (T-08-51). Not one line per
   // panel that asks for one, and not a refusal to start: the rest of the file
@@ -185,6 +187,40 @@ Future<void> main(List<String> args) async {
   await stopped.future;
   await sigint.cancel();
   await sigterm?.cancel();
+}
+
+/// The mapping this gateway has until 10-07 builds the real one: **none**.
+///
+/// Named for what it does, which is `AllVisibleOperatorWrites`' and
+/// `PermissiveTokenValidator`'s rule (`key_policy.dart:120-127`) and matters
+/// more here than for either of them: a resolver is the one seam where the
+/// wrong default is silent. Every lookup answers null, which
+/// `SeriesResolver`'s contract defines as **refuse** — 10-CONTEXT amendment 6:
+/// an unmappable table is not served until it is mapped. So the gateway that
+/// runs at the plant today serves no history it cannot account for, and says
+/// so by the name of the object in this file.
+///
+/// It lives in `bin/` rather than in a `lib/` deliberately. A sweep in
+/// `handler_table_test.dart` asserts that no relay package's `lib/` implements
+/// this interface, because the first implementation to land in one is the one
+/// every composition root reaches for. This is the composition root, it is the
+/// only caller, and nothing can import it.
+///
+/// 10-07 replaces it with a resolver over 8b's collection config, whose
+/// `collect` entries already name both the plant key and the `gw_`-prefixed
+/// table. When that lands, this class is deleted rather than kept as a
+/// fallback: a fallback is how a deployment ends up running the wrong one.
+final class NoSeriesMapped implements SeriesResolver {
+  const NoSeriesMapped();
+
+  @override
+  ResolvedSeries? resolve(String wireName) => null;
+
+  @override
+  String? keyForTable(String table) => null;
+
+  @override
+  String? keyForNode(String nodeId) => null;
 }
 
 /// `--config <path>` or `--config=<path>`. Both, because both get typed.

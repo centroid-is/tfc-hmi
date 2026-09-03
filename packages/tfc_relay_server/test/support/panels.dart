@@ -38,6 +38,7 @@ import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 
 import 'counting_encoder.dart';
 import 'fake_clock.dart';
+import 'permissive_resolver.dart';
 
 /// Whether this panel's socket has been broken by a case.
 ///
@@ -197,6 +198,7 @@ final class Plant {
     final closes = <({int code, String reason})>[];
     final fault = SocketFault();
     final session = RelaySession.serve(
+      resolver: const PermissiveSeriesResolver(),
       channel: StreamChannel<String>(pair.server.stream, SessionSink(lane)),
       api: api,
       config: config,

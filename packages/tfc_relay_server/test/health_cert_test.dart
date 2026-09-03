@@ -53,6 +53,7 @@ import 'package:tfc_stateman_contract/tfc_stateman_contract.dart' show within;
 import 'package:web_socket_channel/io.dart';
 
 import 'support/certs.dart';
+import 'support/permissive_resolver.dart';
 
 /// The ceiling on any dial (trap 17: an unreachable address takes 75 s to fail
 /// on macOS, and one such case on its own blows the three-minute lane budget
@@ -83,6 +84,7 @@ void main() {
     int Function()? now,
   }) {
     final server = RelayServer(
+      resolver: const PermissiveSeriesResolver(),
       api: plant,
       config: ServerConfig(tick: ServerConfig.minTick, tls: tls),
       now: now,

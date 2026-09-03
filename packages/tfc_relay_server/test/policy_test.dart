@@ -65,10 +65,13 @@ import 'package:tfc_relay_server/src/relay_session.dart';
 import 'package:tfc_relay_server/src/server_config.dart';
 import 'package:tfc_relay_server/src/token_validator.dart';
 import 'package:tfc_relay_server/src/ws_channel.dart';
+import 'package:tfc_stateman_contract/testing/fake_data_services.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 import 'package:tfc_stateman_contract/tfc_stateman_contract.dart' show within;
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
+
+import 'support/permissive_resolver.dart';
 
 /// A tag in the plant's own naming convention, so the cases read like the
 /// thing they model rather than like synthetic strings.
@@ -84,6 +87,81 @@ const _hidden = 'CN02.MOT01.speed';
 /// the same spelling, because the property under test is that the two answers
 /// are the same one.
 const _ghost = 'CN01.MOT01.speeed';
+
+/// The folder the hidden tag lives under, named as if it were a key.
+///
+/// One case hides *this* — a folder id, not a tag — to pin the rule that
+/// browse asks `canSee` about variables and nothing else. See
+/// `a folder is never asked about`.
+const _hiddenParent = 'CN02.MOT01';
+
+// ---------------------------------------------------------------------------
+// The address space, whose leaf ids are plant keys.
+// ---------------------------------------------------------------------------
+
+/// The visible tag, as a browse node.
+const _visibleNode = BrowseNode(
+    id: _key,
+    displayName: 'speed',
+    type: BrowseNodeType.variable,
+    dataType: 'Float');
+
+/// The hidden tag, as a browse node. Every field but the id matches
+/// [_visibleNode] and [_probeNodeFor], which is what lets the detail answers
+/// be compared rather than described.
+const _hiddenNode = BrowseNode(
+    id: _hidden,
+    displayName: 'speed',
+    type: BrowseNodeType.variable,
+    dataType: 'Float');
+
+/// The node a case hands to `fetchDetail`, for any id.
+///
+/// A client already holds these fields — they came off a browse list, or it
+/// made them up — so echoing them back discloses nothing. The *id* is the only
+/// thing that varies, and it is the only thing `fetchDetail` could answer
+/// differently about.
+BrowseNode _probeNodeFor(String id) => BrowseNode(
+    id: id,
+    displayName: 'speed',
+    type: BrowseNodeType.variable,
+    dataType: 'Float');
+
+/// A tree whose **leaf ids are plant keys**, so a permissive resolver's
+/// identity mapping is the real thing rather than a stand-in.
+///
+/// `FakeBrowse`'s default tree uses OPC-UA-shaped ids (`ST101.CN01…`) that
+/// map to no key this file's policy has ever heard of, which would make every
+/// browse case here pass by hiding nothing. The reading on [_hidden] is
+/// seeded so the anti-vacuity arm can show what the hiding actually removed.
+FakeBrowse _browseTree() => FakeBrowse(
+      roots: const [
+        BrowseNode(
+            id: 'CN01', displayName: 'CN01', type: BrowseNodeType.folder),
+        BrowseNode(
+            id: 'CN02', displayName: 'CN02', type: BrowseNodeType.folder),
+      ],
+      children: const {
+        'CN01': [
+          BrowseNode(
+              id: 'CN01.MOT01',
+              displayName: 'MOT01',
+              type: BrowseNodeType.folder),
+        ],
+        'CN01.MOT01': [_visibleNode],
+        'CN02': [
+          BrowseNode(
+              id: _hiddenParent,
+              displayName: 'MOT01',
+              type: BrowseNodeType.folder),
+        ],
+        _hiddenParent: [_hiddenNode],
+      },
+      details: {
+        _hidden: BrowseNodeDetail(
+            dataType: 'Float', value: DynamicValue(value: 900)),
+      },
+    );
 
 /// A panel next to a machine, and a display on a wall.
 const _panel = Identity(stationId: 'ST101', role: Role.operate);
@@ -161,8 +239,13 @@ final class _Gateway {
     KeyPolicy policy = const AllVisibleOperatorWrites(),
     Identity identity = _panel,
   }) async {
-    final plant = FakeStateMan();
+    final plant = FakeStateMan(browse: _browseTree());
     final server = RelayServer(
+      // Identity mapping: this file's tree names its leaves after the plant
+      // keys they are, so `keyForNode` returning its argument is the honest
+      // answer rather than a fixture's shortcut. `permissive_resolver.dart`
+      // carries the sentence about what it would mean in production.
+      resolver: const PermissiveSeriesResolver(),
       api: plant,
       config: ServerConfig(tick: ServerConfig.minTick),
       validator: _AlwaysStation(identity),
@@ -280,6 +363,16 @@ const List<_Surface> _surfaces = [
   (name: 'subscribe', ask: _askSubscribe),
   (name: 'write', ask: _askWrite),
   (name: 'keys', ask: _askKeys),
+  // 10-02. The doc above invited browse as the seventh, and it is one entry
+  // exactly as promised. **What "indistinguishable" means here is different
+  // from the six above, and the difference is worth a reader's attention.**
+  // Those six answer a *value* or a *refusal*, so the comparison is between
+  // two answers about one tag. Browse answers *lists*, and a hidden tag is
+  // not refused out of one — it is **absent** from it, which is the same
+  // thing a nonexistent tag is. So the comparable shape below is "was this id
+  // anywhere in the tree, what did resolvePath say, and what did the detail
+  // pane get", and hidden and nonexistent have to agree on all three.
+  (name: 'browse', ask: _askBrowse),
 ];
 
 /// Whatever the gateway said, refusal or answer, in one comparable shape.
@@ -347,6 +440,56 @@ Future<Object?> _askWrite(_Gateway gateway, _Station station, String key) =>
         () => station.request(Methods.write,
             params: {'cmd': newUlid(), 'key': key, 'value': 1450}),
         key);
+
+/// Every node id the address space will show this station, walked over the
+/// wire the way a panel expands a tree.
+///
+/// Read through the socket rather than off `gateway.served.browse`, because
+/// the property is about what a *client* can learn and the handler is part of
+/// the path that decides it.
+Future<Set<String>> _reachableNodeIds(_Station station) async {
+  final seen = <String>{};
+
+  Future<void> walk(List<Object?> level) async {
+    for (final raw in level) {
+      final node =
+          BrowseNode.fromJson((raw! as Map).cast<String, Object?>());
+      if (!seen.add(node.id)) continue;
+      final children = await station.request(
+          DataServiceMethods.browseFetchChildren,
+          params: {'parent': node.toJson()},
+          what: 'the children of ${node.id}');
+      await walk(children! as List<Object?>);
+    }
+  }
+
+  final roots = await station.request(DataServiceMethods.browseFetchRoots,
+      params: const <String, Object?>{}, what: 'the roots');
+  await walk(roots! as List<Object?>);
+  return seen;
+}
+
+/// Browse, as one comparable answer: listed, resolvable, and what its detail
+/// pane got.
+///
+/// All three, not one. A filter that dropped a node from `fetchChildren` and
+/// left `resolvePath` answering a full chain would hide the tag from the tree
+/// and hand it back to anyone who asked for a path to it — and the panel that
+/// restores a saved selection asks for exactly that on every page load.
+Future<Object?> _askBrowse(
+        _Gateway gateway, _Station station, String key) =>
+    _outcome(() async {
+      final listed = (await _reachableNodeIds(station)).contains(key);
+      final chain = await station.request(
+          DataServiceMethods.browseResolvePath,
+          params: {'targetId': key},
+          what: 'a path to $key');
+      final detail = await station.request(
+          DataServiceMethods.browseFetchDetail,
+          params: {'node': _probeNodeFor(key).toJson()},
+          what: 'the detail of $key');
+      return {'listed': listed, 'path': chain, 'detail': detail};
+    }, key);
 
 /// The key list, read off the production decorator.
 ///
@@ -607,6 +750,15 @@ void main() {
       gateway.plant.setValue(_hidden, 900);
       final station = await gateway.station();
 
+      // Anti-vacuity: a loop over an empty list asserts nothing, and the
+      // count is named so that *deleting* a surface is as visible as adding
+      // one. Seven since 10-02 added browse.
+      expect(_surfaces, hasLength(7),
+          reason: 'the loop below covers ${_surfaces.length} surfaces. Each '
+              'one is a way to ask about a tag and therefore a way to learn '
+              'that it exists; a surface missing from this list is one '
+              'nobody is comparing');
+
       for (final surface in _surfaces) {
         final forHidden = await surface.ask(gateway, station, _hidden);
         final forGhost = await surface.ask(gateway, station, _ghost);
@@ -677,6 +829,126 @@ void main() {
               'place all four surfaces read it from (06-04). A hidden tag and '
               'a nonexistent one cannot be byte-identical if this refusal '
               'writes its own');
+    });
+  });
+
+  group('browse hides by omission, never by refusal', () {
+    test('the tree really carries the hidden tag under the shipped policy',
+        () async {
+      // **The anti-vacuity companion, and it goes first.** Every case below
+      // asserts something is absent; without this one they would all pass
+      // against a tree that never held it, which is the state
+      // `FakeBrowse`'s *default* fixture is in for these keys.
+      final gateway = await _Gateway.start();
+      final station = await gateway.station();
+
+      expect(await _reachableNodeIds(station), contains(_hidden),
+          reason: 'the address space does not list "$_hidden" even with '
+              'nothing hidden, so every absence asserted below is the '
+              'ordinary kind');
+
+      final detail = BrowseNodeDetail.fromJson(_asMap(await station.request(
+          DataServiceMethods.browseFetchDetail,
+          params: {'node': _probeNodeFor(_hidden).toJson()},
+          what: 'the hidden tag\'s detail under the shipped policy')));
+      expect(detail.value?.value, 900,
+          reason: 'and its detail carries a reading, so the hidden answer '
+              'below is provably missing something rather than matching a '
+              'source that had nothing to give');
+    });
+
+    test('a hidden leaf is dropped from the level it belongs to', () async {
+      final gateway = await _Gateway.start(policy: const _HidesTags({_hidden}));
+      final station = await gateway.station();
+
+      final ids = await _reachableNodeIds(station);
+
+      expect(ids, isNot(contains(_hidden)),
+          reason: 'a node naming a tag this station may not see is dropped '
+              'from the list. Refusing the call instead would name what it '
+              'refused, which is the enumeration the hiding rule exists to '
+              'prevent (T-06-36)');
+      expect(ids, contains(_key),
+          reason: 'a filter that emptied the tree would satisfy the '
+              'assertion above and blind every panel. The visible tag is the '
+              'control');
+    });
+
+    test('a folder is never asked about', () async {
+      // The rule the plan states and the one a reader will not guess:
+      // `canSee` takes a **plant key**, and a folder is not one. A resolver
+      // that happens to answer for a folder id — this file's identity one
+      // does — must not turn a policy entry into a pruned branch.
+      final gateway =
+          await _Gateway.start(policy: const _HidesTags({_hiddenParent}));
+      final station = await gateway.station();
+
+      final ids = await _reachableNodeIds(station);
+
+      expect(ids, contains(_hiddenParent),
+          reason: 'the folder "$_hiddenParent" was dropped because the policy '
+              'names it. Browse asks about *variables*: a folder, an '
+              'intermediate struct or a method is not a tag and has no '
+              'reading to conceal, and pruning one takes every tag under it '
+              'off the tree — including tags the station may see');
+      expect(ids, contains(_hidden),
+          reason: 'and the leaf under it is still there, which is the half '
+              'that makes the assertion above about the folder rather than '
+              'about the walk stopping early');
+    });
+
+    test('a hidden node\'s detail answers exactly as a nonexistent one does',
+        () async {
+      final gateway = await _Gateway.start(policy: const _HidesTags({_hidden}));
+      final station = await gateway.station();
+
+      final forHidden = _asMap(await station.request(
+          DataServiceMethods.browseFetchDetail,
+          params: {'node': _probeNodeFor(_hidden).toJson()},
+          what: 'the hidden node\'s detail'));
+      final forGhost = _asMap(await station.request(
+          DataServiceMethods.browseFetchDetail,
+          params: {'node': _probeNodeFor(_ghost).toJson()},
+          what: 'a nonexistent node\'s detail'));
+
+      // Compared to each other, never against a literal: a later phase that
+      // changes what a source answers for a node it has never heard of has to
+      // change both, which is the property 06-04 established between `read`
+      // and `readFresh` and this surface inherits.
+      expect(forHidden, equals(forGhost),
+          reason: 'the detail pane can tell a concealed tag from a misspelt '
+              'one. -32005 forbidden would be the loudest way to do it and '
+              'this is the quietest: any difference at all is an existence '
+              'oracle');
+      expect(forHidden.containsKey('value'), isFalse,
+          reason: 'the reading itself must not come through. A hidden node '
+              'whose detail carried 900 would be the value leaking behind '
+              'the concealment');
+    });
+
+    test('a path to a hidden node is null, not a truncated chain', () async {
+      final gateway = await _Gateway.start(policy: const _HidesTags({_hidden}));
+      final station = await gateway.station();
+
+      final chain = await station.request(
+          DataServiceMethods.browseResolvePath,
+          params: {'targetId': _hidden},
+          what: 'a path to the hidden tag');
+
+      expect(chain, isNull,
+          reason: 'a chain that stopped at the last visible node would claim '
+              'an edge that is not there, and would say "something is under '
+              'here you may not see" as clearly as a refusal. Null is what a '
+              'target that does not exist gets, and that is what a hidden one '
+              'has to get');
+
+      final visible = await station.request(
+          DataServiceMethods.browseResolvePath,
+          params: {'targetId': _key},
+          what: 'a path to the visible tag');
+      expect(visible, isA<List<Object?>>(),
+          reason: 'a resolver that answered null for everything would pass '
+              'the assertion above and break the picker for every tag');
     });
   });
 

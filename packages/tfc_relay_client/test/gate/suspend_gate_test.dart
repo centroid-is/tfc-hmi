@@ -63,6 +63,7 @@ import 'package:tfc_relay_server/tfc_relay_server.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 
 import '../support/fault_fixture.dart' show until;
+import '../support/permissive_resolver.dart';
 import '../support/suspend_harness.dart';
 
 // ---------------------------------------------------------------------------
@@ -162,6 +163,7 @@ const int _staleWithinReports = 3;
 
   final complaints = <String>[];
   final gateway = RelayServer(
+    resolver: const PermissiveSeriesResolver(),
     api: plant,
     config: ServerConfig(tick: ServerConfig.minTick),
     // Collected rather than discarded, for `gate_fixture.dart`'s reason: a

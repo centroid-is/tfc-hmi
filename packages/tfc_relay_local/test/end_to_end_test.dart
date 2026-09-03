@@ -38,6 +38,7 @@ import 'package:test/test.dart';
 
 import 'opcua_link_test.dart' show alias, mappingFor, speedKey;
 import 'support/opcua_server_fixture.dart';
+import 'support/permissive_resolver.dart';
 
 /// Four more plant keys behind the one link.
 ///
@@ -152,6 +153,7 @@ Future<E2E> standUp({
   );
 
   final gateway = await buildGateway(
+    resolver: const PermissiveSeriesResolver(),
     config,
     mappings: mappings,
     log: Logger(level: Level.off),

@@ -47,6 +47,7 @@ import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'support/certs.dart';
+import 'support/permissive_resolver.dart';
 
 /// The ceiling on any dial in this file (trap 17).
 ///
@@ -69,6 +70,7 @@ void main() {
   RelayServer buildServer({TlsConfig? tls}) {
     final served = FakeStateMan();
     final server = RelayServer(
+      resolver: const PermissiveSeriesResolver(),
       api: served,
       config: ServerConfig(tick: ServerConfig.minTick, tls: tls),
       // Provoked failures are the subject of this file; a collector that

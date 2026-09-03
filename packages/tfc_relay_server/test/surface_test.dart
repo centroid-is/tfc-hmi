@@ -20,7 +20,8 @@
 /// Two properties are enforced here:
 ///
 ///  * **Closure, in both directions.** The session registers exactly these
-///    nine names. One direction alone is half a check: a declared name with no
+///    thirteen names. One direction alone is half a check: a declared name
+///    with no
 ///    handler answers METHOD_NOT_FOUND from a table claiming to carry it, and
 ///    a handler under a name nobody wrote down is surface nobody counted. The
 ///    argument is `suite_integrity_test.dart:22-33`, applied server-side.
@@ -57,8 +58,14 @@
 /// put 28 of the contract suite's 44 checks out of reach over the real
 /// gateway. Phase 5 still owns their *semantics* (three-state depth beyond the
 /// plumbing, idempotency windows, hold-to-run) and Phase 10 adds the
-/// data-service methods (timeseries, history, preferences). Each of those is
-/// an edit to [expectedHandlerTable] below, made by a human, in a diff.
+/// data-service methods. Each of those is an edit to [expectedHandlerTable]
+/// below, made by a human, in a diff.
+///
+/// **Phase 10 plan 02** made the first of those edits: the four `browse.*`
+/// names. It is the shape every later data-service plan copies — the handler
+/// bodies land, this literal grows in the same commit, and the contract legs'
+/// gap lists shrink by the checks the handlers just made reachable. Twenty of
+/// the thirty-four (timeseries, history views, preferences) are still to come.
 library;
 
 import 'package:json_rpc_2/error_code.dart' as rpc_errors;
@@ -75,11 +82,16 @@ import 'package:tfc_relay_server/src/token_validator.dart';
 import 'package:tfc_stateman_contract/channel_harness.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 
+import 'support/permissive_resolver.dart';
 import 'support/ws_harness.dart';
 
-/// Every method a connected client may call, as of Phase 4 plan 02.
+/// Every method a connected client may call, as of Phase 10 plan 02.
 ///
-/// Hand-written. Not derived. See the library doc for why.
+/// Hand-written. Not derived. See the library doc for why — and note that the
+/// four `browse.*` names below are bare strings for exactly that reason, even
+/// though `DataServiceMethods` now declares them in the protocol package. A
+/// literal spelled with the constants would agree with a rename of the wire
+/// name and assert nothing about it.
 const Set<String> expectedHandlerTable = {
   'hello',
   'ping',
@@ -90,6 +102,13 @@ const Set<String> expectedHandlerTable = {
   'read',
   'readFresh',
   'readMany',
+  // Phase 10 plan 02. The first four of the thirty-four data-service methods,
+  // and the reason six contract checks stopped being proven-unreachable in
+  // the commit that added them.
+  'browse.fetchRoots',
+  'browse.fetchChildren',
+  'browse.fetchDetail',
+  'browse.resolvePath',
 };
 
 /// Every name the server *sends* as a notification, and therefore may never
@@ -147,6 +166,7 @@ RelaySession _session() {
   final pair = channelPair();
   final api = FakeStateMan();
   final session = RelaySession.serve(
+    resolver: const PermissiveSeriesResolver(),
     channel: pair.server,
     api: api,
     config: ServerConfig(),
@@ -185,11 +205,12 @@ void main() {
               'registration.');
     });
 
-    test('the table is exactly the nine names a client may call today', () {
-      // The sentence is unchanged and still true: nine names a client may
-      // *call*. `h` is not one of them — it is announced, never called — so
-      // it is taken out of the ledger by name here rather than being added to
-      // the literal, which would say a client may ask the gateway to tick.
+    test('the table is exactly the thirteen names a client may call today', () {
+      // The sentence is unchanged in shape and still true: thirteen names a
+      // client may *call*. `h` is not one of them — it is announced, never
+      // called — so it is taken out of the ledger by name here rather than
+      // being added to the literal, which would say a client may ask the
+      // gateway to tick.
       expect(
           _session().registeredMethods.difference(expectedClientNotifications),
           expectedHandlerTable,
@@ -197,7 +218,7 @@ void main() {
               'failure prints the whole table rather than a difference');
     });
 
-    test('the registered table is the nine callable names plus the client '
+    test('the registered table is the thirteen callable names plus the client '
         'notifications', () {
       expect(_session().registeredMethods, everyRegisterableName,
           reason: 'the ledger is the union, because json_rpc_2 dispatches a '
@@ -284,6 +305,23 @@ void main() {
         'cmd': '01JZZZZZZZZZZZZZZZZZZZZZZZ',
         'value': 1200,
         'cmds': ['01JZZZZZZZZZZZZZZZZZZZZZZZ'],
+        // The browse trio (Phase 10 plan 02). Written out as literal maps
+        // rather than built from `BrowseNode.toJson()`, for the same reason
+        // the expected sets above are bare strings: a bag spelled with the
+        // encoder would agree with a change to the encoder, and this bag's
+        // only job is to be *dispatchable* — a refusal on the contents is a
+        // pass here, because the property is that the method exists at all.
+        'parent': <String, Object?>{
+          'id': 'ST101.CN01',
+          'displayName': 'CN01',
+          'type': 'folder',
+        },
+        'node': <String, Object?>{
+          'id': 'ST101.CN01.MOT01.setpoint',
+          'displayName': 'setpoint',
+          'type': 'variable',
+        },
+        'targetId': 'ST101.CN01.MOT01.setpoint',
       };
 
       final methodNotFound = <String>[];

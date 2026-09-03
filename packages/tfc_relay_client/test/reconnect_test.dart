@@ -46,6 +46,8 @@ import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 import 'package:web_socket_channel/io.dart';
 
+import 'support/permissive_resolver.dart';
+
 /// A health key `FakeStateMan` seeds at construction, so a subscribe against a
 /// real gateway answers with a real snapshot and no plant has to be simulated.
 const String _seededKey = 'PIPE.connected';
@@ -169,6 +171,7 @@ Future<({RelayServer server, FaultProxy? proxy, Uri uri})> _gateway({
 }) async {
   final served = FakeStateMan();
   final server = RelayServer(
+    resolver: const PermissiveSeriesResolver(),
     api: served,
     config: ServerConfig(tick: ServerConfig.minTick),
     // Several arms here provoke errors on purpose; a suite that printed a

@@ -40,6 +40,8 @@ import 'package:tfc_stateman_contract/channel_harness.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 
+import 'support/permissive_resolver.dart';
+
 /// One session, one client, both wired and listening.
 final class _Link {
   _Link(this.session, this.client, this.api);
@@ -64,6 +66,7 @@ _Link _link(
   final pair = channelPair();
   final api = FakeStateMan();
   final session = RelaySession.serve(
+    resolver: const PermissiveSeriesResolver(),
     channel: pair.server,
     api: api,
     config: config ?? ServerConfig(),
@@ -218,6 +221,7 @@ void main() {
     final pair = channelPair();
     final api = FakeStateMan();
     final session = RelaySession.serve(
+      resolver: const PermissiveSeriesResolver(),
       channel: pair.server,
       api: api,
       config: ServerConfig(),
@@ -346,8 +350,8 @@ void main() {
             'a deadline and the pump would be pure cost');
   });
 
-  test('the handler table is exactly the nine names a client may call, plus '
-      'the one it announces', () async {
+  test('the handler table is exactly the thirteen names a client may call, '
+      'plus the one it announces', () async {
     final link = _link();
     addTearDown(link.dispose);
 
@@ -363,15 +367,24 @@ void main() {
           Methods.read,
           Methods.readFresh,
           Methods.readMany,
+          // 10-02: the first four data services. Constants here, bare strings
+          // in `surface_test.dart` — that file pins the wire spelling, this
+          // one pins the ledger.
+          DataServiceMethods.browseFetchRoots,
+          DataServiceMethods.browseFetchChildren,
+          DataServiceMethods.browseFetchDetail,
+          DataServiceMethods.browseResolvePath,
           // 05-05: the hold tick, a client→server notification. It is in the
           // ledger because json_rpc_2 dispatches an un-idded frame through
           // the same table, and it is not a name a client may *call* — see
           // `surface_test.dart`, which keeps the two in separate literals.
           Methods.holdTick,
         },
-        reason: 'the wire surface is a closed set: 03-05 added subscribe and '
-            'unsubscribe, 03-08 froze it, and 04-02 added the five value '
-            'methods the contract leg cannot run without. A handler nobody '
-            'counted is surface nobody reviewed');
+        reason: 'the wire surface is a closed set of fourteen registrations: '
+            '03-05 added subscribe and unsubscribe, 03-08 froze it, 04-02 '
+            'added the five value methods the contract leg cannot run '
+            'without, and 10-02 the four browse ones that retired six of the '
+            'thirteen proven-unreachable checks. A handler nobody counted is '
+            'surface nobody reviewed');
   });
 }

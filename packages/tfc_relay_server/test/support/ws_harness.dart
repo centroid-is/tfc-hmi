@@ -46,6 +46,8 @@ import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'permissive_resolver.dart';
+
 /// How long the served end has to appear after the client's connect returns.
 ///
 /// `socket_harness.dart`'s `_acceptBudget`, same value: generous, because it
@@ -224,6 +226,7 @@ RelayFixture relayFixture({
     preferences: preferences,
   );
   final server = RelayServer(
+    resolver: const PermissiveSeriesResolver(),
     api: served,
     config: config ?? fixtureConfig(),
     validator: validator,

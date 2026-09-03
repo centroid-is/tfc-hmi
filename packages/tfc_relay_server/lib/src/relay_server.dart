@@ -143,6 +143,7 @@ final class RelayServer {
     HandleTable? handles,
     TokenValidator validator = permissiveDefault,
     this.policy = const AllVisibleOperatorWrites(),
+    required this.resolver,
     this.serverSupported = const [protocolVersion],
     this.onError = reportToStderr,
     int Function()? now,
@@ -251,6 +252,33 @@ final class RelayServer {
   /// per *identity* — [api] is one instance shared by every panel on this
   /// gateway, which is the whole reason the policy cannot live inside it.
   final KeyPolicy policy;
+
+  /// How a browse node id and a database table name become a plant key.
+  ///
+  /// **Required, with no default, and that is the decision.** [validator] had
+  /// the same choice and took the other branch: `PermissiveTokenValidator` is
+  /// a named default, so a deployment still running it in Phase 12 says so in
+  /// a config diff. A permissive *resolver* would not be legible that way —
+  /// nothing in the configuration would name it and nothing in a log would
+  /// show it — and what it would silently do is map every table to a key that
+  /// exists, which serves history for tags the identity may not see.
+  ///
+  /// 10-CONTEXT amendment 6 makes an unmappable table fail-closed: it is not
+  /// served until it is mapped. A fail-closed rule with a permissive default
+  /// is a rule that holds until somebody forgets a constructor argument, so
+  /// there is no default to forget. There is also no implementation of
+  /// [SeriesResolver] in any relay package's `lib/` — a sweep in
+  /// `handler_table_test.dart` asserts it — which means a caller cannot
+  /// satisfy this parameter without having built or chosen a mapping.
+  ///
+  /// **Not on [ServerConfig].** Config is data a deployment writes in a file;
+  /// this is an object built from the keymappings the composition root has
+  /// already loaded (10-07 builds the real one over 8b's collection config,
+  /// which names both the plant key and the `gw_`-prefixed table).
+  ///
+  /// Forwarded to every session, which hands it to its `PolicyStateMan` and
+  /// its `DataHandlers`.
+  final SeriesResolver resolver;
 
   /// The protocol versions this build can speak, newest last.
   final List<String> serverSupported;
@@ -656,6 +684,10 @@ final class RelayServer {
         // built against something else would be a panel this server's
         // configuration does not describe.
         policy: policy,
+        // Forwarded the same way, and required at both ends: a session built
+        // without a mapping is a session whose browse filter has nothing to
+        // ask, and 10-03's timeseries handlers would have no table to resolve.
+        resolver: resolver,
         serverSupported: serverSupported,
         // One log for the whole gateway: a reconnecting panel is a new session
         // asking about a write the previous one issued.

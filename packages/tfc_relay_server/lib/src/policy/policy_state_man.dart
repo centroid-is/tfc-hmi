@@ -47,22 +47,28 @@
 /// was consolidated into one helper in 06-04 first, and it is what
 /// `policy_test.dart`'s indistinguishability case exists to keep true.
 ///
-/// ## The four sub-APIs are wrapped, and filter nothing yet
+/// ## The four sub-APIs: one filters, three are still transparent
 ///
-/// `browse`, `timeseries`, `historyViews` and `preferences` return wrappers
-/// that delegate every member and mark where the filter goes. They are wrapped
-/// rather than returned bare so the "no unwrapped source to reach" property
-/// holds for them too: a Phase 10 handler that takes `api.browse` must get
+/// `browse`, `timeseries`, `historyViews` and `preferences` return wrappers.
+/// They are wrapped rather than returned bare so the "no unwrapped source to
+/// reach" property holds for them too: a handler that takes `api.browse` gets
 /// something this session owns, not the shared object itself.
 ///
-/// They do **not** consult the policy, deliberately. None of these methods is
-/// on the wire yet — the handler table is nine names, and
-/// `ws_contract_test.dart:145-185` enumerates thirteen unreachable checks
-/// every one of which is a sub-API method — so CONTEXT's "absent from browse
-/// results" clause has nothing to attach to. A policy call nothing can reach
-/// would read like coverage while testing nothing, which
-/// `suite_integrity_test.dart:104-108` calls worse than an absent one. Phase
-/// 10 adds the calls at the marked points, with cases that can see them.
+/// Through Phase 9 all four merely delegated, and the reason was that none of
+/// their methods was on the wire — the handler table was nine names and the
+/// contract legs enumerated thirteen unreachable checks, every one a sub-API
+/// method. A policy call nothing can reach would read like coverage while
+/// testing nothing, which `suite_integrity_test.dart:104-108` calls worse than
+/// an absent one.
+///
+/// **10-02 registered the four `browse.*` handlers, so browse now filters**
+/// and has cases that can see it (`policy_test.dart`'s browse group, and
+/// browse as the seventh entry in the indistinguishability loop). The other
+/// three still delegate, each saying so at its own declaration, and the plans
+/// that make their methods reachable are the plans that fill them in: 10-03
+/// for timeseries, 10-04 for history views, 10-05 for preferences. The rule
+/// stands unchanged — a filter lands in the commit that makes the surface
+/// reachable, never before it and never after.
 library;
 
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
@@ -89,6 +95,7 @@ final class PolicyStateMan implements StateManApi {
   PolicyStateMan({
     required this.source,
     required this.policy,
+    required this.resolver,
     required this.identityOf,
   });
 
@@ -105,6 +112,18 @@ final class PolicyStateMan implements StateManApi {
   final StateManApi source;
 
   final KeyPolicy policy;
+
+  /// How a node id and a table name become the plant key [canSee] is asked
+  /// about.
+  ///
+  /// The browse filter needs it and nothing else in this class does yet:
+  /// `keys` is already a list of plant keys, so the five surfaces that inherit
+  /// hiding from it never had a translation problem. Browse walks the upstream
+  /// address space instead, where every identifier belongs to the server that
+  /// published it, and 10-03 and 10-04 will need the same object for tables.
+  ///
+  /// Required, no default. See `relay_server.dart`'s `resolver` parameter.
+  final SeriesResolver resolver;
 
   /// Who is asking, read **late**.
   ///
@@ -210,7 +229,7 @@ final class PolicyStateMan implements StateManApi {
   Future<HoldHandle> holdToRun(String key) => source.holdToRun(key);
 
   @override
-  BrowseApi get browse => _PolicyBrowse(source.browse);
+  BrowseApi get browse => _PolicyBrowse(source.browse, resolver, canSee);
 
   @override
   TimeseriesApi get timeseries => _PolicyTimeseries(source.timeseries);
@@ -235,40 +254,118 @@ final class PolicyStateMan implements StateManApi {
 }
 
 // ---------------------------------------------------------------------------
-// The four sub-APIs. Wrapped, delegating, filtering nothing yet — see the
-// library doc for why each of those three words is deliberate.
+// The four sub-APIs. Browse filters as of 10-02; the other three are still
+// wrapped and delegating, and say so at their own declarations. See the
+// library doc for why each of those words is deliberate.
 // ---------------------------------------------------------------------------
 
-/// Navigating the address space. **The filter point for Phase 10** is here:
-/// `fetchRoots`, `fetchChildren` and `resolvePath` return nodes, and a node
-/// naming a key the station may not see must be dropped from the list rather
-/// than refused — a refusal names what it refused.
+/// Navigating the address space, **with the hiding rule applied** (10-02).
+///
+/// Browse is the seventh way to ask whether a tag exists and the first that
+/// does not inherit hiding from [PolicyStateMan.keys]: the other six all gate
+/// on that one list of plant keys, and this one walks the *upstream* address
+/// space, where a node id belongs to the server that published it rather than
+/// to the plant's key namespace. So it needs a translation, and that is what
+/// [SeriesResolver.keyForNode] is.
+///
+/// Three rules, and the second and third are the ones a reader will not guess:
+///
+///  1. **A hidden node is dropped from a list, never refused.** A refusal
+///     names what it refused; ask about a thousand names, keep the ones
+///     refused rather than absent, and the plant's address space has been
+///     enumerated by a station that may not read a byte of it (T-06-36).
+///  2. **Only a *variable* is asked about.** `canSee` takes a plant key and a
+///     folder is not one. A node the resolver maps to no key at all — a
+///     folder, an intermediate struct, a method — is not asked about and is
+///     not dropped. Pruning a folder would take every tag under it off the
+///     tree, including the ones the station may see, on the strength of a
+///     policy entry that was never about the folder.
+///  3. **A path through a hidden node is null, not truncated.** A chain that
+///     stopped at the last visible node would claim an edge that is not there
+///     and would announce "something you may not see is under here" as
+///     clearly as a refusal would.
+///
+/// Written as explicit member-by-member delegation like everything else in
+/// this file — **never `noSuchMethod`** (see the class doc above): a forwarder
+/// would absorb an interface member added later and serve it unfiltered.
+///
+/// Under the shipped [AllVisibleOperatorWrites] this whole class is a no-op —
+/// `canSee` is `true` for every key — which is why the six browse contract
+/// checks are unchanged by it. That is the acceptance shape 06-08 established:
+/// a filter must be provably invisible against the default policy.
 final class _PolicyBrowse implements BrowseApi {
-  const _PolicyBrowse(this._source);
+  const _PolicyBrowse(this._source, this._resolver, this._canSee);
 
   final BrowseApi _source;
+  final SeriesResolver _resolver;
+
+  /// [PolicyStateMan.canSee], passed as a function rather than as the whole
+  /// decorator so this class cannot reach anything else on it.
+  final bool Function(String key) _canSee;
+
+  /// Whether this station may know [node] is in the address space.
+  ///
+  /// Rule 2 above, in the order the checks have to happen: kind first, then
+  /// the mapping, then the policy. Reordering them would ask `canSee` about a
+  /// folder id, which is a string the policy was never written about.
+  bool _visible(BrowseNode node) {
+    if (!node.isVariable) return true;
+    final key = _resolver.keyForNode(node.id);
+    if (key == null) return true;
+    return _canSee(key);
+  }
 
   @override
-  Future<List<BrowseNode>> fetchRoots() => _source.fetchRoots();
+  Future<List<BrowseNode>> fetchRoots() async =>
+      (await _source.fetchRoots()).where(_visible).toList();
 
   @override
-  Future<List<BrowseNode>> fetchChildren(BrowseNode parent) =>
-      _source.fetchChildren(parent);
+  Future<List<BrowseNode>> fetchChildren(BrowseNode parent) async =>
+      (await _source.fetchChildren(parent)).where(_visible).toList();
+
+  /// The detail of [node], or — for one this station may not see — **the
+  /// answer a node that does not exist gets**.
+  ///
+  /// The source is not asked, for `readFresh`'s reason (§E.2 item 2): the
+  /// round trip is itself a side channel, and a caller who may not know a tag
+  /// exists must not be able to make the plant be asked about it. What comes
+  /// back instead is built from the node the caller already holds — the
+  /// description and data type travelled with it in whatever list it came out
+  /// of, so echoing them discloses nothing — and carries **no reading and no
+  /// struct members**, which is the shape a source gives a node it has never
+  /// heard of. `policy_test.dart` pins that by *comparing the two answers*
+  /// rather than by restating this sentence as a literal, so a source that
+  /// changes its nonexistent shape has to change both.
+  @override
+  Future<BrowseNodeDetail> fetchDetail(BrowseNode node) async {
+    if (!_visible(node)) {
+      return BrowseNodeDetail(
+          description: node.description, dataType: node.dataType);
+    }
+    return _source.fetchDetail(node);
+  }
 
   @override
-  Future<BrowseNodeDetail> fetchDetail(BrowseNode node) =>
-      _source.fetchDetail(node);
-
-  @override
-  Future<List<BrowseNode>?> resolvePath(String targetId) =>
-      _source.resolvePath(targetId);
+  Future<List<BrowseNode>?> resolvePath(String targetId) async {
+    final chain = await _source.resolvePath(targetId);
+    if (chain == null) return null;
+    // Rule 3: any hidden step, anywhere in the chain, and there is no path.
+    return chain.every(_visible) ? chain : null;
+  }
 }
 
-/// Historical samples. **The filter point for Phase 10** is here, and it is
-/// the one that needs a decision rather than a line of code: these methods are
-/// keyed by `tableName`, not by plant key, so hiding a tag does not obviously
-/// hide its history. Whoever wires this must first say how a table name maps
-/// to a key.
+/// Historical samples. **Still transparent — 10-03 owns the filter**, and this
+/// class hides nothing today: it delegates every member and says so here so
+/// the file never claims coverage it does not have.
+///
+/// The decision browse needed is already made — [SeriesResolver] is on
+/// [PolicyStateMan] and 10-02 threaded it — but the translation is a different
+/// one: these methods are keyed by `tableName`, not by node id, so what 10-03
+/// consults is `keyForTable`, and 10-CONTEXT amendment 6 makes an unmappable
+/// table **fail-closed**: not served until mapped. That is the opposite of
+/// browse's rule for an unmappable *node*, where a folder legitimately maps to
+/// nothing, and the two must not be made uniform by whoever writes the second
+/// one.
 final class _PolicyTimeseries implements TimeseriesApi {
   const _PolicyTimeseries(this._source);
 
@@ -302,9 +399,14 @@ final class _PolicyTimeseries implements TimeseriesApi {
           since: since);
 }
 
-/// Saved history views. **The filter point for Phase 10** is here: a view is a
-/// list of keys, so a view holding a hidden key must come back without it
-/// rather than not at all — a view that vanished would say a view exists.
+/// Saved history views. **Still transparent — 10-04 owns the filter**, and
+/// this class hides nothing today.
+///
+/// A view is a list of *plant keys*, so unlike browse and unlike timeseries
+/// this one needs no resolver at all — [PolicyStateMan.canSee] takes the keys
+/// as they come. The rule when it lands: a view holding a hidden key comes
+/// back **without that key** rather than not at all, because a view that
+/// vanished would itself say a view exists.
 final class _PolicyHistoryViews implements HistoryViewApi {
   const _PolicyHistoryViews(this._source);
 
