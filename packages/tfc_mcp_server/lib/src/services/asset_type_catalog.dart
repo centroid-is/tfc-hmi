@@ -840,6 +840,37 @@ class AssetTypeCatalog {
       ],
     ),
     AssetTypeInfo(
+      assetName: 'EtherCatLinkConfig',
+      displayName: 'EtherCAT Link',
+      category: 'Beckhoff',
+      description:
+          'One EtherCAT cable, drawn as a run between two devices\' ports '
+          'rather than placed as a box. Its ends belong to the assets it '
+          'plugs into, so moving a terminal moves the cable; corners are '
+          'dragged on the canvas, not typed. Bound to an '
+          'ST_EtherCATLink_HMI struct it also reports how long the link has '
+          'held, how many times it has reconnected, and whether it is '
+          'erroring while still up.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'key',
+            type: 'String',
+            description: 'Tag key of the ST_EtherCATLink_HMI struct. Leave '
+                'empty to draw the cable without diagnostics.'),
+        AssetPropertyInfo(
+            name: 'run',
+            type: 'Object',
+            description: 'The run: {from, to} endpoints as '
+                '{assetId, port, x, y}, a list of waypoints, and a radius. '
+                'Endpoints name other assets by id.'),
+        AssetPropertyInfo(
+            name: 'thickness',
+            type: 'double',
+            description: 'Stroke width as a fraction of the canvas shortest '
+                'side'),
+      ],
+    ),
+    AssetTypeInfo(
       assetName: 'ElevatorConfig',
       displayName: 'Elevator',
       category: 'Visualization',
