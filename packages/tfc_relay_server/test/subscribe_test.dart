@@ -454,8 +454,8 @@ void main() {
     expect(link.session.subscriptions.count, 0);
   });
 
-  test('the wire surface is exactly the nine methods declared today, plus the '
-      'one name a client announces', () async {
+  test('the wire surface is exactly the thirteen methods declared today, plus '
+      'the one name a client announces', () async {
     final link = _link();
     addTearDown(link.dispose);
 
@@ -469,15 +469,24 @@ void main() {
       Methods.read,
       Methods.readFresh,
       Methods.readMany,
-      // 05-05. Not a tenth callable name: `h` is a client→server
+      // Phase 10 plan 02, the first four data services. Spelled as constants
+      // here and as bare strings in `surface_test.dart`, deliberately: that
+      // file is pinning the wire *spelling* and this one is pinning the
+      // *ledger*, so a rename must break exactly one of the two.
+      DataServiceMethods.browseFetchRoots,
+      DataServiceMethods.browseFetchChildren,
+      DataServiceMethods.browseFetchDetail,
+      DataServiceMethods.browseResolvePath,
+      // 05-05. Not a fourteenth callable name: `h` is a client→server
       // notification, dispatched through the same table because that is how
       // json_rpc_2 routes a frame with no id. `surface_test.dart` keeps the
       // two apart in separate literals; here the ledger is one set.
       Methods.holdTick,
     }, reason: 'a declared name with no handler answers METHOD_NOT_FOUND from '
         'a table claiming to carry it; a handler nobody declared is surface '
-        'nobody counted. 03-08 freezes this set and 04-02 added the five '
-        'value methods to it. This is the third file spelling the table out — '
+        'nobody counted. 03-08 freezes this set, 04-02 added the five value '
+        'methods to it and 10-02 the four browse ones. This is the third '
+        'file spelling the table out — '
         '`surface_test.dart` holds the canonical literal, and the fact that '
         'three copies had to be edited in lockstep is itself worth the note');
   });

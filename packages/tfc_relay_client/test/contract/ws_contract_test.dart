@@ -48,7 +48,7 @@ const _readOnlyKey = 'ST301.CN21.SEN01.temp';
 
 /// What this leg passes today. Measured, not chosen.
 ///
-/// See [unreachableChecks] for the other 13 and why every one of them is a
+/// See [unreachableChecks] for the other 7 and why every one of them is a
 /// missing *handler* rather than a missing behaviour. The number goes **up** as
 /// the gateway grows those handlers; it must never go down without the gap list
 /// growing to match, which the arithmetic case below enforces.
@@ -96,14 +96,27 @@ const _readOnlyKey = 'ST301.CN21.SEN01.temp';
 /// names (`tfc_stateman_contract.dart:251-263`): a hold check cannot be excused
 /// here even by somebody who wanted to.
 ///
+/// **Why 37 became 43 in Phase 10.** 10-02 landed the four `browse.*` handlers
+/// on the gateway — `data_handlers.dart`, registered through `RelaySession._on`
+/// like every other method — and the six browse checks that used to sit in
+/// [unreachableChecks] moved here in that same commit. Every one of them was
+/// **closed by a handler, not excused**: none was renamed, none was skipped,
+/// none was moved into the gap list to keep an arithmetic. The mechanism is why
+/// the move had to be same-commit rather than tidied afterwards —
+/// `expectUnreachableMethod` runs a named check and *fails* when it succeeds
+/// (`check.dart:88-94`), so the instant `browse.fetchRoots` answered, leaving a
+/// browse sentence in the list below would have reported a passing check as a
+/// failure. The remaining seven wait on 10-03 through 10-05 (timeseries,
+/// history views, preferences) and will move the same way.
+///
 /// **This number is proven to bite**, three ways rather than one. Raising it to
-/// 38 with the gap list unchanged fails the arithmetic case below with
+/// 44 with the gap list unchanged fails the arithmetic case below with
 /// `Expected: <50> Actual: <51>` (run, recorded, reverted). Moving a check into
 /// the gap list to keep the arithmetic while lowering the count fails
 /// `expectUnreachable`, which rejects a named check that passes. And a
 /// reachable check that regresses fails as itself, because the suite is green
-/// only when all 37 pass.
-const int reachableChecks = 37;
+/// only when all 43 pass.
+const int reachableChecks = 43;
 
 /// Every check this leg does not pass, by name — all of them for one cause.
 ///
@@ -126,7 +139,7 @@ const int reachableChecks = 37;
 /// entries were closed the same way. [reachableChecks] records what each was.
 ///
 /// **Every entry names the handler it waits on**, in the trailing comment on
-/// its own line, and all thirteen wait on **Phase 10**. That is deliberate
+/// its own line, and all seven wait on **Phase 10**. That is deliberate
 /// bookkeeping rather than decoration: "browse is missing" is a sentence
 /// nobody can act on, whereas `browse.fetchChildren` is a method name somebody
 /// implements and then deletes a line here. A reader arriving the day a
@@ -136,29 +149,15 @@ const int reachableChecks = 37;
 /// Two lines per entry where they differ, because they usually do. *Trips on*
 /// is the method the check actually dies at today, read off the -32601 the
 /// gateway returns and recorded from a real run (`parity_test.dart`'s
-/// disagreement report prints all thirteen). *Needs* is everything the check
+/// disagreement report prints all of them). *Needs* is everything the check
 /// would go on to call once that first one answers. The distinction is the
-/// difference between "I implemented `browse.fetchRoots`, why is this check
-/// still red" and knowing up front that it also wants `fetchChildren`. Four of
-/// the six browse checks trip on `fetchRoots` before they reach the method
-/// they are named for.
+/// difference between "I implemented `preferences.setBool`, why is this check
+/// still red" and knowing up front that it also wants `containsKey`.
+///
+/// **The six browse entries left this list in 10-02**, deleted rather than
+/// commented out, in the commit that registered the handlers they waited on.
+/// [reachableChecks] carries the account of what closed them.
 const List<String> unreachableChecks = <String>[
-  // browse — six checks. Phase 10 owns every `browse.*` handler below; the
-  // client's `ClientBrowseApi` already sends each of these exact method names
-  // (`client_sub_apis.dart:59-62`) and is told -32601 by the gateway.
-  'the address space has a top level, and every root is identifiable',
-  //   trips on: browse.fetchRoots
-  "expanding a folder yields that folder's children, not another's",
-  //   trips on: browse.fetchRoots — needs: browse.fetchChildren
-  "a node's detail carries its data type, and a variable's carries a reading",
-  //   trips on: browse.fetchRoots — needs: browse.fetchDetail
-  'a resolved path runs root to leaf, and every step is a real edge',
-  //   trips on: browse.resolvePath
-  'a target that does not exist resolves to null, not empty and not a throw',
-  //   trips on: browse.resolvePath
-  'folders and variables expand; methods do not',
-  //   trips on: browse.fetchRoots
-  //   needs:    browse.fetchChildren, browse.fetchDetail
   // data services — seven checks. Phase 10 owns these three handler families
   // too; the client's `ClientTimeseriesApi`, `ClientHistoryViewApi` and
   // `ClientPreferencesApi` already send the exact names below
