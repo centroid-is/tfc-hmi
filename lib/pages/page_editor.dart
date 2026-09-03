@@ -2270,6 +2270,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
     _saveToHistory();
     final copiedAssets = AssetRegistry.parse(jsonDecode(pasted));
+    reidentifyAssets(copiedAssets);
     setState(() {
       _selectedAssets.clear();
 

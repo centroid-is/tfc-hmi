@@ -24,6 +24,7 @@ ConveyorColorPaletteConfig _$ConveyorColorPaletteConfigFromJson(
         Map<String, dynamic> json) =>
     ConveyorColorPaletteConfig()
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -37,6 +38,7 @@ Map<String, dynamic> _$ConveyorColorPaletteConfigToJson(
         ConveyorColorPaletteConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
@@ -83,6 +85,7 @@ ConveyorConfig _$ConveyorConfigFromJson(Map<String, dynamic> json) =>
           .toList(),
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -95,6 +98,7 @@ ConveyorConfig _$ConveyorConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$ConveyorConfigToJson(ConveyorConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
@@ -161,6 +165,7 @@ RollerConveyorConfig _$RollerConveyorConfigFromJson(
           .toList(),
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -174,6 +179,7 @@ Map<String, dynamic> _$RollerConveyorConfigToJson(
         RollerConveyorConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,

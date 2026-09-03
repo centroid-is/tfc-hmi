@@ -89,9 +89,96 @@ class RelativeSize {
   }
 }
 
+/// Mints the handles assets are referred to by — see [Asset.id].
+///
+/// Not a UUID, and no new dependency for one: 96 bits from a secure generator
+/// is orders of magnitude past anything a page full of assets could collide
+/// on, and a short hex string keeps the page JSON readable when somebody has
+/// to diff two versions of it by eye.
+String newAssetId() {
+  final r = _idRandom;
+  final b = StringBuffer();
+  for (var i = 0; i < 24; i++) {
+    b.write('0123456789abcdef'[r.nextInt(16)]);
+  }
+  return b.toString();
+}
+
+/// Gives every asset in [copies] that carried an id a fresh one, and rewrites
+/// the references between them to match.
+///
+/// This is what a paste (or any other duplication) owes the page. Two assets
+/// sharing an id makes every reference to it ambiguous, so a copy cannot keep
+/// the original's. References *inside* the group follow the copies: duplicate
+/// a coupler, a box and the cable between them and you get a second cable
+/// running between the second pair, not one that reaches back to the
+/// originals. References *out* of the group are deliberately left alone — a
+/// cable copied on its own still runs where it ran.
+void reidentifyAssets(List<Asset> copies) {
+  final idMap = <String, String>{};
+  for (final asset in copies) {
+    final old = asset.id;
+    if (old != null) idMap[old] = asset.assignNewId();
+  }
+  if (idMap.isEmpty) return;
+  for (final asset in copies) {
+    asset.remapAssetIds(idMap);
+  }
+}
+
+math.Random? _idRandomCache;
+
+/// Built on first use rather than at import: `Random.secure` reaches for a
+/// platform entropy source, and a top-level initialiser doing that would run
+/// on every import of this library including in environments that have none.
+math.Random get _idRandom => _idRandomCache ??= _makeIdRandom();
+
+math.Random _makeIdRandom() {
+  try {
+    return math.Random.secure();
+  } catch (_) {
+    // No secure source here. Ids only have to be unique within a page, and
+    // the fallback still is — this is not a security boundary.
+    return math.Random();
+  }
+}
+
 abstract class Asset {
   String get assetName;
   String get displayName;
+
+  /// A stable handle other assets can refer to this one by, or null.
+  ///
+  /// Assets are otherwise identified by object identity, which does not
+  /// survive a save: a page serialises as a bare list and nothing in it names
+  /// anything else. That was fine while no asset referred to another. A cable
+  /// does — both its ends and any pinned corner name the asset they belong to
+  /// — so it needs a handle that outlives a reload.
+  ///
+  /// Null by default and stays null: an asset earns an id the first time
+  /// something points at it ([ensureId]), so a page nothing links across is
+  /// saved exactly as it was before ids existed.
+  String? get id;
+  set id(String? id);
+
+  /// This asset's [id], minting one if it has none yet.
+  String ensureId();
+
+  /// Replaces this asset's [id] with a fresh one, and returns it.
+  ///
+  /// Paste and duplicate call this: two assets carrying one id makes every
+  /// reference to it ambiguous, and the copy is a different piece of
+  /// equipment even when it is identical in every other respect.
+  String assignNewId();
+
+  /// Rewrites references this asset holds to *other* assets' ids.
+  ///
+  /// Called after a paste with a map from each copied asset's old id to its
+  /// new one. An id missing from the map is deliberately left alone: it names
+  /// something outside the pasted group, and a cable copied on its own should
+  /// still run between the two devices it ran between before.
+  void remapAssetIds(Map<String, String> idMap);
+
   String get category;
   String? get text;
   set text(String? text);
@@ -232,6 +319,30 @@ abstract class BaseAsset implements Asset {
     }
     return buffer.toString();
   }
+
+  /// See [Asset.id].
+  ///
+  /// Public, and a field rather than a getter over a private one: every
+  /// concrete asset's `toJson`/`fromJson` is generated from the members
+  /// json_serializable can see on this class, and it cannot see a private
+  /// field. `includeIfNull: false` is what keeps the change additive — an
+  /// asset nothing points at serialises without the key at all, so a page
+  /// saved before ids existed round-trips byte for byte.
+  @JsonKey(name: 'id', includeIfNull: false)
+  @override
+  String? id;
+
+  @override
+  String ensureId() => id ??= newAssetId();
+
+  @override
+  String assignNewId() => id = newAssetId();
+
+  /// Most assets refer to nothing, so the default is to have nothing to
+  /// rewrite. Assets that hold ids (the cable's ends and pinned corners)
+  /// override this.
+  @override
+  void remapAssetIds(Map<String, String> idMap) {}
 
   @JsonKey(name: 'coordinates')
   Coordinates _coordinates = Coordinates(x: 0.0, y: 0.0);

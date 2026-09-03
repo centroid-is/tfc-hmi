@@ -13,6 +13,7 @@ DrawingViewerConfig _$DrawingViewerConfigFromJson(Map<String, dynamic> json) =>
       startPage: (json['startPage'] as num?)?.toInt() ?? 1,
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -25,6 +26,7 @@ Map<String, dynamic> _$DrawingViewerConfigToJson(
         DrawingViewerConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,

@@ -35,6 +35,7 @@ Map<String, dynamic> _$BaseAssetToJson(BaseAsset instance) => <String, dynamic>{
       'asset_name': instance.variant,
       'displayName': instance.displayName,
       'category': instance.category,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
