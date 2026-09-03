@@ -33,6 +33,8 @@
 /// `ws`, so the simulated path stays anchored to the thing it simulates.
 library;
 
+import 'dart:convert';
+
 import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
@@ -41,6 +43,7 @@ import 'package:tfc_relay_server/src/tick_engine.dart';
 import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 
 import 'support/bands.dart';
+import 'support/fake_clock.dart';
 import 'support/panels.dart';
 import 'support/ws_harness.dart';
 
@@ -341,6 +344,204 @@ void main() {
               'on the plant for one 400 ms hiccup');
       expect(panel.ticks, hasLength(1),
           reason: 'the cadence resumes, unremarkably');
+    });
+  });
+
+  group('the wake-up reaper forgives the gateway\'s own stall', () {
+    // F22's reaper half, at the unit level. `RelaySession.silentForMs()` reads
+    // a wall clock and `_lastSeen` advances only when a frame is *processed*,
+    // so after a freeze every session looks as silent as the freeze was long —
+    // its panel's bytes were in the kernel buffer, unread — and `tickOnce`
+    // announces the stall and then reaps in the same synchronous callback. So
+    // a woken gateway would 4003 every panel for silence the gateway itself
+    // caused: the row's "synchronized false disconnect on every client",
+    // reproduced by our own reaper. The fix credits the tick's own measured
+    // `LagStalled.stalledMs` against every session's silence for that one
+    // tick, and nothing else may (07-08b's only-dead-sessions property, and a
+    // forgiveness a client could influence would be a reaper it could talk out
+    // of reaping).
+    //
+    // The deadline is the SESSION's wall clock (`silentForMs`) and the stall
+    // is the ENGINE's uptime gap (`lag.poll`): two different clocks by
+    // construction (see `TickEngine.reap`'s doc), so each panel runs on its
+    // own `FakeClock` handed to `connect(now:)` while `plant.tick(advance:)`
+    // cranks the engine's. `advance: N` past the stall threshold makes the
+    // verdict `LagStalled(N)` — the stall magnitude is exactly `N`.
+    const deadlineMs = 3000;
+    const stallMs = 5000; // past the 300 ms threshold and past the deadline
+
+    Plant reaperPlant() => Plant(
+        config: ServerConfig(
+            tick: ServerConfig.minTick,
+            heartbeatDeadline: const Duration(milliseconds: deadlineMs),
+            stallThreshold: const Duration(milliseconds: 300)));
+
+    // A panel whose session runs on [clock], connected and subscribed, then
+    // held silent for [silentMs] with no inbound frame — exactly what a freeze
+    // does to `_lastSeen`.
+    Future<Panel> silentPanel(
+        Plant plant, String sub, List<String> keys, FakeClock clock,
+        {required int silentMs}) async {
+      final panel = await plant.connect(sub, keys, now: clock.now);
+      // The last inbound frame (subscribe) touched _lastSeen at the clock's
+      // current value; advancing it now is the silence, uninterrupted.
+      clock.advance(silentMs);
+      return panel;
+    }
+
+    test('a session that beat during the stall window is not reaped', () async {
+      final plant = reaperPlant();
+      final keys = plant.seed(1, prefix: 'CN10.MOT');
+      final clock = FakeClock(start: 1_000_000);
+      // Silence a little past the stall itself: the panel's last beat landed
+      // 1 s before the freeze began, so its silence is the freeze plus that
+      // gap — still well inside the deadline once the freeze is forgiven.
+      final panel = await silentPanel(plant, 'page-1', keys, clock,
+          silentMs: stallMs + 1000);
+
+      plant.tick(advance: stallMs);
+      await pumpEventQueue();
+
+      expect(panel.session.sentCloseCode, isNull,
+          reason: 'a panel that beat through the gateway\'s own freeze was '
+              'reaped for silence the gateway caused — silentForMs '
+              '(${stallMs + 1000}) exceeds the $deadlineMs ms deadline only '
+              'because _lastSeen could not advance while the loop was frozen, '
+              'and the wake-up tick must credit its own measured stall against '
+              'that silence');
+      expect(plant.registry.sessions, hasLength(1),
+          reason: 'the forgiven session left the registry, which is a reap by '
+              'another name');
+    });
+
+    test('a session already silent before the stall is still reaped', () async {
+      final plant = reaperPlant();
+      final keys = plant.seed(1, prefix: 'CN11.MOT');
+      final clock = FakeClock(start: 1_000_000);
+      // Dead well before the freeze: a full deadline of pre-stall silence on
+      // top of the freeze. Crediting the freeze leaves that pre-stall silence
+      // exposed, which still exceeds the deadline.
+      const preStall = deadlineMs + 1000;
+      final panel = await silentPanel(plant, 'page-1', keys, clock,
+          silentMs: stallMs + preStall);
+
+      plant.tick(advance: stallMs);
+      await pumpEventQueue();
+
+      expect(panel.session.sentCloseCode, CloseCodes.heartbeatTimeout,
+          reason: 'the only-dead-sessions property (07-08b): a panel whose '
+              'last frame predates the freeze is genuinely dead, and the '
+              'forgiveness must not become a hole that keeps it alive — the '
+              'stall credits its own duration and no more');
+      final close = panel.closes.single;
+      expect(close.code, CloseCodes.heartbeatTimeout,
+          reason: 'the close code the reaper sends is unchanged');
+      expect(close.reason, startsWith('no heartbeat for '),
+          reason: 'the reason shape is unchanged — the fix changes the '
+              'decision, never the sentence, so the 123-byte close-reason seam '
+              'is not disturbed');
+      final reasonBytes = utf8.encode(close.reason).length;
+      print('F22 reaper reason: "${close.reason}" — $reasonBytes UTF-8 bytes '
+          'against the 123-byte RFC 6455 seam');
+      expect(reasonBytes, lessThanOrEqualTo(123),
+          reason: 'a close reason over 123 UTF-8 bytes makes the close '
+              'silently not happen on dart:io (relay_session.dart:1120), so '
+              'the reaper\'s sentence must fit even at a freeze-inflated '
+              'silence figure');
+    });
+
+    test('the forgiveness lasts one tick and then expires', () async {
+      final plant = reaperPlant();
+      final keys = plant.seed(1, prefix: 'CN12.MOT');
+      final clock = FakeClock(start: 1_000_000);
+      // Beat just before the freeze — forgiven on the wake-up tick.
+      final panel = await silentPanel(plant, 'page-1', keys, clock,
+          silentMs: stallMs + 500);
+
+      // The wake-up tick: LagStalled, so the session is forgiven and survives.
+      plant.tick(advance: stallMs);
+      await pumpEventQueue();
+      expect(panel.session.sentCloseCode, isNull,
+          reason: 'the wake-up tick forgives the freeze; this is the same '
+              'property as the first arm, restated as the precondition for '
+              'what follows');
+
+      // The next tick is on time — LagOk, no verdict to forgive by. The panel
+      // still has not beaten, and by now its silence is a whole freeze plus a
+      // normal tick past the deadline with no stall to excuse it.
+      clock.advance(deadlineMs + 100);
+      plant.tick();
+      await pumpEventQueue();
+
+      expect(panel.session.sentCloseCode, CloseCodes.heartbeatTimeout,
+          reason: 'the forgiveness is bounded to the one tick that measured '
+              'the stall: a session that never beats again is reaped on the '
+              'next ordinary tick, so a single freeze does not buy a dead '
+              'panel a permanent reprieve');
+    });
+
+    test('the forgiveness magnitude is exactly the measured stalledMs',
+        () async {
+      final plant = reaperPlant();
+      final onEdge = plant.seed(1, prefix: 'CN13.EDGE');
+      final overEdge = plant.seed(1, prefix: 'CN13.OVER');
+      final edgeClock = FakeClock(start: 1_000_000);
+      final overClock = FakeClock(start: 1_000_000);
+      // Both sessions are connected BEFORE either clock is advanced: a
+      // connect runs its own ticks, and a session made silent before the
+      // other's connect would be reaped on one of those ordinary ticks rather
+      // than on the stall tick under test.
+      final onEdgePanel = await plant.connect('edge', onEdge, now: edgeClock.now);
+      final overEdgePanel =
+          await plant.connect('over', overEdge, now: overClock.now);
+      // The credit is exactly stallMs, so a session gets exactly
+      // stallMs + deadline of grace. On the edge (== that sum) it lives;
+      // one millisecond past it, it dies. A forgiveness sourced from anything
+      // a client could inflate would move this boundary.
+      edgeClock.advance(stallMs + deadlineMs);
+      overClock.advance(stallMs + deadlineMs + 1);
+
+      plant.tick(advance: stallMs);
+      await pumpEventQueue();
+
+      expect(onEdgePanel.session.sentCloseCode, isNull,
+          reason: 'silence of exactly stalledMs + deadline is forgiven down to '
+              'exactly the deadline: the credit is the gateway\'s own measured '
+              'stall and not a millisecond more');
+      expect(overEdgePanel.session.sentCloseCode, CloseCodes.heartbeatTimeout,
+          reason: 'one millisecond past stalledMs + deadline is reaped — the '
+              'forgiveness is derived from LagStalled alone, so nothing a '
+              'client can influence extends a session\'s life past the '
+              'deadline (T-09-36). This is the security property, asserted '
+              'directly rather than left as a comment');
+    });
+
+    test('on a tick with no stall the reaper behaves exactly as before',
+        () async {
+      final plant = reaperPlant();
+      final dead = plant.seed(1, prefix: 'CN14.DEAD');
+      final live = plant.seed(1, prefix: 'CN14.LIVE');
+      final deadClock = FakeClock(start: 1_000_000);
+      final liveClock = FakeClock(start: 1_000_000);
+      // Connect both before advancing either, for the same reason as the
+      // magnitude arm: a connect ticks, and a tick reaps.
+      final deadPanel = await plant.connect('dead', dead, now: deadClock.now);
+      final livePanel = await plant.connect('live', live, now: liveClock.now);
+      deadClock.advance(deadlineMs + 1);
+      liveClock.advance(deadlineMs - 1);
+
+      // A normal, on-time tick: LagOk, so no forgiveness applies to anyone.
+      plant.tick();
+      await pumpEventQueue();
+
+      expect(deadPanel.session.sentCloseCode, CloseCodes.heartbeatTimeout,
+          reason: 'with no stall to forgive, a session past the deadline is '
+              'reaped bit-for-bit as before the fix — the whole risk of the '
+              'change is behaving differently on a tick where nothing '
+              'happened');
+      expect(livePanel.session.sentCloseCode, isNull,
+          reason: 'and a session inside the deadline is left alone, exactly as '
+              'the unmodified reaper did');
     });
   });
 

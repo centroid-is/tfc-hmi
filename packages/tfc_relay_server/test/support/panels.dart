@@ -52,11 +52,21 @@ final class SocketFault {
 /// One connected panel, and every frame the tick engine wrote to it.
 final class Panel {
   Panel(this.sub, this.session, this.client, this.buffer, this.frames,
-      this._fault);
+      this._fault, this.closes);
 
   final String sub;
   final RelaySession session;
   final rpc.Client client;
+
+  /// Every close code and reason the session handed its channel, in order.
+  ///
+  /// `RelaySession` records only the *code* it sent (`sentCloseCode`); the
+  /// reason it never keeps, because in production the socket carries it and is
+  /// gone. A reaper case has to read the exact sentence — "no heartbeat for
+  /// N ms; the deadline is D ms" — to measure its byte length against the
+  /// 123-byte RFC 6455 seam, so the harness wires the `closeChannel` seam
+  /// `relay_server.dart` fills with a real socket and records what crosses it.
+  final List<({int code, String reason})> closes;
 
   /// This session's outbound buffer, for a case that wants to load a lane
   /// without going through the plant.
@@ -168,11 +178,19 @@ final class Plant {
   }
 
   /// A connected, helloed, subscribed panel.
+  ///
+  /// [now] is the SESSION's wall clock — the one `silentForMs()` reads —
+  /// handed through to `RelaySession.serve`. The engine's clock and a
+  /// session's are different clocks on purpose (uptime vs epoch; see
+  /// `TickEngine.reap`'s doc), so a reaper case needs to crank them
+  /// separately: the engine's to place the tick, the session's to accrue the
+  /// silence. Absent, the session runs on the real wall clock as before.
   Future<Panel> connect(String sub, List<String> keys,
-      {ConflatingSendBuffer? buffer}) async {
+      {ConflatingSendBuffer? buffer, int Function()? now}) async {
     final pair = channelPair();
     final lane = buffer ?? ConflatingSendBuffer(maxPending: config.maxPending);
     final frames = <String>[];
+    final closes = <({int code, String reason})>[];
     final fault = SocketFault();
     final session = RelaySession.serve(
       channel: StreamChannel<String>(pair.server.stream, SessionSink(lane)),
@@ -180,6 +198,10 @@ final class Plant {
       config: config,
       handles: handles,
       buffer: lane,
+      now: now,
+      // What a real socket does with a close code, minus the socket: record
+      // the code and reason so a reaper case can read the exact sentence.
+      closeChannel: (code, reason) async => closes.add((code: code, reason: reason)),
       // Two destinations for one frame: the list a case asserts on, and the
       // far end, so the client's `Peer` can complete the request it is waiting
       // for. Both are what a socket would have done.
@@ -192,7 +214,7 @@ final class Plant {
     registry.add(session);
     final client = rpc.Client(pair.client);
     unawaited(client.listen());
-    final panel = Panel(sub, session, client, lane, frames, fault);
+    final panel = Panel(sub, session, client, lane, frames, fault, closes);
     _panels.add(panel);
 
     await ask(
