@@ -68,7 +68,6 @@ import 'package:web_socket_channel/web_socket_channel.dart'
 
 import 'backoff.dart';
 import 'client_config.dart';
-import 'client_sub_apis.dart' show DataServiceMethods;
 import 'clock_offset.dart';
 import 'deadline.dart';
 import 'freshness_watchdog.dart';

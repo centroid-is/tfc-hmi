@@ -35,8 +35,6 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 import 'package:tfc_relay_client/src/client_config.dart';
-import 'package:tfc_relay_client/src/client_sub_apis.dart'
-    show DataServiceMethods;
 import 'package:tfc_relay_client/src/connection_supervisor.dart';
 import 'package:tfc_relay_client/src/failure_taxonomy.dart';
 import 'package:tfc_relay_client/src/remote_state_man.dart';

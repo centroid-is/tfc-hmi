@@ -50,55 +50,11 @@ import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 /// The wire names of the data services.
 ///
-/// Declared here and not in `tfc_relay_protocol`'s [Methods], because
-/// `api_surface_test.dart` freezes that table against a hand-written literal so
-/// each addition is a deliberate edit to a test that explains its cost. Phase 10
-/// is the phase that pays it; these are the names it will register, taken from
-/// the contract harness's own set with its `harness.` prefix removed.
-abstract final class DataServiceMethods {
-  static const browseFetchRoots = 'browse.fetchRoots';
-  static const browseFetchChildren = 'browse.fetchChildren';
-  static const browseFetchDetail = 'browse.fetchDetail';
-  static const browseResolvePath = 'browse.resolvePath';
-
-  static const timeseriesQuery = 'timeseries.queryTimeseriesData';
-  static const timeseriesQueryMultiple =
-      'timeseries.queryTimeseriesDataMultiple';
-  static const timeseriesQueryDownsampled =
-      'timeseries.queryTimeseriesDataDownsampled';
-  static const timeseriesCountMultiple = 'timeseries.countTimeseriesDataMultiple';
-
-  static const historyCreateView = 'historyViews.createHistoryView';
-  static const historyUpdateView = 'historyViews.updateHistoryView';
-  static const historyDeleteView = 'historyViews.deleteHistoryView';
-  static const historySelectViews = 'historyViews.selectHistoryViews';
-  static const historyGetKeys = 'historyViews.getHistoryViewKeys';
-  static const historyGetGraphs = 'historyViews.getHistoryViewGraphs';
-  static const historyGetKeyNames = 'historyViews.getHistoryViewKeyNames';
-  static const historyAddPeriod = 'historyViews.addHistoryViewPeriod';
-  static const historyDeletePeriod = 'historyViews.deleteHistoryViewPeriod';
-  static const historyListPeriods = 'historyViews.listHistoryViewPeriods';
-  static const historyRetentionHorizon = 'historyViews.getGlobalRetentionHorizon';
-
-  static const prefGetKeys = 'preferences.getKeys';
-  static const prefGetAll = 'preferences.getAll';
-  static const prefGetBool = 'preferences.getBool';
-  static const prefGetInt = 'preferences.getInt';
-  static const prefGetDouble = 'preferences.getDouble';
-  static const prefGetString = 'preferences.getString';
-  static const prefGetStringList = 'preferences.getStringList';
-  static const prefContainsKey = 'preferences.containsKey';
-  static const prefSetBool = 'preferences.setBool';
-  static const prefSetInt = 'preferences.setInt';
-  static const prefSetDouble = 'preferences.setDouble';
-  static const prefSetString = 'preferences.setString';
-  static const prefSetStringList = 'preferences.setStringList';
-  static const prefRemove = 'preferences.remove';
-  static const prefClear = 'preferences.clear';
-
-  /// The gateway's notification that a preference changed somewhere else.
-  static const preferencesChanged = 'preferences.changed';
-}
+/// Phase 10 moved them to `tfc_relay_protocol`'s `methods.dart`, where the
+/// gateway can reach them too; re-exported here so call sites that took them
+/// from this file still find them.
+export 'package:tfc_relay_protocol/tfc_relay_protocol.dart'
+    show DataServiceMethods;
 
 /// The JSON-RPC error code a stored value of the wrong type comes back under.
 ///
