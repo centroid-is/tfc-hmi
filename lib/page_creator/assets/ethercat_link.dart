@@ -22,7 +22,9 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 import '../../providers/state_man.dart';
 import '../../theme.dart' show HmiStateColors;
 import '../../widgets/hit_boundary.dart' show AssetHitShape;
+import '../../widgets/panes/side_pane.dart';
 import 'common.dart';
+import 'ethercat_link_pane.dart';
 import 'ethercat_link_painter.dart';
 import 'link_anchors.dart';
 import 'link_geometry.dart';
@@ -43,6 +45,12 @@ abstract final class LinkFields {
   static const lostLinks = 'p_stat_udiLostLinks';
   static const minutesSinceError = 'p_stat_udiMinutesSinceLastError';
   static const availabilityPct = 'p_stat_rAvailabilityPct';
+
+  /// `ST_Counter` of errors over rolling windows.
+  static const errorRate = 'p_stat_ErrorRate';
+
+  /// The window worth showing: what this cable has done in the last hour.
+  static const errorRateHour = 'Minute60';
   static const resetCounters = 'p_cmd_xResetCounters';
 }
 
@@ -61,6 +69,7 @@ class EtherCatLinkState {
     required this.lostLinks,
     required this.minutesSinceError,
     required this.availabilityPct,
+    required this.errorsLastHour,
   });
 
   final bool linkUp;
@@ -75,6 +84,13 @@ class EtherCatLinkState {
   final int lostLinks;
   final int minutesSinceError;
   final double availabilityPct;
+
+  /// Errors on this cable in the last hour.
+  ///
+  /// The number that decides whether anybody walks out to it. A lifetime
+  /// total says what this cable has ever done; forty errors two years ago and
+  /// forty this morning are the same total and completely different cables.
+  final int errorsLastHour;
 
   /// Decodes an `ST_EtherCATLink_HMI`, or null when [value] is not one.
   ///
@@ -96,6 +112,7 @@ class EtherCatLinkState {
       lostLinks: _int(value, LinkFields.lostLinks),
       minutesSinceError: _int(value, LinkFields.minutesSinceError),
       availabilityPct: _double(value, LinkFields.availabilityPct),
+      errorsLastHour: _rate(value, LinkFields.errorRateHour),
     );
   }
 
@@ -120,6 +137,15 @@ class EtherCatLinkState {
   static int _int(DynamicValue v, String f) => v.contains(f) ? v[f].asInt : 0;
   static double _double(DynamicValue v, String f) =>
       v.contains(f) ? v[f].asDouble : 0;
+
+  /// A window off the nested `ST_Counter`, guarded twice: the struct may not
+  /// carry the counter at all on an older PLC revision.
+  static int _rate(DynamicValue v, String window) {
+    if (!v.contains(LinkFields.errorRate)) return 0;
+    final counter = v[LinkFields.errorRate];
+    if (!counter.isObject || !counter.contains(window)) return 0;
+    return counter[window].asInt;
+  }
 }
 
 /// Formats a span of minutes the way an operator reads an uptime.
@@ -300,6 +326,75 @@ class _EtherCatLinkState extends ConsumerState<EtherCatLink> {
   Stream<DynamicValue>? _stream;
   String? _subscribedTo;
 
+  /// Last decode, for the pane. The pane is opened from a tap rather than
+  /// rebuilt with the widget, so it needs somewhere to read the current
+  /// values from that is not a StreamBuilder snapshot.
+  EtherCatLinkState? _last;
+
+  /// How long `p_cmd_xResetCounters` is held high. Long enough to survive a
+  /// slow OPC UA round trip and the PLC scan behind it, short enough that an
+  /// operator sees one press rather than a latched switch -- the same reason
+  /// [kEl9222ResetPulse] is what it is.
+  static const _resetPulse = Duration(milliseconds: 400);
+
+  /// Pulses the reset bit. Nothing in the PLC clears it, so the HMI owns the
+  /// whole edge.
+  Future<void> _resetCounters() async {
+    final key = widget.config.key;
+    if (key.isEmpty) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final sm = await ref.read(stateManProvider.future);
+    const readTimeout = Duration(seconds: 5);
+
+    Future<void> set(bool level) async {
+      final latest = await sm.read(key).timeout(readTimeout);
+      final next = DynamicValue.from(latest);
+      next[LinkFields.resetCounters] = level;
+      await sm.write(key, next);
+    }
+
+    try {
+      await set(true);
+      await Future<void>.delayed(_resetPulse);
+    } catch (e) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Counter reset failed: $e')),
+      );
+    } finally {
+      try {
+        await set(false);
+      } catch (e) {
+        messenger?.showSnackBar(
+          SnackBar(
+            content: Text(
+              'The reset bit is stuck on -- clear it before the next '
+              'reset: $e',
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  void _openPane() {
+    final label = widget.config.text;
+    showSidePane(
+      context: context,
+      id: 'ethercat-link-${widget.config.ensureId()}',
+      builder: (paneContext) => SidePane(
+        title: label?.isNotEmpty == true ? label! : 'EtherCAT link',
+        subtitle: 'Cable',
+        icon: Icons.cable,
+        status: etherCatLinkPaneStatus(_last?.health ??
+            (widget.config.key.isEmpty ? LinkHealth.idle : LinkHealth.unknown)),
+        child: EtherCatLinkPaneBody(
+          state: _last,
+          onResetCounters: widget.config.key.isEmpty ? null : _resetCounters,
+        ),
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -339,6 +434,7 @@ class _EtherCatLinkState extends ConsumerState<EtherCatLink> {
         final value = snap.data;
         if (value == null) return _paint(context, LinkHealth.idle);
         final state = EtherCatLinkState.tryParse(value);
+        _last = state;
         // A node that is not the struct is not something to guess at.
         return _paint(context, state?.health ?? LinkHealth.unknown);
       },
@@ -386,9 +482,16 @@ class _EtherCatLinkState extends ConsumerState<EtherCatLink> {
 
       return AssetHitShape(
         shape: painter.outline,
-        child: CustomPaint(
-          painter: painter,
-          size: Size(constraints.maxWidth, constraints.maxHeight),
+        child: GestureDetector(
+          // deferToChild, so the painter's own hitTest decides. Opaque would
+          // put the cable's whole rectangle -- most of the page -- in front
+          // of the equipment it runs past.
+          behavior: HitTestBehavior.deferToChild,
+          onTap: _openPane,
+          child: CustomPaint(
+            painter: painter,
+            size: Size(constraints.maxWidth, constraints.maxHeight),
+          ),
         ),
       );
     });

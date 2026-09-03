@@ -33,6 +33,7 @@ DynamicValue struct({
   int connectedMinutes = 0,
   int connectCount = 1,
   int crcErrors = 0,
+  int? errorsLastHour,
 }) {
   final v = DynamicValue(value: {
     LinkFields.linkUp: DynamicValue(value: linkUp),
@@ -42,6 +43,10 @@ DynamicValue struct({
     LinkFields.connectedMinutes: DynamicValue(value: connectedMinutes),
     LinkFields.connectCount: DynamicValue(value: connectCount),
     LinkFields.crcErrors: DynamicValue(value: crcErrors),
+    if (errorsLastHour != null)
+      LinkFields.errorRate: DynamicValue(value: {
+        LinkFields.errorRateHour: DynamicValue(value: errorsLastHour),
+      }),
   });
   return v;
 }
@@ -74,6 +79,31 @@ void main() {
       expect(s!.linkUp, isTrue);
       expect(s.crcErrors, 0);
       expect(s.availabilityPct, 0);
+    });
+  });
+
+  group('rolling error rate', () {
+    test('reads the hour window off the nested counter', () {
+      // The number that decides whether anybody walks out to the cable.
+      final s = EtherCatLinkState.tryParse(
+          struct(crcErrors: 4000, errorsLastHour: 12))!;
+      expect(s.errorsLastHour, 12);
+      expect(s.crcErrors, 4000, reason: 'the lifetime total is separate');
+    });
+
+    test('a struct without the counter reads zero rather than throwing', () {
+      // An older PLC revision may not carry ST_Counter at all.
+      expect(EtherCatLinkState.tryParse(struct())!.errorsLastHour, 0);
+    });
+
+    test('a counter without that window reads zero too', () {
+      final partial = DynamicValue(value: {
+        LinkFields.linkUp: DynamicValue(value: true),
+        LinkFields.errorRate: DynamicValue(value: {
+          'Minute1': DynamicValue(value: 3),
+        }),
+      });
+      expect(EtherCatLinkState.tryParse(partial)!.errorsLastHour, 0);
     });
   });
 
