@@ -10,7 +10,8 @@ library;
 import 'package:flutter/material.dart';
 
 import 'ek1100.dart' show EthernetPortPainter;
-import 'io8.dart' show bodyColor, ioLabelColor;
+import 'hardware.dart';
+import 'io8.dart' show bodyColor, ioLabelColor, ledOffColor;
 
 /// Whether the extension's outgoing segment is up, as far as the mimic knows.
 ///
@@ -56,7 +57,8 @@ class EK1110Painter extends CustomPainter {
       Rect.fromLTWH(0, 0, size.width, size.height),
       Radius.circular(size.width * 0.06),
     );
-    canvas.drawRRect(fillRect, Paint()..color = housingColor);
+    canvas.drawRRect(
+        fillRect, housingPaint(fillRect.outerRect, housingColor));
     canvas.drawRRect(
       RRect.fromRectAndRadius(
         Rect.fromLTWH(0, 0, size.width - strokeWidth, size.height - strokeWidth),
@@ -70,42 +72,21 @@ class EK1110Painter extends CustomPainter {
     // The marker tag, when there is one, takes the band an EL terminal gives
     // it and the lamps drop below — the same order as an EL: markers on top,
     // then the lamp block.
-    final markerH = size.height * 0.06;
+    // Matches [IO8Painter]: the band is the height the marker strip is on the
+    // hardware, named or not, so a rack row lines up across every device.
+    final labelH = size.height * 0.06;
+    final markerH = labelH;
     double lampTop = pad;
     if (markerLabel.isNotEmpty) {
       final rect = Rect.fromLTWH(pad, pad, size.width - pad * 2, markerH);
-      canvas.drawRect(rect, Paint()..color = ioLabelColor);
-      canvas.drawRect(rect, stroke);
-
-      // Shrink to fit before ellipsizing, as [IO8Painter] does: plant ids are
-      // told apart by their tail and an ellipsis eats exactly that.
-      TextPainter layoutAt(double fs, {bool clamp = false}) => TextPainter(
-            text: TextSpan(
-              text: markerLabel,
-              style: TextStyle(
-                color: Colors.black,
-                fontSize: fs,
-                fontWeight: FontWeight.bold,
-                fontFamily: 'Roboto',
-              ),
-            ),
-            maxLines: 1,
-            ellipsis: '…',
-            textAlign: TextAlign.center,
-            textDirection: TextDirection.ltr,
-          )..layout(
-              minWidth: clamp ? rect.width : 0,
-              maxWidth: clamp ? rect.width : double.infinity,
-            );
-
-      final avail = rect.width - pad;
-      double fs = markerH * 0.7;
-      while (fs > markerH * 0.32 && layoutAt(fs).width > avail) {
-        fs -= markerH * 0.04;
-      }
-      final tp = layoutAt(fs, clamp: true);
-      tp.paint(canvas, Offset(rect.left, rect.top + (rect.height - tp.height) / 2));
-
+      paintMarkerTag(
+        canvas,
+        rect,
+        markerLabel,
+        color: ioLabelColor,
+        strokeWidth: strokeWidth,
+        minFontSize: labelH * 0.34,
+      );
       lampTop = rect.bottom + pad * 0.6;
     }
 
@@ -115,8 +96,14 @@ class EK1110Painter extends CustomPainter {
     for (int i = 0; i < 2; i++) {
       final rect =
           Rect.fromLTWH(pad + i * (lampW + pad), lampTop, lampW, lampH);
-      canvas.drawRect(rect, Paint()..color = _lampColor);
-      canvas.drawRect(rect, stroke);
+      paintLed(
+        canvas,
+        RRect.fromRectAndRadius(rect, Radius.circular(lampH * 0.25)),
+        color: _lampColor,
+        lit: link == EK1110Link.up,
+        strokeWidth: strokeWidth,
+        border: stroke,
+      );
     }
 
     // The RJ45, centred on the upper third — where it sits on the real part.
@@ -163,8 +150,8 @@ class EK1110Painter extends CustomPainter {
 
   Color get _lampColor => switch (link) {
         EK1110Link.up => const Color(0xFF6CA545),
-        EK1110Link.down => const Color(0xFFCCCCCC),
-        EK1110Link.unknown => const Color(0xFFE8E8E8),
+        EK1110Link.down => ledOffColor,
+        EK1110Link.unknown => const Color(0xFF5C6462),
       };
 
   @override

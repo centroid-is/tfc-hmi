@@ -23,10 +23,10 @@ library;
 import 'package:flutter/material.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 
-import '../../painter/beckhoff/ep_box.dart' show epBoxChannelCount;
+import '../../painter/beckhoff/ep_box.dart'
+    show epBoxBodyColor, epBoxChannelCount;
 import 'io_pane.dart' show IoChannelEntry, IoChannelList;
-import '../../painter/beckhoff/io8.dart'
-    show IOState, bodyColor, twinSafeBodyColor;
+import '../../painter/beckhoff/io8.dart' show IOState, twinSafeBodyColor;
 import '../../theme.dart' show HmiStateColors;
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
@@ -47,7 +47,12 @@ enum EPBoxVariant {
 
   const EPBoxVariant(this.model, this.blurb, this.paneSubtitle);
 
-  /// Printed on the housing and used in the palette.
+  /// Printed on the housing, and used in the palette.
+  ///
+  /// Without the `-0002` variant suffix the real moulding carries. It is the
+  /// same on every box of a type, so on a 30 mm-wide drawing it is four
+  /// characters that never tell you anything, taking width from the tag that
+  /// does.
   final String model;
 
   /// The line beside the model in the configure form's picker, where there
@@ -66,8 +71,11 @@ enum EPBoxVariant {
   bool get isLive => this == EPBoxVariant.ep2338;
 
   /// Beckhoff paints TwinSAFE hardware yellow and everything else cream.
+  /// TwinSAFE boxes are yellow; every other EtherCAT Box is the anthracite
+  /// die-cast [epBoxBodyColor], not the EL terminals' light grey — they are a
+  /// different part in a different material and the photos are unambiguous.
   Color get housingColor =>
-      this == EPBoxVariant.ep1918 ? twinSafeBodyColor : bodyColor;
+      this == EPBoxVariant.ep1918 ? twinSafeBodyColor : epBoxBodyColor;
 }
 
 /// What to call channel [channel] (1..8) — the PLC's own name for it.

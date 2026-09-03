@@ -5,9 +5,9 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/beckhoff.dart';
 import 'package:tfc/page_creator/assets/ep_box.dart';
 import 'package:tfc/painter/beckhoff/ep_box.dart'
-    show EPBoxWidget, epBoxSocketCount;
+    show EPBoxWidget, epBoxBodyColor, epBoxSocketCount;
 import 'package:tfc/painter/beckhoff/io8.dart'
-    show IOState, bodyColor, twinSafeBodyColor;
+    show IOState, twinSafeBodyColor;
 import 'package:tfc/providers/state_man.dart' show stateManProvider;
 import 'package:tfc/widgets/panes/side_pane.dart';
 import 'package:tfc_dart/core/state_man.dart' show StateMan;
@@ -54,9 +54,12 @@ void main() {
       expect(EPBoxVariant.ep1918.isLive, isFalse);
     });
 
-    test('the TwinSAFE box is yellow and the combi box is not', () {
+    test('the TwinSAFE box is yellow and the combi box is anthracite', () {
       expect(EPBoxVariant.ep1918.housingColor, twinSafeBodyColor);
-      expect(EPBoxVariant.ep2338.housingColor, bodyColor);
+      // Not the EL terminals' light grey: an EtherCAT Box is a die-cast IP67
+      // part and wears its own colour, so a page carrying both does not read
+      // as one family of hardware.
+      expect(EPBoxVariant.ep2338.housingColor, epBoxBodyColor);
     });
   });
 

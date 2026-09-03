@@ -16,6 +16,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'ek1100.dart' show EthernetPortPainter;
+import 'hardware.dart';
 import 'io8.dart' show bodyColor;
 
 /// Front face of the housing in mm, from the CU2508 documentation: the box is
@@ -53,17 +54,11 @@ class CU2508Painter extends CustomPainter {
     canvas.translate(dx, dy);
     canvas.scale(scale);
 
-    final stroke = Paint()
-      ..color = Colors.grey.shade700
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.6;
-
     final body = RRect.fromRectAndRadius(
       Rect.fromLTWH(0, 0, design.width, design.height),
       const Radius.circular(2),
     );
-    canvas.drawRRect(body, Paint()..color = housingColor);
-    canvas.drawRRect(body, stroke);
+    paintHousing(canvas, body, color: housingColor, strokeWidth: 0.6);
 
     void text(
       String value,
@@ -101,11 +96,16 @@ class CU2508Painter extends CustomPainter {
     // Supply terminal, two poles, top right. The box is fed 24 V DC.
     const supplyLeft = 108.0;
     for (int i = 0; i < 2; i++) {
+      // A screw terminal: a block sunk into the front with the conductor
+      // bore in it, rather than a light square with a light circle on top.
       final rect = Rect.fromLTWH(supplyLeft + i * 17.0, 5, 14, 12);
-      canvas.drawRect(rect, Paint()..color = Colors.grey.shade300);
-      canvas.drawRect(rect, stroke);
-      canvas.drawCircle(rect.center, 3.2, Paint()..color = Colors.grey.shade400);
-      canvas.drawCircle(rect.center, 3.2, stroke);
+      paintRecess(
+        canvas,
+        RRect.fromRectAndRadius(rect, const Radius.circular(0.8)),
+        face: const Color(0xFFD2D0C8),
+        strokeWidth: 0.6,
+      );
+      paintContactHole(canvas, rect.center, 3.6, strokeWidth: 0.6);
       text(
         i == 0 ? '24V' : '0V',
         Offset(supplyLeft + i * 17.0, 18),
