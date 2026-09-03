@@ -26,6 +26,8 @@ export 'src/value_listenable.dart';
 export 'src/value_store.dart';
 export 'src/browse.dart';
 export 'src/timeseries.dart';
+export 'src/series_address.dart';
+export 'src/result_too_large.dart';
 export 'src/history_view.dart';
 export 'src/ulid.dart';
 export 'src/preferences_api.dart';
