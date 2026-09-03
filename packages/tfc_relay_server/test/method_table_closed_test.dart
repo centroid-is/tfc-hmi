@@ -41,6 +41,10 @@
 library;
 
 import 'dart:io';
+// The parameter sweep is about the *declarations* of four interfaces, so it
+// reads them the way `api_surface_test.dart:171-194` does. Restating their
+// parameter lists here would restate exactly the thing that must not drift.
+import 'dart:mirrors';
 
 import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
@@ -129,6 +133,163 @@ Set<String> leversOnTheWire(Set<String> ledger) => {
 String _unprefixed(String name) => name.startsWith(HarnessMethods.prefix)
     ? name.substring(HarnessMethods.prefix.length)
     : name;
+
+/// Tokens that mark a **method name** as taking a statement.
+///
+/// Mechanical, and this file says plainly that it is the weak half.
+/// `api_surface_test.dart:259-273` runs the same sweep over the interfaces;
+/// this is that sweep re-run over the names that are actually on the wire,
+/// which is where a method a client can call has to be counted.
+///
+/// `query(` cannot fire on any name here — nothing on this wire has a
+/// parenthesis in it — and it is kept anyway because ROADMAP criterion 4 names
+/// `query(sql)` literally and a reader looking for that string should find it
+/// at the check rather than only in a plan. That it cannot fire is the honest
+/// summary of this arm: **a name pattern cannot tell `queryTimeseriesData`
+/// from a method that takes a statement**, because the difference is in the
+/// parameters and not in the word "query" (10-RESEARCH §A.4). The parameter
+/// sweep below is the one carrying the property.
+const _statementNameTokens = <String>[
+  'sql',
+  'rawquery',
+  'raw',
+  'query(',
+  'exec',
+  'statement',
+];
+
+/// Tokens that mark a **parameter name** as a fragment of a statement.
+///
+/// Five of the six are the words a fragment arrives under: `sql`, `where`,
+/// `expression`, `statement`, `raw`.
+///
+/// The sixth is `orderby`, and it is here deliberately rather than as an
+/// oversight. `ORDER BY` is a SQL clause exactly as `WHERE` is, and
+/// `TimeseriesApi` really does take one from the client
+/// (`state_man_api.dart:269-275`) — so a token list that omitted it would
+/// report this wire clean while a caller-supplied clause crosses it. It is
+/// swept and then exempted **by name** in [exemptParameters], which is the
+/// only shape that leaves the decision visible: an omitted token is a decision
+/// nobody can see, and an exemption is a decision with an argument attached.
+const _statementParameterTokens = <String>[
+  'sql',
+  'where',
+  'expression',
+  'statement',
+  'raw',
+  'orderby',
+];
+
+/// The four interfaces whose parameters cross this wire.
+const _wireInterfaces = <Type>[
+  BrowseApi,
+  TimeseriesApi,
+  HistoryViewApi,
+  PreferencesApi,
+];
+
+/// How long an exemption's argument has to be before it counts as one.
+///
+/// `gate_manifest_test.dart:117`'s `_deviationReasonFloor`, and the same
+/// reason: this is a claim of the form "the sweep does not cover this and here
+/// is why that is right", which needs the argument rather than a label.
+const _exemptionArgumentFloor = 60;
+
+/// The parameters that trip [_statementParameterTokens] and are allowed to.
+///
+/// **Exactly one, and it carries its own guard's address.** `orderBy` is a
+/// free-text-looking parameter on the wire and there is no pretending
+/// otherwise; the only reason it is not a SQL door is the allow-list the
+/// gateway puts in front of it. Somebody who deletes that allow-list has to
+/// come through this line.
+const exemptParameters = <String, String>{
+  'orderBy': 'orderBy is refused rather than sanitized by the two-value '
+      'allow-list in lib/src/data_handlers.dart: a request may ask for '
+      'exactly "time ASC" or "time DESC" and anything else is an error before '
+      'the source is reached. It needs one, because the string is interpolated '
+      'unescaped into database_drift.dart\'s ORDER BY clause, where a subquery '
+      'is legal grammar — so "time ASC, (SELECT 1)" is not an injection that '
+      'has to escape a quote, it is simply a longer clause. Case is not '
+      'normalised and whitespace is not collapsed, because each of those is a '
+      'transformation and a transformation is the first step of a sanitizer. '
+      'Delete the allow-list and this wire ships the query(sql) RPC the '
+      'project forbids, wearing a signature nobody reads as one.',
+};
+
+/// The names in [names] that carry a [_statementNameTokens] token.
+Set<String> statementShapedNames(Iterable<String> names) => {
+      for (final name in names)
+        if (_statementNameTokens.any(name.toLowerCase().contains)) name,
+    };
+
+/// The parameters in [parameters] that carry a [_statementParameterTokens]
+/// token — **before** [exemptParameters] is applied, so the arm that proves
+/// the exemption is still needed has something to read.
+Set<String> statementShapedParameters(Iterable<String> parameters) => {
+      for (final parameter in parameters)
+        if (_statementParameterTokens.any(parameter.toLowerCase().contains))
+          parameter,
+    };
+
+/// Every parameter name declared anywhere on the four wire interfaces.
+Iterable<String> _everyWireParameter() =>
+    [for (final type in _wireInterfaces) ...declaredParameterNames(type)];
+
+/// Every parameter name declared anywhere on [type], inherited included.
+///
+/// `api_surface_test.dart:169-194` verbatim in behaviour, and the walk is the
+/// point rather than the reflection: reading `declarations` alone returns only
+/// what a class declares itself, so a `where:` arriving through a
+/// superinterface would be invisible to every arm above. That hole was found
+/// and fixed once already (WR-07) and this file has its own copy of the walk,
+/// so it gets its own regression arm against [_DerivedFixture].
+Iterable<String> declaredParameterNames(Type type) => _walkSurface(
+    type, (m) => m.parameters.map((p) => MirrorSystem.getName(p.simpleName)));
+
+/// Collects [read] over every public, non-constructor member of [type] and of
+/// everything it inherits from.
+Set<String> _walkSurface(
+    Type type, Iterable<String> Function(MethodMirror) read) {
+  final seen = <String>{};
+  final visited = <ClassMirror>{};
+
+  void walk(ClassMirror mirror) {
+    if (!visited.add(mirror)) return;
+    for (final member in mirror.declarations.values.whereType<MethodMirror>()) {
+      if (member.isConstructor || member.isPrivate) continue;
+      seen.addAll(read(member));
+    }
+    mirror.superinterfaces.forEach(walk);
+    final parent = mirror.superclass;
+    if (parent != null && parent.reflectedType != Object) walk(parent);
+  }
+
+  walk(reflectClass(type));
+  return seen;
+}
+
+/// The entries of [exemptions] whose argument is shorter than
+/// [_exemptionArgumentFloor].
+Set<String> thinlyArguedExemptions(Map<String, String> exemptions) => {
+      for (final entry in exemptions.entries)
+        if (entry.value.length < _exemptionArgumentFloor) entry.key,
+    };
+
+/// The entries of [exemptions] whose argument names no file that is on disk.
+///
+/// A citation is only worth the floor above if it resolves: the argument's job
+/// is to send the next reader to the guard, and a path that has moved sends
+/// them looking for a check that may no longer exist.
+Set<String> uncitedExemptions(Map<String, String> exemptions) => {
+      for (final entry in exemptions.entries)
+        if (!_dartPaths(entry.value).any((path) => File(path).existsSync()))
+          entry.key,
+    };
+
+/// The `*.dart` paths [argument] mentions, relative to this package root.
+Iterable<String> _dartPaths(String argument) => RegExp(r'[\w./]+\.dart')
+    .allMatches(argument)
+    .map((match) => match.group(0)!);
 
 void main() {
   group('the data-service ledger is closed in both directions', () {
