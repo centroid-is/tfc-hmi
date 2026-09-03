@@ -457,8 +457,8 @@ void main() {
     expect(link.session.subscriptions.count, 0);
   });
 
-  test('the wire surface is exactly the seventeen methods declared today, plus '
-      'the one name a client announces', () async {
+  test('the wire surface is exactly the twenty-eight methods declared today, '
+      'plus the one name a client announces', () async {
     final link = _link();
     addTearDown(link.dispose);
 
@@ -487,7 +487,19 @@ void main() {
       DataServiceMethods.timeseriesQueryMultiple,
       DataServiceMethods.timeseriesQueryDownsampled,
       DataServiceMethods.timeseriesCountMultiple,
-      // 05-05. Not an eighteenth callable name: `h` is a client→server
+      // Phase 10 plan 04, the history-view eleven. Same rule, same commit.
+      DataServiceMethods.historyCreateView,
+      DataServiceMethods.historyUpdateView,
+      DataServiceMethods.historyDeleteView,
+      DataServiceMethods.historySelectViews,
+      DataServiceMethods.historyGetKeys,
+      DataServiceMethods.historyGetGraphs,
+      DataServiceMethods.historyGetKeyNames,
+      DataServiceMethods.historyAddPeriod,
+      DataServiceMethods.historyDeletePeriod,
+      DataServiceMethods.historyListPeriods,
+      DataServiceMethods.historyRetentionHorizon,
+      // 05-05. Not a twenty-ninth callable name: `h` is a client→server
       // notification, dispatched through the same table because that is how
       // json_rpc_2 routes a frame with no id. `surface_test.dart` keeps the
       // two apart in separate literals; here the ledger is one set.
@@ -495,8 +507,9 @@ void main() {
     }, reason: 'a declared name with no handler answers METHOD_NOT_FOUND from '
         'a table claiming to carry it; a handler nobody declared is surface '
         'nobody counted. 03-08 freezes this set, 04-02 added the five value '
-        'methods to it, 10-02 the four browse ones and 10-03 the four '
-        'timeseries ones. This is the third file spelling the table out — '
+        'methods to it, 10-02 the four browse ones, 10-03 the four timeseries '
+        'ones and 10-04 the eleven history-view ones. This is the third file '
+        'spelling the table out — '
         '`surface_test.dart` holds the canonical literal, and the fact that '
         'three copies had to be edited in lockstep is itself worth the note');
   });

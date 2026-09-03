@@ -924,8 +924,9 @@ final class RelaySession {
   /// **ungated** method, and `ws_malformed_test.dart:529-593`'s pre-hello
   /// sweep is a sweep rather than a list precisely so it catches one.
   ///
-  /// 10-02 registers four of the thirty-four. 10-03 adds timeseries, 10-04 the
-  /// history views, 10-05 the preferences and the one notification they send.
+  /// 10-02 registers four of the thirty-four; 10-03 adds the timeseries four
+  /// and 10-04 the history-view eleven, which is nineteen. 10-05 adds the
+  /// preferences and the one notification they send, and closes the table.
   void _registerDataServices(DataHandlers data) {
     _on(DataServiceMethods.browseFetchRoots, data.browseFetchRoots);
     _on(DataServiceMethods.browseFetchChildren, data.browseFetchChildren);
@@ -938,6 +939,18 @@ final class RelaySession {
         data.timeseriesQueryDownsampled);
     _on(DataServiceMethods.timeseriesCountMultiple,
         data.timeseriesCountMultiple);
+    _on(DataServiceMethods.historyCreateView, data.historyCreateView);
+    _on(DataServiceMethods.historyUpdateView, data.historyUpdateView);
+    _on(DataServiceMethods.historyDeleteView, data.historyDeleteView);
+    _on(DataServiceMethods.historySelectViews, data.historySelectViews);
+    _on(DataServiceMethods.historyGetKeys, data.historyGetKeys);
+    _on(DataServiceMethods.historyGetGraphs, data.historyGetGraphs);
+    _on(DataServiceMethods.historyGetKeyNames, data.historyGetKeyNames);
+    _on(DataServiceMethods.historyAddPeriod, data.historyAddPeriod);
+    _on(DataServiceMethods.historyDeletePeriod, data.historyDeletePeriod);
+    _on(DataServiceMethods.historyListPeriods, data.historyListPeriods);
+    _on(DataServiceMethods.historyRetentionHorizon,
+        data.historyRetentionHorizon);
   }
 
   /// The client's end vanished — a graceful close, a reset, a yanked cable.

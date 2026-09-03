@@ -121,30 +121,32 @@ const _benignThrottle = 4 * 1024 * 1024;
 /// cross-check each other by text (the last case in this file), so a
 /// half-flipped pair reports a leg disagreement — the loudest failure this
 /// suite has — for a change that is actually correct on both sides.
-const int reachableThroughTheProxy = 46;
+///
+/// 43 until 10-03, whose four `timeseries.*` handlers made it 46; and 46 until
+/// 10-04, whose eleven `historyViews.*` ones make it **48** by taking the two
+/// history-view checks out of the gap list below in the commit that registered
+/// them.
+const int reachableThroughTheProxy = 48;
 
 /// Every check this leg does not pass, by name — all of them for one cause.
 ///
-/// **The gateway has no handler.** `timeseries.*`, `historyViews.*` and
-/// `preferences.*` answer -32601 method-not-found; 10-03 through 10-05 own
-/// them. The list is identical to `ws_contract_test.dart`'s, and identical on
-/// purpose: a proxy in the path cannot add or remove a handler, so any
-/// difference between the two lists is a leg that has drifted rather than a
-/// transport that behaves differently.
+/// **The gateway has no handler.** `preferences.*` answers -32601
+/// method-not-found; 10-05 owns it. The list is identical to
+/// `ws_contract_test.dart`'s, and identical on purpose: a proxy in the path
+/// cannot add or remove a handler, so any difference between the two lists is a
+/// leg that has drifted rather than a transport that behaves differently.
 ///
 /// The six `browse.*` entries were deleted in 10-02, in the same commit as the
 /// WS leg's and as the handlers themselves; the three `timeseries.*` ones went
-/// the same way in 10-03, leaving four.
+/// the same way in 10-03 and the two `historyViews.*` ones in 10-04, leaving
+/// two.
 ///
 /// These are **not** skipped and **not** red. Each is handed to
 /// `runStateManContract`'s `expectUnreachable`, which runs it and asserts it
 /// fails with exactly -32601 — so the suite is green *because* the gap is
 /// precisely what this list claims.
 const List<String> unreachableThroughTheProxy = <String>[
-  // data services — four checks: no `historyViews.*` or `preferences.*`
-  // handler.
-  'a history view survives create, list, read back and delete',
-  'a saved time window survives add, list and delete',
+  // data services — two checks: no `preferences.*` handler.
   'every typed preference round-trips and containsKey agrees',
   'a preference change reaches a second listener',
 ];

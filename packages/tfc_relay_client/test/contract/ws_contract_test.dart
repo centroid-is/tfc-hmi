@@ -48,7 +48,7 @@ const _readOnlyKey = 'ST301.CN21.SEN01.temp';
 
 /// What this leg passes today. Measured, not chosen.
 ///
-/// See [unreachableChecks] for the other 7 and why every one of them is a
+/// See [unreachableChecks] for the other 2 and why every one of them is a
 /// missing *handler* rather than a missing behaviour. The number goes **up** as
 /// the gateway grows those handlers; it must never go down without the gap list
 /// growing to match, which the arithmetic case below enforces.
@@ -110,24 +110,27 @@ const _readOnlyKey = 'ST301.CN21.SEN01.temp';
 ///
 /// **And 43 became 46 in 10-03**, by exactly the same mechanism: the four
 /// `timeseries.*` handlers landed and the three timeseries checks moved out of
-/// [unreachableChecks] in that commit. The remaining four wait on 10-04 and
-/// 10-05 (history views, preferences) and will move the same way.
+/// [unreachableChecks] in that commit. **46 became 48 in 10-04**, when the
+/// eleven `historyViews.*` handlers landed and took the two history-view
+/// checks with them. The remaining two wait on 10-05 (preferences) and will
+/// move the same way.
 ///
 /// **This number is proven to bite**, three ways rather than one. Raising it by
 /// one with the gap list unchanged fails the arithmetic case below with
-/// `Expected: <50> Actual: <51>` (run, recorded, reverted — at 43, and again
-/// at 46 in 10-03). Moving a check into the gap list to keep the arithmetic
-/// while lowering the count fails `expectUnreachable`, which rejects a named
-/// check that passes. And a reachable check that regresses fails as itself,
-/// because the suite is green only when all 46 pass.
-const int reachableChecks = 46;
+/// `Expected: <50> Actual: <51>` (run, recorded, reverted — at 43, again at 46
+/// in 10-03, and again at 48 in 10-04). Moving a check into the gap list to
+/// keep the arithmetic while lowering the count fails `expectUnreachable`,
+/// which rejects a named check that passes. And a reachable check that
+/// regresses fails as itself, because the suite is green only when all 48
+/// pass.
+const int reachableChecks = 48;
 
 /// Every check this leg does not pass, by name — all of them for one cause.
 ///
-/// **The gateway has no handler.** `historyViews.*` and `preferences.*` both
-/// answer -32601 method-not-found; 10-04 and 10-05 own them. (`browse.*` used
-/// to be here too — 10-02 landed those four and the six checks behind them left
-/// this list in the same commit — and `timeseries.*` likewise in 10-03.)
+/// **The gateway has no handler.** `preferences.*` answers -32601
+/// method-not-found; 10-05 owns it. (`browse.*` used to be here too — 10-02
+/// landed those four and the six checks behind them left this list in the same
+/// commit — `timeseries.*` likewise in 10-03, and `historyViews.*` in 10-04.)
 /// Nothing on the client
 /// side can close these: the client's sub-APIs (`client_sub_apis.dart`) already
 /// send the right methods and get told the server has never heard of them.
@@ -145,7 +148,7 @@ const int reachableChecks = 46;
 /// entries were closed the same way. [reachableChecks] records what each was.
 ///
 /// **Every entry names the handler it waits on**, in the trailing comment on
-/// its own line, and all four wait on **Phase 10**. That is deliberate
+/// its own line, and both wait on **Phase 10**. That is deliberate
 /// bookkeeping rather than decoration: "browse is missing" is a sentence
 /// nobody can act on, whereas `browse.fetchChildren` is a method name somebody
 /// implements and then deletes a line here. A reader arriving the day a
@@ -160,21 +163,14 @@ const int reachableChecks = 46;
 /// difference between "I implemented `preferences.setBool`, why is this check
 /// still red" and knowing up front that it also wants `containsKey`.
 ///
-/// **The six browse entries left this list in 10-02**, and the three
-/// timeseries ones in 10-03, deleted rather than commented out, each in the
-/// commit that registered the handlers they waited on. [reachableChecks]
-/// carries the account of what closed them.
+/// **The six browse entries left this list in 10-02**, the three timeseries
+/// ones in 10-03 and the two history-view ones in 10-04, deleted rather than
+/// commented out, each in the commit that registered the handlers they waited
+/// on. [reachableChecks] carries the account of what closed them.
 const List<String> unreachableChecks = <String>[
-  // data services — four checks. Phase 10 owns these two handler families too;
-  // the client's `ClientHistoryViewApi` and `ClientPreferencesApi` already send
-  // the exact names below (`client_sub_apis.dart:64-100`).
-  'a history view survives create, list, read back and delete',
-  //   trips on: historyViews.createHistoryView
-  //   needs:    historyViews.selectHistoryViews, .deleteHistoryView
-  'a saved time window survives add, list and delete',
-  //   trips on: historyViews.createHistoryView (the window needs a view first)
-  //   needs:    historyViews.addHistoryViewPeriod, .listHistoryViewPeriods,
-  //             .deleteHistoryViewPeriod
+  // data services — two checks. Phase 10 owns this handler family too; the
+  // client's `ClientPreferencesApi` already sends the exact names below
+  // (`client_sub_apis.dart:64-100`).
   'every typed preference round-trips and containsKey agrees',
   //   trips on: preferences.setBool
   //   needs:    the six other typed set/get pairs, preferences.containsKey

@@ -251,7 +251,8 @@ final class PolicyStateMan implements StateManApi {
       _PolicyTimeseries(source.timeseries, resolver, canSee, tally);
 
   @override
-  HistoryViewApi get historyViews => _PolicyHistoryViews(source.historyViews);
+  HistoryViewApi get historyViews =>
+      _PolicyHistoryViews(source.historyViews, canSee);
 
   @override
   PreferencesApi get preferences => _PolicyPreferences(source.preferences);
@@ -270,10 +271,10 @@ final class PolicyStateMan implements StateManApi {
 }
 
 // ---------------------------------------------------------------------------
-// The four sub-APIs. Browse filters as of 10-02 and timeseries as of 10-03;
-// the other two are still wrapped and delegating, and say so at their own
-// declarations. See the library doc for why each of those words is
-// deliberate.
+// The four sub-APIs. Browse filters as of 10-02, timeseries as of 10-03 and
+// history views as of 10-04; preferences is still wrapped and delegating, and
+// says so at its own declaration. See the library doc for why each of those
+// words is deliberate.
 // ---------------------------------------------------------------------------
 
 /// Navigating the address space, **with the hiding rule applied** (10-02).
@@ -536,49 +537,144 @@ final class _PolicyTimeseries implements TimeseriesApi {
   }
 }
 
-/// Saved history views. **Still transparent — 10-04 owns the filter**, and
-/// this class hides nothing today.
+/// Saved history views, **with the hiding rule applied** (10-04).
 ///
 /// A view is a list of *plant keys*, so unlike browse and unlike timeseries
 /// this one needs no resolver at all — [PolicyStateMan.canSee] takes the keys
-/// as they come. The rule when it lands: a view holding a hidden key comes
-/// back **without that key** rather than not at all, because a view that
-/// vanished would itself say a view exists.
+/// as they come.
+///
+/// Three rules, and the third is a decision rather than a mechanism:
+///
+///  1. **A hidden key is dropped from a view; the view itself still comes
+///     back.** A view that vanished would itself say a view exists — the
+///     operator saved it and the picker offered it a moment ago, so its
+///     disappearance is a louder statement about the key it held than the
+///     key's own absence is (T-10-13). The arm that proves the difference is
+///     the boundary one: a view **all** of whose keys are hidden comes back as
+///     a view with an *empty* key list. Every other case passes under either
+///     rule.
+///  2. **Graphs are not filtered.** A graph index is not a key and there is
+///     nothing to hide in a title or an axis unit. Filtering them alongside
+///     the keys is the plausible over-reach, and it would leave a view whose
+///     axes lost their labels for a reason nobody could find.
+///  3. **A hidden key is dropped from a *save*, silently** — see
+///     [_visibleKeys] for the cost, which is real and is written down there
+///     rather than here because that is where somebody will stand.
+///
+/// [selectHistoryViews] delegates untouched, and that is not an omission:
+/// `HistoryViewRecord` carries an id, a name and two timestamps and **no key
+/// list**, so there is nothing on it to filter. The keys live behind
+/// [getHistoryViewKeys] and [getHistoryViewKeyNames], which are the two
+/// methods that do filter.
+///
+/// Written as explicit member-by-member delegation like everything else in
+/// this file — **never `noSuchMethod`**: a forwarder would absorb an interface
+/// member added later and serve it unfiltered.
+///
+/// Under the shipped [AllVisibleOperatorWrites] this whole class is a no-op,
+/// which is why the two history-view contract checks are unchanged by it.
 final class _PolicyHistoryViews implements HistoryViewApi {
-  const _PolicyHistoryViews(this._source);
+  const _PolicyHistoryViews(this._source, this._canSee);
 
   final HistoryViewApi _source;
 
+  /// [PolicyStateMan.canSee], passed as a function rather than as the whole
+  /// decorator so this class cannot reach anything else on it.
+  final bool Function(String key) _canSee;
+
+  /// The keys of [keys] this station may see.
+  ///
+  /// ## On the way *out* this is rule 1. On the way *in* it is a decision.
+  ///
+  /// Dropping a hidden key from a **save** means an operator's save can
+  /// quietly lose a key they cannot see: they edit a view somebody else built,
+  /// press save, and a line disappears from the chart with nothing said. That
+  /// is a real cost and it is the reason this paragraph exists.
+  ///
+  /// The alternative is to refuse the save, and it is worse in two ways.
+  /// Refusing *and saying why* names the hidden key, which is the whole of
+  /// what the hiding rule closes — the same disclosure a `forbidden` refusal
+  /// is. Refusing *without* saying why turns an invisible key into an
+  /// unexplainable failure: the operator sees a save that will not go through,
+  /// on a view that looks complete to them, with no field to correct and
+  /// nothing in the message to act on. A key silently absent is at least a
+  /// difference they can see on the chart.
+  ///
+  /// Under [AllVisibleOperatorWrites] neither happens, so this is recorded for
+  /// whoever ships per-key hiding rather than chosen against evidence. When
+  /// that day comes, the honest third option is an *audit* one — save what was
+  /// asked, log what was dropped, and tell the operator "some keys were not
+  /// saved" without naming them — which needs a logging surface this gateway
+  /// does not have yet.
+  ///
+  /// The read side has no such tension: a key already stored is dropped from
+  /// the answer, and there was never anything to tell the caller.
+  List<String> _visibleKeys(List<String> keys) =>
+      keys.where(_canSee).toList();
+
   @override
   Future<int> createHistoryView(String name, List<String> keys,
-          [Map<String, HistoryViewKeyRecord>? keyConfigs,
-          Map<int, HistoryViewGraphRecord>? graphConfigs]) =>
-      _source.createHistoryView(name, keys, keyConfigs, graphConfigs);
+      [Map<String, HistoryViewKeyRecord>? keyConfigs,
+      Map<int, HistoryViewGraphRecord>? graphConfigs]) {
+    final visible = _visibleKeys(keys);
+    return _source.createHistoryView(
+        name, visible, _visibleConfigs(keyConfigs), graphConfigs);
+  }
 
   @override
   Future<void> updateHistoryView(int id, String name, List<String> keys,
-          [Map<String, HistoryViewKeyRecord>? keyConfigs,
-          Map<int, HistoryViewGraphRecord>? graphConfigs]) =>
-      _source.updateHistoryView(id, name, keys, keyConfigs, graphConfigs);
+      [Map<String, HistoryViewKeyRecord>? keyConfigs,
+      Map<int, HistoryViewGraphRecord>? graphConfigs]) {
+    final visible = _visibleKeys(keys);
+    return _source.updateHistoryView(
+        id, name, visible, _visibleConfigs(keyConfigs), graphConfigs);
+  }
+
+  /// The per-key configuration of the keys that survived [_visibleKeys].
+  ///
+  /// Filtered with them rather than passed through: a configuration entry
+  /// carries its own key, so leaving one behind would write a hidden key's
+  /// name into a row the key itself never reached.
+  Map<String, HistoryViewKeyRecord>? _visibleConfigs(
+      Map<String, HistoryViewKeyRecord>? configs) {
+    if (configs == null) return null;
+    return {
+      for (final entry in configs.entries)
+        if (_canSee(entry.key)) entry.key: entry.value,
+    };
+  }
 
   @override
   Future<void> deleteHistoryView(int id) => _source.deleteHistoryView(id);
 
+  /// Delegates. See the class doc: there are no keys on a
+  /// [HistoryViewRecord] to filter, and the view itself is never hidden.
   @override
   Future<List<HistoryViewRecord>> selectHistoryViews() =>
       _source.selectHistoryViews();
 
   @override
-  Future<Map<String, HistoryViewKeyRecord>> getHistoryViewKeys(int viewId) =>
-      _source.getHistoryViewKeys(viewId);
+  Future<Map<String, HistoryViewKeyRecord>> getHistoryViewKeys(
+      int viewId) async {
+    final keys = await _source.getHistoryViewKeys(viewId);
+    return {
+      for (final entry in keys.entries)
+        if (_canSee(entry.key)) entry.key: entry.value,
+    };
+  }
 
+  /// Delegates. Rule 2: a graph index is not a key.
   @override
   Future<Map<int, HistoryViewGraphRecord>> getHistoryViewGraphs(int viewId) =>
       _source.getHistoryViewGraphs(viewId);
 
+  /// The same filter as [getHistoryViewKeys], because the two are two reads of
+  /// one row set and a caller picks whichever it needs. One fitted and the
+  /// other forgotten would hide a key from the legend and hand it to the
+  /// chart.
   @override
-  Future<List<String>> getHistoryViewKeyNames(int viewId) =>
-      _source.getHistoryViewKeyNames(viewId);
+  Future<List<String>> getHistoryViewKeyNames(int viewId) async =>
+      _visibleKeys(await _source.getHistoryViewKeyNames(viewId));
 
   @override
   Future<int> addHistoryViewPeriod(
