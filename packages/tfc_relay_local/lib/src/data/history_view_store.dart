@@ -250,10 +250,75 @@ final class HistoryViewStore implements HistoryViewApi {
     return periods;
   }
 
+  /// The oldest instant any series is still retained for, in **UTC**, or null
+  /// when nothing has been discarded yet.
+  ///
+  /// ## Mismatch 3: the instant is local upstream and the wire is UTC
+  ///
+  /// `getGlobalRetentionHorizon` builds `DateTime.now().subtract(maxDur)`
+  /// (`database_drift.dart:774`), which is local-flagged. The moment itself is
+  /// right — epoch milliseconds do not care about the flag — but `DateTime ==`
+  /// compares the flag, and anything that renders the value with
+  /// `toIso8601String` emits a wall clock with no zone on it. A chart that
+  /// draws its "no data before here" line from a horizon read as local when it
+  /// is UTC puts the line an hour or thirteen off, and an operator scrolling
+  /// past it sees absence of data as absence of events. `.toUtc()` here, at
+  /// the boundary, is the whole fix.
+  ///
+  /// ## Mismatch 4: null is three different answers, and only one of them is
+  /// good news
+  ///
+  /// Upstream returns null for **"no retention policy is installed"**, for
+  /// **"the jobs view could not be read"** (no permissions, or a database that
+  /// is not TimescaleDB at all) and for **"the connection is gone"** — one
+  /// blanket `catch (_) { return null; }` at `:775-778`. On the wire, null
+  /// means *nothing has been discarded yet*, which is the opposite of what a
+  /// permissions failure should imply
+  /// (`client_sub_apis.dart:398-408`: "'Nothing has been discarded yet' and
+  /// 'everything since the epoch is gone' are opposite answers").
+  ///
+  /// **The answer is not widened and the catch is not widened.** Null stays
+  /// null: a new exception type reaching the wire is a client-visible change,
+  /// 10-04 already decided the wire shape, and every existing client reads
+  /// null as "no horizon". What changes is that the gateway stops being
+  /// *silent* about which null it just produced. On a null answer — and only
+  /// then, so the ordinary case costs nothing — one cheap probe asks whether
+  /// `timescaledb_information.jobs` can be read at all:
+  ///
+  ///  * the probe **succeeds** → the jobs view is readable and holds no
+  ///    retention policy this gateway can parse. That is genuinely "nothing
+  ///    has been discarded yet", and it is logged as nothing at all: a line
+  ///    per panel per open is a log that rotates away the evidence of
+  ///    everything else.
+  ///  * the probe **throws** → the null was a failure, and the failure is
+  ///    logged with the exception that caused it.
+  ///
+  /// **What the probe cannot do, said plainly rather than glossed:** it is a
+  /// second query at a second moment, so a horizon query that failed
+  /// transiently and a probe that then succeeded is reported as "no policy".
+  /// The two cannot be told apart from outside without upstream distinguishing
+  /// them itself, which would be a change to `tfc_dart` that this phase does
+  /// not make. The narrowing is from three indistinguishable causes to two,
+  /// and the one it separates out — a permissions failure or a non-Timescale
+  /// database, the causes that persist — is the one an operator can act on.
   @override
   Future<DateTime?> getGlobalRetentionHorizon() async {
-    database() ?? _noHistorian();
-    throw UnsupportedError('10-08 task 3 owes getGlobalRetentionHorizon');
+    final db = (database() ?? _noHistorian()).db;
+    final horizon = await db.getGlobalRetentionHorizon();
+    if (horizon != null) return horizon.toUtc();
+
+    try {
+      await db.customSelect('SELECT 1 FROM timescaledb_information.jobs '
+          'LIMIT 1').get();
+    } catch (error) {
+      log?.call('the retention horizon could not be determined and is being '
+          'reported as "nothing has been discarded yet", which may be wrong: '
+          'reading timescaledb_information.jobs failed with $error. A chart '
+          'will draw no horizon line at all. Check that this database is '
+          'TimescaleDB, that the gateway\'s role may read the jobs view, and '
+          'that the connection is up');
+    }
+    return null;
   }
 
   /// Refuses, retryably, when the composition is holding no `Database`.

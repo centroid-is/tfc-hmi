@@ -93,10 +93,12 @@ final class LocalStateMan implements StateManApi {
     Map<String, UpstreamAddressSpace> browseSpaces =
         const <String, UpstreamAddressSpace>{},
     TimeseriesApi? timeseries,
+    HistoryViewApi? historyViews,
     DateTime Function()? now,
     int Function()? elapsedMs,
   })  : links = List<UpstreamLink>.unmodifiable(links),
         _timeseries = timeseries,
+        _historyViews = historyViews,
         browseSpaces =
             Map<String, UpstreamAddressSpace>.unmodifiable(browseSpaces),
         _now = now ?? DateTime.now,
@@ -1400,12 +1402,36 @@ final class LocalStateMan implements StateManApi {
 
   final TimeseriesApi? _timeseries;
 
-  // ----------------------------------------------------------- not this phase
-
+  /// Saved history views, when this deployment has a database.
+  ///
+  /// Exactly [timeseries]'s shape and for exactly its reasons, so the two are
+  /// worth reading together. The member is **implemented**; what a gateway
+  /// with no `collection:` block lacks is a database, and 8b-01 made having
+  /// one a deliberate two-field act. So the absence is a deployment fact and
+  /// this throws a [StateError] naming the composition, **not** an
+  /// `UnimplementedError` naming a plan — which is what let
+  /// `declaredUnimplementedMembers` honestly drop from two to one in the
+  /// commit that made this true.
+  ///
+  /// Not an empty store: a view picker that answers "you have saved nothing"
+  /// to a plant that has saved plenty is an operator saving their view a
+  /// second time, and then a third.
   @override
-  HistoryViewApi get historyViews =>
-      throw UnimplementedError('10-01 owes LocalStateMan.historyViews — as '
-          'timeseries, and from the same database seam');
+  HistoryViewApi get historyViews {
+    final store = _historyViews;
+    if (store == null) {
+      throw StateError('this gateway was composed without a database, so it '
+          'has nowhere to keep a saved history view. Give it a `collection:` '
+          'block with an endpoint and `enabled: true`; a gateway with no such '
+          'block constructs no database object at all, deliberately '
+          '(collection_config.dart\'s class doc)');
+    }
+    return store;
+  }
+
+  final HistoryViewApi? _historyViews;
+
+  // ----------------------------------------------------------- not this phase
 
   @override
   PreferencesApi get preferences =>
