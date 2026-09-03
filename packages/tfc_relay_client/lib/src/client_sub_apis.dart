@@ -58,11 +58,22 @@ export 'package:tfc_relay_protocol/tfc_relay_protocol.dart'
 
 /// The JSON-RPC error code a stored value of the wrong type comes back under.
 ///
+/// The gateway's `ServerErrorCodes.typeMismatch` (`error_codes.dart:94-100`).
+///
 /// Declared here rather than imported for the reason `connection_supervisor`
 /// gives about the version-mismatch code: the number is the contract, and a
 /// production file may not reach into a package this one depends on only for
 /// its tests.
-const int _typeMismatch = -32001;
+///
+/// **It read `-32001` until Phase 10, and that was a real bug rather than a
+/// near miss.** `-32001` is the *contract harness*'s type-mismatch code
+/// (`rpc_names.dart:53`), borrowed from the kit's own peer when these classes
+/// were ported from it; on this wire it is `ServerErrorCodes.helloRequired`.
+/// So the check fired on exactly the wrong things in both directions:
+/// `PreferencesApi`'s promised `TypeError` never surfaced for a mismatch, and
+/// a call that arrived before the handshake was re-raised to a settings page
+/// as a type error about a value nobody had read.
+const int _typeMismatch = -32010;
 
 /// One request over the pipe: a method name, its parameters, its answer.
 ///
@@ -402,6 +413,14 @@ final class ClientPreferencesApi implements PreferencesApi {
   /// Called from the notification handler and nowhere else, which is what keeps
   /// "every change this reports arrived over the pipe" true rather than
   /// approximately true.
+  ///
+  /// One key at a time on purpose, even though the frame carries a list since
+  /// Phase 10: the handler fans the list out and calls this once per key, so
+  /// `onPreferencesChanged` stays a `Stream<String>` and contract check 13 is
+  /// untouched. **Do not add a buffer here.** Coalescing a burst into one
+  /// frame is the gateway's job (10-05 task 2); doing it again on this side
+  /// would delay an edit an operator is waiting to see and save nothing,
+  /// because the frames are already across.
   void announce(String key) {
     if (_changes.isClosed) return;
     _changes.add(key);

@@ -467,8 +467,11 @@ void main() {
           client.preferences.onPreferencesChanged.listen(changed.add);
       addTearDown(listening.cancel);
 
-      gateway.notifyLive(
-          DataServiceMethods.preferencesChanged, {'key': 'ui.theme'});
+      // Phase 10 migrated the frame to a key list wholesale — see
+      // `preferences_changed_test.dart` for the fan-out this case now rides.
+      gateway.notifyLive(DataServiceMethods.preferencesChanged, {
+        'keys': ['ui.theme'],
+      });
 
       await _until('the announcement to reach the stream',
           () => changed.isNotEmpty);

@@ -851,17 +851,44 @@ final class ConnectionSupervisor {
     _onBye?.call('${json['reason'] ?? 'the gateway said goodbye'}');
   }
 
-  /// A preference changed somewhere else. Carried up, never interpreted here.
+  /// Preferences changed somewhere else. Carried up, never interpreted here.
+  ///
+  /// **One frame, many keys, fanned out to one announcement each.** The frame
+  /// carried a single `"key"` until Phase 10, which made a `clear()` over five
+  /// hundred keys five hundred frames per connected client on the
+  /// un-conflated priority lane — the way a settings page evicts every panel
+  /// in the plant with `4004` (10-CONTEXT amendment 4). The list is the only
+  /// shape: both ends of this wire are in one repository and nothing is
+  /// deployed, so carrying a compatibility spelling forever would leave two
+  /// names for one frame and every future reader to work out which they are
+  /// looking at.
+  ///
+  /// **The fan-out is here; the coalescing is not.** Deciding what belongs in
+  /// one frame is the gateway's job (10-05 task 2). A second buffer on this
+  /// side would delay an edit an operator is watching for, to save nothing —
+  /// the frames it would merge have already crossed the wire.
   void _preferenceChanged(rpc.Parameters params) {
     watchdog.sawFrame(InboundFrame.update);
     final json = _asJson(sanitize(params.asMap).value);
-    final key = json['key'];
-    if (key is! String || key.isEmpty) {
-      // Refused rather than announced under a guess: a settings listener told
-      // that "null" changed goes and re-reads a preference nobody has.
-      throw FormatException('preferences.changed carried no "key"');
+    final keys = json['keys'];
+    if (keys is! List) {
+      // Refused rather than announced under a guess, exactly as a frame with
+      // no "key" was refused before: a settings listener told that "null"
+      // changed goes and re-reads a preference nobody has.
+      throw FormatException('preferences.changed carried no "keys" list');
     }
-    _onPreferenceChanged?.call(key);
+    // The whole frame or none of it. A frame this malformed came from a
+    // gateway that is not sending what it thinks it is, and announcing the
+    // readable half would hide that while leaving the other key stale.
+    for (final key in keys) {
+      if (key is! String || key.isEmpty) {
+        throw FormatException(
+            'preferences.changed named something that is not a key: $key');
+      }
+    }
+    for (final key in keys) {
+      _onPreferenceChanged?.call('$key');
+    }
   }
 
   /// Wraps a handler body in the pre-substituted armor.
