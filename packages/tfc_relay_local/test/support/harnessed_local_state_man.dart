@@ -88,6 +88,7 @@ library;
 import 'dart:async';
 
 import 'package:tfc_relay_local/tfc_relay_local.dart';
+import 'package:tfc_relay_local/src/data/preference_store.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 
@@ -255,7 +256,28 @@ final class _ScriptedAddressSpace implements UpstreamAddressSpace {
 /// `addTearDown`. The links connect eagerly here rather than in a `setUp`
 /// because `runStateManContract` takes a synchronous factory and a case that
 /// had to remember to `await start()` would be a case that could forget.
-StateManApi makeHarnessedLocalStateMan() {
+StateManApi makeHarnessedLocalStateMan() => buildHarnessedLocalStateMan();
+
+/// The same subject, optionally with the three data services behind it.
+///
+/// Two legs share this body and differ in exactly one thing: whether a
+/// database was composed in. `contract_test.dart` passes nothing and stays in
+/// the pure lane; `contract_db_test.dart` passes a `TimescaleReader`, a
+/// `HistoryViewStore` and a `PreferenceStore` over a real TimescaleDB and a
+/// [recorder] that puts rows in front of the reader.
+///
+/// [recorder] is the async half of [StateManDataHarness.seedTimeseries]. The
+/// kit's lever returns `void` — it was written for an in-memory fake, where
+/// recording a sample is a map assignment — and a real recorder is a database
+/// round trip. See [HarnessedLocalStateMan.seedTimeseries] for how the two are
+/// reconciled without the case having to know.
+StateManApi buildHarnessedLocalStateMan({
+  TimeseriesApi? timeseries,
+  HistoryViewApi? historyViews,
+  PreferenceStore? preferences,
+  Future<void> Function(String tableName, List<TimeseriesData> points)?
+      recorder,
+}) {
   final plant = FakeUpstreamLink(
     alias: contractPlantAlias,
     keys: contractPlantKeys(),
@@ -301,7 +323,11 @@ StateManApi makeHarnessedLocalStateMan() {
 
 /// `LocalStateMan` plus the test-only control surface, and nothing else.
 final class HarnessedLocalStateMan
-    implements StateManApi, StateManHarness, StateManWriteHarness {
+    implements
+        StateManApi,
+        StateManHarness,
+        StateManWriteHarness,
+        StateManDataHarness {
   HarnessedLocalStateMan(
     this._man, {
     required FakeUpstreamLink plant,
@@ -468,6 +494,16 @@ final class HarnessedLocalStateMan
   /// that can tell a re-issue from a re-try: `LocalStateMan._crossIntoThePlant`
   /// is one call site and `freeze_test.dart` pins it at one, but a pin counts
   /// call sites in source and this counts crossings at runtime.
+  // -------------------------------------------------- the data-harness lever
+
+  @override
+  void seedTimeseries(String tableName, List<TimeseriesData> points) {
+    throw UnimplementedError(
+        'this leg has no recorder: 10-11 task 1 owes the database-backed '
+        'seeding lever. Until it lands, the only way to put a sample in '
+        'front of the reader is to compose one.');
+  }
+
   @override
   int upstreamWriteAttempts(String cmd) {
     var total = 0;
