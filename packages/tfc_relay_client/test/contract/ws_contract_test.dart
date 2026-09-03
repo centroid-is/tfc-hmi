@@ -106,24 +106,29 @@ const _readOnlyKey = 'ST301.CN21.SEN01.temp';
 /// `expectUnreachableMethod` runs a named check and *fails* when it succeeds
 /// (`check.dart:88-94`), so the instant `browse.fetchRoots` answered, leaving a
 /// browse sentence in the list below would have reported a passing check as a
-/// failure. The remaining seven wait on 10-03 through 10-05 (timeseries,
-/// history views, preferences) and will move the same way.
+/// failure.
 ///
-/// **This number is proven to bite**, three ways rather than one. Raising it to
-/// 44 with the gap list unchanged fails the arithmetic case below with
-/// `Expected: <50> Actual: <51>` (run, recorded, reverted). Moving a check into
-/// the gap list to keep the arithmetic while lowering the count fails
-/// `expectUnreachable`, which rejects a named check that passes. And a
-/// reachable check that regresses fails as itself, because the suite is green
-/// only when all 43 pass.
-const int reachableChecks = 43;
+/// **And 43 became 46 in 10-03**, by exactly the same mechanism: the four
+/// `timeseries.*` handlers landed and the three timeseries checks moved out of
+/// [unreachableChecks] in that commit. The remaining four wait on 10-04 and
+/// 10-05 (history views, preferences) and will move the same way.
+///
+/// **This number is proven to bite**, three ways rather than one. Raising it by
+/// one with the gap list unchanged fails the arithmetic case below with
+/// `Expected: <50> Actual: <51>` (run, recorded, reverted — at 43, and again
+/// at 46 in 10-03). Moving a check into the gap list to keep the arithmetic
+/// while lowering the count fails `expectUnreachable`, which rejects a named
+/// check that passes. And a reachable check that regresses fails as itself,
+/// because the suite is green only when all 46 pass.
+const int reachableChecks = 46;
 
 /// Every check this leg does not pass, by name — all of them for one cause.
 ///
-/// **The gateway has no handler.** `timeseries.*`, `historyViews.*` and
-/// `preferences.*` all answer -32601 method-not-found; 10-03 through 10-05 own
-/// them. (`browse.*` used to be here too — 10-02 landed those four and the six
-/// checks behind them left this list in the same commit.) Nothing on the client
+/// **The gateway has no handler.** `historyViews.*` and `preferences.*` both
+/// answer -32601 method-not-found; 10-04 and 10-05 own them. (`browse.*` used
+/// to be here too — 10-02 landed those four and the six checks behind them left
+/// this list in the same commit — and `timeseries.*` likewise in 10-03.)
+/// Nothing on the client
 /// side can close these: the client's sub-APIs (`client_sub_apis.dart`) already
 /// send the right methods and get told the server has never heard of them.
 ///
@@ -140,7 +145,7 @@ const int reachableChecks = 43;
 /// entries were closed the same way. [reachableChecks] records what each was.
 ///
 /// **Every entry names the handler it waits on**, in the trailing comment on
-/// its own line, and all seven wait on **Phase 10**. That is deliberate
+/// its own line, and all four wait on **Phase 10**. That is deliberate
 /// bookkeeping rather than decoration: "browse is missing" is a sentence
 /// nobody can act on, whereas `browse.fetchChildren` is a method name somebody
 /// implements and then deletes a line here. A reader arriving the day a
@@ -155,20 +160,14 @@ const int reachableChecks = 43;
 /// difference between "I implemented `preferences.setBool`, why is this check
 /// still red" and knowing up front that it also wants `containsKey`.
 ///
-/// **The six browse entries left this list in 10-02**, deleted rather than
-/// commented out, in the commit that registered the handlers they waited on.
-/// [reachableChecks] carries the account of what closed them.
+/// **The six browse entries left this list in 10-02**, and the three
+/// timeseries ones in 10-03, deleted rather than commented out, each in the
+/// commit that registered the handlers they waited on. [reachableChecks]
+/// carries the account of what closed them.
 const List<String> unreachableChecks = <String>[
-  // data services — seven checks. Phase 10 owns these three handler families
-  // too; the client's `ClientTimeseriesApi`, `ClientHistoryViewApi` and
-  // `ClientPreferencesApi` already send the exact names below
-  // (`client_sub_apis.dart:64-100`).
-  'a recorded series comes back inside the window, oldest first',
-  //   trips on: timeseries.queryTimeseriesData
-  'every requested series gets an entry, including the silent ones',
-  //   trips on: timeseries.queryTimeseriesDataMultiple
-  'a downsampled series is bounded and still reaches both ends of the window',
-  //   trips on: timeseries.queryTimeseriesDataDownsampled
+  // data services — four checks. Phase 10 owns these two handler families too;
+  // the client's `ClientHistoryViewApi` and `ClientPreferencesApi` already send
+  // the exact names below (`client_sub_apis.dart:64-100`).
   'a history view survives create, list, read back and delete',
   //   trips on: historyViews.createHistoryView
   //   needs:    historyViews.selectHistoryViews, .deleteHistoryView

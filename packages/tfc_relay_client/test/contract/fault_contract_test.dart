@@ -121,7 +121,7 @@ const _benignThrottle = 4 * 1024 * 1024;
 /// cross-check each other by text (the last case in this file), so a
 /// half-flipped pair reports a leg disagreement — the loudest failure this
 /// suite has — for a change that is actually correct on both sides.
-const int reachableThroughTheProxy = 43;
+const int reachableThroughTheProxy = 46;
 
 /// Every check this leg does not pass, by name — all of them for one cause.
 ///
@@ -133,18 +133,16 @@ const int reachableThroughTheProxy = 43;
 /// transport that behaves differently.
 ///
 /// The six `browse.*` entries were deleted in 10-02, in the same commit as the
-/// WS leg's and as the handlers themselves.
+/// WS leg's and as the handlers themselves; the three `timeseries.*` ones went
+/// the same way in 10-03, leaving four.
 ///
 /// These are **not** skipped and **not** red. Each is handed to
 /// `runStateManContract`'s `expectUnreachable`, which runs it and asserts it
 /// fails with exactly -32601 — so the suite is green *because* the gap is
 /// precisely what this list claims.
 const List<String> unreachableThroughTheProxy = <String>[
-  // data services — seven checks: no `timeseries.*`, `historyViews.*` or
-  // `preferences.*` handler.
-  'a recorded series comes back inside the window, oldest first',
-  'every requested series gets an entry, including the silent ones',
-  'a downsampled series is bounded and still reaches both ends of the window',
+  // data services — four checks: no `historyViews.*` or `preferences.*`
+  // handler.
   'a history view survives create, list, read back and delete',
   'a saved time window survives add, list and delete',
   'every typed preference round-trips and containsKey agrees',
