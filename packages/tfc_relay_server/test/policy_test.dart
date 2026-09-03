@@ -60,6 +60,7 @@ import 'package:tfc_relay_server/src/error_codes.dart';
 import 'package:tfc_relay_server/src/health/session_health_state_man.dart';
 import 'package:tfc_relay_server/src/policy/key_policy.dart';
 import 'package:tfc_relay_server/src/policy/policy_state_man.dart';
+import 'package:tfc_relay_server/src/policy/series_mapping_tally.dart';
 import 'package:tfc_relay_server/src/relay_server.dart';
 import 'package:tfc_relay_server/src/relay_session.dart';
 import 'package:tfc_relay_server/src/server_config.dart';
@@ -251,6 +252,63 @@ final class _HidesTags implements KeyPolicy {
       identity.role == Role.operate;
 }
 
+/// A preference store that writes down every mutation it is asked to make.
+///
+/// The lever the pre-effect property needs. "The write was refused" is cheap to
+/// assert and easy to satisfy by accident — a gate that throws *after* calling
+/// the store refuses just as visibly — so what the arms below actually assert
+/// is that the store was never touched, and that needs a store that counts.
+///
+/// Extends [FakePreferences] rather than reimplementing [PreferencesApi]: the
+/// reads have to be real for the read arms to mean anything, and
+/// `FakeStateMan` takes the concrete type.
+final class _RecordingPreferences extends FakePreferences {
+  /// The mutators called on this store, in order, by name.
+  final writes = <String>[];
+
+  @override
+  Future<void> setBool(String key, bool value) {
+    writes.add('setBool');
+    return super.setBool(key, value);
+  }
+
+  @override
+  Future<void> setInt(String key, int value) {
+    writes.add('setInt');
+    return super.setInt(key, value);
+  }
+
+  @override
+  Future<void> setDouble(String key, double value) {
+    writes.add('setDouble');
+    return super.setDouble(key, value);
+  }
+
+  @override
+  Future<void> setString(String key, String value) {
+    writes.add('setString');
+    return super.setString(key, value);
+  }
+
+  @override
+  Future<void> setStringList(String key, List<String> value) {
+    writes.add('setStringList');
+    return super.setStringList(key, value);
+  }
+
+  @override
+  Future<void> remove(String key) {
+    writes.add('remove');
+    return super.remove(key);
+  }
+
+  @override
+  Future<void> clear({Set<String>? allowList}) {
+    writes.add('clear');
+    return super.clear(allowList: allowList);
+  }
+}
+
 /// A validator that hands every session one fixed identity.
 ///
 /// Cheaper than a token file for cases whose subject is the *policy* rather
@@ -399,6 +457,21 @@ final class _Station {
     }
     fail('$what was answered instead of refused');
   }
+}
+
+/// Runs [call] expecting a refusal, and hands the refusal back.
+///
+/// `_Station.refusal`'s argument, one layer in: a call that is *answered* fails
+/// here rather than at a downstream matcher, so the report names the property
+/// rather than the assertion that tripped over it.
+Future<rpc.RpcException> _refused(
+    Future<void> Function() call, String what) async {
+  try {
+    await call();
+  } on rpc.RpcException catch (error) {
+    return error;
+  }
+  fail('$what was answered instead of refused');
 }
 
 /// One decoded JSON object, cast where the wire hands back `Object?`.
@@ -1283,6 +1356,218 @@ void main() {
       expect((await gateway.plant.historyViews.getHistoryViewKeys(id)).keys,
           [_key],
           reason: 'on the way in, as with create');
+    });
+  });
+
+  // **Preferences: reads for everyone, writes for `operate`** (10-05,
+  // 10-CONTEXT ruling 1, T-10-17).
+  //
+  // A sibling group rather than a ninth `_surfaces` entry, and for a plainer
+  // reason than the history-view group's: a preference key is not a plant key
+  // at all. `svn.chart.maxPoints` names a row in the gateway's own settings
+  // store, `KeyPolicy` was never written about it, and asking the
+  // indistinguishability loop about it would be asking whether the *plant* has
+  // a tag called `svn.chart.maxPoints` — a question with one honest answer for
+  // both a hidden tag and a nonexistent one, arrived at by accident.
+  //
+  // What this group asserts instead is the one access-control decision the
+  // phase carries. The reason it is `operate` and not something weaker is
+  // `key_mappings`: 518 KiB of the gateway's own routing configuration lives in
+  // this store, and a `view` station that can `setString` it re-points the
+  // plant's tag map — at least as sensitive as writing a motor setpoint, which
+  // is exactly what `operate` already guards.
+  //
+  // These cases drive the decorator **in process** rather than over a socket,
+  // and that is not a shortcut: the pre-effect property is "the store was not
+  // touched", which needs a store that counts, and the no-identity arm needs a
+  // session state the handshake gate makes unreachable from the wire. The
+  // wire-level half — a `view` station refused with -32005 over a real socket —
+  // is `data_handlers_test.dart`'s and the contract legs'.
+  group('a preference write needs the role a setpoint needs', () {
+    /// One recording store, and the decorator [identity] sees it through.
+    ///
+    /// Built by hand rather than read off a live session because
+    /// `_Gateway.start` has no preference lever and because two of the arms
+    /// below are about an identity a session cannot be in while it is
+    /// answering: null, which is every session between `serve` and `hello`.
+    ({_RecordingPreferences store, PolicyStateMan served}) seenBy(
+        Identity? identity) {
+      final store = _RecordingPreferences();
+      final plant = FakeStateMan(preferences: store);
+      addTearDown(plant.dispose);
+      return (
+        store: store,
+        served: PolicyStateMan(
+          source: plant,
+          // The shipped policy, deliberately: this gate is not a `KeyPolicy`
+          // rule and must hold under the policy the plant actually runs.
+          policy: const AllVisibleOperatorWrites(),
+          resolver: const PermissiveSeriesResolver(),
+          tally: SeriesMappingTally(),
+          identityOf: () => identity,
+        ),
+      );
+    }
+
+    /// Every mutator, as a name and a call. Seven, and the count is asserted.
+    final mutators = <String, Future<void> Function(PreferencesApi prefs)>{
+      'setBool': (prefs) => prefs.setBool('svn.ui.dark', true),
+      'setInt': (prefs) => prefs.setInt('svn.chart.maxPoints', 800),
+      'setDouble': (prefs) => prefs.setDouble('svn.weigher.tolerance', 0.25),
+      // The one this ruling is actually about.
+      'setString': (prefs) => prefs.setString('key_mappings', '{"CN01":"x"}'),
+      'setStringList': (prefs) =>
+          prefs.setStringList('svn.page.recent', const ['frystir']),
+      'remove': (prefs) => prefs.remove('svn.ui.dark'),
+      'clear': (prefs) => prefs.clear(),
+    };
+
+    test('an operate station writes, and the store records it', () async {
+      // **The anti-vacuity companion, and it goes first.** Every arm below
+      // asserts a write was *refused* and that the store recorded nothing;
+      // without this one they would all pass against a decorator that refused
+      // everybody, and against a recorder that never recorded.
+      final panel = seenBy(_panel);
+
+      for (final mutator in mutators.entries) {
+        await mutator.value(panel.served.preferences);
+      }
+
+      expect(panel.store.writes, mutators.keys.toList(),
+          reason: 'the shipped policy grants `operate` to every station '
+              '`PermissiveTokenValidator` mints, so a panel writing a '
+              'preference must reach the store. If this fails, every refusal '
+              'arm below is passing because nothing writes rather than '
+              'because the gate ran');
+      expect(mutators, hasLength(7),
+          reason: 'seven mutators is the surface being gated — five typed '
+              'setters, remove and clear. A mutator added to PreferencesApi '
+              'and not to this map is one nobody checked the role on');
+    });
+
+    for (final mutator in mutators.entries) {
+      test('a view station\'s ${mutator.key} is refused, pre-effect', () async {
+        final display = seenBy(_display);
+
+        final refusal = await _refused(
+            () => mutator.value(display.served.preferences),
+            '${mutator.key} from a view station');
+
+        expect(refusal.code, ServerErrorCodes.forbidden,
+            reason: '`forbidden` is the right refusal here and `unknownKey` '
+                'would be wrong, which makes this the one place in Phase 10 '
+                'where naming the refusal is the correct answer. Preference '
+                'reads are all-visible, so this station has already been told '
+                'the key exists — there is no existence left to conceal, and '
+                'the two facts a client acts on differently are "fix the key '
+                'name" and "obtain the permission". This is the second');
+        expect(refusal.message, contains(mutator.key),
+            reason: 'a refusal that does not name the call it refused is one '
+                'an engineer cannot act on');
+        expect(display.store.writes, isEmpty,
+            reason: 'the refusal must be **pre-effect**: the store recorded '
+                '${display.store.writes} for a call that was refused. A gate '
+                'that fires after the write has landed is not a gate, it is a '
+                'report — and for `key_mappings` it would be a report that the '
+                'plant\'s tag map has already been re-pointed');
+      });
+    }
+
+    test('a session with no identity may not write either', () async {
+      final anonymous = seenBy(null);
+
+      final refusal = await _refused(
+          () => anonymous.served.preferences.setString('key_mappings', '{}'),
+          'a setString from a session that never said hello');
+
+      expect(refusal.code, ServerErrorCodes.forbidden,
+          reason: 'null identity means "nothing", not "everything" — the same '
+              'rule `canSee` and `canWrite` already answer by. The state is '
+              'unreachable from the wire because the handshake gate refuses '
+              'every method before hello, but "unreachable" is a property of '
+              'today\'s gate rather than of this class');
+      expect(anonymous.store.writes, isEmpty);
+    });
+
+    test('a view station reads every typed getter', () async {
+      final display = seenBy(_display);
+      // Seeded past the gate, on the store itself: a fixture written through
+      // the wrapper would be a write, and this case is about reads.
+      await display.store.setBool('svn.ui.dark', true);
+      await display.store.setInt('svn.chart.maxPoints', 800);
+      await display.store.setDouble('svn.weigher.tolerance', 0.25);
+      await display.store.setString('svn.site.name', 'Sæból');
+      await display.store.setStringList('svn.page.recent', const ['frystir']);
+      display.store.writes.clear();
+
+      final prefs = display.served.preferences;
+
+      expect(await prefs.getBool('svn.ui.dark'), isTrue);
+      expect(await prefs.getInt('svn.chart.maxPoints'), 800);
+      expect(await prefs.getDouble('svn.weigher.tolerance'), 0.25);
+      expect(await prefs.getString('svn.site.name'), 'Sæból');
+      expect(await prefs.getStringList('svn.page.recent'), ['frystir']);
+      expect(await prefs.containsKey('svn.ui.dark'), isTrue);
+      expect(await prefs.containsKey('svn.never.set'), isFalse,
+          reason: 'reads are all-visible, so a wall display renders a settings '
+              'page with real values in it. Gating the reads too would leave '
+              'every non-operate station showing a page of blanks and would '
+              'fail the round-trip contract check outright');
+    });
+
+    test('a view station enumerates the store', () async {
+      final display = seenBy(_display);
+      await display.store.setString('svn.site.name', 'Sæból');
+      await display.store.setInt('svn.chart.maxPoints', 800);
+
+      final prefs = display.served.preferences;
+
+      expect(await prefs.getKeys(),
+          containsAll(['svn.site.name', 'svn.chart.maxPoints']));
+      expect(await prefs.getAll(),
+          containsPair('svn.chart.maxPoints', 800));
+    });
+
+    test('a view station hears a change an operate station made', () async {
+      final display = seenBy(_display);
+      final heard = display.served.preferences.onPreferencesChanged.first;
+
+      // Through the store, which is where a second client's edit arrives from.
+      await display.store.setString('svn.site.name', 'Sæból');
+
+      expect(await within(heard, 'the change reaching a view station'),
+          'svn.site.name',
+          reason: 'the change stream is a read surface. A settings page open '
+              'on a wall display shows what the plant\'s settings are, and a '
+              'station that may not write is exactly the one that has no other '
+              'way to learn an operator changed something');
+    });
+
+    test('secret material stays impossible by construction, not by this gate',
+        () async {
+      // Re-asserted **here**, because this is the plan a future reader will be
+      // standing in when they consider adding the parameter back. The gate
+      // above is about `key_mappings`; it is not about secrets, and conflating
+      // the two is how `{bool secret = false}` gets "helpfully" restored.
+      final declared = reflectClass(PreferencesApi)
+          .declarations
+          .values
+          .whereType<MethodMirror>()
+          .expand((member) => member.parameters)
+          .map((parameter) => MirrorSystem.getName(parameter.simpleName))
+          .toSet();
+
+      expect(declared, isNotEmpty,
+          reason: 'the mirror read nothing, so the assertion below is true of '
+              'an empty set rather than of the wire interface');
+      expect(declared, isNot(contains('secret')),
+          reason: 'the concrete `Preferences` class routes a `secret: true` '
+              'call to secure storage at twelve sites. The wire interface '
+              'omits the parameter, so there is no route from this pipe to the '
+              'secure store at all — one client-supplied boolean would '
+              'otherwise be remote secret retrieval (SEC-01, T-10-18). '
+              '`api_surface_test.dart` sweeps every wire interface for it; '
+              'this arm is the one standing next to the gate');
     });
   });
 
