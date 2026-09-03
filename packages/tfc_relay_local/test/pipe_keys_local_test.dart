@@ -289,6 +289,43 @@ void main() {
               'event, and one that notified every listener would make a '
               'diagnostics page\'s poll a rebuild storm');
     });
+
+    test('readFresh re-derives data_age_ms too — the only poll a REMOTE panel '
+        'has is never a frozen gauge (09-REVIEW WR-02)', () async {
+      // The arm above proves the property for the synchronous `read`, which
+      // only a local caller can reach. The wire RPCs are readFresh/readMany
+      // (client-side read() is a store peek; no RemoteStateMan member reaches
+      // the server's read), and `_readOne`'s PipeKeyRoute arm answered them
+      // from the raw store peek — so during a silent upstream freeze an
+      // engineer's diagnostics page polled the frozen last-pushed age under
+      // good quality, during the one incident the gauge exists for. F25b
+      // measured the discrepancy live: the read path climbed 38 → 4012 ms
+      // while the pushed gauge held 51 ms throughout.
+      final key = PipeKeys.upstreamDataAgeMs(st101Alias);
+      man.applyUpstreamBatch(<String, DynamicValue>{
+        st101Key: DynamicValue(value: 41),
+      });
+      expect((await man.readFresh(key)).value, 0,
+          reason: 'anti-vacuity: the gauge is fresh at arrival, so the climb '
+              'below is the judge working rather than a seeding artifact');
+
+      // F25b's recipe, pointed at the member that was missing it: nothing
+      // arrives, nothing is announced, and three seconds pass.
+      clock.advance(const Duration(seconds: 3));
+
+      final polled = await man.readFresh(key);
+      expect(polled.value, 3000,
+          reason: 'readFresh answered the stored gauge instead of the judged '
+              'one — pipe_health.dart promises "a diagnostics poll is always '
+              'correct", and for the only poll a remote panel has it was not. '
+              'readFresh is a one-key readMany, so this pins the whole wire '
+              'read path through the same _readOne arm');
+      expect(polled.quality, Quality.good,
+          reason: 'the judge corrects the figure, not the quality: the link '
+              'machinery still owns staleness verdicts for plant keys, and a '
+              'health gauge inside its own accounting would grey out '
+              'precisely while nothing is wrong (HLTH-02)');
+    });
   });
 
   group('HLTH-02: the health keys are outside their own freshness accounting',

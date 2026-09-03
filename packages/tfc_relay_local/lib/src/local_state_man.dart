@@ -561,9 +561,23 @@ final class LocalStateMan implements StateManApi {
         // The gateway's own namespace: there is nothing upstream to ask. 08-09
         // produces these; until then the honest answer for an unproduced one is
         // uncertain-not-yet-known, because waiting does fix it.
+        //
+        // Judged through the same composition [read] uses (09-REVIEW WR-02,
+        // 09-04's deferred finding). Post 08-REVIEW CR-02 the stored
+        // `data_age_ms` gauge is written only on link events and arrivals, so
+        // the raw peek is the frozen last-pushed figure — and readFresh/
+        // readMany are the only poll a REMOTE panel has (client-side read()
+        // is a local store peek). During ST101's silent-freeze reproduction
+        // F25b measured the judged path climbing 38 → 4012 ms while the peek
+        // held 51 ms under good quality: the gauge built to expose staleness
+        // was itself stale, on the wire path, during the one incident it
+        // exists for. `judge` does not write — a read is not an event.
+        final cached = _store.peek(key);
         return (
           key: key,
-          value: _store.peek(key) ?? notYetKnown,
+          value: cached == null
+              ? notYetKnown
+              : _health.judge(key, _sweep.judge(key, cached)),
           fromUpstream: false,
         );
       case ClaimedRoute(link: final link, ref: final ref):
