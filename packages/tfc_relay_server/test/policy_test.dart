@@ -1023,6 +1023,199 @@ void main() {
     });
   });
 
+  // ---------------------------------------------------------------------
+  // History views (10-04).
+  //
+  // **Deliberately a sibling group rather than a ninth `_surfaces` entry**,
+  // and the reason is a property rather than a shape mismatch — so it is
+  // written here rather than left for a reader to rediscover.
+  //
+  // The loop's premise is that asking a surface about a tag tells you whether
+  // the *plant* has it, which is why "hidden" and "never existed" must answer
+  // identically on all eight. A history view is not that kind of surface: its
+  // key list is data the **client itself supplied**, so a view saved holding
+  // `_ghost` comes back holding `_ghost` — the gateway stored a string, and
+  // handing it back says nothing about the plant. A view saved holding
+  // `_hidden` comes back without it. The two therefore differ *by design*, and
+  // adding this to the loop would demand one of two changes, both worse than
+  // the difference: keeping hidden keys (which is the leak the seam exists to
+  // close), or dropping every key the gateway does not currently serve (which
+  // would silently destroy an operator's saved view every time a tag is
+  // renamed or a station is reconfigured).
+  //
+  // **What that leaves is a residual oracle, and it is recorded rather than
+  // waved past.** A station that may write views can save one holding a
+  // candidate key, read it back, and learn from the key's absence that the
+  // key exists and is hidden. It is a much narrower channel than the ones
+  // T-06-36 closes — it costs a write, it needs the `operate` role, and PR
+  // #403's logging is on that path — and every alternative examined is worse
+  // (see `_PolicyHistoryViews`'s own doc for the write-side argument). Under
+  // the shipped `AllVisibleOperatorWrites` it does not exist at all. Whoever
+  // ships per-key hiding for real inherits this paragraph.
+  group('a view holding a hidden key comes back without it', () {
+    /// Saves a view over the wire and answers its id.
+    Future<int> saveView(_Station station, List<String> keys,
+            {Map<String, Object?>? graphConfigs}) async =>
+        (await station.request(DataServiceMethods.historyCreateView,
+            params: {
+              'name': 'Vaktir',
+              'keys': keys,
+              if (graphConfigs != null) 'graphConfigs': graphConfigs,
+            },
+            what: 'saving a view over $keys'))! as int;
+
+    Future<List<Object?>> keyNames(_Station station, int id) async =>
+        (await station.request(DataServiceMethods.historyGetKeyNames,
+            params: {'viewId': id}, what: 'the key names of view $id'))!
+            as List<Object?>;
+
+    test('the shipped policy keeps every key a view was saved with', () async {
+      // **The anti-vacuity companion, and it goes first**, on this file's
+      // convention: every case below asserts a key is *absent*, and without
+      // this one they would all pass against a gateway whose views came back
+      // empty for everybody.
+      final gateway = await _Gateway.start();
+      final station = await gateway.station();
+
+      final id = await saveView(station, [_key, _hidden]);
+
+      expect(await keyNames(station, id), containsAll([_key, _hidden]),
+          reason: 'under the shipped policy nothing is hidden, so a view '
+              'holding two keys holds two keys. If this fails, every "the '
+              'hidden key is gone" assertion below is true because views are '
+              'broken rather than because a filter ran');
+    });
+
+    test('the view still comes back, without the key', () async {
+      final gateway = await _Gateway.start(policy: const _HidesTags({_hidden}));
+      final station = await gateway.station();
+
+      final id = await saveView(station, [_key, _hidden]);
+
+      final listed = (await station.request(
+          DataServiceMethods.historySelectViews,
+          params: const <String, Object?>{},
+          what: 'the view picker'))! as List<Object?>;
+      expect(listed.map((view) => (view! as Map)['id']), contains(id),
+          reason: 'the view itself is not hidden and must not be: a view that '
+              'vanished would say a view exists — the operator saved it, the '
+              'picker offered it a moment ago, and its disappearance is a '
+              'louder statement about the hidden key than the key\'s own '
+              'absence is (T-10-13)');
+
+      expect(await keyNames(station, id), [_key],
+          reason: 'the hidden key is dropped from the key list, not from the '
+              'view');
+
+      final keys = _asMap(await station.request(
+          DataServiceMethods.historyGetKeys,
+          params: {'viewId': id},
+          what: 'the keys of view $id'));
+      expect(keys.keys, [_key],
+          reason: 'and the record accessor agrees with the name-only one. A '
+              'filter fitted to one and forgotten on the other would hide the '
+              'key from the legend and hand it back to the chart');
+    });
+
+    test('a view all of whose keys are hidden is a view with no keys, never '
+        'no view', () async {
+      // **The boundary case**, and the only one where "drop the key" and
+      // "drop the view" produce different answers. Everything else in this
+      // group passes under either rule.
+      final gateway = await _Gateway.start(policy: const _HidesTags({_hidden}));
+      final station = await gateway.station();
+
+      final id = await saveView(station, [_hidden]);
+
+      final listed = (await station.request(
+          DataServiceMethods.historySelectViews,
+          params: const <String, Object?>{},
+          what: 'the view picker'))! as List<Object?>;
+      expect(listed, hasLength(1),
+          reason: 'the view is still there. Dropping it would be the one '
+              'thing the rule forbids: an operator opening the picker would '
+              'see a view they saved simply gone, which is a statement about '
+              'the key it held');
+      expect((listed.single! as Map)['id'], id);
+      expect((listed.single! as Map)['name'], 'Vaktir',
+          reason: 'and it still carries its name — a view is more than its '
+              'key list');
+
+      expect(await keyNames(station, id), isEmpty,
+          reason: 'with an empty key list, which is an honest answer: the '
+              'chart draws no lines and the operator can see that it draws '
+              'none');
+    });
+
+    test('graphs are untouched by the filter', () async {
+      final gateway = await _Gateway.start(policy: const _HidesTags({_hidden}));
+      final station = await gateway.station();
+
+      final id = await saveView(station, [_hidden],
+          graphConfigs: historyViewGraphsToJson(const {
+            0: HistoryViewGraphRecord(graphIndex: 0, name: 'Hraði'),
+            1: HistoryViewGraphRecord(
+                graphIndex: 1, name: 'Hitastig', yAxisUnit: '°C'),
+          }));
+
+      final graphs = _asMap(await station.request(
+          DataServiceMethods.historyGetGraphs,
+          params: {'viewId': id},
+          what: 'the graphs of a view whose every key is hidden'));
+
+      expect(graphs.keys, hasLength(2),
+          reason: 'a graph index is not a key and there is nothing to hide in '
+              'a title or an axis unit. Filtering graphs alongside keys is '
+              'the plausible over-reach here, and it would leave a view whose '
+              'axes lost their labels for a reason nobody could find');
+      expect(_asMap(graphs['1'])['yAxisUnit'], '°C');
+    });
+
+    test('a hidden key never reaches the store on the way in', () async {
+      final gateway = await _Gateway.start(policy: const _HidesTags({_hidden}));
+      final station = await gateway.station();
+
+      final id = await saveView(station, [_key, _hidden]);
+
+      // Read off the **unpoliced** source, which is the only way to tell a
+      // key that was dropped on the way in from one that is merely filtered
+      // on the way out. The read-side filter would make both look identical
+      // over the wire.
+      final stored =
+          await gateway.plant.historyViews.getHistoryViewKeys(id);
+      expect(stored.keys, [_key],
+          reason: 'the hidden key was dropped from the *input*, silently, so '
+              'nothing about it was written down. Refusing the save would '
+              'have named it — "this view holds a key you may not see" is the '
+              'same disclosure a `forbidden` is — and storing it would leave '
+              'the gateway holding a row whose only protection is that a '
+              'filter remembers to run on every future read path');
+    });
+
+    test('an update drops a hidden key too', () async {
+      final gateway = await _Gateway.start(policy: const _HidesTags({_hidden}));
+      final station = await gateway.station();
+
+      final id = await saveView(station, [_key]);
+      await station.request(DataServiceMethods.historyUpdateView,
+          params: {
+            'id': id,
+            'name': 'Vaktir',
+            'keys': [_key, _hidden],
+          },
+          what: 'an update adding a hidden key to a view');
+
+      expect(await keyNames(station, id), [_key],
+          reason: 'update is the other write-shaped door into the same rows, '
+              'and a filter fitted to create and forgotten on update would '
+              'let any station store any key by saving an empty view and then '
+              'editing it');
+      expect((await gateway.plant.historyViews.getHistoryViewKeys(id)).keys,
+          [_key],
+          reason: 'on the way in, as with create');
+    });
+  });
+
   group('a hidden key is a key that does not exist', () {
     test('a hidden key is indistinguishable from a key that does not exist',
         () async {
