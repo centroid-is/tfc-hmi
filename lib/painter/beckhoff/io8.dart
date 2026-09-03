@@ -237,7 +237,18 @@ class IO8Painter extends CustomPainter {
     }
 
     // --- Calculate heights for all elements ---
-    double topLabelsH = labelH + pad * 2;
+    // A name or id gets a taller band than the printed 07/08 markers do.
+    // Those are two characters and fit anything; a plant id is a dozen and
+    // was being shrunk to the floor to fit a band sized for '07'. The extra
+    // comes out of the LED block's top margin, so nothing below moves.
+    // A name or id gets a band nearly twice the height the printed 07/08
+    // markers need. Those are two characters; a plant id is a dozen, and it
+    // wraps onto a second line rather than being shrunk to a smear. The extra
+    // comes out of the I/O area below, so nothing is covered.
+    final markerH = markerLabel.isNotEmpty && topLabels.$1 == ''
+        ? labelH * 1.9
+        : labelH;
+    double topLabelsH = markerH + pad * 2;
     double ledBlockH = size.height * 0.22;
     double ledBlockY = topLabelsH;
     double ledBlockBottom = ledBlockY + ledBlockH;
@@ -279,46 +290,14 @@ class IO8Painter extends CustomPainter {
     } else if (markerLabel.isNotEmpty) {
       // The slice's configured name or id, as one marker tag spanning the
       // band the two printed terminal markers would occupy.
-      final rect =
-          Rect.fromLTWH(pad, pad, size.width - pad * 2, labelH);
-      canvas.drawRect(rect, Paint()..color = ioLabelColor);
-      canvas.drawRect(rect, innerBorderPaint);
-      // Not `drawLabel`: a plant id can outgrow the tag, and the shared
-      // helper wraps onto a second line that paints over the LED block
-      // below. One line — shrunk to fit first, because ids like
-      // `ST301.A1.09` are told apart by their tail and an ellipsis eats
-      // exactly that. Only a name too long even at the floor is ellipsized.
-      TextPainter layoutAt(double fs, {bool clamp = false}) => TextPainter(
-            text: TextSpan(
-              text: markerLabel,
-              style: TextStyle(
-                color: Colors.black,
-                fontSize: fs,
-                fontWeight: FontWeight.bold,
-                // Named for the same reason the other labels name it — a
-                // null family renders as the test font's boxes under
-                // `flutter test`.
-                fontFamily: 'Roboto',
-              ),
-            ),
-            maxLines: 1,
-            ellipsis: '…',
-            textAlign: TextAlign.center,
-            textDirection: TextDirection.ltr,
-          )..layout(
-              minWidth: clamp ? rect.width : 0,
-              maxWidth: clamp ? rect.width : double.infinity,
-            );
-
-      final baseFs = labelH * 0.6;
-      final natural = layoutAt(baseFs).width;
-      var fs = baseFs;
-      if (natural > rect.width) {
-        fs = (baseFs * rect.width / natural).clamp(labelH * 0.34, baseFs);
-      }
-      final tp = layoutAt(fs, clamp: true);
-      tp.paint(
-          canvas, Offset(rect.left, rect.top + (labelH - tp.height) / 2));
+      paintMarkerTag(
+        canvas,
+        Rect.fromLTWH(pad, pad, size.width - pad * 2, markerH),
+        markerLabel,
+        color: ioLabelColor,
+        strokeWidth: strokeWidth,
+        minFontSize: labelH * 0.34,
+      );
     }
 
     // --- Draw LED block ---

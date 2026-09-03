@@ -72,42 +72,21 @@ class EK1110Painter extends CustomPainter {
     // The marker tag, when there is one, takes the band an EL terminal gives
     // it and the lamps drop below — the same order as an EL: markers on top,
     // then the lamp block.
-    final markerH = size.height * 0.06;
+    // Matches [IO8Painter]: a name or id gets the taller band and wraps
+    // rather than shrinking, so a rack row of tags reads as one row.
+    final labelH = size.height * 0.06;
+    final markerH = markerLabel.isNotEmpty ? labelH * 1.9 : labelH;
     double lampTop = pad;
     if (markerLabel.isNotEmpty) {
       final rect = Rect.fromLTWH(pad, pad, size.width - pad * 2, markerH);
-      canvas.drawRect(rect, Paint()..color = ioLabelColor);
-      canvas.drawRect(rect, stroke);
-
-      // Shrink to fit before ellipsizing, as [IO8Painter] does: plant ids are
-      // told apart by their tail and an ellipsis eats exactly that.
-      TextPainter layoutAt(double fs, {bool clamp = false}) => TextPainter(
-            text: TextSpan(
-              text: markerLabel,
-              style: TextStyle(
-                color: Colors.black,
-                fontSize: fs,
-                fontWeight: FontWeight.bold,
-                fontFamily: 'Roboto',
-              ),
-            ),
-            maxLines: 1,
-            ellipsis: '…',
-            textAlign: TextAlign.center,
-            textDirection: TextDirection.ltr,
-          )..layout(
-              minWidth: clamp ? rect.width : 0,
-              maxWidth: clamp ? rect.width : double.infinity,
-            );
-
-      final avail = rect.width - pad;
-      double fs = markerH * 0.7;
-      while (fs > markerH * 0.32 && layoutAt(fs).width > avail) {
-        fs -= markerH * 0.04;
-      }
-      final tp = layoutAt(fs, clamp: true);
-      tp.paint(canvas, Offset(rect.left, rect.top + (rect.height - tp.height) / 2));
-
+      paintMarkerTag(
+        canvas,
+        rect,
+        markerLabel,
+        color: ioLabelColor,
+        strokeWidth: strokeWidth,
+        minFontSize: labelH * 0.34,
+      );
       lampTop = rect.bottom + pad * 0.6;
     }
 

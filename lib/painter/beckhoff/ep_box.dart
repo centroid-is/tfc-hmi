@@ -175,7 +175,11 @@ class EPBoxPainter extends CustomPainter {
         width: design.width);
     text(model, const Offset(0, 26.5), fontSize: 3.0, width: design.width);
     if (name.isNotEmpty) {
-      text(name, const Offset(0, 30.5), fontSize: 2.6, width: design.width);
+      // Larger than the model line above it, not smaller. The model is the
+      // same on every box of this type; the tag is the one string that says
+      // which box you are looking at, and it was the smallest thing on the
+      // housing.
+      text(name, const Offset(0, 30.4), fontSize: 3.2, width: design.width);
     }
 
     // --- The four signal plugs, one column, two channels each ---
@@ -191,12 +195,8 @@ class EPBoxPainter extends CustomPainter {
 
       // Two marker cards per plug, one per channel, with the pair of lamps
       // between them — the arrangement on the box, where each channel gets
-      // its own strip to be written on. The card carries the caption rather
-      // than the housing does, because that is where the label physically
-      // goes; the caption itself stays the PLC's own member name ('I0'..'I7'),
-      // since nobody reading this page is holding the box — they are holding
-      // a variable list, and the caption has to be the string they can search
-      // for there.
+      // its own strip to be written on. They stay blank, because that is how
+      // the box is shipped and how every one of these on the plant looks.
       for (int side = 0; side < 2; side++) {
         final card = Rect.fromLTWH(
           2.5,
@@ -206,30 +206,37 @@ class EPBoxPainter extends CustomPainter {
         );
         canvas.drawRect(card, Paint()..color = epBoxMarkerColor);
         canvas.drawRect(card, stroke);
-        text(
-          'I${plug * 2 + side}',
-          Offset(card.left, card.top + 0.6),
-          fontSize: 3.0,
-          color: Colors.black,
-          width: card.width,
-        );
       }
 
-      // The lamps sit between the two cards, left for the first channel and
-      // right for the second, in the same order the cards read down.
+      // The lamp row between the cards, captioned on the outside — the
+      // box prints its channel numbers either side of the pair ('1 ●● 2')
+      // and putting them anywhere else costs a reading.
+      //
+      // The captions are the PLC's own member names, 'I0'..'I7' in channel
+      // order down the box, not the plug-and-side names off the moulding:
+      // nobody looking at this page is holding the box, they are holding a
+      // variable list, and the caption has to be the string they can search
+      // for there.
       for (int side = 0; side < 2; side++) {
-        final lampX = side == 0 ? 5.0 : 10.5;
-        final lamp = Rect.fromLTWH(lampX, centre.dy - 1.5, 3, 3);
+        final lampX = side == 0 ? 5.6 : 9.0;
+        final lamp = Rect.fromLTWH(lampX, centre.dy - 1.15, 2.3, 2.3);
         final state = channels[plug * 2 + side];
         paintLed(
           canvas,
-          RRect.fromRectAndRadius(lamp, const Radius.circular(0.6)),
+          RRect.fromRectAndRadius(lamp, const Radius.circular(0.5)),
           color: _lampColor(state),
           lit: state == IOState.high ||
               state == IOState.forcedHigh ||
               state == IOState.error,
           strokeWidth: 0.4,
           border: stroke,
+        );
+        text(
+          'I${plug * 2 + side}',
+          Offset(side == 0 ? 2.2 : 11.5, centre.dy - 1.5),
+          fontSize: 2.5,
+          width: 3.0,
+          align: side == 0 ? TextAlign.right : TextAlign.left,
         );
       }
     }

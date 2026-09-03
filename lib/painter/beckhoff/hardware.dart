@@ -644,3 +644,126 @@ void paintFinnedHeatsink(
       ..strokeWidth = strokeWidth,
   );
 }
+
+/// Where a name or id may be broken across two lines: after a space, and
+/// after a separator. Never inside a token.
+///
+/// The positions are indices into [label] at which a second line may start.
+List<int> markerBreakPoints(String label) {
+  final out = <int>[];
+  for (var i = 0; i < label.length - 1; i++) {
+    if (label[i] == ' ' || '._-/:'.contains(label[i])) out.add(i + 1);
+  }
+  return out;
+}
+
+/// The operator's own tag on a terminal — the configured name or id, printed
+/// on the marker band where the 07/08 terminal markers go.
+///
+/// The hard part is that the band is only as wide as a 12 mm terminal and a
+/// plant id is a dozen characters. Shrinking one line to fit put
+/// `ST101.A1.03` on the housing at a third the height of its band, and
+/// ellipsizing is worse than shrinking: these ids are told apart by their
+/// *tail*, and an ellipsis eats exactly that.
+///
+/// So the tag may take two lines — but only broken where a person would
+/// break it. Handing the job to the `TextPainter` is not enough: with no
+/// space to break at it wraps mid-token, which turned `LICENCE` into
+/// `LICE`/`NCE` and `ST301 A1` into `ST30`/`1 A1`. The split is therefore
+/// chosen here, from [markerBreakPoints], at whichever legal point leaves
+/// the two halves most even, and the line ending is explicit.
+///
+/// Two lines are used only when they buy a materially bigger face than one
+/// line would; a name that fits comfortably on one keeps it.
+void paintMarkerTag(
+  Canvas canvas,
+  Rect band,
+  String label, {
+  required Color color,
+  required double strokeWidth,
+  required double minFontSize,
+  String fontFamily = 'Roboto',
+}) {
+  canvas.drawRect(band, Paint()..color = color);
+  canvas.drawRect(
+    band,
+    Paint()
+      ..color = housingOutline
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth,
+  );
+
+  final inner = band.deflate(strokeWidth * 1.5);
+
+  TextPainter layoutAt(String text, double fontSize, int maxLines) =>
+      TextPainter(
+        text: TextSpan(
+          text: text,
+          style: TextStyle(
+            color: Colors.black,
+            fontSize: fontSize,
+            fontWeight: FontWeight.bold,
+            height: 1.05,
+            // Named, as ek1100.dart names it: a null family renders as the
+            // test font's boxes under `flutter test`, and a golden of boxes
+            // pins nothing about a label.
+            fontFamily: fontFamily,
+          ),
+        ),
+        maxLines: maxLines,
+        ellipsis: '…',
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.ltr,
+      )..layout(minWidth: inner.width, maxWidth: inner.width);
+
+  final maxFontSize = band.height * 0.62;
+  const steps = 28;
+  double stepFontSize(int i) =>
+      maxFontSize - (maxFontSize - minFontSize) * i / steps;
+
+  /// The largest size at which [text] fits without the painter having to
+  /// wrap or ellipsize it, or null when even the floor does not fit.
+  ({double fontSize, TextPainter painter})? largestFit(
+      String text, int maxLines) {
+    for (var i = 0; i <= steps; i++) {
+      final fontSize = stepFontSize(i);
+      final tp = layoutAt(text, fontSize, maxLines);
+      if (!tp.didExceedMaxLines && tp.height <= inner.height) {
+        return (fontSize: fontSize, painter: tp);
+      }
+    }
+    return null;
+  }
+
+  final single = largestFit(label, 1);
+
+  // The most even legal split, if there is one.
+  ({double fontSize, TextPainter painter})? double_;
+  final breaks = markerBreakPoints(label);
+  if (breaks.isNotEmpty) {
+    var best = breaks.first;
+    for (final at in breaks) {
+      if ((label.length - at - at).abs() < (label.length - best - best).abs()) {
+        best = at;
+      }
+    }
+    final wrapped =
+        '${label.substring(0, best).trimRight()}\n${label.substring(best)}';
+    double_ = largestFit(wrapped, 2);
+  }
+
+  // One line unless two buy a materially bigger face — wrapping a name that
+  // already fits is churn, not legibility.
+  final chosen = switch ((single, double_)) {
+    (null, null) => layoutAt(label, minFontSize, 2),
+    (final s?, null) => s.painter,
+    (null, final d?) => d.painter,
+    (final s?, final d?) =>
+      d.fontSize > s.fontSize * 1.15 ? d.painter : s.painter,
+  };
+
+  chosen.paint(
+    canvas,
+    Offset(inner.left, inner.top + (inner.height - chosen.height) / 2),
+  );
+}
