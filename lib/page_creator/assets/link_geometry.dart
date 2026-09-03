@@ -86,7 +86,7 @@ class LinkWaypoint {
   /// [pinnedTo] is null.
   double? n;
 
-  /// Page-relative offset from the pinned asset's top-left. Non-null iff
+  /// Page-relative offset from the pinned asset's centre. Non-null iff
   /// [pinnedTo] is non-null.
   double? dx;
   double? dy;
@@ -96,7 +96,8 @@ class LinkWaypoint {
   /// A corner held in the frame of the run.
   LinkWaypoint.onRun(double t, double n) : this(t: t, n: n);
 
-  /// A corner nailed to [assetId] at a fixed page-relative offset.
+  /// A corner nailed to [assetId] at a fixed page-relative offset from its
+  /// centre.
   LinkWaypoint.pinned(String assetId, double dx, double dy)
       : this(pinnedTo: assetId, dx: dx, dy: dy);
 
@@ -136,8 +137,9 @@ abstract class LinkAnchors {
   /// asset or the port is unknown.
   Offset? portPosition(String assetId, String? port);
 
-  /// Page-relative top-left of [assetId]'s box, or null if unknown.
-  Offset? assetOrigin(String assetId);
+  /// Page-relative point a corner pinned to [assetId] is an offset from —
+  /// its box centre — or null if unknown.
+  Offset? assetAnchor(String assetId);
 
   /// Nothing is anchored — every end falls back to its stored coordinate.
   static const LinkAnchors none = _NoAnchors();
@@ -148,7 +150,7 @@ class _NoAnchors implements LinkAnchors {
   @override
   Offset? portPosition(String assetId, String? port) => null;
   @override
-  Offset? assetOrigin(String assetId) => null;
+  Offset? assetAnchor(String assetId) => null;
 }
 
 /// The coordinate system a run's unpinned corners are measured in.
@@ -356,7 +358,7 @@ class LinkRun {
       LinkWaypoint w, LinkRunFrame frame, LinkAnchors anchors) {
     final pin = w.pinnedTo;
     if (pin != null) {
-      final origin = anchors.assetOrigin(pin);
+      final origin = anchors.assetAnchor(pin);
       // A pin whose asset is gone has nothing to be an offset from. Falling
       // back to the run frame keeps the corner on the cable instead of
       // dropping it at the page origin, which is the difference between a
@@ -386,7 +388,7 @@ class LinkRun {
     required LinkAnchors anchors,
   }) {
     if (pinnedTo != null) {
-      final origin = anchors.assetOrigin(pinnedTo);
+      final origin = anchors.assetAnchor(pinnedTo);
       if (origin != null) {
         final d = at - origin;
         return LinkWaypoint.pinned(pinnedTo, d.dx, d.dy);

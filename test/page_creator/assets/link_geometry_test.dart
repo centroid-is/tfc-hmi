@@ -22,7 +22,7 @@ class _FakeAnchors implements LinkAnchors {
       ports['$assetId/$port'] ?? boxes[assetId]?.centerRight;
 
   @override
-  Offset? assetOrigin(String assetId) => boxes[assetId]?.topLeft;
+  Offset? assetAnchor(String assetId) => boxes[assetId]?.center;
 }
 
 /// Samples a path into points, for asserting about ink rather than about the
