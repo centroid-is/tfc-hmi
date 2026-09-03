@@ -5,7 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/page_creator/assets/link_geometry.dart';
 
 /// Anchors backed by a plain map, so a test can say exactly where a device is
-/// without standing up a page.
+/// without standing up a page. Positions are page-relative 0..1, canonical
+/// (unmirrored) -- see [LinkAnchors].
 class _FakeAnchors implements LinkAnchors {
   _FakeAnchors({Map<String, Rect>? boxes, Map<String, Offset>? ports})
       : boxes = boxes ?? {},
@@ -214,7 +215,7 @@ void main() {
     });
 
     test('a bound end takes the port position', () {
-      final anchors = _FakeAnchors(ports: {'ek/X2': const Offset(200, 100)});
+      final anchors = _FakeAnchors(ports: {'ek/X2': const Offset(0.2, 0.125)});
       final run = LinkRun(
         from: LinkEnd(assetId: 'ek', port: 'X2', x: 0.1, y: 0.5),
         to: LinkEnd(x: 0.9, y: 0.5),
@@ -257,15 +258,17 @@ void main() {
 
     test('a run-frame corner rides both ends', () {
       final anchors = _FakeAnchors(ports: {
-        'a/X2': const Offset(100, 100),
-        'b/X1': const Offset(300, 100),
+        'a/X2': const Offset(0.1, 0.125),
+        'b/X1': const Offset(0.3, 0.125),
       });
       final run = runWith(LinkWaypoint.onRun(0.5, 0));
-      expect(run.resolve(canvas, anchors).points[1], const Offset(200, 100));
+      expect(run.resolve(canvas, anchors).points[1],
+          within(distance: 1e-6, from: const Offset(200, 100)));
 
       // Move the far end: the corner moves with the frame.
-      anchors.ports['b/X1'] = const Offset(500, 100);
-      expect(run.resolve(canvas, anchors).points[1], const Offset(300, 100));
+      anchors.ports['b/X1'] = const Offset(0.5, 0.125);
+      expect(run.resolve(canvas, anchors).points[1],
+          within(distance: 1e-6, from: const Offset(300, 100)));
     });
 
     test('a run-frame corner near one end mostly follows that end', () {
@@ -273,57 +276,60 @@ void main() {
       // t = 0.1 belongs to the near device far more than to the far one.
       final anchors = _FakeAnchors(ports: {
         'a/X2': const Offset(0, 0),
-        'b/X1': const Offset(1000, 0),
+        'b/X1': const Offset(1, 0),
       });
       final run = runWith(LinkWaypoint.onRun(0.1, 0));
       final before = run.resolve(canvas, anchors).points[1];
 
-      anchors.ports['a/X2'] = const Offset(0, 100); // near end moves 100 down
+      anchors.ports['a/X2'] =
+          const Offset(0, 0.125); // near end moves 100px down
       final afterNear = run.resolve(canvas, anchors).points[1];
       expect(afterNear.dy - before.dy, closeTo(90, 0.5));
 
       anchors.ports['a/X2'] = const Offset(0, 0);
-      anchors.ports['b/X1'] = const Offset(1000, 100); // far end moves instead
+      anchors.ports['b/X1'] = const Offset(1, 0.125); // far end moves instead
       final afterFar = run.resolve(canvas, anchors).points[1];
       expect(afterFar.dy - before.dy, closeTo(10, 0.5));
     });
 
     test('a pinned corner ignores the far end entirely', () {
       final anchors = _FakeAnchors(
-        boxes: {'a': const Rect.fromLTWH(100, 100, 60, 40)},
+        boxes: {'a': const Rect.fromLTWH(0.1, 0.125, 0.06, 0.05)},
         ports: {
-          'a/X2': const Offset(160, 120),
-          'b/X1': const Offset(500, 120),
+          'a/X2': const Offset(0.16, 0.15),
+          'b/X1': const Offset(0.5, 0.15),
         },
       );
       final run = runWith(LinkWaypoint.pinned('a', 0.25, 0.05));
       final before = run.resolve(canvas, anchors).points[1];
 
-      anchors.ports['b/X1'] = const Offset(900, 700);
-      expect(run.resolve(canvas, anchors).points[1], before);
+      anchors.ports['b/X1'] = const Offset(0.9, 0.875);
+      expect(run.resolve(canvas, anchors).points[1],
+          within(distance: 1e-6, from: before));
     });
 
     test('a pinned corner translates rigidly with its own asset', () {
       final anchors = _FakeAnchors(
-        boxes: {'a': const Rect.fromLTWH(100, 100, 60, 40)},
+        boxes: {'a': const Rect.fromLTWH(0.1, 0.125, 0.06, 0.05)},
         ports: {
-          'a/X2': const Offset(160, 120),
-          'b/X1': const Offset(500, 120),
+          'a/X2': const Offset(0.16, 0.15),
+          'b/X1': const Offset(0.5, 0.15),
         },
       );
       final run = runWith(LinkWaypoint.pinned('a', 0.1, 0.1));
       final before = run.resolve(canvas, anchors).points[1];
 
-      anchors.boxes['a'] = const Rect.fromLTWH(140, 170, 60, 40);
-      anchors.ports['a/X2'] = const Offset(200, 190);
+      anchors.boxes['a'] = const Rect.fromLTWH(0.14, 0.2125, 0.06, 0.05);
+      anchors.ports['a/X2'] = const Offset(0.2, 0.2375);
       final after = run.resolve(canvas, anchors).points[1];
-      expect(after - before, const Offset(40, 70));
+      expect(
+          after - before, within(distance: 1e-6, from: const Offset(40, 70)));
     });
 
     test('a pin whose asset is gone falls back to the run frame', () {
       final anchors = _FakeAnchors(ports: {
         'a/X2': const Offset(0, 0),
-        'b/X1': const Offset(400, 0),
+        'b/X1': const Offset(0.4, 0),
       });
       final run = runWith(LinkWaypoint.pinned('deleted', 0.1, 0.1));
       final p = run.resolve(canvas, anchors).points[1];
@@ -340,12 +346,12 @@ void main() {
     setUp(() {
       anchors = _FakeAnchors(
         boxes: {
-          'a': const Rect.fromLTWH(0, 0, 100, 50),
-          'b': const Rect.fromLTWH(600, 0, 100, 50),
+          'a': const Rect.fromLTWH(0, 0, 0.1, 0.0625),
+          'b': const Rect.fromLTWH(0.6, 0, 0.1, 0.0625),
         },
         ports: {
-          'a/X2': const Offset(100, 0),
-          'b/X1': const Offset(600, 0),
+          'a/X2': const Offset(0.1, 0),
+          'b/X1': const Offset(0.6, 0),
         },
       );
       run = LinkRun(
@@ -387,12 +393,12 @@ void main() {
       run.waypoints.add(LinkWaypoint.onRun(0.4, 0.15));
       final before = run.resolve(canvas, anchors).points[1];
 
-      run.repin(0, 'a', canvas: canvas, anchors: anchors);
+      run.repin(0, 'a', anchors: anchors);
       expect(run.waypoints.single.pinnedTo, 'a');
       expect(run.resolve(canvas, anchors).points[1],
           within(distance: 0.01, from: before));
 
-      run.repin(0, null, canvas: canvas, anchors: anchors);
+      run.repin(0, null, anchors: anchors);
       expect(run.waypoints.single.pinnedTo, isNull);
       expect(run.resolve(canvas, anchors).points[1],
           within(distance: 0.01, from: before));
@@ -402,15 +408,139 @@ void main() {
       // Two live coordinate systems on one corner is how it ends up in two
       // places; the inactive pair has to actually be gone.
       run.waypoints.add(LinkWaypoint.onRun(0.4, 0.15));
-      run.repin(0, 'a', canvas: canvas, anchors: anchors);
+      run.repin(0, 'a', anchors: anchors);
       expect(run.waypoints.single.t, isNull);
       expect(run.waypoints.single.n, isNull);
       expect(run.waypoints.single.dx, isNotNull);
 
-      run.repin(0, null, canvas: canvas, anchors: anchors);
+      run.repin(0, null, anchors: anchors);
       expect(run.waypoints.single.dx, isNull);
       expect(run.waypoints.single.dy, isNull);
       expect(run.waypoints.single.t, isNotNull);
+    });
+  });
+
+  group('aspect ratio', () {
+    _FakeAnchors twoDevices() => _FakeAnchors(
+          boxes: {'a': const Rect.fromLTWH(0.1, 0.2, 0.1, 0.06)},
+          ports: {
+            'a/X2': const Offset(0.2, 0.25),
+            'b/X1': const Offset(0.8, 0.75),
+          },
+        );
+
+    LinkRun bent() => LinkRun(
+          from: LinkEnd(assetId: 'a', port: 'X2'),
+          to: LinkEnd(assetId: 'b', port: 'X1'),
+          waypoints: [LinkWaypoint.onRun(0.4, 0.25)],
+        );
+
+    test('the run scales with the canvas', () {
+      // Halving both axes halves every coordinate: the drawing is the same
+      // drawing, rendered smaller.
+      final run = bent();
+      final big = run.resolve(const Size(1000, 800), twoDevices()).points;
+      final small = run.resolve(const Size(500, 400), twoDevices()).points;
+      expect(big, hasLength(small.length));
+      for (var i = 0; i < big.length; i++) {
+        expect(small[i], within(distance: 1e-6, from: big[i] / 2));
+      }
+    });
+
+    test('a corner keeps its place among the equipment when the aspect changes',
+        () {
+      // The devices are positioned in page fractions, so they squash with the
+      // canvas. A corner measured in pixels would not, and the cable would
+      // slide off the ports the moment the page was drawn on a different
+      // shape of screen. Measured in page space it squashes with them.
+      final run = bent();
+      const wide = Size(1000, 400);
+      const tall = Size(1000, 1000);
+
+      Offset pageCorner(Size c) {
+        final p = run.resolve(c, twoDevices()).points[1];
+        return Offset(p.dx / c.width, p.dy / c.height);
+      }
+
+      expect(pageCorner(wide), within(distance: 1e-9, from: pageCorner(tall)));
+    });
+
+    test('the fillet is circular on screen, not squashed by the canvas', () {
+      // The skeleton is scaled first and rounded afterwards. Rounding in page
+      // space and scaling after would make every corner an ellipse on any
+      // canvas that is not square.
+      final run = bent()..radius = 0.05;
+      const squashed = Size(1000, 250);
+      final r = run.resolve(squashed, twoDevices());
+      expect(r.radius, closeTo(0.05 * 250, 1e-9));
+    });
+  });
+
+  group('mirroring', () {
+    // `AssetStack` mirrors a page by flipping each asset's coordinate and then
+    // mirroring a chiral glyph about its own box centre -- which composes to a
+    // true mirror about the page centre. The run therefore resolves against
+    // canonical positions and lets the stack do the flip.
+
+    Offset mirrorX(Offset p) => Offset(1 - p.dx, p.dy);
+
+    test('resolving against mirrored anchors puts the bend on the wrong side',
+        () {
+      // This is the trap, kept as a test so nobody "fixes" LinkAnchors to feed
+      // it laid-out (already mirrored) rectangles. Mirroring reverses
+      // handedness, but `across` is `along` turned a fixed direction, so the
+      // ends would land correctly and the bend would flip across the run.
+      final canonical = _FakeAnchors(ports: {
+        'a/X2': const Offset(0.2, 0.5),
+        'b/X1': const Offset(0.8, 0.5),
+      });
+      final mirrored = _FakeAnchors(ports: {
+        'a/X2': mirrorX(const Offset(0.2, 0.5)),
+        'b/X1': mirrorX(const Offset(0.8, 0.5)),
+      });
+      final run = LinkRun(
+        from: LinkEnd(assetId: 'a', port: 'X2'),
+        to: LinkEnd(assetId: 'b', port: 'X1'),
+        waypoints: [LinkWaypoint.onRun(0.5, 0.2)],
+      );
+
+      final want = mirrorX(run.frameIn(canonical).place(0.5, 0.2));
+      final got = run.frameIn(mirrored).place(0.5, 0.2);
+
+      expect(got.dx, closeTo(want.dx, 1e-9), reason: 'ends mirror fine');
+      // ...but the bend has crossed to the other side of the run.
+      expect(got.dy, isNot(closeTo(want.dy, 1e-6)));
+      expect(got.dy - 0.5, closeTo(-(want.dy - 0.5), 1e-9));
+    });
+
+    test('a run resolved canonically is independent of the page mirror', () {
+      // The geometry never sees the mirror flags -- that is the whole point.
+      // The stack mirrors the finished glyph, so chirality, `n` signs and
+      // pinned offsets all come out right without the run knowing.
+      final anchors = _FakeAnchors(
+        boxes: {'a': const Rect.fromLTWH(0.1, 0.4, 0.1, 0.06)},
+        ports: {
+          'a/X2': const Offset(0.2, 0.43),
+          'b/X1': const Offset(0.8, 0.5),
+        },
+      );
+      final run = LinkRun(
+        from: LinkEnd(assetId: 'a', port: 'X2'),
+        to: LinkEnd(assetId: 'b', port: 'X1'),
+        waypoints: [
+          LinkWaypoint.onRun(0.4, 0.2),
+          LinkWaypoint.pinned('a', 0.05, -0.03),
+        ],
+      );
+      final once = run.resolve(canvas, anchors).points;
+      final twice = run.resolve(canvas, anchors).points;
+      expect(once, twice);
+
+      // And every point is inside the canvas, so the mirror the stack applies
+      // has a sane box to work in.
+      final b = run.boundsIn(anchors, pad: 0.01);
+      expect(b.left, greaterThan(-0.5));
+      expect(b.right, lessThan(1.5));
     });
   });
 
@@ -463,12 +593,13 @@ void main() {
         to: LinkEnd(x: 0.8, y: 0.5),
         waypoints: [LinkWaypoint.onRun(0.5, -0.4)],
       );
-      final b = run.boundsIn(canvas, LinkAnchors.none, pad: 6);
+      final b = run.boundsIn(LinkAnchors.none, pad: 0.01);
       for (final p in run.resolve(canvas, LinkAnchors.none).points) {
-        expect(b.contains(p), isTrue, reason: '$p outside $b');
+        final page = Offset(p.dx / canvas.width, p.dy / canvas.height);
+        expect(b.contains(page), isTrue, reason: '$page outside $b');
       }
       // The padding is real, so the stroke's caps are inside the box too.
-      expect(b.left, lessThan(200));
+      expect(b.left, lessThan(0.2));
     });
   });
 

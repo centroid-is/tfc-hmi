@@ -112,16 +112,31 @@ class LinkWaypoint {
 
 /// Where a run's ends and pinned corners get their positions.
 ///
-/// The run does not know what an asset is — it is handed pixels. In the page
-/// editor this is backed by the laid-out asset rectangles; in a test it is a
-/// map. Both answer null for an id nothing on the page carries, which is the
-/// case that makes an end fall back to its stored coordinate.
+/// Answers in **page-relative 0..1 space, unmirrored** — an asset's stored
+/// `coordinates`, not the rectangle it was laid out into. Two reasons, and
+/// both matter:
+///
+///  - **Mirroring.** `AssetStack` mirrors a page by flipping each asset's
+///    coordinate (`1 - x`) and, for chiral glyphs, mirroring the glyph about
+///    its own box centre — which composes to a true mirror about the page
+///    centre. A run that resolved against *already mirrored* positions would
+///    be mirrored a second time by that transform. Worse, mirroring reverses
+///    handedness while [LinkRunFrame.across] is `along` turned a fixed
+///    direction, so a corner's `n` would land on the wrong side of the run:
+///    the bend would flip while the ends stayed put. Resolving canonically
+///    and letting the stack mirror the finished glyph avoids both.
+///
+///  - **Layout order.** Reading stored coordinates means a run does not have
+///    to wait for the assets it names to be laid out first.
+///
+/// Both methods answer null for an id nothing on the page carries, which is
+/// the case that makes an end fall back to its own stored coordinate.
 abstract class LinkAnchors {
-  /// Canvas-pixel position of a port on [assetId], or null if either the asset
-  /// or the port is unknown.
+  /// Page-relative position of a port on [assetId], or null if either the
+  /// asset or the port is unknown.
   Offset? portPosition(String assetId, String? port);
 
-  /// Canvas-pixel top-left of [assetId]'s box, or null if unknown.
+  /// Page-relative top-left of [assetId]'s box, or null if unknown.
   Offset? assetOrigin(String assetId);
 
   /// Nothing is anchored — every end falls back to its stored coordinate.
@@ -137,6 +152,12 @@ class _NoAnchors implements LinkAnchors {
 }
 
 /// The coordinate system a run's unpinned corners are measured in.
+///
+/// **Page-relative 0..1 space**, not pixels. A corner recorded here moves with
+/// the equipment when the page is rendered at a different aspect ratio,
+/// exactly as every asset's own coordinate does — measuring it in pixels
+/// instead would let the cable drift off the ports it is plugged into the
+/// moment the canvas stopped being the shape it was drawn on.
 ///
 /// [along] runs from [start] to [end]; [across] is that turned a quarter turn.
 /// Both are unit vectors, so a waypoint's `n` is in units of run length and a
@@ -190,13 +211,25 @@ class LinkRunFrame {
 /// inserted. The editor's ghost handles and "add point here" both lean on that
 /// alignment; breaking it silently inserts corners one place off.
 class ResolvedLink {
+  /// The skeleton in canvas pixels — what gets painted and hit-tested.
   final List<Offset> points;
+
+  /// The same run's frame in page-relative space, which is where every
+  /// editing operation does its arithmetic.
   final LinkRunFrame frame;
 
+  /// The canvas these pixels are for.
+  final Size canvas;
+
   /// Corner radius in canvas pixels, before per-corner clamping.
+  ///
+  /// Taken from the shortest side and applied *after* the skeleton is scaled,
+  /// so a fillet is a circle on screen. Rounding in page space and scaling
+  /// afterwards would turn every corner into an ellipse on any canvas that is
+  /// not square.
   final double radius;
 
-  ResolvedLink(this.points, this.frame, this.radius);
+  ResolvedLink(this.points, this.frame, this.canvas, this.radius);
 
   /// The waypoints only — the skeleton without its two ends.
   Iterable<Offset> get corners => points.skip(1).take(points.length - 2);
@@ -285,40 +318,50 @@ class LinkRun {
   /// [anchors] answers where the bound assets are; anything it does not know
   /// falls back to the end's own stored coordinate.
   ResolvedLink resolve(Size canvas, LinkAnchors anchors) {
-    final frame = LinkRunFrame(
-      _resolveEnd(from, canvas, anchors),
-      _resolveEnd(to, canvas, anchors),
-    );
+    final frame = frameIn(anchors);
     final pts = <Offset>[frame.start];
     for (final w in waypoints) {
-      pts.add(_resolveWaypoint(w, frame, canvas, anchors));
+      pts.add(_resolveWaypoint(w, frame, anchors));
     }
     pts.add(frame.end);
-    return ResolvedLink(pts, frame, radius * canvas.shortestSide);
+    return ResolvedLink(
+      [for (final p in pts) _toPixels(p, canvas)],
+      frame,
+      canvas,
+      radius * canvas.shortestSide,
+    );
   }
 
-  static Offset _resolveEnd(LinkEnd e, Size canvas, LinkAnchors anchors) {
+  /// This run's frame in page-relative space.
+  LinkRunFrame frameIn(LinkAnchors anchors) =>
+      LinkRunFrame(_resolveEnd(from, anchors), _resolveEnd(to, anchors));
+
+  static Offset _toPixels(Offset p, Size canvas) =>
+      Offset(p.dx * canvas.width, p.dy * canvas.height);
+
+  static Offset _toPage(Offset p, Size canvas) => Offset(
+      canvas.width == 0 ? 0 : p.dx / canvas.width,
+      canvas.height == 0 ? 0 : p.dy / canvas.height);
+
+  static Offset _resolveEnd(LinkEnd e, LinkAnchors anchors) {
     final id = e.assetId;
     if (id != null) {
       final p = anchors.portPosition(id, e.port);
       if (p != null) return p;
     }
-    return Offset(e.x * canvas.width, e.y * canvas.height);
+    return Offset(e.x, e.y);
   }
 
   static Offset _resolveWaypoint(
-      LinkWaypoint w, LinkRunFrame frame, Size canvas, LinkAnchors anchors) {
+      LinkWaypoint w, LinkRunFrame frame, LinkAnchors anchors) {
     final pin = w.pinnedTo;
     if (pin != null) {
       final origin = anchors.assetOrigin(pin);
       // A pin whose asset is gone has nothing to be an offset from. Falling
       // back to the run frame keeps the corner on the cable instead of
-      // dropping it at the canvas origin, which is the difference between a
+      // dropping it at the page origin, which is the difference between a
       // page that looks slightly wrong and one that looks broken.
-      if (origin != null) {
-        return origin +
-            Offset((w.dx ?? 0) * canvas.width, (w.dy ?? 0) * canvas.height);
-      }
+      if (origin != null) return origin + Offset(w.dx ?? 0, w.dy ?? 0);
     }
     return frame.place(w.t ?? 0.5, w.n ?? 0);
   }
@@ -329,36 +372,24 @@ class LinkRun {
   /// Re-anchoring is a change to the rule that holds a corner, not to where it
   /// is. A corner that jumps when you change what it follows teaches the
   /// operator that the setting is dangerous, and they stop using it.
-  void repin(
-    int index,
-    String? pinnedTo, {
-    required Size canvas,
-    required LinkAnchors anchors,
-  }) {
-    final at = resolve(canvas, anchors).points[index + 1];
-    waypoints[index] = _describe(at, pinnedTo,
-        frame: LinkRunFrame(
-          _resolveEnd(from, canvas, anchors),
-          _resolveEnd(to, canvas, anchors),
-        ),
-        canvas: canvas,
-        anchors: anchors);
+  void repin(int index, String? pinnedTo, {required LinkAnchors anchors}) {
+    final frame = frameIn(anchors);
+    final at = _resolveWaypoint(waypoints[index], frame, anchors);
+    waypoints[index] = _describe(at, pinnedTo, frame: frame, anchors: anchors);
   }
 
-  /// Describes the page point [at] under whichever rule [pinnedTo] names.
+  /// Describes the page-space point [at] under whichever rule [pinnedTo] names.
   static LinkWaypoint _describe(
     Offset at,
     String? pinnedTo, {
     required LinkRunFrame frame,
-    required Size canvas,
     required LinkAnchors anchors,
   }) {
     if (pinnedTo != null) {
       final origin = anchors.assetOrigin(pinnedTo);
       if (origin != null) {
         final d = at - origin;
-        return LinkWaypoint.pinned(
-            pinnedTo, d.dx / canvas.width, d.dy / canvas.height);
+        return LinkWaypoint.pinned(pinnedTo, d.dx, d.dy);
       }
     }
     final l = frame.locate(at);
@@ -373,13 +404,8 @@ class LinkRun {
     required Size canvas,
     required LinkAnchors anchors,
   }) {
-    waypoints[index] = _describe(at, waypoints[index].pinnedTo,
-        frame: LinkRunFrame(
-          _resolveEnd(from, canvas, anchors),
-          _resolveEnd(to, canvas, anchors),
-        ),
-        canvas: canvas,
-        anchors: anchors);
+    waypoints[index] = _describe(_toPage(at, canvas), waypoints[index].pinnedTo,
+        frame: frameIn(anchors), anchors: anchors);
   }
 
   /// Inserts a corner at the canvas point [at], into whichever segment it is
@@ -393,18 +419,24 @@ class LinkRun {
     final seg = resolved.nearestSegment(at);
     waypoints.insert(
         seg,
-        _describe(at, null,
-            frame: resolved.frame, canvas: canvas, anchors: anchors));
+        _describe(_toPage(at, canvas), null,
+            frame: resolved.frame, anchors: anchors));
     return seg;
   }
 
-  /// The page-relative box the run occupies, so the asset can publish a
-  /// bounding box `AssetStack` can position it by.
+  /// The page-relative box the run occupies, so the asset can publish the
+  /// centre and size `AssetStack` positions it by.
   ///
-  /// Inflated by the stroke so the ends' caps are inside it — a rect measured
-  /// on the centreline clips half the cable away at the extremes.
-  Rect boundsIn(Size canvas, LinkAnchors anchors, {double pad = 0}) {
-    final pts = resolve(canvas, anchors).points;
+  /// [pad] is in page-relative units and wants to cover the stroke's half
+  /// width: a rect measured on the centreline clips half the cable away at
+  /// the extremes, and the end caps with it.
+  Rect boundsIn(LinkAnchors anchors, {double pad = 0}) {
+    final frame = frameIn(anchors);
+    final pts = <Offset>[
+      frame.start,
+      for (final w in waypoints) _resolveWaypoint(w, frame, anchors),
+      frame.end,
+    ];
     var l = double.infinity, t = double.infinity;
     var r = -double.infinity, b = -double.infinity;
     for (final p in pts) {
