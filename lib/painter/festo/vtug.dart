@@ -40,6 +40,12 @@
 /// hardware photographs put it: at the solenoid end, under the `14` and `12`
 /// moulded into the body. A blanked position has no solenoid cap, no lamps
 /// and no overrides, because it has no valve.
+///
+/// One thing the photographs do *not* license: the dark solenoid housing on
+/// a VUVG is dark on the valve's **side**, and a top view never sees it.
+/// Nothing here is filled black. The only saturated colour on the drawing is
+/// the blue of the manual overrides, which is the only saturated colour on
+/// the hardware.
 library;
 
 import 'dart:math' as math;
@@ -87,10 +93,6 @@ const Color festoWhite = Color(0xFFECECEA);
 
 /// A half-tone of it for the manifold rail the valves stand on.
 const Color vtugManifoldColor = Color(0xFFDBDCDA);
-
-/// The dark cap over the pilot solenoids — the strongest shape on a VUVG,
-/// and what makes a row of them read as valves rather than as a comb.
-const Color vuvgSolenoidColor = Color(0xFF3B3B3D);
 
 /// Festo's blue. On the hardware it is the logo and the manual override
 /// caps, and it is used for exactly those two things here.
@@ -250,33 +252,58 @@ class VtugPainter extends CustomPainter {
       _outline,
     );
 
-    _screw(canvas, Offset(rect.left + 4, rect.top + 4));
+    _screw(canvas, Offset(rect.right - 4, rect.top + 4));
     _screw(canvas, Offset(rect.right - 4, rect.bottom - 4));
 
     // The lamp column down the left, labels outboard of the dots, exactly as
     // the housing is silkscreened. No panel behind them — the real ones are
     // bare lenses in the white moulding.
-    const top = 13.0;
-    const pitch = 6.6;
+    const top = 15.0;
+    const pitch = 6.4;
     for (var i = 0; i < leds.length; i++) {
       final y = top + i * pitch;
       _text(
         canvas,
         leds[i].label,
-        Offset(rect.left + 1, y - 1.5),
+        Offset(rect.left + 0.5, y - 1.5),
         fontSize: 3,
         color: const Color(0xFF55585A),
-        width: 11,
+        width: 9.5,
         align: TextAlign.right,
       );
-      _paintCteuLed(canvas, Offset(rect.left + 15, y), leds[i].state);
+      _paintCteuLed(canvas, Offset(rect.left + 12.5, y), leds[i].state);
     }
 
-    // The M12 bus connector and, below it, the label window.
-    _connector(canvas, Offset(rect.left + 28, 20), male: true);
+    // Three M12s, not one: the power inlet and both ends of the bus.
+    //
+    // `In 1` and `Out 2` are what `L/A1` and `L/A2` in the lamp column
+    // report on, so drawing a single connector left two of the six lamps
+    // with nothing on the housing to belong to. Power is the male one —
+    // pins, not sockets — which is how you tell it from the bus pair
+    // without reading the moulding, and so it is drawn that way here.
+    const sockets = [
+      ('PWR', 16.0, true),
+      ('In 1', 31.0, false),
+      ('Out 2', 46.0, false),
+    ];
+    for (final (label, y, male) in sockets) {
+      _text(
+        canvas,
+        label,
+        Offset(rect.left + 15, y - 1.4),
+        fontSize: 2.8,
+        color: const Color(0xFF55585A),
+        // The node's 40 mm is four columns: lamp legends, lamps, these
+        // legends, connectors. Narrower than 12 and 'Out 2' ellipsises,
+        // which on a two-port bus node is the one legend that has to read.
+        width: 12,
+        align: TextAlign.right,
+      );
+      _connector(canvas, Offset(rect.left + 33, y), male: male);
+    }
 
     final window = RRect.fromRectAndRadius(
-      Rect.fromLTWH(rect.left + 6, 48, 28, 36),
+      Rect.fromLTWH(rect.left + 5, 57, 30, 27),
       const Radius.circular(0.8),
     );
     canvas.drawRRect(window, Paint()..color = const Color(0xFFF7F7F5));
@@ -284,18 +311,18 @@ class VtugPainter extends CustomPainter {
     _text(
       canvas,
       'CTEU-EC',
-      Offset(rect.left + 6, 62),
+      Offset(rect.left + 5, 65),
       fontSize: 4,
       color: const Color(0xFF44474A),
-      width: 28,
+      width: 30,
     );
     _text(
       canvas,
       'FESTO',
-      Offset(rect.left + 6, 70),
+      Offset(rect.left + 5, 73),
       fontSize: 3.4,
       color: festoBlue,
-      width: 28,
+      width: 30,
     );
   }
 
@@ -326,22 +353,23 @@ class VtugPainter extends CustomPainter {
     }
   }
 
-  /// An M12. Male shows pins, female shows the socket bore.
+  /// An M12. Male shows pins — the power inlet — female the socket bore,
+  /// which is both EtherCAT ports.
   void _connector(Canvas canvas, Offset centre, {required bool male}) {
-    canvas.drawCircle(centre, 5, Paint()..color = const Color(0xFFC3C6C8));
-    canvas.drawCircle(centre, 5, _outline);
-    canvas.drawCircle(centre, 3.3, Paint()..color = const Color(0xFF44484A));
+    canvas.drawCircle(centre, 4.6, Paint()..color = const Color(0xFFC3C6C8));
+    canvas.drawCircle(centre, 4.6, _outline);
+    canvas.drawCircle(centre, 3.1, Paint()..color = const Color(0xFF44484A));
     if (male) {
       for (var i = 0; i < 4; i++) {
         final a = i * math.pi / 2 + math.pi / 4;
         canvas.drawCircle(
-          centre + Offset(math.cos(a), math.sin(a)) * 1.7,
-          0.55,
+          centre + Offset(math.cos(a), math.sin(a)) * 1.6,
+          0.5,
           Paint()..color = const Color(0xFFDDDEDB),
         );
       }
     } else {
-      canvas.drawCircle(centre, 1.6, Paint()..color = const Color(0xFF17191A));
+      canvas.drawCircle(centre, 1.5, Paint()..color = const Color(0xFF17191A));
     }
   }
 
@@ -407,20 +435,30 @@ class VtugPainter extends CustomPainter {
 
     if (!blank) {
       // The ribbed cap over the pilot solenoids, at the far end of the
-      // valve. One coil takes half the cap, two take all of it — the
-      // fastest read on the drawing for how many coils a position has,
-      // before anyone counts lamps.
+      // valve. One coil takes a little over half of it, two take the lot —
+      // a second, redundant read on how many coils a position has, before
+      // anyone counts lamps.
+      //
+      // Ribs on white, not a filled block. The solenoid housing on a VUVG
+      // genuinely is dark, and an earlier pass drew it that way — but it is
+      // dark on the valve's *side*, which a top view never sees. Fill it in
+      // from above and you get a black rectangle that is on no face of the
+      // hardware, sized differently per position for a reason the drawing
+      // never explains. The catalogue's own top view draws this as hatching
+      // in outline, and it is right to.
       final capW = coils == 1 ? w * 0.56 : w;
       final cap = Rect.fromLTWH(left, _bodyTop + 3, capW, 9);
-      canvas.drawRect(cap, Paint()..color = vuvgSolenoidColor);
-      for (var i = 1; i < 5; i++) {
-        final x = cap.left + cap.width * i / 5;
+      canvas.drawRect(cap, Paint()..color = const Color(0xFFDFE0DD));
+      canvas.drawRect(cap, _outline);
+      final ribs = Paint()
+        ..color = const Color(0xFF9DA0A2)
+        ..strokeWidth = 0.45;
+      for (var i = 1; i < 6; i++) {
+        final x = cap.left + cap.width * i / 6;
         canvas.drawLine(
-          Offset(x, cap.top + 1.5),
-          Offset(x, cap.bottom - 1.5),
-          Paint()
-            ..color = const Color(0xFF5C5C5F)
-            ..strokeWidth = 0.5,
+          Offset(x, cap.top + 1.2),
+          Offset(x, cap.bottom - 1.2),
+          ribs,
         );
       }
 
@@ -433,16 +471,18 @@ class VtugPainter extends CustomPainter {
           : [left + w * 0.3, left + w * 0.7];
       const labels = ['14', '12'];
       for (var i = 0; i < coils; i++) {
+        // Below the ribbed cap, not on it: the cap runs to y=17 and this
+        // was landing inside it.
         _text(
           canvas,
           labels[i],
-          Offset(xs[i] - 2.5, 16),
+          Offset(xs[i] - 2.5, 17.8),
           fontSize: 2.6,
           color: const Color(0xFF6E7274),
           width: 5,
         );
         final lamp = Rect.fromCenter(
-          center: Offset(xs[i], 22.5),
+          center: Offset(xs[i], 23.6),
           width: 3.4,
           height: 3.4,
         );
@@ -461,14 +501,14 @@ class VtugPainter extends CustomPainter {
         );
 
         canvas.drawCircle(
-            Offset(xs[i], 28.5), 1.3, Paint()..color = festoBlue);
-        canvas.drawCircle(Offset(xs[i], 28.5), 1.3, _outline);
+            Offset(xs[i], 29.5), 1.3, Paint()..color = festoBlue);
+        canvas.drawCircle(Offset(xs[i], 29.5), 1.3, _outline);
       }
     } else {
       _text(
         canvas,
         'BLANK',
-        Offset(left, 20),
+        Offset(left, 22),
         fontSize: 2.4,
         color: const Color(0xFF9DA0A2),
         width: w,
@@ -527,17 +567,18 @@ class VtugPainter extends CustomPainter {
     );
   }
 
-  /// The supply and pilot port markings the end plates carry, and the tag.
+  /// The terminal's tag.
+  ///
+  /// The end plates also carry the supply and pilot port markings — `14`,
+  /// `84`, `5`, `1`, `3` down each outer edge — and this deliberately does
+  /// not draw them. On the hardware they are read with the terminal in front
+  /// of you and a spanner in your hand; on a mimic at this scale they are
+  /// five characters of noise down both sides of the outermost box, and they
+  /// answer a question nobody asks a screen.
+  ///
+  /// The port numbers that *do* earn their place are the ones on each valve
+  /// position, because those are the ports the pane's controls act on.
   void _paintEndMarkings(Canvas canvas) {
-    const marks = ['14', '84', '5', '1', '3'];
-    for (var i = 0; i < marks.length; i++) {
-      final y = 16 + i * 14.0;
-      _text(canvas, marks[i], Offset(0.5, y), fontSize: 3.2,
-          color: const Color(0xFF55585A), width: 4.5, align: TextAlign.left);
-      _text(canvas, marks[i], Offset(vtugFaceMm.width - 5, y), fontSize: 3.2,
-          color: const Color(0xFF55585A), width: 4.5, align: TextAlign.right);
-    }
-
     if (name.isNotEmpty) {
       _text(
         canvas,
