@@ -765,8 +765,9 @@ final class RelaySession {
     // (three-state depth beyond forwarding, idempotency windows, hold-to-run)
     // and Phase 6 owns authorization. 10-02 added the four `browse.*` names in
     // `_registerDataServices` below, which retired six of the thirteen checks
-    // the contract legs had been proving unreachable; the other twenty
-    // data-service names land in 10-03 through 10-05. 03-08's rule stands —
+    // the contract legs had been proving unreachable, and 10-03's timeseries
+    // four, which retired three more; the other sixteen data-service names
+    // land in 10-04 and 10-05. 03-08's rule stands —
     // the set is frozen against a hand-written literal in `surface_test.dart`
     // so each addition is a deliberate edit to a test that explains its cost.
     final handlers = SessionHandlers(
@@ -840,7 +841,8 @@ final class RelaySession {
     // summary line per session, rather than thrown once per frame into the
     // error handler (05-REVIEW WR-03).
     _onNotification(Methods.holdTick, values.holdTick);
-    _registerDataServices(DataHandlers(source: api, resolver: resolver));
+    _registerDataServices(
+        DataHandlers(source: api, config: config, resolver: resolver));
     // Method-not-found. **This fallback's armor is inert, and the code below
     // is kept anyway** (06-04, 06-RESEARCH §H.2, measured).
     //
@@ -914,6 +916,13 @@ final class RelaySession {
     _on(DataServiceMethods.browseFetchChildren, data.browseFetchChildren);
     _on(DataServiceMethods.browseFetchDetail, data.browseFetchDetail);
     _on(DataServiceMethods.browseResolvePath, data.browseResolvePath);
+    _on(DataServiceMethods.timeseriesQuery, data.timeseriesQuery);
+    _on(DataServiceMethods.timeseriesQueryMultiple,
+        data.timeseriesQueryMultiple);
+    _on(DataServiceMethods.timeseriesQueryDownsampled,
+        data.timeseriesQueryDownsampled);
+    _on(DataServiceMethods.timeseriesCountMultiple,
+        data.timeseriesCountMultiple);
   }
 
   /// The client's end vanished — a graceful close, a reset, a yanked cable.
