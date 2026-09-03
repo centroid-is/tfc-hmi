@@ -564,6 +564,7 @@ Future<Gateway> buildGateway(
   required KeyMappings mappings,
   required Logger log,
   required SeriesResolver resolver,
+  TimeseriesApi? timeseries,
   void Function(Object error, StackTrace stack, String where)? onError,
 }) async {
   final refused = reservedKeyMappingNames(mappings);
@@ -603,6 +604,17 @@ Future<Gateway> buildGateway(
     // which `local_state_man.dart` already documents as a *configuration* gap
     // that lands in `LocalBrowse.incidents` rather than in an exception.
     browseSpaces: const <String, UpstreamAddressSpace>{},
+    // Recorded samples, when this deployment historises. Null is the ordinary
+    // case for a fixture and for a gateway with no `collection:` block: 8b-01
+    // made historising a deliberate two-field act, and `LocalStateMan.
+    // timeseries` says so rather than serving an empty chart.
+    //
+    // Passed in rather than built here for the same reason `browseSpaces`
+    // cannot be filled here: the object it needs does not exist yet. A
+    // `TimescaleReader` borrows the `TimescaleSink`'s connection, and the
+    // sink is the composition root's — it is started, torn down and flushed
+    // there, around this call.
+    timeseries: timeseries,
   );
   final server = RelayServer(
     // **The identity this whole phase exists to make true.** The server's

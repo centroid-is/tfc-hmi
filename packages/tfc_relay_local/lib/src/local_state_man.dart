@@ -92,9 +92,11 @@ final class LocalStateMan implements StateManApi {
     this.maxWriteOutcomes = 4096,
     Map<String, UpstreamAddressSpace> browseSpaces =
         const <String, UpstreamAddressSpace>{},
+    TimeseriesApi? timeseries,
     DateTime Function()? now,
     int Function()? elapsedMs,
   })  : links = List<UpstreamLink>.unmodifiable(links),
+        _timeseries = timeseries,
         browseSpaces =
             Map<String, UpstreamAddressSpace>.unmodifiable(browseSpaces),
         _now = now ?? DateTime.now,
@@ -1363,13 +1365,42 @@ final class LocalStateMan implements StateManApi {
     deadline: readDeadline,
   );
 
-  // ----------------------------------------------------------- not this phase
+  // ----------------------------------------------------------------- history
 
+  /// Recorded samples, over the gateway's own collection plan.
+  ///
+  /// The same instance every time it is asked for — `browse`'s rule, for
+  /// `browse`'s reason: a getter that rebuilt would discard whatever the
+  /// composition wired.
+  ///
+  /// **A gateway with no `collection:` block has none of this**, and says so.
+  /// 8b-01 made historising a deliberate two-field act precisely so that a
+  /// gateway nobody configured constructs no database object at all; there is
+  /// therefore nothing to read from, and the honest answer is to fail. An
+  /// empty reader would be worse than a failure in the way that matters
+  /// here — it would draw every chart flat, for months, with nothing anywhere
+  /// saying why.
+  ///
+  /// It is a [StateError] and **not** an `UnimplementedError`: the member is
+  /// implemented, and what is absent is a historian in this deployment. The
+  /// ledger in `freeze_test.dart` dropped from three to two in the commit
+  /// that made this true, and it would be lying if it still counted this one.
   @override
-  TimeseriesApi get timeseries =>
-      throw UnimplementedError('10-01 owes LocalStateMan.timeseries — Phase 10 '
-          'consumes what Phase 8 collects; 08-11 sets supportsDataServices '
-          'false on the contract leg until it does');
+  TimeseriesApi get timeseries {
+    final reader = _timeseries;
+    if (reader == null) {
+      throw StateError('this gateway was composed without a historian, so it '
+          'has no recorded samples to serve. Give it a `collection:` block '
+          'with an endpoint and `enabled: true`; a gateway with no such '
+          'block constructs no database object at all, deliberately '
+          '(collection_config.dart\'s class doc)');
+    }
+    return reader;
+  }
+
+  final TimeseriesApi? _timeseries;
+
+  // ----------------------------------------------------------- not this phase
 
   @override
   HistoryViewApi get historyViews =>

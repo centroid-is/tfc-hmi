@@ -94,11 +94,36 @@ final List<Directory> _relayBinDirs = [
 /// fail-closed rather than a permissive default, which is the whole hazard the
 /// `lib/` sweep exists to prevent.
 const Map<String, String> _exemptResolvers = {
-  'relay_gateway.dart': 'NoSeriesMapped, the composition root\'s fail-closed '
-      'interim: every lookup returns null, which 10-CONTEXT amendment 6 '
-      'defines as "not served until mapped". 10-07 replaces it with the '
-      'resolver over 8b\'s collection config and deletes both it and this '
-      'line.',
+  'relay_gateway.dart': 'LateSeriesResolver, the composition root\'s ordering '
+      'knot and nothing else: RelayServer takes its resolver as a required '
+      'constructor argument, and the real one cannot be built until '
+      'buildGateway has fed the KeyRouter, because the collection plan needs '
+      'the router\'s own ingest verdict. Before install() every lookup '
+      'returns null, which 10-CONTEXT amendment 6 defines as "not served '
+      'until mapped", and a second install is a StateError rather than a '
+      'silent replacement. main installs before gateway.server.start(), so '
+      'the uninstalled state is unreachable by any request. It was '
+      'NoSeriesMapped until 10-07.',
+};
+
+/// The production implementations of the interface, by file, and why each is
+/// allowed to exist in a `lib/`.
+///
+/// **Empty until 10-07, and the reason the list exists rather than the pin
+/// simply moving to one:** the hazard is not "an implementation exists", it is
+/// "a PERMISSIVE implementation exists, so every composition root reaches for
+/// the only one available and the fail-closed rule becomes advice". An entry
+/// here is a claim that the named file cannot be permissive, with the argument
+/// on the record.
+const Map<String, String> _libResolvers = {
+  'collection_plan_resolver.dart': 'CollectionPlanResolver (10-07), whose '
+      'only source of truth is 8b\'s CollectionPlan: it answers a table for a '
+      'series the plan holds an entry for and null for every other string in '
+      'the world. It cannot be permissive, because it has nothing to be '
+      'permissive with — there is no identity path, no fallback to the '
+      'argument, and no prefix spelled anywhere in it (freeze_test.dart '
+      'sweeps lib/src/data/ for both). A gateway that historises nothing '
+      'builds one over an empty plan and serves no history at all.',
 };
 
 /// The sweep's own file, excluded from the scan. See the library doc.
@@ -377,23 +402,38 @@ void main() {
               'the two together are what make an empty result mean something');
     });
 
-    test('nothing under any relay lib implements it', () {
+    test('the only relay lib implementations are the named ones', () {
       final hits = [
         for (final directory in _relayLibDirs)
           ..._mentions(directory, _resolverImpl),
       ];
+      final unexpected = hits
+          .where((hit) => !_libResolvers.keys
+              .any((file) => hit.split(':').first.endsWith(file)))
+          .toList();
 
-      expect(hits, isEmpty,
-          reason: 'a production implementation of SeriesResolver was found at '
-              '$hits. 10-CONTEXT amendment 6 makes an unmappable table '
-              'fail-closed — it is not served until it is mapped — and a '
-              'fail-closed rule holds exactly as long as the only way to get '
-              'a resolver is to supply one. The first permissive '
-              'implementation in a lib/ is the one every composition root '
-              'reaches for, because it is the only one available, and from '
-              'then on the rule is advice. 10-07 builds the real resolver '
-              'over 8b\'s collection config; until it does, the fixtures '
-              'carry their own in test/support/');
+      expect(unexpected, isEmpty,
+          reason: 'an unlisted production implementation of SeriesResolver '
+              'was found at $unexpected. 10-CONTEXT amendment 6 makes an '
+              'unmappable table fail-closed — it is not served until it is '
+              'mapped — and the rule holds exactly as long as no PERMISSIVE '
+              'implementation is lying around: the first one in a lib/ is the '
+              'one every composition root reaches for, because it is the only '
+              'one available, and from then on the rule is advice. Add the '
+              'file to _libResolvers with the argument for why it cannot be '
+              'permissive, or keep it in test/support/ where the fixtures\' '
+              'own resolvers live');
+
+      // The other direction, as the close-code exemptions are checked: an
+      // entry naming a file that no longer implements the interface is a list
+      // nobody pruned, and it would silently license the next thing to take
+      // that file name.
+      for (final file in _libResolvers.keys) {
+        expect(hits.where((hit) => hit.split(':').first.endsWith(file)),
+            isNotEmpty,
+            reason: '$file is listed but implements nothing. Reason on '
+                'record was: ${_libResolvers[file]}');
+      }
     });
 
     test('the only production implementation is the named fail-closed one',
@@ -508,10 +548,26 @@ void main() {
               .readAsLinesSync()[int.parse(parts.last) - 1];
           // Parameter declarations only: `SeriesResolver name,` or `... {`.
           // A field, a return type or a prose mention is not one.
-          if (!RegExp(r'SeriesResolver [a-z]\w*\s*[,)]').hasMatch(line)) {
-            continue;
+          final match = RegExp(r'SeriesResolver [a-z]\w*\s*[,)]').firstMatch(line);
+          if (match == null) continue;
+          // **The property is "a caller cannot leave the mapping out", and
+          // `required` is only one of the two ways to have it.** A MANDATORY
+          // POSITIONAL parameter has it by construction and cannot carry the
+          // keyword — `required` is a named-parameter modifier and the
+          // analyzer rejects it on a positional one. Judged by what precedes
+          // the declaration on its own line: a positional parameter follows
+          // the signature's `(` with no `{` between, while a named one either
+          // sits alone on its line inside a `{`-opened block or follows a `{`
+          // on the same line. Without this, 10-07's LateSeriesResolver.install
+          // — whose one positional argument is as unomittable as a parameter
+          // gets — reads as an offender, and "fix" would mean making it
+          // named and optional.
+          final before = line.substring(0, match.start);
+          final positional =
+              before.contains('(') && !before.contains('{');
+          if (!positional && !line.contains('required ')) {
+            offenders.add('$hit: $line');
           }
-          if (!line.contains('required ')) offenders.add('$hit: $line');
           if (line.contains('=')) offenders.add('$hit (defaulted): $line');
         }
       }

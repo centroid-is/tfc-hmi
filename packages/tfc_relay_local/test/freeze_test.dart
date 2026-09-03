@@ -346,28 +346,65 @@ const String contractKitPackage = 'tfc_stateman_contract';
 /// The plan that closes each member decrements this in the same commit. A
 /// member that quietly starts working without this number moving is a member
 /// nobody decided to ship.
-const int declaredUnimplementedMembers = 3;
+///
+/// **10-07 took it from three to two**, in the commit that made
+/// `LocalStateMan.timeseries` answer a `TimescaleReader`. That member no
+/// longer throws at all: a gateway composed WITHOUT a historian — no
+/// `collection:` block, so no database object exists anywhere — throws a
+/// `StateError` naming the composition instead, which is a deployment fact
+/// rather than an unwritten member, and the ledger would be lying if it still
+/// counted it. `historyViews` and `preferences` remain, owed by **10-08 task 3**
+/// and **10-09 task 3** — the two plans that wire those getters and decrement
+/// this number, not 10-04 and 10-05, which shipped the server-side handlers
+/// and left both getters throwing. A ledger that names a finished plan as the
+/// owner is a ledger nobody can act on.
+const int declaredUnimplementedMembers = 2;
 
 /// Files under `lib/` allowed to import the database layer — the wrap seam.
 ///
-/// **One, raised from zero by 8b-02 in the same commit that created the
-/// import site it names: `collect/timescale_sink.dart`**, the TimescaleDB
-/// adapter behind the seam. The point of the seam is that the rest of the
-/// package cannot reach past it: `Database` starts a flush timer in its
-/// constructor and retries its connect until it opens, and a second import
-/// site is a second place those behaviours leak onto the gateway's value
-/// path. The sweep also flags an unrestricted `tfc_dart/tfc_dart.dart`
-/// barrel import, because the barrel re-exports the database layer wholesale
-/// — a `show` clause is what keeps a barrel import from being a back door.
+/// **Two, and the two are named below.** 8b-02 raised it from zero to one in
+/// the same commit that created `collect/timescale_sink.dart`, the write
+/// adapter; 10-07 raised it to two in the same commit that created
+/// `data/timescale_reader.dart`, the read adapter and its mirror. The point of
+/// the seam is that the rest of the package cannot reach past it: `Database`
+/// starts a flush timer in its constructor and retries its connect until it
+/// opens, and a third import site is a third place those behaviours leak onto
+/// the gateway's value path — and a place a second connection pool would get
+/// built without anyone deciding to. The sweep also flags an unrestricted
+/// `tfc_dart/tfc_dart.dart` barrel import, because the barrel re-exports the
+/// database layer wholesale — a `show` clause is what keeps a barrel import
+/// from being a back door.
 ///
 /// (`package:postgres` is deliberately NOT in the sweep's needles: the
 /// driver's types are not `Database`, and the advisory lock's dedicated
 /// out-of-pool connection needs them without inheriting the flush timer or
-/// the connect ladder this seam exists to contain.)
-const int declaredSeamImportFiles = 1;
+/// the connect ladder this seam exists to contain. `package:drift` is not one
+/// either, for the same reason and for one more: the reader needs `Variable`
+/// to parameterise two statements `Database` exposes no method for, and
+/// parameterising is the opposite of the hazard this file exists to watch.)
+const int declaredSeamImportFiles = 2;
 
-/// The one file [declaredSeamImportFiles] permits, by path fragment.
-const String seamImportFile = 'collect/timescale_sink.dart';
+/// The files [declaredSeamImportFiles] permits, by path fragment.
+///
+/// One writes and never reads; one reads and never writes. The second half of
+/// that sentence is enforced separately — see [writeCallSitesUnder].
+const List<String> declaredSeamFiles = <String>[
+  'collect/timescale_sink.dart',
+  'data/timescale_reader.dart',
+];
+
+/// Insert and retention call sites under `lib/src/data/` — **zero**.
+///
+/// PHASE 10 READS AND NEVER WRITES. `registerRetentionPolicy` does not merely
+/// register: on a table whose policy differs it *uninstalls the existing one
+/// and installs its own* (`database.dart:847-864`), which is precisely the
+/// two-writer fight 8b spent a whole verdict avoiding while the application's
+/// own collector still runs against the same server. A read path that called
+/// it would restart that fight from the side nobody is watching — 8b's
+/// `side_by_side_test.dart` reads the app's policy before and after, and this
+/// pin is what keeps a future edit from making that case start failing for a
+/// reason nobody could find.
+const int declaredDataWriteSites = 0;
 
 /// Files under `lib/` spelling the literal `'gw_'` — exactly one.
 ///
@@ -677,19 +714,52 @@ void main() {
               'the shape this sweep exists to stop');
     });
 
-    test('the wrap seam is one file, and it is the named one', () {
+    test('the wrap seam is two files, and they are the named ones', () {
       final files = seamImportFiles(libRoot);
       expect(files, hasLength(declaredSeamImportFiles),
           reason: 'the point of the seam is that the rest of the package '
               'cannot reach past it: Database starts a flush timer in its '
               'constructor and retries its connect until it opens, and an '
-              'import site outside collect/timescale_sink.dart puts both '
-              'on the gateway\'s value path. 8b-02 raised this to one, '
-              'naming that file, in the commit that created it');
-      expect(files.single, contains(seamImportFile),
-          reason: 'one import site somewhere else is not the seam — it is '
-              'a second adapter nobody decided on, holding a Database with '
-              'its own flush timer');
+              'import site outside the two named files puts both on the '
+              'gateway\'s value path — and is where a second connection '
+              'pool gets built without anyone deciding to. 8b-02 raised '
+              'this to one and 10-07 to two, each in the commit that '
+              'created the file it names');
+      for (final declared in declaredSeamFiles) {
+        expect(files.where((f) => f.contains(declared)), hasLength(1),
+            reason: 'the seam is these two files and no others; '
+                '$declared is missing or duplicated');
+      }
+    });
+
+    test('nothing under lib/src/data/ can write or retire history', () {
+      expect(writeCallSitesUnder(Directory('${libSrc.path}/data')),
+          hasLength(declaredDataWriteSites),
+          reason: 'PHASE 10 READS AND NEVER WRITES. registerRetentionPolicy '
+              'uninstalls a differing policy and installs its own '
+              '(database.dart:847-864), which is the two-writer fight 8b '
+              'settled while the app collector still runs — restarting it '
+              'from the read path would show up as 8b\'s side_by_side case '
+              'failing for a reason nobody could locate');
+    });
+
+    test('the write sweep can see an offender', () {
+      // declaredDataWriteSites is ZERO, so the pin above proves nothing on
+      // its own: a sweep that always returns empty passes it.
+      final seeded = Directory.systemTemp.createTempSync('relay-data-write-');
+      addTearDown(() => seeded.deleteSync(recursive: true));
+      File('${seeded.path}/insert.dart').writeAsStringSync(
+          'void f(Object db) { db.insertTimeseriesData(t, now, v); }\n');
+      File('${seeded.path}/retention.dart').writeAsStringSync(
+          'void f(Object db) { db.registerRetentionPolicy(t, p); }\n');
+      File('${seeded.path}/mention.dart').writeAsStringSync(
+          '/// insertTimeseriesData is what the SINK does, not this.\n');
+
+      expect(writeCallSitesUnder(seeded), hasLength(2),
+          reason: 'both write doors are seen, and a doc comment naming one '
+              'is not a call site — a sweep that flagged prose would make '
+              'the honest explanation of why there is no write path here '
+              'impossible to write down');
     });
 
     test('the prefix has one spelling', () {
@@ -1008,6 +1078,28 @@ List<String> seamImportFiles(Directory directory) {
     }
   }
   return files;
+}
+
+/// Insert and retention call sites under [directory], outside comments.
+///
+/// The two doors `Database` opens onto writing history: `insertTimeseriesData`
+/// puts a row in, `registerRetentionPolicy` decides what gets thrown away —
+/// and the second one *uninstalls* whatever policy it disagrees with.
+List<String> writeCallSitesUnder(Directory directory) {
+  final sites = <String>[];
+  if (!directory.existsSync()) return sites;
+  for (final file in dartFilesIn(directory)) {
+    final lines = file.readAsLinesSync();
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      if (_isAnyComment(line)) continue;
+      if (line.contains('insertTimeseriesData') ||
+          line.contains('registerRetentionPolicy')) {
+        sites.add('${file.path}:${i + 1}');
+      }
+    }
+  }
+  return sites;
 }
 
 /// Files under [directory] spelling the literal `'gw_'` outside a comment,
