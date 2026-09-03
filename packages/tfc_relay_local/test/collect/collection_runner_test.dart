@@ -452,6 +452,50 @@ void main() {
           reason: 'recovery resumes the trend');
       expect(r.sink.accepted.last.value, 6.0);
     });
+
+    test('a wake-up tick after a stall declines the held value instead of '
+        'stamping it at now() (09-09, F22e)', () async {
+      final r = rig({speedKey: collectedEntry(speedKey, interval: tick)});
+      await r.runner.start();
+      await pump();
+
+      feed(r.plant, speedKey, 9.0);
+      await until(() => r.sink.accepted.length >= 2);
+      final skippedBefore = r.runner.skippedSamples;
+      final rowsBefore = r.sink.accepted.length;
+
+      // The stall: a synchronous block freezes this isolate's event loop —
+      // the sample timer misses whole windows exactly as it does under
+      // Isolate.pause or a VM snapshot, and `t.tick` jumps on the wake-up
+      // callback. 400 ms over a 25 ms tick is ~15 missed windows, well past
+      // the runner's quarter-second decline floor and far past anything a
+      // scheduler pause produces.
+      final stallEnd = DateTime.now().add(const Duration(milliseconds: 400));
+      while (DateTime.now().isBefore(stallEnd)) {
+        // Busy-wait on purpose: dart:io sleep() would also work, but a spin
+        // keeps this file import-identical and the property is the same —
+        // no event loop, no timers, no sweeps.
+      }
+
+      // The wake-up tick must DECLINE and COUNT — the held 9.0 predates the
+      // stall, and writing it at now() manufactures a reading from inside a
+      // window nobody sampled (the one-row flat line F22e catches at the
+      // gate level, against a real hypertable).
+      await until(() => r.runner.skippedSamples > skippedBefore,
+          reason: 'the wake-up tick neither declined nor counted: the '
+              'missed windows are a real loss the operator reads off '
+              'PIPE.collect.rows_dropped');
+      // And the trend resumes on its own: the value is still vouched for
+      // (nothing degraded it), so the next ON-SCHEDULE tick writes again.
+      await until(() => r.sink.accepted.length > rowsBefore,
+          reason: 'one declined wake-up tick must cost exactly the missed '
+              'windows, never the trend that follows them');
+      expect(r.runner.skippedSamples, skippedBefore + 1,
+          reason: 'the stall is one wake-up tick, so it is one counted '
+              'decline — Timer.periodic coalesces the missed windows into '
+              'a single callback, and counting more would inflate the drop '
+              'counter for a single gap');
+    });
   });
 
   group('struct members become one row', () {
