@@ -1,6 +1,7 @@
-import 'dart:io' show Platform;
+import 'dart:io' show File, Platform;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show FontLoader;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/page_creator/assets/ethercat_link.dart';
 import 'package:tfc/page_creator/assets/ethercat_link_pane.dart';
@@ -9,6 +10,20 @@ import 'package:tfc/theme.dart';
 import '../../helpers/golden_tolerance.dart';
 
 const _key = Key('ethercat_link_pane');
+
+/// The pane is almost entirely words -- uptimes, counts, the line saying which
+/// way the evidence points. Without a real font every glyph renders as a solid
+/// Ahem box and the golden proves the layout while saying nothing about what
+/// it says.
+Future<void> loadRealFont() async {
+  final data = File('lib/fonts/roboto-mono/RobotoMono-Regular.ttf')
+      .readAsBytesSync()
+      .buffer
+      .asByteData();
+  for (final family in ['Roboto', 'roboto-mono']) {
+    await (FontLoader(family)..addFont(Future.value(data))).load();
+  }
+}
 
 EtherCatLinkState _state({
   bool linkUp = true,
@@ -71,6 +86,7 @@ void main() {
     testWidgets('a cable that has held since commissioning', (tester) async {
       // 412 days: past where a 32-bit millisecond TIME would have saturated,
       // which is the whole reason the PLC counts minutes.
+      await loadRealFont();
       await tester.pumpWidget(pane(_state(
         connectedMinutes: 412 * 1440 + 7 * 60 + 23,
         longestMinutes: 412 * 1440 + 7 * 60 + 23,
@@ -84,6 +100,7 @@ void main() {
     });
 
     testWidgets('a marginal cable, still up and erroring', (tester) async {
+      await loadRealFont();
       await tester.pumpWidget(pane(_state(
         degraded: true,
         connectedMinutes: 3 * 1440 + 90,
@@ -102,6 +119,7 @@ void main() {
     });
 
     testWidgets('a cable that is out', (tester) async {
+      await loadRealFont();
       await tester.pumpWidget(pane(_state(
         linkUp: false,
         connectCount: 9,
@@ -116,6 +134,7 @@ void main() {
 
     testWidgets('errors that arrived already broken exonerate the cable',
         (tester) async {
+      await loadRealFont();
       await tester.pumpWidget(pane(_state(
         connectedMinutes: 5000,
         longestMinutes: 5000,
@@ -130,6 +149,7 @@ void main() {
     });
 
     testWidgets('figures that stopped updating say so', (tester) async {
+      await loadRealFont();
       await tester.pumpWidget(pane(_state(
         stale: true,
         connectedMinutes: 2000,
@@ -143,6 +163,7 @@ void main() {
 
     testWidgets('a cable drawn to document wiring, with no key',
         (tester) async {
+      await loadRealFont();
       await tester.pumpWidget(pane(null, withReset: false));
       await tester.pumpAndSettle();
       await expectLater(find.byKey(_key),

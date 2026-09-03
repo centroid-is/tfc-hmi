@@ -42,6 +42,9 @@ class EtherCatLinkPaneBody extends StatelessWidget {
   /// button can show it running.
   final Future<void> Function()? onResetCounters;
 
+  // Labels are kept short deliberately: three tiles fit across a 380 px pane,
+  // which leaves about 108 px each, and anything longer ellipses to
+  // 'Connecte…' -- a label that has lost the word carrying its meaning.
   @override
   Widget build(BuildContext context) {
     final s = state;
@@ -78,47 +81,50 @@ class EtherCatLinkPaneBody extends StatelessWidget {
                         ?.copyWith(color: states.violet),
                   ),
                 ),
+              // Two per row, not three. A d:hh:mm uptime is the widest
+              // value here and the interesting cables are the old ones:
+              // 412 days ellipsed to '412d 07:…' in a 108 px tile, losing
+              // exactly the digits somebody opened the pane to read.
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: [
                   PaneMetricTile(
-                    label: 'Connected for',
+                    width: 184,
+                    label: 'Uptime',
                     value: s.linkUp
                         ? formatDaysHoursMinutes(s.connectedMinutes)
-                        : '--',
+                        : 'down',
                     icon: Icons.timelapse,
                     valueColor: s.linkUp ? null : states.red,
                   ),
                   PaneMetricTile(
-                    label: 'Connections',
+                    width: 128,
+                    label: 'Connects',
                     value: '${s.connectCount}',
                     icon: Icons.link,
                   ),
                   PaneMetricTile(
-                    label: 'Errors / hour',
-                    value: '${s.errorsLastHour}',
-                    icon: Icons.warning_amber,
-                    valueColor: s.degraded ? states.yellow : null,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  PaneMetricTile(
-                    label: 'Longest run',
+                    width: 184,
+                    label: 'Best run',
                     value: formatDaysHoursMinutes(s.longestMinutes),
                     icon: Icons.trending_up,
                   ),
                   PaneMetricTile(
+                    width: 128,
+                    label: 'Errors/h',
+                    value: '${s.errorsLastHour}',
+                    icon: Icons.warning_amber,
+                    valueColor: s.degraded ? states.yellow : null,
+                  ),
+                  PaneMetricTile(
+                    width: 184,
                     label: 'Clean for',
                     value: formatDaysHoursMinutes(s.minutesSinceError),
                     icon: Icons.check_circle_outline,
                   ),
                   PaneMetricTile(
+                    width: 128,
                     label: 'Available',
                     value: s.availabilityPct.toStringAsFixed(1),
                     unit: '%',
