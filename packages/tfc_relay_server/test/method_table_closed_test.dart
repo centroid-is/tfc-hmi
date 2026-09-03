@@ -332,4 +332,152 @@ void main() {
               'wrong side of the socket');
     });
   });
+
+  group('no method on this wire is shaped like a statement', () {
+    test('no registered name carries a statement-shaped token', () {
+      expect(statementShapedNames(_session().registeredMethods), isEmpty,
+          reason: 'a method whose name says SQL is the crudest form of the '
+              'thing DB-04 forbids, and the only reason to sweep for it is '
+              'that it costs nothing. If this ever fires, the offending name '
+              'hands the plant\'s database to whoever holds a socket: no '
+              'gateway-side escaping makes a caller-supplied statement safe, '
+              'because the caller chose the grammar');
+    });
+
+    test('the shipped timeseries names pass the sweep', () {
+      // Asserted explicitly rather than left as a consequence of the arm
+      // above. A sweep that fires on a name that already ships is a sweep
+      // somebody weakens within the week, and the weakening is what actually
+      // loses the property. `queryTimeseriesData` is a query *for a named
+      // series over a window*; the shape forbidden here is a method that takes
+      // a **statement**, and the two are not distinguishable by a name
+      // pattern — which is why the parameter arm below is the one doing the
+      // work, and why saying otherwise in this reason string would be a lie
+      // the next reader would act on.
+      expect(statementShapedNames(DataServiceMethods.timeseriesMethods), isEmpty,
+          reason: 'timeseries.queryTimeseriesData and its three siblings are '
+              'shipped names. If the pattern fires on them the pattern is '
+              'wrong, and the correct response is to narrow the pattern here '
+              'rather than to rename a wire method or delete the sweep');
+    });
+
+    test('a name set carrying historyViews.rawQuery is caught, naming it', () {
+      final forged = {
+        ..._session().registeredMethods,
+        'historyViews.rawQuery',
+      };
+
+      expect(statementShapedNames(forged), {'historyViews.rawQuery'},
+          reason: 'the arm has to name the offender. A rawQuery on this wire '
+              'means any authenticated station can run a statement of its own '
+              'choosing against the historian — reading every tag the policy '
+              'hides, or dropping the table a shift report is built from');
+    });
+  });
+
+  group('no parameter on this wire is shaped like a statement', () {
+    test('the four wire interfaces declare no statement-shaped parameter', () {
+      final swept = statementShapedParameters(_everyWireParameter())
+          .difference(exemptParameters.keys.toSet());
+
+      expect(swept, isEmpty,
+          reason: 'this is the arm that bites. The gateway forbids '
+              'query(sql) by having no method that takes a statement — but a '
+              'parameter is a statement fragment just the same, and it '
+              'arrives wearing an ordinary signature. A `where` or an '
+              '`expression` on any of these four interfaces is a SQL door '
+              'with a different door handle. If a new one is genuinely safe, '
+              'it joins exemptParameters with the guard that makes it safe '
+              'cited there — it does not get quietly dropped from the token '
+              'list');
+    });
+
+    test('orderBy is still exempt, and still needs to be', () {
+      // The companion to the exemption, and the reason the exemption is not a
+      // hole held open for nothing. `handler_table_test.dart:293-300` makes
+      // the same move for a close code: an exemption whose subject has stopped
+      // tripping the sweep is a line nobody will ever delete on purpose.
+      expect(statementShapedParameters(_everyWireParameter()), {'orderBy'},
+          reason: 'the raw sweep — exemptions not applied — must still name '
+              'exactly orderBy. If it names nothing, the sweep has stopped '
+              'seeing the one parameter this exemption exists for and the '
+              'exemption is now excusing nothing while looking like a '
+              'reviewed decision. If it names something else as well, that '
+              'second parameter reached the wire without anybody arguing for '
+              'it');
+    });
+
+    test('a parameter set carrying where is caught, naming it', () {
+      final forged = [..._everyWireParameter(), 'where'];
+
+      expect(statementShapedParameters(forged), containsAll(<String>['where']),
+          reason: 'a `where` parameter on a timeseries method is the whole of '
+              'DB-04 in one word: the client writes the predicate, the '
+              'gateway pastes it into the statement, and every row-level '
+              'restriction the policy layer applies stops meaning anything');
+    });
+
+    test('the walk sees a parameter arriving through a superinterface', () {
+      // WR-07's hole, re-proven against this file's own copy of the walk.
+      // `api_surface_test.dart:247-257` found it once: reading `declarations`
+      // alone returns only what a class declares itself, so the one shape
+      // these arms exist to forbid could arrive through a superinterface and
+      // be invisible to every assertion above.
+      expect(declaredParameterNames(_DerivedFixture),
+          containsAll(<String>['sql', 'where']),
+          reason: 'a parameter inherited from a superinterface is fully part '
+              'of the wire surface. If this fails, every arm above is reading '
+              'half the surface and reporting the other half as clean');
+    });
+  });
+
+  group('the one exemption is argued, not asserted', () {
+    test('there is exactly one exempt parameter', () {
+      expect(exemptParameters, hasLength(1),
+          reason: 'orderBy is the only free-text-looking parameter on this '
+              'wire and the list is meant to stay that way. A second entry is '
+              'a second SQL-shaped thing somebody decided was fine, and it '
+              'should be read as such rather than counted');
+    });
+
+    test('the exemption carries an argument, not a label', () {
+      expect(thinlyArguedExemptions(exemptParameters), isEmpty,
+          reason: 'an exemption nobody had to justify is an exemption nobody '
+              'will re-examine. The same floor gate_manifest_test.dart puts '
+              'on a supporting case, for the same reason: the entry is the '
+              'only place the argument is written down, so a label leaves the '
+              'next reader to re-derive whether a SQL fragment on the wire is '
+              'safe');
+    });
+
+    test('the exemption cites a file that exists', () {
+      expect(uncitedExemptions(exemptParameters), isEmpty,
+          reason: 'the argument has to point at the guard, not describe it. '
+              'orderBy is safe because of a two-value allow-list in a '
+              'specific file; a citation that does not resolve is a reader '
+              'being sent to look for a check that may have moved or been '
+              'deleted');
+    });
+
+    test('an exemption with its argument blanked is caught, naming it', () {
+      final blanked = {'orderBy': ''};
+
+      expect(thinlyArguedExemptions(blanked), {'orderBy'},
+          reason: 'this is what the discipline is for. A future reviewer '
+              'adding a parameter to the exempt list with an empty string, or '
+              'with "safe" as the reason, has silently widened what this wire '
+              'accepts as a SQL fragment');
+    });
+  });
+}
+
+/// Fixtures for the walk's own regression arm: exactly the shape that used to
+/// slip past — a statement-taking method and a `where:` parameter, reachable
+/// only through a superinterface. Nothing on the wire implements these.
+abstract interface class _StatementFixture {
+  Future<void> query(String sql, {String? where});
+}
+
+abstract interface class _DerivedFixture implements _StatementFixture {
+  Future<void> ownMember(int id);
 }
