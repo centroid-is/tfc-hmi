@@ -346,7 +346,16 @@ const String contractKitPackage = 'tfc_stateman_contract';
 /// The plan that closes each member decrements this in the same commit. A
 /// member that quietly starts working without this number moving is a member
 /// nobody decided to ship.
-const int declaredUnimplementedMembers = 3;
+///
+/// **10-07 took it from three to two**, in the commit that made
+/// `LocalStateMan.timeseries` answer a `TimescaleReader`. That member no
+/// longer throws at all: a gateway composed WITHOUT a historian — no
+/// `collection:` block, so no database object exists anywhere — throws a
+/// `StateError` naming the composition instead, which is a deployment fact
+/// rather than an unwritten member, and the ledger would be lying if it still
+/// counted it. `historyViews` and `preferences` remain, owed by 10-04 and
+/// 10-05.
+const int declaredUnimplementedMembers = 2;
 
 /// Files under `lib/` allowed to import the database layer — the wrap seam.
 ///

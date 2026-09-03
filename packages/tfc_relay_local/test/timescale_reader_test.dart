@@ -19,9 +19,14 @@ import 'package:drift/native.dart';
 import 'package:test/test.dart';
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/database_drift.dart';
+import 'package:tfc_dart/core/state_man.dart' show KeyMappingEntry, KeyMappings;
+import 'package:tfc_relay_local/src/key_router.dart';
+import 'package:tfc_relay_local/src/local_state_man.dart';
 import 'package:tfc_relay_local/src/data/timescale_reader.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart'
-    show ResolvedSeries, SeriesAddress, SeriesResolver;
+    show ResolvedSeries, SeriesAddress, SeriesResolver, TimeseriesApi;
+
+import 'support/fake_upstream_link.dart';
 
 // --------------------------------------------------------------- the recorder
 
@@ -303,6 +308,45 @@ void main() {
 
       await expectLater(reader.queryTimeseriesData('Line1.Motor1', to),
           throwsA(isA<SeriesNotNumeric>()));
+    });
+  });
+
+  group('the composer answers a reader instead of throwing', () {
+    LocalStateMan plant({TimeseriesApi? timeseries}) {
+      final link = FakeUpstreamLink(alias: 'plant');
+      final man = LocalStateMan(
+        links: [link],
+        router: KeyRouter.overLinks([link],
+            mappings: KeyMappings(nodes: <String, KeyMappingEntry>{})),
+        timeseries: timeseries,
+      );
+      addTearDown(man.dispose);
+      return man;
+    }
+
+    test('LocalStateMan.timeseries is the reader it was composed with', () {
+      final man = plant(timeseries: reader);
+
+      expect(identical(man.timeseries, reader), isTrue,
+          reason: 'the same instance every time it is asked for, like '
+              '`browse`: a getter that rebuilt would throw away whatever the '
+              'composition wired');
+    });
+
+    test('a gateway with no historian says so, and does not pretend', () {
+      final man = plant();
+
+      expect(() => man.timeseries, throwsA(isA<StateError>()),
+          reason: 'a gateway with no `collection:` block constructs no '
+              'database object at all (8b-01\'s deliberate two-field act), '
+              'so there is nothing to read from. An empty reader would draw '
+              'every chart flat forever and nothing anywhere would say why — '
+              'and it is NOT an UnimplementedError either, because the '
+              'member is implemented and this is a deployment fact');
+      expect(() => man.timeseries, isNot(throwsUnimplementedError),
+          reason: 'the ledger in freeze_test.dart drops from three to two in '
+              'the same commit; an UnimplementedError here would mean the '
+              'member is still owed, and it is not');
     });
   });
 
