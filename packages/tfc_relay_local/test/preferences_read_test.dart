@@ -247,6 +247,14 @@ void main() {
         });
       });
       addTearDown(sub.cancel);
+      // Let the SEEDING writes' own announcements drain before measuring,
+      // and let them fall out of the de-duplication window — otherwise the
+      // first flush is the tail of the setString loop above, and the clear's
+      // own events for those same keys would be suppressed as duplicates of
+      // it. Neither is what this case is about.
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+      flushes.clear();
+      pending = <String>[];
 
       await store.clear(allowList: keys);
       await Future<void>.delayed(const Duration(milliseconds: 200));
