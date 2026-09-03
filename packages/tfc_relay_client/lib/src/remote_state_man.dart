@@ -378,6 +378,18 @@ final class RemoteStateMan implements StateManApi {
   /// widget renders now.
   int? get stalledMs => _supervisor.stalledMs;
 
+  /// How long ago this connection's stall was announced — the "when" a widget
+  /// renders beside [stalledMs], so "gateway stalled for 5015 ms" cannot read
+  /// as current hours after the fact (09-REVIEW IN-05). Null exactly when
+  /// [stallReason] is null; cleared with the pair on a fresh connection.
+  ///
+  /// Measured on this panel's monotonic clock: it is the *capture* age of a
+  /// display fact, not a wire fact, so there is no gateway clock arithmetic
+  /// to drift and no NTP step can age or un-age it. Deliberately not a
+  /// `StateManApi` member, like the rest of the stall surface — this is the
+  /// designed getter seam `lastDownReason` established.
+  Duration? get stallAge => _supervisor.stallAge;
+
   /// Configuration problems collected while re-establishing pages — a rejected
   /// key, a snapshot entry naming a handle nobody announced. Never thrown: a
   /// page carries ~1500 hand-edited keys and one typo must cost one tag.

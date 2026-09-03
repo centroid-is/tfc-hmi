@@ -285,6 +285,47 @@ void main() {
             'reads about');
   });
 
+  test('the stall surface carries its own age, so a panel can say WHEN',
+      () async {
+    // 09-REVIEW IN-05: stallReason/stalledMs persist until the connection
+    // dies, so a widget binding them on a long-lived healthy connection
+    // showed "gateway stalled for 5015 ms" hours after the fact with nothing
+    // to age it by. stallAge is the "when" — capture time on this side,
+    // measured on the panel's monotonic clock (a display fact, not a wire
+    // fact, so no gateway clock arithmetic and no NTP exposure).
+    final gateway = await _StallGateway.start();
+    final client = await _connected(gateway);
+
+    expect(client.stallAge, isNull,
+        reason: 'no stall has been announced on this connection, so there is '
+            'no age to render — a zero here would read as "a stall just '
+            'happened"');
+
+    gateway.resync(_page, _gatewayStalled, stalledMs: 5015);
+    await _until('the stall to be recorded',
+        () => client.stallReason == _gatewayStalled);
+
+    final first = client.stallAge;
+    expect(first, isNotNull,
+        reason: 'the stall is on the surface but carries no age — the first '
+            'widget built on this surface has nothing to age the sentence by');
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    final second = client.stallAge;
+    expect(second, greaterThan(first!),
+        reason: 'the age does not climb, so it is a stored constant rather '
+            'than a measurement — "5015 ms, 0 s ago" forever is the same '
+            'stale-sentence defect one field over');
+
+    // Cleared with the pair: an old connection's stall age on a new
+    // connection would be the exact confusion the surface reset exists for.
+    await gateway.dropLink();
+    await _until('the client to reconnect',
+        () => gateway.connections >= 2 && client.isReady);
+    expect(client.stallAge, isNull,
+        reason: 'the age survived the reconnect that cleared the reason and '
+            'duration — the three fields must travel as one surface');
+  });
+
   test('stalledMs is carried through as the absolute figure the gateway sent',
       () async {
     final gateway = await _StallGateway.start();

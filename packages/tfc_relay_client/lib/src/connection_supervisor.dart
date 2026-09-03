@@ -260,6 +260,10 @@ final class ConnectionSupervisor {
   /// stall is one operator-facing sentence, not fifty (WR-02's shape).
   String? _stallReason;
   int? _stalledMs;
+
+  /// When the stall was announced, on [_elapsed]'s clock — the anchor
+  /// [stallAge] measures from, cleared with the pair (09-REVIEW IN-05).
+  int? _stallAtElapsedMs;
   bool _stallComplained = false;
   Timer? _retry;
   bool _stopped = false;
@@ -324,6 +328,22 @@ final class ConnectionSupervisor {
   /// The absolute stalledMs of that resync, or null. See
   /// [RemoteStateMan.stalledMs]. The figure the gateway sent, never recomputed.
   int? get stalledMs => _stalledMs;
+
+  /// How long ago the current connection's stall was announced, or null when
+  /// [stallReason] is null (09-REVIEW IN-05).
+  ///
+  /// The surface's "when": [stallReason]/[stalledMs] persist until the
+  /// connection dies, so a widget binding them on a long-lived healthy link
+  /// would render "gateway stalled for 5015 ms" hours after the fact with
+  /// nothing to age it by. Measured on [_elapsed] — this panel's monotonic
+  /// clock — because it is capture time on this side, a *display* fact and
+  /// not a wire fact: no gateway clock arithmetic, and an NTP step cannot
+  /// age or un-age it (the WR-03 shape, kept out of a fourth file).
+  Duration? get stallAge {
+    final at = _stallAtElapsedMs;
+    if (at == null) return null;
+    return Duration(milliseconds: _elapsed.elapsedMilliseconds - at);
+  }
 
   /// Every delay this supervisor has waited before an attempt, in order.
   ///
@@ -791,6 +811,10 @@ final class ConnectionSupervisor {
       // panel's clock would drift (03-CONTEXT chose absolute).
       _stallReason = asked.reason;
       _stalledMs = asked.stalledMs;
+      // The anchor stallAge measures from: this side's receipt instant, on
+      // the monotonic clock. Re-stamped on every stall announcement, so a
+      // second freeze on the same connection reads as freshly announced.
+      _stallAtElapsedMs = _elapsed.elapsedMilliseconds;
       // Once per connection, not once per subscription: one stall is one
       // sentence, however many pages resync on it (07-REVIEW WR-02's damping
       // shape, applied to a new surface). Reset with the surface on the way
@@ -966,6 +990,7 @@ final class ConnectionSupervisor {
       // the once-per-connection complaint damper re-arms.
       _stallReason = null;
       _stalledMs = null;
+      _stallAtElapsedMs = null;
       _stallComplained = false;
     }
     if (next == LinkState.ready) {
