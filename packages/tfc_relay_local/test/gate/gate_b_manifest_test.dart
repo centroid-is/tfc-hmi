@@ -751,6 +751,41 @@ void main() {
               'is not a gap, it is a number somebody stopped maintaining. The '
               'per-row arms above say which rows fell out');
     });
+
+    test('the outstanding list is empty, because the phase is over', () {
+      // The phase's own closing condition, asserted rather than remembered —
+      // gate A's arm, one phase later, for the same reason it exists there.
+      //
+      // Every plan in Phase 9 deleted its own entries in the commit that
+      // landed its rows, and 09-09 deleted the last one (F22's historian
+      // clause, closed by F22e). This arm is what makes that a property
+      // instead of a habit: a list that tracked the phase's progress must
+      // not survive the phase as a list of things nobody is going to do. It
+      // is deliberately separate from the arms above — those ask whether
+      // the two lists *agree*, and two empty lists and two full ones agree
+      // equally well.
+      final left = [
+        for (final entry in gateOutstanding.entries)
+          '${entry.key} (${entry.value.kind.name}, owed to '
+              '${entry.value.owner})',
+      ];
+      expect(left, isEmpty,
+          reason: 'the phase is closing with these rows still outstanding: '
+              '$left. An entry here after the phase closes is one of exactly '
+              'two things, and they are fixed differently. Either it is a '
+              'clause that never landed — in which case the phase did not do '
+              'what it said, and the owner named in the entry is where to '
+              'start. Or it is a clause the phase decided not to assert, '
+              'wearing the wrong label: an outstanding entry says "somebody '
+              'is going to write this", and nobody is. That belongs in '
+              'gateDeviations, with the clause quoted verbatim from the '
+              'catalogue and the measurement or ruling that settled it — '
+              'which is the list RES-02\'s evidence quotes and this file '
+              'prints on every run. Moving it there is not bookkeeping: an '
+              'outstanding row is invisible after the phase ends and a '
+              'deviation is read every time somebody asks what the green '
+              'covers');
+    });
   });
 
   group('the two gates reconcile, B to A, by one text read', () {
@@ -1161,7 +1196,15 @@ final x = 1;
       final lane = Stopwatch()..start();
       final run = await Process.run(
         Platform.resolvedExecutable,
-        ['test', _gateDir, '--exclude-tags', 'meta'],
+        // `db` is excluded alongside `meta`, and for a different reason:
+        // this budget measures the lane the relay CI step runs, and that
+        // step is `--exclude-tags db` on a job that has no database and
+        // must not grow one (test.yml's own words). F22e runs — and is
+        // separately floor-checked — on the tfc-dart-test job's db leg;
+        // letting it into this child would time a Compose bring-up into
+        // the budget and hand the relay job a database dependency by the
+        // back door.
+        ['test', _gateDir, '--exclude-tags', 'meta', '--exclude-tags', 'db'],
         workingDirectory: Directory.current.path,
         // Cleared in the child, because the child inherits this process's
         // environment and would otherwise see the variable that turned this

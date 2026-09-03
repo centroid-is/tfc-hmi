@@ -298,6 +298,42 @@ StartTime change the gateway drops its NodeId cache, re-browses, and marks
 affected keys bad until re-established. Tags resolve by browse path, never by
 cached numeric NodeId across a session boundary.
 
+### 4.5a Amendment, 2026-09-03 (Phase 9): the stall is surfaced, and forgiven
+
+Two behaviours added behind reproduced defects (gate B, F22), written here
+because a future reader will look for them in the design rather than in a
+phase summary:
+
+- **The client surfaces the stall, damped once per connection.** A
+  `gateway_stalled` resync carries `reason` and `stalledMs` — an **absolute**
+  duration measured by the gateway's own lag monitor, never recomputed from a
+  client clock. `RemoteStateMan` exposes both (`stallReason`/`stalledMs`,
+  shaped like `lastDownReason` — no new `StateManApi` member), so a panel can
+  say *"gateway stalled for N ms"* instead of *"you disconnected"*, and it
+  complains **once per connection** however many subscriptions resync. Before
+  this, `connection_supervisor` decoded the reason and dropped it on the
+  floor — the wire carried the fact and no operator surface did.
+
+- **The reaper forgives the gateway's own stall, for one tick.** After a
+  freeze, every session's `silentForMs` includes the freeze itself, because
+  `_lastSeen` only advances when a frame is *processed* — a woken gateway
+  would 4003 every panel in the plant for silence it caused (the
+  synchronized-false-disconnect headline, reproduced on a 5 s freeze over a
+  3 s deadline). `reap` now credits the wake-up tick's own `LagStalled.stalledMs`
+  against each session's silence: derived from the `LagMonitor`, **never from
+  anything a client sends**, bounded to the single tick that reports the
+  stall, and preserving only-dead-sessions — a panel already silent *before*
+  the freeze still carries that silence after the credit and is reaped on the
+  same tick. The close reason is unchanged (the credit decides, it does not
+  rewrite the sentence).
+
+The same stall also reaches the historian honestly: collection's interval
+tick declines a wake-up sample (the timer's own missed-window count, past a
+250 ms floor) instead of stamping the pre-freeze held value at `now()`, so a
+frozen gateway leaves a **gap plus a counted drop** in the trend — never a
+flat line — which is F22's third clause ("historian marks the gap") and the
+same fail-safe instinct as the band-0-only quality gate.
+
 ### 4.6 Writes (the safety path)
 
 ```jsonc
