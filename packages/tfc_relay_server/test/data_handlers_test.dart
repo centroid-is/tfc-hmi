@@ -32,6 +32,8 @@ import 'package:tfc_relay_server/src/data_handlers.dart';
 import 'package:tfc_stateman_contract/testing/fake_data_services.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 
+import 'support/permissive_resolver.dart';
+
 /// A node that really is in [FakeBrowse]'s default tree.
 const _folder = BrowseNode(
     id: 'ST101.CN01', displayName: 'CN01', type: BrowseNodeType.folder);
@@ -54,7 +56,10 @@ final class _Kit {
 _Kit _kit({FakeBrowse? browse}) {
   final api = FakeStateMan(browse: browse);
   addTearDown(api.dispose);
-  return _Kit(DataHandlers(source: api), api);
+  return _Kit(
+      DataHandlers(
+          source: api, resolver: const PermissiveSeriesResolver()),
+      api);
 }
 
 rpc.Parameters _params(String method, Map<String, Object?> value) =>
@@ -64,6 +69,30 @@ rpc.Parameters _params(String method, Map<String, Object?> value) =>
 List<Map<String, Object?>> _nodes(Object? raw) => [
       for (final entry in raw! as List) (entry as Map).cast<String, Object?>(),
     ];
+
+/// A resolver that fails the case if anything asks it a question.
+///
+/// Used to prove a *negative* — that the browse handlers never consult the
+/// mapping — which a permissive resolver cannot do, because a handler that
+/// asked it would get a plausible answer and the case would pass.
+final class _RefusesEverything implements SeriesResolver {
+  const _RefusesEverything();
+
+  @override
+  ResolvedSeries? resolve(String wireName) =>
+      throw StateError('a browse handler asked the resolver to resolve '
+          '"$wireName"');
+
+  @override
+  String? keyForTable(String table) =>
+      throw StateError('a browse handler asked the resolver about table '
+          '"$table"');
+
+  @override
+  String? keyForNode(String nodeId) =>
+      throw StateError('a browse handler asked the resolver about node '
+          '"$nodeId"');
+}
 
 /// The refusal a body raised, or a failure naming what it answered instead.
 Future<rpc.RpcException> _refusal(
@@ -214,6 +243,46 @@ void main() {
       expect(error.code, rpc_error.INVALID_PARAMS);
       expect(error.message, contains('node'));
       expect((error.data! as Map)['request'], isA<String>());
+    });
+  });
+
+  group('the resolver seam', () {
+    test('the handlers hold the resolver they were built with', () {
+      const resolver = PermissiveSeriesResolver();
+      final api = FakeStateMan();
+      addTearDown(api.dispose);
+
+      final handlers = DataHandlers(source: api, resolver: resolver);
+
+      expect(identical(handlers.resolver, resolver), isTrue,
+          reason: 'the same object, not an equal one: there is exactly one '
+              'mapping per gateway and it is built from the keymappings the '
+              'composition root already loaded. 10-03\'s timeseries handlers '
+              'read it to turn a wire series name into a table, and a copy '
+              'made somewhere in between is a second place a mapping could '
+              'go stale');
+    });
+
+    test('the browse handlers do not consult it', () async {
+      // Browse is the one family that does not need the mapping in the
+      // handler: a node id is an upstream address-space identifier
+      // (`client_sub_apis.dart:179-183`), and turning one into a plant key is
+      // the *policy's* job, one layer down, so that a handler cannot forget
+      // it. This case pins that division by handing the handlers a resolver
+      // that would throw if it were asked.
+      final api = FakeStateMan();
+      addTearDown(api.dispose);
+      final handlers =
+          DataHandlers(source: api, resolver: const _RefusesEverything());
+
+      final roots = await handlers
+          .browseFetchRoots(_params('browse.fetchRoots', {}));
+
+      expect(roots, isNotEmpty,
+          reason: 'fetchRoots asked the resolver a question. Filtering by '
+              'visibility belongs to _PolicyBrowse, which is already between '
+              'these handlers and the source — a second filter here would be '
+              'a second place to keep in step');
     });
   });
 

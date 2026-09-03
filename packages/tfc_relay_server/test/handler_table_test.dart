@@ -41,13 +41,39 @@
 library;
 
 import 'dart:io';
+import 'dart:mirrors';
 
 import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
+import 'package:tfc_relay_server/src/data_handlers.dart';
+import 'package:tfc_relay_server/src/policy/policy_state_man.dart';
+import 'package:tfc_relay_server/src/relay_server.dart';
+import 'package:tfc_relay_server/src/relay_session.dart';
 
 /// This package's test directory, relative to the package root that
 /// `dart test` runs from.
 const _testDir = 'test';
+
+/// How a Dart class says it satisfies the resolver contract.
+///
+/// A text needle rather than a mirrors walk, deliberately: `dart:mirrors` can
+/// only see classes something already imported, and the property here is about
+/// files nobody imports yet — the one a future plan drops into a `lib/` and
+/// binds from a composition root in the same commit.
+const _resolverImpl = 'implements SeriesResolver';
+
+/// Every relay package's production directory, from this package's root.
+///
+/// Written out rather than globbed so that a new relay package is a
+/// deliberate line here. A package missing from this list is a package the
+/// sweep is not looking at, and the anti-vacuity arm below cannot tell the
+/// difference between "swept and clean" and "never swept".
+final List<Directory> _relayLibDirs = [
+  Directory('lib'),
+  Directory('../tfc_relay_protocol/lib'),
+  Directory('../tfc_relay_client/lib'),
+  Directory('../tfc_relay_local/lib'),
+];
 
 /// The sweep's own file, excluded from the scan. See the library doc.
 const _selfName = 'handler_table_test.dart';
@@ -292,6 +318,123 @@ void main() {
       expect(Directory('../tfc_stateman_contract/lib').existsSync(), isTrue,
           reason: 'the contract package moved; the grep above has been '
               'passing against nothing');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 10-02 task 2. `SeriesResolver` (`series_address.dart`) is a contract with
+  // no implementation anywhere a gateway could pick one up by accident.
+  // -------------------------------------------------------------------------
+  group('no relay package ships a series resolver', () {
+    // Anti-vacuity first, this repository's sweep convention: a grep over a
+    // path that does not exist, or over one holding no Dart, passes by having
+    // read nothing.
+    test('the directories swept exist and hold Dart', () {
+      for (final directory in _relayLibDirs) {
+        expect(directory.existsSync(), isTrue,
+            reason: '${directory.path} is not there, so the sweep below is '
+                'passing against nothing');
+        expect(_mentions(directory, ''), isNotEmpty,
+            reason: '${directory.path} holds no .dart files, which makes '
+                'every hit count from it a zero somebody could trust');
+      }
+    });
+
+    test('an empty directory reports zero, which is how a false negative '
+        'looks', () {
+      final empty = Directory.systemTemp.createTempSync('resolver-sweep');
+      addTearDown(() => empty.deleteSync(recursive: true));
+
+      expect(_mentions(empty, _resolverImpl), isEmpty,
+          reason: 'the falsification companion to the arm above: this is what '
+              'the real sweep would print if it were pointed at nothing, so '
+              'the two together are what make an empty result mean something');
+    });
+
+    test('nothing under any relay lib implements it', () {
+      final hits = [
+        for (final directory in _relayLibDirs)
+          ..._mentions(directory, _resolverImpl),
+      ];
+
+      expect(hits, isEmpty,
+          reason: 'a production implementation of SeriesResolver was found at '
+              '$hits. 10-CONTEXT amendment 6 makes an unmappable table '
+              'fail-closed — it is not served until it is mapped — and a '
+              'fail-closed rule holds exactly as long as the only way to get '
+              'a resolver is to supply one. The first permissive '
+              'implementation in a lib/ is the one every composition root '
+              'reaches for, because it is the only one available, and from '
+              'then on the rule is advice. 10-07 builds the real resolver '
+              'over 8b\'s collection config; until it does, the fixtures '
+              'carry their own in test/support/');
+    });
+
+    test('the sweep finds the fixtures\' resolvers when pointed at test/', () {
+      // The falsification arm that matters: the needle is right and the sweep
+      // does hit when there is something to hit. Both permissive resolvers
+      // are test-only, and this is where they live.
+      final hits = _mentions(Directory('test'), _resolverImpl);
+
+      expect(hits, isNotEmpty,
+          reason: 'the sweep found no implementation even under test/, where '
+              'PermissiveSeriesResolver certainly is one. Either the needle '
+              '"$_resolverImpl" no longer matches how the class is declared, '
+              'or the fixture was deleted — and in the first case the arm '
+              'above has been passing for the wrong reason');
+      expect(hits.map((hit) => hit.split(':').first).toSet(),
+          contains(contains('permissive_resolver.dart')));
+    });
+
+    test('every construction path takes one, and none of them defaults it',
+        () {
+      final offenders = <String>[];
+      final found = <String>[];
+      for (final owner in [
+        reflectClass(RelayServer),
+        reflectClass(RelaySession),
+        reflectClass(PolicyStateMan),
+        reflectClass(DataHandlers),
+      ]) {
+        for (final method in owner.declarations.values.whereType<MethodMirror>()
+            .where((member) => member.isConstructor || member.isStatic)) {
+          for (final parameter in method.parameters) {
+            if (MirrorSystem.getName(parameter.type.simpleName) !=
+                'SeriesResolver') {
+              continue;
+            }
+            final where = '${MirrorSystem.getName(owner.simpleName)}.'
+                '${MirrorSystem.getName(method.simpleName)}';
+            found.add(where);
+            if (parameter.isOptional) offenders.add('$where (optional)');
+            if (parameter.hasDefaultValue) offenders.add('$where (defaulted)');
+          }
+        }
+      }
+
+      // Anti-vacuity, and it goes first: an "everything found is required"
+      // assertion is true for free when nothing is found, which is exactly
+      // the state this seam was in before 10-02. All four construction paths
+      // have to be here, or the arm below is silent about the one that is
+      // missing.
+      expect(found, hasLength(greaterThanOrEqualTo(4)),
+          reason: 'only $found take a SeriesResolver. Every path that can '
+              'build a gateway or a session must: RelayServer for a '
+              'deployment, RelaySession.serve for a by-hand session, '
+              'PolicyStateMan because the hiding filter is what asks the '
+              'mapping, and DataHandlers because 10-03 reads it. One path '
+              'without the argument is one way to build a gateway that maps '
+              'nothing');
+
+      expect(offenders, isEmpty,
+          reason: 'these take a SeriesResolver that a caller may omit: '
+              '$offenders. `TokenValidator` took the other branch on purpose '
+              'and it is legible there — `PermissiveTokenValidator` has a '
+              'name, so a deployment running it says so in a config diff. A '
+              'resolver that silently mapped everything would be invisible: '
+              'nothing in the config would name it and nothing in a log would '
+              'show it, and the gateway would serve every table it was asked '
+              'about');
     });
   });
 
