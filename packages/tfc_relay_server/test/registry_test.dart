@@ -27,6 +27,8 @@ import 'package:tfc_relay_server/src/subscription_registry.dart';
 import 'package:tfc_stateman_contract/channel_harness.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 
+import 'support/permissive_resolver.dart';
+
 /// One session's worth of the pieces a subscription is made of.
 final class _Bench {
   _Bench() : api = FakeStateMan();
@@ -191,6 +193,7 @@ void main() {
       final bench = _Bench();
       benches.add(bench);
       final session = RelaySession.serve(
+        resolver: const PermissiveSeriesResolver(),
         channel: pair.server,
         api: bench.api,
         config: ServerConfig(),

@@ -75,6 +75,32 @@ final List<Directory> _relayLibDirs = [
   Directory('../tfc_relay_local/lib'),
 ];
 
+/// The gateway process's own directory, swept for the same needle.
+///
+/// A `lib/`-only sweep would have been true and misleading: `buildGateway`
+/// requires a resolver and something has to supply one, so the implementation
+/// that does not exist in a `lib/` exists here instead. Swept, and allowed
+/// exactly one hit — see [_exemptResolvers].
+final List<Directory> _relayBinDirs = [
+  Directory('../tfc_relay_local/bin'),
+];
+
+/// The one production implementation there is, and why it is allowed.
+///
+/// The same idiom as `exemptCodes` above: an exemption is a named file with a
+/// reason on the record, so the plan that removes the debt removes the line
+/// and the build says whether it was really removed. `NoSeriesMapped` answers
+/// **null to everything**, which the interface defines as refuse — it is
+/// fail-closed rather than a permissive default, which is the whole hazard the
+/// `lib/` sweep exists to prevent.
+const Map<String, String> _exemptResolvers = {
+  'relay_gateway.dart': 'NoSeriesMapped, the composition root\'s fail-closed '
+      'interim: every lookup returns null, which 10-CONTEXT amendment 6 '
+      'defines as "not served until mapped". 10-07 replaces it with the '
+      'resolver over 8b\'s collection config and deletes both it and this '
+      'line.',
+};
+
 /// The sweep's own file, excluded from the scan. See the library doc.
 const _selfName = 'handler_table_test.dart';
 
@@ -370,6 +396,38 @@ void main() {
               'carry their own in test/support/');
     });
 
+    test('the only production implementation is the named fail-closed one',
+        () {
+      final hits = [
+        for (final directory in _relayBinDirs)
+          ..._mentions(directory, _resolverImpl),
+      ];
+      final unexpected = hits
+          .where((hit) => !_exemptResolvers.keys
+              .any((file) => hit.split(':').first.endsWith(file)))
+          .toList();
+
+      expect(unexpected, isEmpty,
+          reason: 'a series resolver was found in a gateway binary that is '
+              'not on the exempt list: $unexpected. The list is '
+              '${_exemptResolvers.keys.toList()} and each entry carries its '
+              'reason. A second implementation is a second answer to "which '
+              'tables does this gateway serve", and the one that wins is '
+              'whichever composition root a deployment happens to run');
+
+      // And the exemption is checked in the other direction, exactly as the
+      // close-code exemptions above are: an entry that names a file with no
+      // implementation left in it is a debt already paid and a line nobody
+      // deleted.
+      for (final file in _exemptResolvers.keys) {
+        expect(hits.where((hit) => hit.split(':').first.endsWith(file)),
+            isNotEmpty,
+            reason: '$file is exempt but no longer implements the interface. '
+                'The debt is paid — delete the entry. Reason on record was: '
+                '${_exemptResolvers[file]}');
+      }
+    });
+
     test('the sweep finds the fixtures\' resolvers when pointed at test/', () {
       // The falsification arm that matters: the needle is right and the sweep
       // does hit when there is something to hit. Both permissive resolvers
@@ -388,7 +446,7 @@ void main() {
 
     test('every construction path takes one, and none of them defaults it',
         () {
-      final offenders = <String>[];
+      final defaulted = <String>[];
       final found = <String>[];
       for (final owner in [
         reflectClass(RelayServer),
@@ -406,14 +464,13 @@ void main() {
             final where = '${MirrorSystem.getName(owner.simpleName)}.'
                 '${MirrorSystem.getName(method.simpleName)}';
             found.add(where);
-            if (parameter.isOptional) offenders.add('$where (optional)');
-            if (parameter.hasDefaultValue) offenders.add('$where (defaulted)');
+            if (parameter.hasDefaultValue) defaulted.add(where);
           }
         }
       }
 
-      // Anti-vacuity, and it goes first: an "everything found is required"
-      // assertion is true for free when nothing is found, which is exactly
+      // Anti-vacuity, and it goes first: a "none of them is defaulted"
+      // assertion is true for free when none of them exists, which is exactly
       // the state this seam was in before 10-02. All four construction paths
       // have to be here, or the arm below is silent about the one that is
       // missing.
@@ -426,15 +483,44 @@ void main() {
               'without the argument is one way to build a gateway that maps '
               'nothing');
 
+      expect(defaulted, isEmpty,
+          reason: 'these give a SeriesResolver a default value: $defaulted. '
+              '`TokenValidator` took the other branch on purpose and it is '
+              'legible there — `PermissiveTokenValidator` has a name, so a '
+              'deployment running it says so in a config diff. A resolver '
+              'that silently mapped everything would be invisible: nothing in '
+              'the config would name it and nothing in a log would show it, '
+              'and the gateway would serve every table it was asked about');
+    });
+
+    test('every declaration of one says `required`', () {
+      // **The required-ness half, and it cannot be done by mirrors.**
+      // `ParameterMirror.isOptional` is true for every *named* parameter,
+      // `required` or not — the mirror API predates required-named and never
+      // grew a way to tell them apart — so a mirrors assertion here would
+      // either always fail or, written the other way, always pass. The
+      // property is a syntactic one, so it is read syntactically.
+      final offenders = <String>[];
+      for (final directory in [..._relayLibDirs, ..._relayBinDirs]) {
+        for (final hit in _mentions(directory, 'SeriesResolver ')) {
+          final parts = hit.split(':');
+          final line = File(parts.first)
+              .readAsLinesSync()[int.parse(parts.last) - 1];
+          // Parameter declarations only: `SeriesResolver name,` or `... {`.
+          // A field, a return type or a prose mention is not one.
+          if (!RegExp(r'SeriesResolver [a-z]\w*\s*[,)]').hasMatch(line)) {
+            continue;
+          }
+          if (!line.contains('required ')) offenders.add('$hit: $line');
+          if (line.contains('=')) offenders.add('$hit (defaulted): $line');
+        }
+      }
+
       expect(offenders, isEmpty,
-          reason: 'these take a SeriesResolver that a caller may omit: '
-              '$offenders. `TokenValidator` took the other branch on purpose '
-              'and it is legible there — `PermissiveTokenValidator` has a '
-              'name, so a deployment running it says so in a config diff. A '
-              'resolver that silently mapped everything would be invisible: '
-              'nothing in the config would name it and nothing in a log would '
-              'show it, and the gateway would serve every table it was asked '
-              'about');
+          reason: 'these declare a SeriesResolver parameter without '
+              '`required`, or with a default: $offenders. The fail-closed '
+              'rule holds exactly as long as a caller cannot leave the '
+              'mapping out');
     });
   });
 

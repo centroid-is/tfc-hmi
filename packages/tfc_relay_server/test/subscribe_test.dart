@@ -31,6 +31,8 @@ import 'package:tfc_stateman_contract/channel_harness.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 
+import 'support/permissive_resolver.dart';
+
 /// A source that can serve a key whose value has not arrived yet.
 ///
 /// `FakeStateMan.keys` deliberately filters to keys a value has arrived for, so
@@ -66,6 +68,7 @@ _Link _link({
   final pair = channelPair();
   final source = api ?? FakeStateMan();
   final session = RelaySession.serve(
+    resolver: const PermissiveSeriesResolver(),
     channel: pair.server,
     api: source,
     config: config ?? ServerConfig(),

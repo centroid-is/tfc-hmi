@@ -113,6 +113,7 @@ final class RelaySession {
     this.buffer,
     this.validator,
     this.policy,
+    this.resolver,
     this._gate,
     this._lastSeen,
     this._now,
@@ -162,6 +163,7 @@ final class RelaySession {
     required ConflatingSendBuffer buffer,
     TokenValidator validator = const PermissiveTokenValidator(),
     KeyPolicy policy = const AllVisibleOperatorWrites(),
+    required SeriesResolver resolver,
     List<String> serverSupported = const [protocolVersion],
     WriteOutcomeLog? writeOutcomes,
     int Function()? mintGeneration,
@@ -199,6 +201,7 @@ final class RelaySession {
       buffer,
       validator,
       policy,
+      resolver,
       HelloGate(serverSupported: serverSupported),
       lastSeen,
       clock,
@@ -355,6 +358,7 @@ final class RelaySession {
   late final PolicyStateMan api = PolicyStateMan(
     source: _source,
     policy: policy,
+    resolver: resolver,
     // Late-read, the `epochOf` / `ownerOf` idiom below: the identity is minted
     // by `_hello`, which cannot have run when this object is built.
     identityOf: () => _identity,
@@ -396,6 +400,15 @@ final class RelaySession {
   /// `PolicyStateMan` built in [_start]; nothing else in this class asks it a
   /// question directly.
   final KeyPolicy policy;
+
+  /// How a node id and a table name become a plant key.
+  ///
+  /// Held here rather than reached for through the server, exactly as
+  /// [validator] and [policy] are and for the same reason: the session
+  /// deliberately does not know what a server is. What consults it is the
+  /// [PolicyStateMan] built below and the [DataHandlers] built in [_start];
+  /// nothing in this class asks it a question directly.
+  final SeriesResolver resolver;
 
   final HelloGate _gate;
   final _LastSeen _lastSeen;
@@ -827,7 +840,7 @@ final class RelaySession {
     // summary line per session, rather than thrown once per frame into the
     // error handler (05-REVIEW WR-03).
     _onNotification(Methods.holdTick, values.holdTick);
-    _registerDataServices(DataHandlers(source: api));
+    _registerDataServices(DataHandlers(source: api, resolver: resolver));
     // Method-not-found. **This fallback's armor is inert, and the code below
     // is kept anyway** (06-04, 06-RESEARCH §H.2, measured).
     //

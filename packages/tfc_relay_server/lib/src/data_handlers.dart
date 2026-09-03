@@ -49,7 +49,7 @@ import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 /// cannot forget it (T-06-38). What this object is handed is already the
 /// policed view.
 final class DataHandlers {
-  DataHandlers({required this.source});
+  DataHandlers({required this.source, required this.resolver});
 
   /// The source being served, already seen through this session's policy.
   ///
@@ -63,6 +63,20 @@ final class DataHandlers {
   /// here is purely the name — and the failure it produces is a message about
   /// *retries* on a file that has nothing to do with retrying.
   final StateManApi source;
+
+  /// How a node id and a table name become a plant key.
+  ///
+  /// Held here and **not consulted by the four browse handlers**: a
+  /// `BrowseNode` id is an upstream address-space identifier rather than a
+  /// plant key (`client_sub_apis.dart:179-183`), and turning one into a key so
+  /// `canSee` can be asked is `_PolicyBrowse`'s job, one layer down, where a
+  /// handler added by a later plan cannot forget it. What reads this field is
+  /// 10-03's timeseries family, which is keyed by table and has no other way
+  /// to find the key its samples belong to.
+  ///
+  /// Required, with no default, all the way up to `RelayServer` — see that
+  /// class's `resolver` parameter for the argument.
+  final SeriesResolver resolver;
 
   // ------------------------------------------------------------------ browse
 

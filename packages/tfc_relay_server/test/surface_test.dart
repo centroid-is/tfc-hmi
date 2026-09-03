@@ -82,6 +82,7 @@ import 'package:tfc_relay_server/src/token_validator.dart';
 import 'package:tfc_stateman_contract/channel_harness.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 
+import 'support/permissive_resolver.dart';
 import 'support/ws_harness.dart';
 
 /// Every method a connected client may call, as of Phase 10 plan 02.
@@ -165,6 +166,7 @@ RelaySession _session() {
   final pair = channelPair();
   final api = FakeStateMan();
   final session = RelaySession.serve(
+    resolver: const PermissiveSeriesResolver(),
     channel: pair.server,
     api: api,
     config: ServerConfig(),

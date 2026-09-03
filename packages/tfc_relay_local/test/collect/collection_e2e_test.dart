@@ -36,6 +36,7 @@ import 'package:tfc_relay_server/tfc_relay_server.dart' show ServerConfig;
 
 import '../opcua_link_test.dart' show alias, mappingFor;
 import '../support/opcua_server_fixture.dart';
+import '../support/permissive_resolver.dart';
 import '../support/timescale_fixture.dart';
 
 late TimescaleFixture fx;
@@ -137,6 +138,7 @@ final class CollectionChain {
 
     final keyMappings = KeyMappings(nodes: mappings);
     final gateway = await buildGateway(
+      resolver: const PermissiveSeriesResolver(),
       GatewayConfig(
         server: ServerConfig(port: 0, tick: ServerConfig.minTick),
         links: <UpstreamLinkConfig>[

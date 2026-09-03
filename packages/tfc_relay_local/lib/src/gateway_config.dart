@@ -552,10 +552,18 @@ final class Gateway {
 /// Nothing here connects. `LocalStateMan.start()` is what opens the links, and
 /// keeping the two apart is what lets a case build the whole plant side without
 /// a PLC in the room.
+///
+/// [resolver] is **passed through, never invented here** (10-02). It says how a
+/// browse node id and a database table name become a plant key, `RelayServer`
+/// requires one with no default, and no relay package's `lib/` implements the
+/// interface — so this function cannot quietly supply a permissive one and a
+/// caller has to have made the decision. 10-07 builds the real one over the
+/// collection config, which already names both the plant key and the table.
 Future<Gateway> buildGateway(
   GatewayConfig config, {
   required KeyMappings mappings,
   required Logger log,
+  required SeriesResolver resolver,
   void Function(Object error, StackTrace stack, String where)? onError,
 }) async {
   final refused = reservedKeyMappingNames(mappings);
@@ -603,6 +611,7 @@ Future<Gateway> buildGateway(
     // that. Two overlays, one shared instance.
     api: plant,
     config: config.server,
+    resolver: resolver,
     onError: onError ?? _logServerError(log),
   );
   return Gateway._(

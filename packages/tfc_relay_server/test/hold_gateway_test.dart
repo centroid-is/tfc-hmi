@@ -55,6 +55,7 @@ import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 import 'support/bands.dart';
 import 'support/fake_clock.dart';
 import 'support/panels.dart';
+import 'support/permissive_resolver.dart';
 import 'support/ws_harness.dart';
 
 /// A clock far enough from zero that a ULID minted on it is a plausible id.
@@ -126,6 +127,7 @@ _Gate _gate() {
   final inbound = <String>[];
   final errors = <({String where, Object error, StackTrace stack})>[];
   final session = RelaySession.serve(
+    resolver: const PermissiveSeriesResolver(),
     channel: pair.server,
     api: api,
     config: ServerConfig(),

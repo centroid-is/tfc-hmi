@@ -67,6 +67,7 @@ import 'package:tfc_relay_server/tfc_relay_server.dart';
 import 'fake_upstream_link.dart';
 import 'gate_b_fixture.dart' show gateBPage;
 import 'keymap_fixtures.dart' show opcUaEntry;
+import 'permissive_resolver.dart';
 
 /// What F22e hands the gateway isolate so it historises one key into a real
 /// TimescaleDB while it is being frozen — endpoint values from 8b-03's
@@ -477,6 +478,7 @@ Future<void> stalledGatewayEntryPoint(Map<String, Object?> spec) async {
   }
 
   final server = RelayServer(
+    resolver: const PermissiveSeriesResolver(),
     api: plant,
     config: ServerConfig(
       // No port: ServerConfig defaults to 0, the ephemeral bind spelled by

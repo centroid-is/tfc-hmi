@@ -64,6 +64,7 @@ import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'support/permissive_resolver.dart';
 import 'support/ws_harness.dart';
 
 /// Cycles run before the baseline is taken.
@@ -164,7 +165,7 @@ final class _Gateway {
 
   static Future<_Gateway> start() async {
     final served = FakeStateMan();
-    final server = RelayServer(api: served, config: _cycleConfig());
+    final server = RelayServer(resolver: const PermissiveSeriesResolver(), api: served, config: _cycleConfig());
     await server.start();
     final proxy = FaultProxy(targetPort: server.port);
     await proxy.start();
@@ -255,7 +256,7 @@ void main() {
   test('a client that arrives while the server is draining is refused, not '
       'registered', () async {
     final served = FakeStateMan();
-    final server = RelayServer(api: served, config: fixtureConfig());
+    final server = RelayServer(resolver: const PermissiveSeriesResolver(), api: served, config: fixtureConfig());
     await server.start();
     final uri = Uri.parse('ws://127.0.0.1:${server.port}');
     addTearDown(served.dispose);

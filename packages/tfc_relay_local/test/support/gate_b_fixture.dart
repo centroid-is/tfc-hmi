@@ -56,6 +56,7 @@ import 'package:tfc_stateman_contract/faults.dart'
 
 import 'fake_upstream_link.dart';
 import 'keymap_fixtures.dart';
+import 'permissive_resolver.dart';
 
 // `within(future, what, {budget})` — the one future-bounder in the tree,
 // re-exported so a gate case gets both window helpers from this one import.
@@ -699,6 +700,7 @@ Future<GateBFixture> gateBFixture({
 
   final gatewayComplaints = <String>[];
   final server = RelayServer(
+    resolver: const PermissiveSeriesResolver(),
     api: plant,
     config: config,
     // Collected rather than printed, and collected rather than discarded —

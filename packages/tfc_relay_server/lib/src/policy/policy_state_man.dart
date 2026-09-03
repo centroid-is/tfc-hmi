@@ -89,6 +89,7 @@ final class PolicyStateMan implements StateManApi {
   PolicyStateMan({
     required this.source,
     required this.policy,
+    required this.resolver,
     required this.identityOf,
   });
 
@@ -105,6 +106,18 @@ final class PolicyStateMan implements StateManApi {
   final StateManApi source;
 
   final KeyPolicy policy;
+
+  /// How a node id and a table name become the plant key [canSee] is asked
+  /// about.
+  ///
+  /// The browse filter needs it and nothing else in this class does yet:
+  /// `keys` is already a list of plant keys, so the five surfaces that inherit
+  /// hiding from it never had a translation problem. Browse walks the upstream
+  /// address space instead, where every identifier belongs to the server that
+  /// published it, and 10-03 and 10-04 will need the same object for tables.
+  ///
+  /// Required, no default. See `relay_server.dart`'s `resolver` parameter.
+  final SeriesResolver resolver;
 
   /// Who is asking, read **late**.
   ///

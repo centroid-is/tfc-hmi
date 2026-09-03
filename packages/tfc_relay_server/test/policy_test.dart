@@ -70,6 +70,8 @@ import 'package:tfc_stateman_contract/tfc_stateman_contract.dart' show within;
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'support/permissive_resolver.dart';
+
 /// A tag in the plant's own naming convention, so the cases read like the
 /// thing they model rather than like synthetic strings.
 const _key = 'CN01.MOT01.speed';
@@ -163,6 +165,7 @@ final class _Gateway {
   }) async {
     final plant = FakeStateMan();
     final server = RelayServer(
+      resolver: const PermissiveSeriesResolver(),
       api: plant,
       config: ServerConfig(tick: ServerConfig.minTick),
       validator: _AlwaysStation(identity),

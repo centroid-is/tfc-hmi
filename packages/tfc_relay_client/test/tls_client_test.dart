@@ -67,6 +67,8 @@ import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'support/permissive_resolver.dart';
+
 /// A key `FakeStateMan` seeds at construction, so a subscribe against a real
 /// gateway answers with a real snapshot and no plant has to be simulated.
 const String _seededKey = 'PIPE.connected';
@@ -235,6 +237,7 @@ Future<({FakeStateMan served, RelayServer server, FaultProxy? proxy, int port})>
 }) async {
   final served = FakeStateMan();
   final server = RelayServer(
+    resolver: const PermissiveSeriesResolver(),
     api: served,
     config: ServerConfig(
       tick: ServerConfig.minTick,

@@ -53,6 +53,8 @@ import 'package:tfc_relay_server/src/ws_channel.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 import 'package:web_socket_channel/io.dart';
 
+import 'support/permissive_resolver.dart';
+
 const _dialBudget = Duration(seconds: 10);
 const _speedKey = 'ST101.CN01.MOT01.speed';
 
@@ -102,6 +104,7 @@ void main() {
       String? publisherId,
       int Function()? now}) {
     final server = RelayServer(
+      resolver: const PermissiveSeriesResolver(),
       api: plant,
       config: ServerConfig(
           tick: ServerConfig.minTick, publisherId: publisherId),

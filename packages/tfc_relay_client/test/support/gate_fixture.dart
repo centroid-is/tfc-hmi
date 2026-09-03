@@ -103,6 +103,7 @@ import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 // declaration would be the first place the two legs drifted.
 import 'fault_fixture.dart' show FaultTls, faultClientConfig, until;
 import 'frame_seam.dart';
+import 'permissive_resolver.dart';
 
 /// A page of [n] keys in the plant's own `AREAnn.DEVnn.SUBnn` shape.
 ///
@@ -748,6 +749,7 @@ RelayServer _buildGateway(
   FaultTls? tls,
 }) =>
     RelayServer(
+      resolver: const PermissiveSeriesResolver(),
       api: plant,
       config: _configFor(config, port, tls),
       // Collected rather than printed, and collected rather than discarded.

@@ -51,6 +51,7 @@ import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 import 'package:web_socket_channel/io.dart';
 
 import 'support/certs.dart';
+import 'support/permissive_resolver.dart';
 
 const _dialBudget = Duration(seconds: 10);
 const _requestBudget = Duration(seconds: 5);
@@ -123,7 +124,7 @@ void main() {
       tls = TlsConfig(chainPath: mounted.chainPath, keyPath: mounted.keyPath);
       config = ServerConfig(tick: ServerConfig.minTick, tls: tls);
       served = FakeStateMan()..setValue('MOTOR01.speed', 12.5);
-      server = RelayServer(api: served, config: config, onError: (_, __, ___) {});
+      server = RelayServer(resolver: const PermissiveSeriesResolver(), api: served, config: config, onError: (_, __, ___) {});
       addTearDown(() async {
         await server.close();
         await served.dispose();
@@ -245,6 +246,7 @@ void main() {
       final reported = <String>[];
       final served = FakeStateMan();
       final server = RelayServer(
+        resolver: const PermissiveSeriesResolver(),
         api: served,
         // Port 0 so the case cannot collide with anything; the address is
         // what the check reads.

@@ -40,6 +40,8 @@ import 'package:tfc_stateman_contract/channel_harness.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 
+import 'support/permissive_resolver.dart';
+
 /// One session, one client, both wired and listening.
 final class _Link {
   _Link(this.session, this.client, this.api);
@@ -64,6 +66,7 @@ _Link _link(
   final pair = channelPair();
   final api = FakeStateMan();
   final session = RelaySession.serve(
+    resolver: const PermissiveSeriesResolver(),
     channel: pair.server,
     api: api,
     config: config ?? ServerConfig(),
@@ -218,6 +221,7 @@ void main() {
     final pair = channelPair();
     final api = FakeStateMan();
     final session = RelaySession.serve(
+      resolver: const PermissiveSeriesResolver(),
       channel: pair.server,
       api: api,
       config: ServerConfig(),

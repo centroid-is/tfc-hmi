@@ -75,6 +75,7 @@ import 'package:tfc_stateman_contract/faults.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 
 import 'frame_seam.dart';
+import 'permissive_resolver.dart';
 
 /// The client's timing knobs for a fault leg, with the deadline floor lowered
 /// deliberately.
@@ -247,6 +248,7 @@ Future<FaultFixture> faultFixture({
   seed?.call(served);
 
   final server = RelayServer(
+    resolver: const PermissiveSeriesResolver(),
     api: served,
     config: ServerConfig(
       tick: ServerConfig.minTick,
