@@ -268,6 +268,21 @@ void main() {
     expect(client.stalledMs, isNull,
         reason: 'the duration of a previous connection\'s stall survived a '
             'reconnect');
+
+    // And the once-per-connection damper is RE-ARMED, not merely the surface
+    // cleared (09-REVIEW IN-02): a regression that cleared the surface but
+    // left _stallComplained set would silence every stall after the first
+    // for the process lifetime, and without this half the suite stayed green
+    // through it. A second connection's stall is a second operator sentence.
+    final before = client.complaints.length;
+    gateway.resync(_page, _gatewayStalled, stalledMs: 8000);
+    await _until('the second connection\'s stall to be recorded',
+        () => client.stalledMs == 8000);
+    expect(client.complaints.length - before, 1,
+        reason: 'a stall on the second connection produced no complaint — the '
+            'surface was reset on reconnect but the damper was not, so the '
+            'first stall of the process is the only one an engineer ever '
+            'reads about');
   });
 
   test('stalledMs is carried through as the absolute figure the gateway sent',
