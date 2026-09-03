@@ -256,13 +256,12 @@ const Map<String, String> catalogueProse = <String, String>{
 /// A [OutstandingKind.partial] entry is for a row that *has* a case whose
 /// named clauses are not all asserted yet. A partial entry for a row with no
 /// case is a missing entry wearing the wrong label, and the manifest says so.
-const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
-  'F22': Outstanding(
-    kind: OutstandingKind.partial,
-    owner: '09-09',
-    clause: 'the announcement (F22a), the operator sentence (F22b), staleness-that-clears-unaided (F22c) and the reaper half ("synchronized false disconnect on every client", F22d) have landed; still owed: the historian half ("historian marks the gap") is 09-09\'s db-tagged arm',
-  ),
-};
+/// Empty since 09-09 landed F22e (the historian arm, "historian marks the
+/// gap") — the last owed clause of the last partial row. The manifest's
+/// closing case asserts this map STAYS empty, because the phase is over: an
+/// entry here now would be work nobody has agreed to do, recorded as though
+/// somebody had.
+const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{};
 
 /// Every catalogue clause the phase's green will **not** cover.
 ///

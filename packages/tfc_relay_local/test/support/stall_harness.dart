@@ -57,13 +57,32 @@ import 'dart:async';
 import 'dart:isolate';
 
 import 'package:test/test.dart' show addTearDown;
+import 'package:tfc_dart/core/collector.dart' show CollectEntry;
 import 'package:tfc_dart/core/state_man.dart' show KeyMappings;
+import 'package:tfc_relay_local/src/collect/timescale_sink.dart';
 import 'package:tfc_relay_local/tfc_relay_local.dart';
+import 'package:tfc_relay_protocol/tfc_relay_protocol.dart' show PipeKeys;
 import 'package:tfc_relay_server/tfc_relay_server.dart';
 
 import 'fake_upstream_link.dart';
 import 'gate_b_fixture.dart' show gateBPage;
 import 'keymap_fixtures.dart' show opcUaEntry;
+
+/// What F22e hands the gateway isolate so it historises one key into a real
+/// TimescaleDB while it is being frozen — endpoint values from 8b-03's
+/// env-addressed fixture, a table base the case owns and drops, the plant key
+/// to collect and its sample interval. Plain values only: everything crosses
+/// the isolate boundary as a map, like the rest of the spec.
+typedef StallCollect = ({
+  String host,
+  int port,
+  String database,
+  String? username,
+  String? password,
+  String table,
+  String key,
+  Duration sampleInterval,
+});
 
 /// The default cadence of the plant driver inside the isolate.
 ///
@@ -103,7 +122,8 @@ typedef GatewayReport = ({int sweep, int latest});
 
 /// A gateway and its three PLCs living in an isolate this object can freeze.
 final class StalledGateway {
-  StalledGateway._(this._isolate, this._fromGateway, this._toGateway, this.port);
+  StalledGateway._(this._isolate, this._fromGateway, this._toGateway, this.port,
+      this.collectFailures);
 
   final Isolate _isolate;
   final ReceivePort _fromGateway;
@@ -112,6 +132,12 @@ final class StalledGateway {
   /// The ephemeral port the OS picked at bind, reported back from the isolate.
   /// The panels a case builds dial this — never a literal.
   final int port;
+
+  /// [CollectionRunner.entryFailures] as of the `up` report — empty when the
+  /// collection chain stood up whole, and always empty when [spawn] was given
+  /// no `collect` spec. F22e asserts on this before trusting a single row:
+  /// a gap proven against a historian that never started is no proof.
+  final Map<String, String> collectFailures;
 
   final _pending = <int, Completer<Object?>>{};
 
@@ -159,6 +185,13 @@ final class StalledGateway {
     Duration tick = ServerConfig.minTick,
     Duration? stallThreshold,
     Duration? heartbeatDeadline,
+    // Long by default, because F22a-d are not staleAfter rows (the plant
+    // keeps re-delivering, so a short link staleAfter would grey values for
+    // a reason that is not the freeze). F22e passes a SHORT one on purpose:
+    // its whole subject is the freeze outliving the deadline, so the values
+    // the pause left behind degrade before the quiesced plant refreshes them.
+    Duration staleAfter = const Duration(seconds: 30),
+    StallCollect? collect,
   }) async {
     if (aliases.isEmpty || aliases.toSet().length != aliases.length) {
       throw ArgumentError('aliases must be non-empty and distinct (got '
@@ -204,9 +237,21 @@ final class StalledGateway {
         'keysPerAlias': keysPerAlias,
         'sweepMs': plantSweep.inMilliseconds,
         'tickMs': tick.inMilliseconds,
+        'staleAfterMs': staleAfter.inMilliseconds,
         if (stallThreshold != null) 'stallThresholdMs': stallThreshold.inMilliseconds,
         if (heartbeatDeadline != null)
           'heartbeatMs': heartbeatDeadline.inMilliseconds,
+        if (collect != null)
+          'collect': <String, Object?>{
+            'host': collect.host,
+            'port': collect.port,
+            'database': collect.database,
+            'username': collect.username,
+            'password': collect.password,
+            'table': collect.table,
+            'key': collect.key,
+            'sampleIntervalMs': collect.sampleInterval.inMilliseconds,
+          },
       },
       debugName: 'stall-harness-gateway',
       errorsAreFatal: false,
@@ -236,6 +281,8 @@ final class StalledGateway {
       fromGateway,
       ready['commands']! as SendPort,
       ready['port']! as int,
+      ((ready['collectFailures'] ?? const <String, Object?>{}) as Map)
+          .cast<String, String>(),
     );
     addTearDown(gateway.shutdown);
     return gateway;
@@ -343,8 +390,10 @@ Future<void> stalledGatewayEntryPoint(Map<String, Object?> spec) async {
   final keysPerAlias = spec['keysPerAlias']! as int;
   final sweep = Duration(milliseconds: spec['sweepMs']! as int);
   final tick = Duration(milliseconds: spec['tickMs']! as int);
+  final staleAfterMs = spec['staleAfterMs'] as int? ?? 30000;
   final stallThresholdMs = spec['stallThresholdMs'] as int?;
   final heartbeatMs = spec['heartbeatMs'] as int?;
+  final collectSpec = (spec['collect'] as Map?)?.cast<String, Object?>();
 
   // One fake PLC per alias, each claiming exactly its own page — an empty key
   // set on FakeUpstreamLink claims EVERYTHING, which a per-alias gateway must
@@ -361,16 +410,24 @@ Future<void> stalledGatewayEntryPoint(Map<String, Object?> spec) async {
   final mappings = KeyMappings(nodes: {
     for (final entry in pages.entries)
       for (final key in entry.value)
-        key: opcUaEntry(alias: entry.key.alias, identifier: key),
+        key: opcUaEntry(alias: entry.key.alias, identifier: key)
+          // F22e's one collected key: the entry rides the same mapping every
+          // other key gets, plus the collect block the runner plans from.
+          ..collect = collectSpec != null && key == collectSpec['key']
+              ? CollectEntry(
+                  key: key,
+                  name: collectSpec['table']! as String,
+                  sampleInterval: Duration(
+                      milliseconds: collectSpec['sampleIntervalMs']! as int),
+                )
+              : null,
   });
 
   final plant = LocalStateMan(
     links: links,
     router: KeyRouter.overLinks(links, mappings: mappings),
-    // Long, because F22 is not a staleAfter row: the plant keeps re-delivering,
-    // so a short link staleAfter would grey values for a reason that is not the
-    // freeze.
-    staleAfter: const Duration(seconds: 30),
+    // See spawn's staleAfter doc: long for F22a-d, short on F22e's order.
+    staleAfter: Duration(milliseconds: staleAfterMs),
   );
 
   // Seed the first sweep synchronously, before the server exists, so the first
@@ -382,6 +439,42 @@ Future<void> stalledGatewayEntryPoint(Map<String, Object?> spec) async {
   }
 
   await plant.start();
+
+  // F22e's collection chain, composed the way bin/relay_gateway.dart composes
+  // it — sink, plan, runner on the plant's own health producer — and living
+  // IN THIS ISOLATE on purpose (`useIsolate: false`): a sink on its own
+  // isolate would keep flushing through the very freeze the arm exists to
+  // see. Nothing here runs when the spec carries no collect block.
+  TimescaleSink? sink;
+  CollectionRunner? runner;
+  if (collectSpec != null) {
+    final config = CollectionConfig(
+      enabled: true,
+      endpoint: CollectionEndpoint(
+        host: collectSpec['host']! as String,
+        port: collectSpec['port']! as int,
+        database: collectSpec['database']! as String,
+        username: collectSpec['username'] as String?,
+        password: collectSpec['password'] as String?,
+      ),
+      connectTimeout: const Duration(seconds: 2),
+      queryTimeout: const Duration(seconds: 5),
+    );
+    sink = TimescaleSink(
+      config,
+      publisherId: 'f22e-stall',
+      useIsolate: false,
+      sleep: (_) => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await sink.start();
+    runner = CollectionRunner(
+      plan: CollectionPlan.from(mappings, config),
+      stateMan: plant,
+      sink: sink,
+      health: plant.collectHealth,
+    );
+    await runner.start();
+  }
 
   final server = RelayServer(
     api: plant,
@@ -401,10 +494,16 @@ Future<void> stalledGatewayEntryPoint(Map<String, Object?> spec) async {
   await server.start();
 
   var sweeps = 0;
+  // F22e's quiesce lever: while false the driver ticks but publishes nothing,
+  // so the plant's held values age exactly as a real PLC's do across its
+  // first silent publishing interval. Flipped by the quiesce/drive commands,
+  // for the window F22e is judging and no longer.
+  var driving = true;
   // The self-driving plant. Not on the freeze allow-list and needs no entry:
   // the sweep is under test/support (see the library doc), which timerOffenders
   // does not scan.
   final driver = Timer.periodic(sweep, (_) {
+    if (!driving) return;
     value++;
     sweeps++;
     for (final entry in pages.entries) {
@@ -428,16 +527,33 @@ Future<void> stalledGatewayEntryPoint(Map<String, Object?> spec) async {
         answer = sweeps;
       case 'latest':
         answer = value;
+      case 'quiesce':
+        driving = false;
+        answer = 'quiet';
+      case 'drive':
+        driving = true;
+        answer = 'driving';
+      case 'drops':
+        // The counter behind PIPE.collect.rows_dropped, read through the
+        // plant the way a panel reads it — null-under-errorConfig before the
+        // runner's first refresh, which the delta arithmetic reads as zero.
+        answer = (plant.read(PipeKeys.collectRowsDropped)?.value as int?) ?? 0;
       case 'shutdown':
         driver.cancel();
+        // Collection first, mirroring bin/relay_gateway.dart's order
+        // (8b-03 deviation 4): the runner stops sampling and flushes while
+        // the sink still owns a connection, before anything else tears down.
+        await runner?.stop();
+        await sink?.close();
         await status.cancel();
         await server.close();
         await plant.dispose();
         answer = 'gone';
       default:
         answer = 'unknown command "${command['cmd']}": this harness answers '
-            'sessionCount, sweeps, latest and shutdown, and nothing else — it '
-            'is F22\'s and is not a general remote-control channel';
+            'sessionCount, sweeps, latest, quiesce, drive, drops and '
+            'shutdown, and nothing else — it is F22\'s and is not a general '
+            'remote-control channel';
     }
     reports.send(<String, Object?>{'kind': 'reply', 'id': id, 'value': answer});
     if (command['cmd'] == 'shutdown') commands.close();
@@ -447,5 +563,6 @@ Future<void> stalledGatewayEntryPoint(Map<String, Object?> spec) async {
     'kind': 'up',
     'commands': commands.sendPort,
     'port': server.port,
+    if (runner != null) 'collectFailures': runner.entryFailures,
   });
 }

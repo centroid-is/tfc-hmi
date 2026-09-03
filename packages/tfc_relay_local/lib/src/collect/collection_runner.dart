@@ -72,6 +72,21 @@ import 'collection_plan.dart';
 import 'sample_gate.dart';
 import 'timeseries_sink.dart';
 
+/// How many milliseconds of whole missed sampling windows turn an interval
+/// tick into a declined wake-up tick (09-09, F22e).
+///
+/// The number separates two populations that do not overlap: scheduler and
+/// GC pauses on a loaded runner are tens of milliseconds, while the stalls
+/// this guard exists for — a Veeam/VMware snapshot freezing the whole
+/// process, an `Isolate.pause` in the gate lane — run seconds to tens of
+/// seconds. A quarter second of plant nobody sampled is beyond any pause the
+/// historian should write through, and hours below any freeze worth a gap.
+/// Note the arithmetic is over MISSED windows (`(tickDelta - 1) * interval`),
+/// so at production-scale sample intervals (>= 250 ms) a single missed
+/// window already trips it, while the 25 ms ticks the unit suite runs need
+/// ten — which is what keeps ordinary jitter from counting phantom drops.
+const int _stallDeclineFloorMs = 250;
+
 /// Drives [CollectionPlan.entries] from the value path into the sink.
 final class CollectionRunner {
   CollectionRunner({
@@ -308,7 +323,22 @@ final class CollectionRunner {
     _subscriptions[entry.key] = subscription;
 
     if (interval != null) {
-      final timer = Timer.periodic(interval, (_) {
+      var lastTick = 0;
+      final timer = Timer.periodic(interval, (t) {
+        // A tick that skipped whole periods is a WAKE-UP tick: the isolate
+        // (or the process under it) was stalled across full sampling
+        // windows, and it fires before the freshness sweep's own overdue
+        // pass can degrade what the stall left behind — the sample deadline
+        // is always the earlier one. `Timer.periodic` reports the missed
+        // periods itself (`t.tick` jumps), which is information already in
+        // scope, the same instinct as the reaper's LagStalled credit
+        // (09-08). The floor keeps ordinary scheduler jitter out of it: a
+        // GC pause is tens of milliseconds, a backup-snapshot freeze is
+        // seconds, and only the second may open a gap.
+        final missedWindowMs =
+            (t.tick - lastTick - 1) * interval.inMilliseconds;
+        final wokeFromStall = missedWindowMs > _stallDeclineFloorMs;
+        lastTick = t.tick;
         final held = latest;
         // Nothing to sample before the first value: a tick with no reading
         // writes nothing and counts nothing — a row that never existed is
@@ -317,6 +347,19 @@ final class CollectionRunner {
         // A closed gate stops the tick from sampling at all — the operator
         // said "only while", and while is not now.
         if (gate != null && !gate.isOpen) return;
+        if (wokeFromStall) {
+          // The held value predates a gap nobody sampled through. Writing
+          // it at now() stamps a pre-stall reading as current — after a 45 s
+          // backup freeze that is a 45-second-old number wearing a fresh
+          // timestamp, the one-row flat line F22e catches (09-09). Decline
+          // and count: the missed window is a real loss the operator can
+          // read off PIPE.collect.rows_dropped. Within one sweep interval
+          // the sweep rules on the value's real age, and a live upstream
+          // re-vouches it with its next arrival — an on-schedule tick then
+          // resumes writing.
+          if (heldIsArrival) _countSkip();
+          return;
+        }
         if (held.quality.band == 0) {
           _insert(entry, held);
           return;
