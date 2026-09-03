@@ -563,4 +563,108 @@ void main() {
               'must not round them away');
     });
   });
+
+  group('the retention horizon', () {
+    final createdTables = <String>[];
+
+    /// Every `policy_retention` job on this server, removed.
+    ///
+    /// The horizon is GLOBAL — it is the maximum `drop_after` across every
+    /// job on the server — so the "no policy" arm is only meaningful against
+    /// a server that genuinely has none, and a sibling case (or an 8b case
+    /// sharing an external server) installing one would otherwise decide this
+    /// arm's answer.
+    Future<void> removeEveryRetentionJob() async {
+      await admin.execute("SELECT delete_job(job_id) FROM "
+          "timescaledb_information.jobs WHERE proc_name = 'policy_retention'");
+    }
+
+    tearDownAll(() async {
+      for (final table in createdTables) {
+        await admin.execute('DROP TABLE IF EXISTS "$table" CASCADE');
+      }
+    });
+
+    test('with no retention policy installed, the horizon is null and silent',
+        () async {
+      await removeEveryRetentionJob();
+
+      expect(await store.getGlobalRetentionHorizon(), isNull,
+          reason: '"nothing has been discarded yet" is null, and it must not '
+              'be defaulted to the epoch — 0 is a valid epoch millisecond and '
+              'the OPPOSITE answer, "everything since the epoch is gone" '
+              '(client_sub_apis.dart:398-408)');
+      expect(notices, isEmpty,
+          reason: 'a gateway that logged a line every time a chart asked '
+              'about retention on a server that has no policy would log one '
+              'per panel per open. Silence is the right answer for the '
+              'ordinary case; the failure arm below is what must NOT be '
+              'silent');
+    });
+
+    test('with a policy installed, the horizon is UTC and is now minus it',
+        () async {
+      final table = 'gw_retention_${DateTime.now().microsecondsSinceEpoch}';
+      createdTables.add(table);
+      const week = Duration(days: 7);
+
+      await writer.registerRetentionPolicy(
+          table, const RetentionPolicy(dropAfter: week));
+      await writer.insertTimeseriesData(table, DateTime.now().toUtc(), 1);
+      await writer.flush();
+      await writer.registerRetentionPolicy(
+          table, const RetentionPolicy(dropAfter: week));
+
+      // Bracketed by the case's own clock, so the arithmetic is asserted
+      // rather than approximated: the horizon is computed inside the call, so
+      // it cannot be older than `before - 7d` nor newer than `after - 7d`.
+      final before = DateTime.now().toUtc();
+      final horizon = await store.getGlobalRetentionHorizon();
+      final after = DateTime.now().toUtc();
+
+      expect(horizon, isNotNull,
+          reason: 'a retention policy is installed and the gateway says '
+              'nothing has been discarded, so a chart scrolled past the '
+              'horizon shows absence of DATA as absence of EVENTS');
+      expect(horizon!.isUtc, isTrue,
+          reason: 'drift builds this with DateTime.now().subtract(maxDur) — a '
+              'LOCAL instant (database_drift.dart:774) — and the wire is UTC '
+              'epoch milliseconds everywhere. A horizon an hour off says '
+              'history exists that does not');
+      expect(horizon.isAfter(before.subtract(week)) || horizon == before.subtract(week),
+          isTrue,
+          reason: 'the horizon $horizon is older than the case\'s own '
+              '"now minus seven days" (${before.subtract(week)})');
+      expect(horizon.isBefore(after.subtract(week)) || horizon == after.subtract(week),
+          isTrue,
+          reason: 'the horizon $horizon is newer than the case\'s own '
+              '"now minus seven days" (${after.subtract(week)})');
+    });
+
+    test('when the query fails the answer is still null, and it is logged',
+        () async {
+      // A historian that went down between the panel opening and the chart
+      // asking. Its own Database, closed on purpose, so no other case shares
+      // the wreckage.
+      final dead = await openWriter();
+      final deadStore =
+          HistoryViewStore(database: () => dead, log: notices.add);
+      await dead.close();
+
+      expect(await deadStore.getGlobalRetentionHorizon(), isNull,
+          reason: 'the ANSWER stays null: this gateway does not widen '
+              'upstream\'s catch, because a new exception type on the wire is '
+              'a client-visible change and the compatible answer is the '
+              'existing one');
+      expect(notices, isNotEmpty,
+          reason: 'THIS is the improvement. Upstream answers a permissions '
+              'error, a non-Timescale database and "nothing has been '
+              'discarded yet" with the same null and no trace '
+              '(database_drift.dart:775-778). The answer stays compatible '
+              'and the operator stops being lied to silently');
+      expect(notices.join('\n'), contains('retention'),
+          reason: 'a log line that does not name what was being asked is a '
+              'line nobody can act on');
+    });
+  });
 }
