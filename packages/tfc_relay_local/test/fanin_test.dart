@@ -12,6 +12,7 @@ import 'dart:async';
 import 'package:test/test.dart';
 import 'package:tfc_dart/core/state_man.dart' show KeyMappingEntry, KeyMappings;
 import 'package:tfc_relay_local/src/data/history_view_store.dart';
+import 'package:tfc_relay_local/src/data/preference_store.dart';
 import 'package:tfc_relay_local/tfc_relay_local.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
@@ -234,8 +235,7 @@ void main() {
     /// argues for: a phase whose own gate is red cannot tell a new failure
     /// from a known one, so an unwritten member throws with an owner rather
     /// than leaving a case failing until somebody writes it.
-    void owes(String name, String plan, void Function() call) {
-      test('$name is owed by $plan', () {
+    void owesDirectly(String name, String plan, void Function() call) {
         expect(
             call,
             throwsA(isA<UnimplementedError>().having(
@@ -243,18 +243,81 @@ void main() {
             reason: 'a member that is not written yet must name the plan that '
                 'owes it, so the count in freeze_test.dart can be decremented '
                 'by the plan that closes it');
-      });
     }
 
     // 08-06's three entries — `write`, `writeStatus`, `holdToRun` — came off
     // this ledger in the commits that closed them, 08-11's `browse` came off
-    // in the commit that landed `local_browse.dart`, and 10-07's
-    // `timeseries` came off in the commit that landed `TimescaleReader`. That
-    // is the ledger being self-deleting rather than merely honest. Two left,
-    // and their owner is a LATER PHASE: `supportsDataServices: false` on the
-    // contract leg deletes the cases behind them, which is not the same as
-    // implementing them, so the ledger says 10-01 rather than saying zero.
-    owes('preferences', '10-01', () => man.preferences);
+    // in the commit that landed `local_browse.dart`, 10-07's `timeseries`
+    // came off in the commit that landed `TimescaleReader`, 10-08's
+    // `historyViews` in the commit that landed `HistoryViewStore`, and
+    // 10-09's `preferences` in the commit that landed `PreferenceStore`.
+    // That is the ledger being self-deleting rather than merely honest, and
+    // **it is now empty**: [owes] is kept because the doctrine outlives this
+    // phase, and the anti-vacuity arm below is what keeps a helper with no
+    // callers from rotting into one that does not work.
+    test('the ledger is empty, and owes() still works', () {
+      // A deliberately unwritten member, declared here and nowhere in lib/,
+      // so the helper that guarded five real members is still proven to
+      // recognise one. Without this the day somebody needs `owes` again is
+      // the day they find out it stopped matching.
+      owesDirectly('a_future_member', '99-01',
+          () => throw UnimplementedError('99-01 owes a_future_member'));
+    });
+
+    test('preferences is no longer owed — composed, not unwritten', () {
+      // 10-09 task 3, and the refusal is deliberately NOT the `StateError`
+      // that `timeseries` and `historyViews` answer with. `relay_session.dart
+      // :899` calls `data.watchPreferences()` on EVERY session, and
+      // `data_handlers.dart:216` catches exactly `on UnsupportedError` for
+      // "a source with no preference store". A `StateError` there is
+      // uncaught, so it would take down session setup on every gateway with
+      // no `collection:` block — which is the default deployment.
+      //
+      // That the member throws at all today is only survivable for the same
+      // reason: `UnimplementedError implements UnsupportedError`
+      // (dart:core errors.dart:595), so the ledger's throw was being caught
+      // all along. Which is why the two assertions below are BOTH needed —
+      // an `isA<UnsupportedError>()` alone would pass against the
+      // `UnimplementedError` this case exists to remove.
+      expect(() => man.preferences, throwsA(isA<UnsupportedError>()));
+      expect(() => man.preferences, isNot(throwsUnimplementedError));
+      expect(() => man.preferences, isNot(throwsStateError));
+
+      final composed = LocalStateMan(
+        links: const <UpstreamLink>[],
+        router: KeyRouter.overLinks(const <UpstreamLink>[],
+            mappings: KeyMappings(nodes: <String, KeyMappingEntry>{})),
+        // The real store, not a fake, for `historyViews`' reason.
+        preferences: PreferenceStore(database: () => null),
+      );
+      addTearDown(composed.dispose);
+      expect(composed.preferences, isA<PreferencesApi>(),
+          reason: 'the anti-vacuity arm: a getter that always threw would '
+              'pass the three assertions above');
+    });
+
+    test('disposing the composer lets the preference feed go', () async {
+      final store = PreferenceStore(database: () => null);
+      final composed = LocalStateMan(
+        links: const <UpstreamLink>[],
+        router: KeyRouter.overLinks(const <UpstreamLink>[],
+            mappings: KeyMappings(nodes: <String, KeyMappingEntry>{})),
+        preferences: store,
+      );
+      final sub = composed.preferences.onPreferencesChanged.listen((_) {});
+      addTearDown(sub.cancel);
+      expect(store.feed.hasListener, isTrue);
+
+      await composed.dispose();
+
+      expect(store.feed.hasListener, isFalse,
+          reason: 'Trap 5 on this side: a subscription on a shared source '
+              'that only one path cancels is a leak with a measured '
+              'precedent (2.50 listeners per kill cycle). The feed holds a '
+              'channel subscription on the shared notification connection, '
+              'and a disposed gateway that kept it is a socket nobody owns');
+      expect(store.feed.channelUp, isFalse);
+    });
 
     test('browse is no longer owed — it answers a BrowseApi', () {
       expect(man.browse, isA<LocalBrowse>());

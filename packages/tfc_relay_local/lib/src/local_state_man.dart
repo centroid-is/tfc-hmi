@@ -69,6 +69,7 @@ import 'dart:async';
 
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
+import 'data/preference_store.dart';
 import 'fanin.dart';
 import 'freshness_sweep.dart';
 import 'ingest.dart';
@@ -94,11 +95,13 @@ final class LocalStateMan implements StateManApi {
         const <String, UpstreamAddressSpace>{},
     TimeseriesApi? timeseries,
     HistoryViewApi? historyViews,
+    PreferenceStore? preferences,
     DateTime Function()? now,
     int Function()? elapsedMs,
   })  : links = List<UpstreamLink>.unmodifiable(links),
         _timeseries = timeseries,
         _historyViews = historyViews,
+        _preferences = preferences,
         browseSpaces =
             Map<String, UpstreamAddressSpace>.unmodifiable(browseSpaces),
         _now = now ?? DateTime.now,
@@ -1438,6 +1441,8 @@ final class LocalStateMan implements StateManApi {
       throw UnimplementedError('10-01 owes LocalStateMan.preferences — Phase '
           '10 owns the stored preferences, and no method here may request '
           'secret material');
+
+  final PreferenceStore? _preferences;
 
   // ---------------------------------------------------------------- internals
 

@@ -41,7 +41,9 @@ import 'package:test/test.dart';
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/database_drift.dart';
 import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
+import 'package:tfc_dart/core/state_man.dart' show KeyMappingEntry, KeyMappings;
 import 'package:tfc_relay_local/src/data/preference_store.dart';
+import 'package:tfc_relay_local/tfc_relay_local.dart';
 
 import 'support/timescale_fixture.dart';
 
@@ -319,6 +321,52 @@ void main() {
               'parses and a gateway that will not route');
 
       await store.remove(key);
+    });
+  });
+
+  group('through the composer, end to end', () {
+    test('a second-connection write is heard through '
+        'LocalStateMan.preferences', () async {
+      final owned = freshStore();
+      final man = LocalStateMan(
+        links: const <UpstreamLink>[],
+        router: KeyRouter.overLinks(const <UpstreamLink>[],
+            mappings: KeyMappings(nodes: <String, KeyMappingEntry>{})),
+        preferences: owned,
+      );
+      addTearDown(man.dispose);
+
+      final seen = <String>[];
+      // Through the COMPOSER's getter, not through the store variable: the
+      // wiring is the subject. If `preferences` answered a bare `Preferences`
+      // — or the store's local stream instead of the merged feed — the
+      // cross-process half built in task 2 would be unreachable from the wire
+      // and the whole task would be decoration.
+      final sub = man.preferences.onPreferencesChanged.listen(seen.add);
+      addTearDown(sub.cancel);
+      final ready = DateTime.now().add(const Duration(seconds: 15));
+      while (!owned.feed.channelUp && DateTime.now().isBefore(ready)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(owned.feed.channelUp, isTrue);
+
+      final key = '${ns}endtoend';
+      await writeBehindTheStore(key, 'from the HMI station');
+
+      final deadline = DateTime.now().add(const Duration(seconds: 15));
+      while (!seen.contains(key) && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+
+      expect(seen, contains(key),
+          reason: 'this is DB-03 end to end: an edit made by a process this '
+              'gateway does not own, reaching the member a session '
+              'subscribes to. relay_session.dart:899 attaches to exactly '
+              'this stream');
+      expect(await man.preferences.getString(key), 'from the HMI station',
+          reason: 'and the read that follows the notification has to answer '
+              'the new value, or the notification sent every panel to fetch '
+              'what it already had');
     });
   });
 }
