@@ -83,6 +83,38 @@ class SchneiderATV320Config extends BaseAsset {
 
   SchneiderATV320Config.preview() : super();
 
+  /// The drive's own settings, minus its three OPC UA keys — a row of ATV320s
+  /// is exactly the selection where sharing a status key would look right on
+  /// the mimic and be wrong on the floor.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<BulkProperty> get bulkProperties => [
+        ...super.bulkProperties,
+        TextBulkProperty(
+          id: 'SchneiderATV320Config.label',
+          label: 'Drive label',
+          group: _bulkGroup,
+          read: () => label,
+          apply: (value) => label = value,
+        ),
+        NumberBulkProperty(
+          id: 'SchneiderATV320Config.labelFontSize',
+          label: 'Label font size',
+          group: _bulkGroup,
+          unit: 'pt',
+          decimals: 1,
+          min: ATV320.minLabelFontSize,
+          max: ATV320.maxLabelFontSize,
+          // Null is "the drive's default", which is what every page saved
+          // before the field existed holds; clearing the row restores it.
+          nullable: true,
+          read: () => labelFontSize,
+          apply: (value) => labelFontSize = value?.toDouble(),
+        ),
+      ];
+
+  static const String _bulkGroup = 'Schneider ATV320';
+
   factory SchneiderATV320Config.fromJson(Map<String, dynamic> json) =>
       _$SchneiderATV320ConfigFromJson(json);
   @override

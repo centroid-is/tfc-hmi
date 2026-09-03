@@ -97,6 +97,54 @@ class TextAssetConfig extends BaseAsset {
     size = const RelativeSize(width: 0.15, height: 0.08);
   }
 
+  /// The whole asset is its text, so [textContent] is bulk-editable here in a
+  /// way an OPC UA key is not — the substitution syntax makes one string work
+  /// across a row of them (`"$CN$i speed"` is still per-asset, but a shared
+  /// caption is a common thing to want).
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<BulkProperty> get bulkProperties => [
+        ...super.bulkProperties,
+        TextBulkProperty(
+          id: 'TextAssetConfig.textContent',
+          label: 'Content',
+          group: _bulkGroup,
+          nullable: false,
+          read: () => textContent,
+          apply: (value) => textContent = value ?? '',
+        ),
+        BoolBulkProperty(
+          id: 'TextAssetConfig.enableVariableSubstitution',
+          label: 'Substitute variables',
+          group: _bulkGroup,
+          read: () => enableVariableSubstitution,
+          apply: (value) => enableVariableSubstitution = value,
+        ),
+        NumberBulkProperty(
+          id: 'TextAssetConfig.decimalPlaces',
+          label: 'Decimal places',
+          group: _bulkGroup,
+          isInt: true,
+          decimals: 0,
+          min: 0,
+          max: 6,
+          read: () => decimalPlaces,
+          apply: (value) => decimalPlaces = (value ?? decimalPlaces).round(),
+        ),
+        ColorBulkProperty(
+          id: 'TextAssetConfig.textColor',
+          label: 'Text colour',
+          group: _bulkGroup,
+          // Null means the ambient theme colour, which is the state every
+          // text asset starts in — the picker keeps a way back to it.
+          nullable: true,
+          read: () => textColor,
+          apply: (value) => textColor = value,
+        ),
+      ];
+
+  static const String _bulkGroup = 'Text';
+
   factory TextAssetConfig.fromJson(Map<String, dynamic> json) =>
       _$TextAssetConfigFromJson(json);
   Map<String, dynamic> toJson() => _$TextAssetConfigToJson(this);

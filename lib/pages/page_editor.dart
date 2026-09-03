@@ -23,6 +23,7 @@ import '../widgets/zoomable_canvas.dart';
 import '../widgets/panes/pane_chrome.dart' show PaneAction;
 import '../widgets/leave_guard.dart';
 import '../widgets/panes/side_pane.dart';
+import '../widgets/bulk_property_editor.dart';
 import '../page_creator/page.dart';
 import '../core/startup_url.dart';
 import '../providers/preferences.dart' show localPreferencesProvider;
@@ -898,6 +899,23 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// width you drag it to is the one the next asset opens at.
   double _configPaneWidth = 520;
 
+  /// The selection the properties pane is showing, or null when it is closed.
+  ///
+  /// Held apart from [_selectedAssets] so that a change to the selection can
+  /// be spotted (see [_refreshBulkPane]) — the pane is built once into an
+  /// overlay entry and does not rebuild just because this editor did.
+  List<Asset>? _bulkPaneSelection;
+
+  /// Ticks whenever the open properties pane's view of the world goes stale:
+  /// the selection changed, or the assets moved under it. The pane listens
+  /// and re-reads its rows; nothing else does, so the notifier is only
+  /// touched while it is open.
+  final ValueNotifier<int> _bulkRevision = ValueNotifier<int>(0);
+
+  /// Narrower than [_configPaneWidth]: a properties grid is a column of short
+  /// fields, not the dense forms the per-asset editors grew into.
+  double _bulkPaneWidth = 360;
+
   List<Asset> get assets {
     if (_currentPage == null) {
       return [];
@@ -1176,6 +1194,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     _configWatch?.cancel();
     _configWatch = null;
     _closeConfigPane();
+    _closeBulkPane();
+    // After the panes: closing one runs its `onClosed`, which reads this.
+    _bulkRevision.dispose();
     _treeScrollController.dispose();
     _paletteSearchController.dispose();
     _shortcutFocus.dispose();
@@ -1718,6 +1739,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     // Ctrl+Z with nothing to do.
     final configAsset = _configAsset;
     if (configAsset != null) _configSnapshot = _assetSnapshot(configAsset);
+ 
+    // The properties pane reads its rows straight off the assets, so any
+    // settled edit — a nudge, a drag, an undo — leaves its fields showing
+    // stale numbers until it is told to look again.
+    if (_bulkPaneSelection != null) _bulkRevision.value++;
   }
 
   bool get _hasUnsavedChanges =>
@@ -2067,6 +2093,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   void _closeConfigPane() {
     final asset = _configAsset;
     if (asset != null) closeSidePane(id: _configPaneId(asset));
+  }
+
+  /// Shuts the properties pane, if it is open.
+  void _closeBulkPane() {
+    if (_bulkPaneSelection != null) closeSidePane(id: _bulkPaneId);
   }
 
   /// The canvas shortcuts, registered on [HardwareKeyboard] for the editor's
@@ -2602,14 +2633,20 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       ),
       items: [
         // First, and on its own: this is how the configuration editor is
-        // reached now that a tap selects instead of opening it. Unlike the
-        // entries below it acts on the asset under the cursor rather than on
-        // the whole selection — the pane configures one asset.
+        // reached now that a tap selects instead of opening it.
+        //
+        // It follows the same targets rule as the entries below, but opens a
+        // different pane for each case. One asset gets its own `configure()`
+        // form — the complete one, with the key pickers and the device
+        // specifics. A selection gets the properties grid, which offers only
+        // what the selected assets have in common but writes to all of them
+        // at once (see [_openBulkEditPane]).
         PopupMenuItem<int>(
           value: _editAction,
-          child: const ListTile(
-            leading: Icon(Icons.tune),
-            title: Text('Edit'),
+          child: ListTile(
+            leading: const Icon(Icons.tune),
+            title: Text(
+                targets.length > 1 ? 'Edit ${targets.length} assets' : 'Edit'),
             dense: true,
           ),
         ),
@@ -2764,10 +2801,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     if (!mounted) return;
 
     if (choice == _editAction) {
-      // `_openConfigPane` toggles, which from a menu entry reading "Edit"
-      // would read as the pane refusing to open. Already showing this asset
-      // is already the wanted end state.
-      if (!identical(_configAsset, asset)) _openConfigPane(asset);
+      if (targets.length > 1) {
+        _openBulkEditPane(targets);
+      } else if (!identical(_configAsset, asset)) {
+        // `_openConfigPane` toggles, which from a menu entry reading "Edit"
+        // would read as the pane refusing to open. Already showing this asset
+        // is already the wanted end state.
+        _openConfigPane(asset);
+      }
     } else if (choice == _sendToBackAction) {
       _sendToBack(targets);
     } else if (choice == _bringToFrontAction) {
@@ -2829,6 +2870,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
   @override
   Widget build(BuildContext context) {
+    // Keeps the properties pane on the live selection; a no-op when it is
+    // closed, which is the usual case.
+    _refreshBulkPane();
     // Reactively watch for new page/asset proposals arriving via MCP.
     ref.listen<ProposalState>(proposalStateProvider, (prev, next) {
       final pageProposals = next.proposals.where((p) =>
@@ -3557,6 +3601,172 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         ),
       ),
     );
+  }
+
+  /// The one properties pane. Unlike the per-asset config pane there is never
+  /// more than one, and it survives the selection changing under it, so its
+  /// id is fixed rather than derived from what it is showing.
+  static const String _bulkPaneId = 'page-editor:properties';
+
+  /// Docks the multi-select property editor to the right of the canvas.
+  ///
+  /// This is what the context menu's Edit does for a selection of more than
+  /// one asset: [configure] can only edit the asset it was handed, so
+  /// widening four drives at once needs the narrower, shared description of
+  /// an asset that [Asset.bulkProperties] gives.
+  void _openBulkEditPane(List<Asset> targets) {
+    if (targets.isEmpty) return;
+    ref.read(currentPageAssetsProvider.notifier).state = assets;
+
+    // Already up: re-point it rather than let `showSidePane`'s toggle read as
+    // the pane refusing to open, the same guard the Edit entry uses for the
+    // single-asset pane.
+    if (_bulkPaneSelection != null) {
+      setState(() => _bulkPaneSelection = List.of(targets));
+      _bulkRevision.value++;
+      return;
+    }
+
+    // The per-asset pane closes: only one side pane fits, and the two would
+    // otherwise fight over the strip.
+    _closeConfigPane();
+
+    final opened = showSidePane(
+      context: context,
+      id: _bulkPaneId,
+      width: _bulkPaneWidth,
+      resizable: true,
+      onWidthChanged: (width) => setState(() => _bulkPaneWidth = width),
+      builder: _buildBulkPane,
+      onClosed: _onBulkPaneClosed,
+      avoidRect: _selectionScreenRect(targets),
+    );
+    if (!opened) return;
+    setState(() => _bulkPaneSelection = List.of(targets));
+  }
+
+  void _onBulkPaneClosed() {
+    if (!mounted) {
+      _bulkPaneSelection = null;
+      return;
+    }
+    setState(() => _bulkPaneSelection = null);
+    // The pane's text fields live in the root overlay and hold keyboard
+    // focus; with it gone the canvas shortcuts take over again without the
+    // operator having to click the canvas first. Same as [_onConfigPaneClosed].
+    _shortcutFocus.requestFocus();
+  }
+
+  /// The bounding box of [targets] on screen, so the canvas only steps aside
+  /// when the pane would actually cover what is being edited. Assets with no
+  /// laid-out element yet are skipped; null (nothing measurable) makes
+  /// `showSidePane` play it safe and inset.
+  Rect? _selectionScreenRect(List<Asset> targets) {
+    Rect? union;
+    for (final asset in targets) {
+      final rect = _assetScreenRect(asset);
+      if (rect == null) continue;
+      union = union == null ? rect : union.expandToInclude(rect);
+    }
+    return union;
+  }
+
+  Widget _buildBulkPane(BuildContext paneContext) {
+    return ListenableBuilder(
+      listenable: _bulkRevision,
+      builder: (context, _) {
+        final selection = _bulkPaneSelection ?? const <Asset>[];
+        return SidePane(
+          title: selection.length == 1
+              ? selection.single.displayName
+              : '${selection.length} assets',
+          subtitle: _bulkPaneSubtitle(selection),
+          icon: Icons.tune,
+          // The editor brings its own scrolling; see [_buildConfigPane].
+          scrollable: false,
+          child: BulkPropertyEditor(
+            selection: selection,
+            revision: _bulkRevision,
+            onBeforeChange: _saveToHistory,
+            onChanged: () => _updateState(() {}),
+          ),
+        );
+      },
+    );
+  }
+
+  /// What is selected, by kind: 'Schneider ATV320 x4', or the mix when the
+  /// selection is not all one thing. Named kinds rather than a bare count
+  /// because the rows on offer depend on them — a selection that has lost its
+  /// device-specific section has usually picked up one asset of another kind.
+  static String? _bulkPaneSubtitle(List<Asset> selection) {
+    if (selection.length < 2) return null;
+    final counts = <String, int>{};
+    for (final asset in selection) {
+      counts.update(asset.displayName, (n) => n + 1, ifAbsent: () => 1);
+    }
+    final parts = [
+      for (final entry in counts.entries)
+        entry.value > 1 ? '${entry.key} \u00d7${entry.value}' : entry.key,
+    ];
+    // Three kinds is already a longer subtitle than the header has room for.
+    if (parts.length > 3) return '${counts.length} kinds of asset';
+    return parts.join(', ');
+  }
+
+  /// Keeps the open properties pane pointed at the live selection.
+  ///
+  /// The pane is an overlay entry built once, so a marquee that grows the
+  /// selection, a Ctrl-click that shrinks it, or a delete that empties it
+  /// would otherwise leave it editing assets that are no longer selected —
+  /// or no longer on the page. Called from [build], where every one of those
+  /// has already landed in [_selectedAssets]; the work itself is deferred to
+  /// after the frame because it notifies a listener.
+  void _refreshBulkPane() {
+    if (_bulkPaneSelection == null) return;
+    // A rubber-band drag clears the selection on the way down and rebuilds it
+    // as the box grows, so mid-drag it passes through empty and through every
+    // partial set. Following that would flicker the pane's rows and — since
+    // an empty selection closes it — shut it halfway through the gesture.
+    // The drag settles into one more build when the pointer lifts.
+    if (_selectionStart != null) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _bulkPaneSelection == null) return;
+      // Recomputed here rather than captured above: several frames can each
+      // queue a callback, and one holding the selection as it stood two
+      // frames ago would undo the newest rebind — or close a pane over a
+      // selection that has since come back.
+      final live = _liveSelection();
+      // Nothing left to edit — an operator who deleted the selection is done
+      // with the pane, and an empty one is just a dead strip.
+      if (live.isEmpty) {
+        closeSidePane(id: _bulkPaneId);
+        return;
+      }
+      if (_sameAssets(live, _bulkPaneSelection!)) return;
+      setState(() => _bulkPaneSelection = live);
+      _bulkRevision.value++;
+    });
+  }
+
+  /// The selection in page order, which is the order the pane lists it in.
+  List<Asset> _liveSelection() => [
+        for (final asset in assets)
+          if (_selectedAssets.contains(asset)) asset,
+      ];
+
+  /// Whether two selections hold the same assets in the same order.
+  ///
+  /// By identity: a rebuilt asset (undo, paste) is a different object holding
+  /// the same values, and the pane's rows must be rebound onto it or they
+  /// write to an instance no longer on the page.
+  static bool _sameAssets(List<Asset> a, List<Asset> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!identical(a[i], b[i])) return false;
+    }
+    return true;
   }
 
   /// Repaints the canvas when the open pane has changed its asset.

@@ -66,6 +66,40 @@ class LEDConfig extends BaseAsset {
     );
   }
 
+  /// Shape and the two state colours. The colours are [AssetColor]s, so a
+  /// selection set to a theme role keeps tracking the scheme rather than
+  /// freezing at whatever the role resolved to on the day of the edit.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<BulkProperty> get bulkProperties => [
+        ...super.bulkProperties,
+        ChoiceBulkProperty<LEDType>(
+          id: 'LEDConfig.ledType',
+          label: 'Shape',
+          group: _bulkGroup,
+          options: LEDType.values,
+          optionLabel: (value) => BaseAsset.bulkEnumLabel(value.name),
+          read: () => ledType,
+          apply: (value) => ledType = value,
+        ),
+        AssetColorBulkProperty(
+          id: 'LEDConfig.onColor',
+          label: 'On colour',
+          group: _bulkGroup,
+          read: () => onColor,
+          apply: (value) => onColor = value,
+        ),
+        AssetColorBulkProperty(
+          id: 'LEDConfig.offColor',
+          label: 'Off colour',
+          group: _bulkGroup,
+          read: () => offColor,
+          apply: (value) => offColor = value,
+        ),
+      ];
+
+  static const String _bulkGroup = 'LED';
+
   factory LEDConfig.fromJson(Map<String, dynamic> json) =>
       _$LEDConfigFromJson(json);
   Map<String, dynamic> toJson() => _$LEDConfigToJson(this);

@@ -267,6 +267,87 @@ class ButtonConfig extends BaseAsset {
     return keys.toList();
   }
 
+  /// Shape, behaviour and colours. Neither the write key nor the interlock
+  /// key is here — a bank of buttons sharing one write key is a page that
+  /// starts the wrong motor.
+  ///
+  /// [disabledPolarity] is offered even though [disabledKey] is not: setting
+  /// it on a selection whose keys are already configured is exactly the
+  /// tidy-up the row is for, and on a selection with no keys it changes
+  /// nothing an operator can see.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<BulkProperty> get bulkProperties => [
+        ...super.bulkProperties,
+        ChoiceBulkProperty<ButtonType>(
+          id: 'ButtonConfig.buttonType',
+          label: 'Shape',
+          group: _bulkGroup,
+          options: ButtonType.values,
+          optionLabel: (value) => BaseAsset.bulkEnumLabel(value.name),
+          read: () => buttonType,
+          apply: (value) => buttonType = value,
+        ),
+        BoolBulkProperty(
+          id: 'ButtonConfig.isToggle',
+          label: 'Toggles',
+          group: _bulkGroup,
+          read: () => isToggle,
+          apply: (value) => isToggle = value,
+        ),
+        BoolBulkProperty(
+          id: 'ButtonConfig.serverWritesLow',
+          label: 'Server writes low',
+          group: _bulkGroup,
+          read: () => serverWritesLow,
+          apply: (value) => serverWritesLow = value,
+        ),
+        ChoiceBulkProperty<DisabledPolarity>(
+          id: 'ButtonConfig.disabledPolarity',
+          label: 'Disable when',
+          group: _bulkGroup,
+          options: DisabledPolarity.values,
+          optionLabel: (value) =>
+              value == DisabledPolarity.disableWhenTrue ? 'True' : 'False',
+          read: () => disabledPolarity,
+          apply: (value) => disabledPolarity = value,
+        ),
+        AssetColorBulkProperty(
+          id: 'ButtonConfig.outwardColor',
+          label: 'Outward colour',
+          group: _bulkGroup,
+          read: () => outwardColor,
+          apply: (value) => outwardColor = value,
+        ),
+        AssetColorBulkProperty(
+          id: 'ButtonConfig.inwardColor',
+          label: 'Inward colour',
+          group: _bulkGroup,
+          read: () => inwardColor,
+          apply: (value) => inwardColor = value,
+        ),
+        ColorBulkProperty(
+          id: 'ButtonConfig.disabledColor',
+          label: 'Disabled colour',
+          group: _bulkGroup,
+          read: () => disabledColor,
+          apply: (value) => disabledColor = value ?? disabledColor,
+        ),
+        ColorBulkProperty(
+          id: 'ButtonConfig.textColor',
+          label: 'Text colour',
+          group: _bulkGroup,
+          // The editor's Default/Custom toggle is derived from this being
+          // null, so clearing has to stay reachable or a bulk edit could
+          // strand a selection on Custom.
+          nullable: true,
+          read: () => textColor,
+          apply: (value) => textColor = value,
+        ),
+      ];
+
+  static const String _bulkGroup = 'Button';
+
   factory ButtonConfig.fromJson(Map<String, dynamic> json) =>
       _$ButtonConfigFromJson(json);
   Map<String, dynamic> toJson() => _$ButtonConfigToJson(this);
