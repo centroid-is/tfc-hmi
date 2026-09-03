@@ -130,6 +130,20 @@ const Map<String, String> retainedTimerAllowList = <String, String>{
   // (a timer that removes by key and evicts the live entry that replaced it).
   // Defaults to Duration.zero, in which case no timer is created at all.
   'fanin.dart': '08-05 — the fan-in linger, one-shot per key at refcount zero',
+  // 10-09, task 2. ONE-SHOT, and LISTENER-GATED, which is the part that
+  // earned the entry rather than merely justified it: the feed's channel
+  // opens on the first subscriber and closes with the last, and the back-off
+  // is armed only on the path between those two — `_stop` and `close` both
+  // cancel it, so a feed nobody is subscribed to holds no timer at all.
+  // `listenToChannel` ends its stream with onDone and no error when the
+  // connection dies (database_drift.dart:1066-1069), and re-listening with no
+  // delay against a database that is down is a hot loop; upstream's
+  // PreferencesWatcher uses the same five seconds for the same reason
+  // (preferences_watch.dart:41). Project memory is the other half of why this
+  // is an entry and not an oversight: an always-on Timer.periodic in relay
+  // plumbing has already failed unrelated widget tests once.
+  'preference_change_feed.dart':
+      '10-09 — the re-listen back-off, one-shot and listener-gated',
 };
 
 /// Test files permitted to hold a literal port number, each naming why.
@@ -152,9 +166,17 @@ const int declaredPeriodicTimers = 3;
 
 /// Retained one-shot `Timer(` occurrences under `lib/src`.
 ///
-/// **One, landed by 08-05 task 2:** the fan-in linger. It moves when a plan on
+/// **Two.** 08-05 task 2 landed the fan-in linger; **10-09 task 2 landed the
+/// preference feed's re-listen back-off**, in the commit that created it, and
+/// this number moved with it. It moves when a plan on
 /// [retainedTimerAllowList] lands, and only then.
-const int declaredRetainedTimers = 1;
+///
+/// The two are the same shape and both are gated, differently: the linger is
+/// armed at refcount zero and cancelled by the next subscribe, and the
+/// back-off exists only while the feed has a listener. Neither can run when
+/// the thing it was scheduled about is gone, which is the property the number
+/// is here to make somebody argue for.
+const int declaredRetainedTimers = 2;
 
 /// Lines under `lib/` that await an upstream `connect`/`read`/`write`.
 ///
