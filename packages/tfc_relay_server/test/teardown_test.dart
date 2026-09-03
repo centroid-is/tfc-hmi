@@ -59,6 +59,7 @@ import 'package:tfc_relay_server/src/server_config.dart';
 import 'package:tfc_relay_server/src/subscription_registry.dart';
 import 'package:tfc_relay_server/src/ws_channel.dart';
 import 'package:tfc_stateman_contract/faults.dart';
+import 'package:tfc_stateman_contract/testing/fake_data_services.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 import 'package:web_socket_channel/io.dart';
@@ -163,8 +164,8 @@ final class _Gateway {
   final RelayServer server;
   final FaultProxy proxy;
 
-  static Future<_Gateway> start() async {
-    final served = FakeStateMan();
+  static Future<_Gateway> start({FakePreferences? preferences}) async {
+    final served = FakeStateMan(preferences: preferences);
     final server = RelayServer(resolver: const PermissiveSeriesResolver(), api: served, config: _cycleConfig());
     await server.start();
     final proxy = FaultProxy(targetPort: server.port);
@@ -226,6 +227,48 @@ final class _Gateway {
     await client.release();
     await within(_untilNoSessions(server), 'the gateway letting go of a killed '
         'client', budget: _reapBudget);
+  }
+}
+
+/// A preference store that counts the listeners on its change stream.
+///
+/// `StreamController.broadcast` offers `hasListener` and no count, and "some
+/// listener is attached" is exactly the wrong resolution for a leak measured as
+/// a rate. So each read of [onPreferencesChanged] hands back its own
+/// single-subscription bridge, and the count moves in `onListen` and
+/// `onCancel` — which is also what makes the number *exact*: no settling, no
+/// sampling, and no way for the arm to pass because the reading was taken too
+/// early.
+///
+/// [everAttached] is the anti-vacuity companion: a bridge that never attached
+/// would report zero live listeners forever, and "nothing leaked" would be true
+/// of a stream nobody had ever listened to.
+final class _CountingPreferences extends FakePreferences {
+  /// Listeners attached right now.
+  var attached = 0;
+
+  /// Listeners ever attached, which never goes down.
+  var everAttached = 0;
+
+  @override
+  Stream<String> get onPreferencesChanged {
+    final upstream = super.onPreferencesChanged;
+    StreamSubscription<String>? subscription;
+    late final StreamController<String> bridge;
+    bridge = StreamController<String>(
+      onListen: () {
+        attached++;
+        everAttached++;
+        subscription = upstream.listen(bridge.add,
+            onError: bridge.addError, onDone: bridge.close);
+      },
+      onCancel: () async {
+        attached--;
+        await subscription?.cancel();
+        subscription = null;
+      },
+    );
+    return bridge.stream;
   }
 }
 
@@ -486,6 +529,120 @@ void main() {
       },
       timeout: const Timeout(Duration(minutes: 3)),
       onPlatform: const {'windows': Skip(openSocketCountSkipReason)});
+
+  // 10-05. The gateway serves every session from **one shared preference
+  // store**, so each session attaches its own listener to the one change
+  // stream and each has to take it off again. A listener that outlives its
+  // session keeps building key sets and calling `sendNotification` for a peer
+  // that is gone — the same debt as a subscription left attached, on a
+  // stream nothing else in this file measures, and reached by a completely
+  // separate line in `_teardown` (T-10-20).
+  //
+  // Reported as a **rate**, on this file's second doctrine: "we leak" and "we
+  // leak one per cycle" are different findings, and only the second names the
+  // missing release. The benchmark is the 2.50 per cycle this file measured in
+  // 03-11 for the same class of bug on the value path.
+  group('a killed session takes its preference listener with it', () {
+    /// Cycles this arm runs, and where it reports.
+    ///
+    /// Shorter than the 200 the registry arm runs, deliberately: this counter
+    /// is exact rather than sampled — it is incremented in `onListen` and
+    /// decremented in `onCancel`, with no kernel settling in between — so a
+    /// one-per-cycle leak is unambiguous by the first checkpoint and a longer
+    /// run would only cost minutes.
+    const checkpoints = <int>[10, 30];
+
+    test('thirty kill cycles leave no listener behind', () async {
+      final counter = _CountingPreferences();
+      final gateway = await _Gateway.start(preferences: counter);
+
+      var keySetIndex = 0;
+      List<String> nextKeys() => _keySets[keySetIndex++ % _keySets.length];
+
+      for (var i = 0; i < _warmupCycles; i++) {
+        await gateway.killAndSettle(await gateway.connect(nextKeys()));
+      }
+
+      final baseline = counter.attached;
+      print('preference listeners after $_warmupCycles warm-up cycles: '
+          '$baseline attached, ${counter.everAttached} ever attached');
+      expect(counter.everAttached, greaterThanOrEqualTo(_warmupCycles),
+          reason: 'the warm-up must have attached one listener per session, '
+              'or "none left behind" below is a statement about a stream '
+              'nobody ever listened to. ${counter.everAttached} attachments '
+              'across $_warmupCycles sessions');
+
+      var completed = 0;
+      for (final checkpoint in checkpoints) {
+        while (completed < checkpoint) {
+          await gateway.killAndSettle(await gateway.connect(nextKeys()));
+          completed++;
+        }
+
+        final leaked = counter.attached - baseline;
+        print('after +$completed kill cycles: ${counter.attached} preference '
+            'listeners attached (delta $leaked, '
+            '${(leaked / completed).toStringAsFixed(2)} per cycle), '
+            '${counter.everAttached} ever attached');
+
+        expect(leaked, 0,
+            reason: 'the shared preference store holds $leaked more listeners '
+                'than it did at the baseline after $completed abruptly killed '
+                'clients — about ${(leaked / completed).toStringAsFixed(2)} '
+                'per cycle. Read it as a rate: one per cycle is a `_teardown` '
+                'that never cancels, and each of those listeners goes on '
+                'buffering keys and calling sendNotification into a peer that '
+                'is gone. The same class of bug measured 2.50 per cycle on the '
+                'value path before 03-11 fixed it');
+      }
+    }, timeout: const Timeout(Duration(minutes: 3)));
+
+    test('the counter would have noticed: $_held sessions held open on purpose',
+        () async {
+      // The control arm, and this file's first doctrine: `expect(delta, 0)`
+      // passes just as well against a counter that always answers zero as
+      // against a gateway that releases everything.
+      final counter = _CountingPreferences();
+      final gateway = await _Gateway.start(preferences: counter);
+
+      final baseline = counter.attached;
+      final clients = <_Client>[];
+      addTearDown(() async {
+        for (final client in clients) {
+          await client.release();
+        }
+      });
+      for (var i = 0; i < _held; i++) {
+        clients.add(await gateway.connect(_keySets[i % _keySets.length]));
+      }
+
+      print('control: $_held deliberately-held sessions -> '
+          '${counter.attached} preference listeners attached');
+      expect(counter.attached - baseline, _held,
+          reason: 'the counter saw ${counter.attached - baseline} listeners '
+              'while $_held sessions were demonstrably open. One per session '
+              'is the shape being built — a server-level subscription fanning '
+              'out would read as one here, and would make the arm above true '
+              'for a reason that has nothing to do with teardown');
+
+      for (final client in clients) {
+        await client.release();
+      }
+      clients.clear();
+      await within(_untilNoSessions(gateway.server),
+          'the gateway letting go of every released client',
+          budget: _reapBudget);
+      // The cancel runs inside `_teardown`, which is asynchronous past
+      // `peer.close()`; the registry emptying is the event that says the
+      // teardown was reached, not that it finished.
+      await pumpEventQueue();
+
+      expect(counter.attached, baseline,
+          reason: 'releasing the held sessions took every listener back off '
+              'the store. If it did not, the counter is measuring something '
+              'that outlives the session and the rate above is noise');
+    }, timeout: const Timeout(Duration(minutes: 3)));
+  });
 
   test('the package holds no per-session timer', () async {
     // T-03-35, made executable. Finding 8 chose the sweep over per-session

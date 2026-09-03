@@ -122,34 +122,35 @@ const _benignThrottle = 4 * 1024 * 1024;
 /// half-flipped pair reports a leg disagreement — the loudest failure this
 /// suite has — for a change that is actually correct on both sides.
 ///
-/// 43 until 10-03, whose four `timeseries.*` handlers made it 46; and 46 until
-/// 10-04, whose eleven `historyViews.*` ones make it **48** by taking the two
-/// history-view checks out of the gap list below in the commit that registered
-/// them.
-const int reachableThroughTheProxy = 48;
-
-/// Every check this leg does not pass, by name — all of them for one cause.
+/// 43 until 10-03, whose four `timeseries.*` handlers made it 46; 46 until
+/// 10-04, whose eleven `historyViews.*` ones made it 48; and 48 until 10-05,
+/// whose fifteen `preferences.*` ones make it **50** by taking the last two
+/// entries out of the gap list below in the commit that registered them.
 ///
-/// **The gateway has no handler.** `preferences.*` answers -32601
-/// method-not-found; 10-05 owns it. The list is identical to
-/// `ws_contract_test.dart`'s, and identical on purpose: a proxy in the path
-/// cannot add or remove a handler, so any difference between the two lists is a
-/// leg that has drifted rather than a transport that behaves differently.
+/// **50 is the whole registry**, so this leg now passes every check the
+/// in-memory reference leg passes, through two loopback hops and a fault
+/// proxy. There is nothing left for the gap list to name.
+const int reachableThroughTheProxy = 50;
+
+/// Every check this leg does not pass, by name. **It is empty as of 10-05**,
+/// and it is identical to `ws_contract_test.dart`'s for the reason it was
+/// always identical: a proxy in the path cannot add or remove a handler, so
+/// any difference between the two lists is a leg that has drifted rather than
+/// a transport that behaves differently.
 ///
 /// The six `browse.*` entries were deleted in 10-02, in the same commit as the
 /// WS leg's and as the handlers themselves; the three `timeseries.*` ones went
-/// the same way in 10-03 and the two `historyViews.*` ones in 10-04, leaving
-/// two.
+/// the same way in 10-03, the two `historyViews.*` ones in 10-04 and the last
+/// two `preferences.*` ones in 10-05.
 ///
-/// These are **not** skipped and **not** red. Each is handed to
-/// `runStateManContract`'s `expectUnreachable`, which runs it and asserts it
-/// fails with exactly -32601 — so the suite is green *because* the gap is
-/// precisely what this list claims.
-const List<String> unreachableThroughTheProxy = <String>[
-  // data services — two checks: no `preferences.*` handler.
-  'every typed preference round-trips and containsKey agrees',
-  'a preference change reaches a second listener',
-];
+/// **The cross-read at the bottom of this file still bites with an empty
+/// list**, and that is worth stating because it is exactly the kind of claim
+/// that is assumed and wrong. What the empty list makes vacuous is the
+/// *`missing`* comparison — nothing to look for, nothing missing — and the
+/// anti-vacuity arm in front of it does not depend on the list at all: it
+/// asserts the WS leg's file is where this one thinks it is, and it fails if
+/// the working directory has moved. Both halves were run at empty.
+const List<String> unreachableThroughTheProxy = <String>[];
 
 /// The WS leg, read as text so the two gap lists cannot drift apart quietly.
 ///

@@ -48,9 +48,9 @@ const _readOnlyKey = 'ST301.CN21.SEN01.temp';
 
 /// What this leg passes today. Measured, not chosen.
 ///
-/// See [unreachableChecks] for the other 2 and why every one of them is a
-/// missing *handler* rather than a missing behaviour. The number goes **up** as
-/// the gateway grows those handlers; it must never go down without the gap list
+/// [unreachableChecks] is now **empty**, which is the sentence this constant
+/// existed to be able to say: there is no check on this leg that a missing
+/// handler puts out of reach. The number must never go down without that list
 /// growing to match, which the arithmetic case below enforces.
 ///
 /// It was 21 when this leg was first measured (04-09). The other ten were
@@ -112,8 +112,32 @@ const _readOnlyKey = 'ST301.CN21.SEN01.temp';
 /// `timeseries.*` handlers landed and the three timeseries checks moved out of
 /// [unreachableChecks] in that commit. **46 became 48 in 10-04**, when the
 /// eleven `historyViews.*` handlers landed and took the two history-view
-/// checks with them. The remaining two wait on 10-05 (preferences) and will
-/// move the same way.
+/// checks with them. **48 became 50 in 10-05**, when the fifteen
+/// `preferences.*` handlers landed with the `preferences.changed` sender
+/// behind them, and the last two entries left the gap list in that commit.
+///
+/// ## The Phase 10 ledger, closed
+///
+/// Thirteen entries were closed across four plans, and every one of them by a
+/// handler that landed rather than by an excuse — none was renamed, none was
+/// skipped, none was moved into the gap list to keep an arithmetic true. The
+/// batch-by-batch arithmetic, in order:
+///
+///  * **37 → 43** (10-02): the four `browse.*` handlers, six checks.
+///  * **43 → 46** (10-03): the four `timeseries.*` handlers, three checks.
+///  * **46 → 48** (10-04): the eleven `historyViews.*` handlers, two checks.
+///  * **48 → 50** (10-05): the fifteen `preferences.*` handlers and the
+///    coalesced `preferences.changed` notification, the last two checks.
+///
+/// **`expectUnreachable`'s registration-time guard now has nothing left to
+/// permit.** `tfc_stateman_contract.dart:249-263` narrows what may be excused
+/// to browse and data-services names — a hold-to-run or freshness check could
+/// never be excused here even by somebody who wanted to — and every name that
+/// guard would have allowed is now a check this leg passes. The parameter is
+/// still passed below, with an **empty** set rather than deleted, and that is
+/// deliberate: a future gap should have a mechanism to declare itself through,
+/// proven and self-policing, instead of a precedent for a leg quietly
+/// asserting a smaller number.
 ///
 /// **This number is proven to bite**, three ways rather than one. Raising it by
 /// one with the gap list unchanged fails the arithmetic case below with
@@ -123,61 +147,28 @@ const _readOnlyKey = 'ST301.CN21.SEN01.temp';
 /// which rejects a named check that passes. And a reachable check that
 /// regresses fails as itself, because the suite is green only when all 48
 /// pass.
-const int reachableChecks = 48;
+const int reachableChecks = 50;
 
-/// Every check this leg does not pass, by name — all of them for one cause.
+/// Every check this leg does not pass, by name. **It is empty**, and 10-05 is
+/// the commit that emptied it.
 ///
-/// **The gateway has no handler.** `preferences.*` answers -32601
-/// method-not-found; 10-05 owns it. (`browse.*` used to be here too — 10-02
-/// landed those four and the six checks behind them left this list in the same
-/// commit — `timeseries.*` likewise in 10-03, and `historyViews.*` in 10-04.)
-/// Nothing on the client
-/// side can close these: the client's sub-APIs (`client_sub_apis.dart`) already
-/// send the right methods and get told the server has never heard of them.
+/// It held thirteen entries when Phase 10 opened, every one of them a missing
+/// *handler* rather than a missing behaviour: `browse.*` (six), `timeseries.*`
+/// (three), `historyViews.*` (two) and `preferences.*` (two). Each batch was
+/// deleted from here — deleted, never commented out — in the same commit that
+/// registered the handlers behind it, and [reachableChecks] carries the
+/// account of which plan closed which.
 ///
-/// These are **not** skipped and **not** red. Each one is handed to
-/// `runStateManContract`'s `expectUnreachable`, which runs it and asserts it
-/// fails with exactly -32601 — so the suite is green *because* the gap is
-/// precisely what this list claims, and any of three things breaks it: the
-/// handler landing (the case now passes, and must be deleted from here and
-/// judged properly), the case failing some other way (a real defect wearing a
-/// known gap's clothes), or the name going stale (the last accounting case).
-///
-/// The two `cmd`-correlation entries that used to sit here were a genuine
-/// write-safety defect and are fixed, not excused; the eight behavioural
-/// entries were closed the same way. [reachableChecks] records what each was.
-///
-/// **Every entry names the handler it waits on**, in the trailing comment on
-/// its own line, and both wait on **Phase 10**. That is deliberate
-/// bookkeeping rather than decoration: "browse is missing" is a sentence
-/// nobody can act on, whereas `browse.fetchChildren` is a method name somebody
-/// implements and then deletes a line here. A reader arriving the day a
-/// handler lands can grep this list for the method they just wrote and find
-/// exactly which check now has to be judged on its merits.
-///
-/// Two lines per entry where they differ, because they usually do. *Trips on*
-/// is the method the check actually dies at today, read off the -32601 the
-/// gateway returns and recorded from a real run (`parity_test.dart`'s
-/// disagreement report prints all of them). *Needs* is everything the check
-/// would go on to call once that first one answers. The distinction is the
-/// difference between "I implemented `preferences.setBool`, why is this check
-/// still red" and knowing up front that it also wants `containsKey`.
-///
-/// **The six browse entries left this list in 10-02**, the three timeseries
-/// ones in 10-03 and the two history-view ones in 10-04, deleted rather than
-/// commented out, each in the commit that registered the handlers they waited
-/// on. [reachableChecks] carries the account of what closed them.
-const List<String> unreachableChecks = <String>[
-  // data services — two checks. Phase 10 owns this handler family too; the
-  // client's `ClientPreferencesApi` already sends the exact names below
-  // (`client_sub_apis.dart:64-100`).
-  'every typed preference round-trips and containsKey agrees',
-  //   trips on: preferences.setBool
-  //   needs:    the six other typed set/get pairs, preferences.containsKey
-  'a preference change reaches a second listener',
-  //   trips on: preferences.setBool
-  //   needs:    preferences.changed (the server-to-client notification)
-];
+/// **The list is kept rather than the parameter deleted**, and so is the
+/// `expectUnreachable:` argument below. Three things this arrangement does
+/// that a deleted parameter would not: a check that regresses cannot be
+/// quietly absorbed, because the arithmetic case would then need a name here
+/// and a name here has to be a real check name; a future gap has a mechanism
+/// to declare itself through instead of a precedent for lowering a constant;
+/// and `expectUnreachableMethod` keeps its teeth, because it *fails a named
+/// check that passes* — so an entry added here for a check that actually works
+/// is caught rather than believed.
+const List<String> unreachableChecks = <String>[];
 
 void main() {
   var ran = 0;

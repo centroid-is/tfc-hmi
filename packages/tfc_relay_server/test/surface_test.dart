@@ -20,12 +20,12 @@
 /// Two properties are enforced here:
 ///
 ///  * **Closure, in both directions.** The session registers exactly these
-///    twenty-eight names. One direction alone is half a check: a declared name
+///    forty-three names. One direction alone is half a check: a declared name
 ///    with no
 ///    handler answers METHOD_NOT_FOUND from a table claiming to carry it, and
 ///    a handler under a name nobody wrote down is surface nobody counted. The
 ///    argument is `suite_integrity_test.dart:22-33`, applied server-side.
-///  * **Notifications are not handlers.** The five names the server *sends*
+///  * **Notifications are not handlers.** The six names the server *sends*
 ///    are listed in their own literal and asserted absent from the handler
 ///    table. A notification registered as a handler is a request a client
 ///    could make of the server — the wrong direction on a one-way name.
@@ -66,8 +66,10 @@
 /// bodies land, this literal grows in the same commit, and the contract legs'
 /// gap lists shrink by the checks the handlers just made reachable. **Plan 03
 /// made the second**, the four `timeseries.*` names; **plan 04 the third**, the
-/// eleven `historyViews.*` names, and fifteen of the thirty-four (preferences)
-/// are still to come.
+/// eleven `historyViews.*` names; and **plan 05 the last**, the fifteen
+/// `preferences.*` ones. The table is now the whole of the thirty-four
+/// data-service methods plus the nine that came before them, and both socket
+/// legs name no gap at all.
 library;
 
 import 'package:json_rpc_2/error_code.dart' as rpc_errors;
@@ -87,7 +89,7 @@ import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 import 'support/permissive_resolver.dart';
 import 'support/ws_harness.dart';
 
-/// Every method a connected client may call, as of Phase 10 plan 04.
+/// Every method a connected client may call, as of Phase 10 plan 05.
 ///
 /// Hand-written. Not derived. See the library doc for why — and note that the
 /// four `browse.*` names below are bare strings for exactly that reason, even
@@ -140,6 +142,27 @@ const Set<String> expectedHandlerTable = {
   'historyViews.deleteHistoryViewPeriod',
   'historyViews.listHistoryViewPeriods',
   'historyViews.getGlobalRetentionHorizon',
+  // Phase 10 plan 05. The preferences fifteen, which close the table: the two
+  // remaining contract checks stopped being proven-unreachable in the commit
+  // that added them, and **seven of these fifteen are the only names on this
+  // wire that a `view` station may not call** — `_PolicyPreferences` refuses
+  // them with -32005, because `key_mappings` is the gateway's own routing
+  // configuration and rewriting it re-points the plant's tag map.
+  'preferences.getKeys',
+  'preferences.getAll',
+  'preferences.getBool',
+  'preferences.getInt',
+  'preferences.getDouble',
+  'preferences.getString',
+  'preferences.getStringList',
+  'preferences.containsKey',
+  'preferences.setBool',
+  'preferences.setInt',
+  'preferences.setDouble',
+  'preferences.setString',
+  'preferences.setStringList',
+  'preferences.remove',
+  'preferences.clear',
 };
 
 /// Every name the server *sends* as a notification, and therefore may never
@@ -147,12 +170,20 @@ const Set<String> expectedHandlerTable = {
 ///
 /// `u` is `update` on the wire — one character on purpose, because it is the
 /// hot path. Spelling it as the wire spells it is the whole point of a literal.
+/// **`preferences.changed` is the sixth, and it is the freeze most likely to
+/// have been missed**: a notification is not a handler, so it appears in none
+/// of the closure checks above and none of them would have failed if it had
+/// shipped uncounted. It is here because the server sends it — one coalesced
+/// frame per burst per session, carrying a **list** of keys — and because a
+/// name the server emits that nobody wrote down is surface nobody reviewed,
+/// exactly as a handler would be.
 const Set<String> expectedNotifications = {
   'u',
   'tick',
   'resync',
   'status',
   'bye',
+  'preferences.changed',
 };
 
 /// Names the client *sends* as notifications, registered as handlers so
@@ -236,9 +267,9 @@ void main() {
               'registration.');
     });
 
-    test('the table is exactly the twenty-eight names a client may call today',
+    test('the table is exactly the forty-three names a client may call today',
         () {
-      // The sentence is unchanged in shape and still true: twenty-eight names
+      // The sentence is unchanged in shape and still true: forty-three names
       // a client may *call*. `h` is not one of them — it is announced, never
       // called — so it is taken out of the ledger by name here rather than
       // being added to the literal, which would say a client may ask the
@@ -250,7 +281,7 @@ void main() {
               'failure prints the whole table rather than a difference');
     });
 
-    test('the registered table is the twenty-eight callable names plus the '
+    test('the registered table is the forty-three callable names plus the '
         'client notifications', () {
       expect(_session().registeredMethods, everyRegisterableName,
           reason: 'the ledger is the union, because json_rpc_2 dispatches a '
@@ -387,6 +418,16 @@ void main() {
         // one instant encoding. `start` is before `end`.
         'start': 1_786_600_800_000, // 2026-08-13T06:00:00Z
         'end': 1_786_604_400_000, //   2026-08-13T07:00:00Z
+        // The preferences one (Phase 10 plan 05). `key` and `value` above are
+        // reused — a preference key is a string and `value` is whatever type
+        // the setter takes, so the typed setters are *refused on their
+        // contents* here and dispatched, which is a pass for this sweep. Only
+        // `allowList` is new, and it is spelled out rather than left absent so
+        // `getKeys`, `getAll` and `clear` are dispatched with the argument a
+        // settings page actually sends. It names the one key this fixture
+        // seeded, so the `clear` at the end of the sweep empties one row
+        // rather than the store.
+        'allowList': ['CN01.MOT01.speed'],
       };
 
       final methodNotFound = <String>[];
@@ -437,9 +478,13 @@ void main() {
       // intersection checks above true for free.
       expect(expectedNotifications, isNotEmpty,
           reason: 'an empty literal makes both notification checks vacuous');
-      expect(expectedNotifications, hasLength(5),
-          reason: 'update/tick/resync/status/bye — five names as of Phase 3; '
-              'changing this count is a deliberate edit');
+      expect(expectedNotifications, hasLength(6),
+          reason: 'update/tick/resync/status/bye — five names as of Phase 3, '
+              'and preferences.changed as of 10-05, which is six. A '
+              'notification is not a handler and appears in none of the '
+              'closure checks above, so this count is the only arm that would '
+              'have caught a sixth server-to-client name shipping uncounted; '
+              'changing it is a deliberate edit');
     });
   });
 

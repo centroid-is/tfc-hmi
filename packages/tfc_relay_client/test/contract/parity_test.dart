@@ -1,4 +1,13 @@
-/// One registry, two legs, and a difference that must be exactly the named gap.
+/// One registry, two legs, and — as of 10-05 — **no difference at all**.
+///
+/// This file's headline used to be that the gateway leg differs from the
+/// in-memory reference leg by exactly the named gap. The gap is now empty, so
+/// the sentence it asserts has become the strongest single statement this
+/// phase can make: **`channel.passes − ws.passes` is empty**, which is to say
+/// the gateway leg passes exactly what the reference leg passes. Thirteen
+/// checks were out of reach when Phase 10 opened, every one of them for a
+/// missing handler; four plans landed those handlers, and each entry left
+/// [unreachableChecks] in the commit that made it reachable.
 ///
 /// `ws_contract_test.dart` proves the gateway leg is green. Green is not the
 /// claim this file makes. A leg can be green while judging a *different set of
@@ -6,21 +15,34 @@
 /// a case rebound to a weaker lever, a case that only ever ran in memory — and
 /// every one of those leaves both drivers green and this file red.
 ///
-/// **Why a count would not do.** The obvious version of this test compares two
-/// numbers: the reference passes 44, the gateway passes 31, 44 − 31 = 13, done.
-/// That arithmetic holds just as well if the gateway silently failed
-/// `a rejected write carries a greppable reason` and silently passed one of the
-/// browse checks against a handler that answers something plausible and wrong.
-/// Two legs agreeing on a number while judging different checks is the whole
-/// failure this file exists to catch, so what is compared here is **set
-/// membership**: `channel.passes − ws.passes` must equal
-/// [unreachableChecks] element for element, and `ws.passes − channel.passes`
-/// must be empty. There is no `.length` anywhere in the parity assertion or in
+/// **Why a count would not do**, and why an empty gap does not make a count
+/// adequate after all. The obvious version of this test compares two numbers:
+/// the reference passes 50, the gateway passes 50, done. That arithmetic holds
+/// just as well if the gateway silently failed `a rejected write carries a
+/// greppable reason` and silently passed one of the browse checks against a
+/// handler that answers something plausible and wrong. Two legs agreeing on a
+/// number while judging different checks is the whole failure this file exists
+/// to catch, so what is compared is **set membership**:
+/// `channel.passes − ws.passes` must equal [unreachableChecks] element for
+/// element — an empty set today — and `ws.passes − channel.passes` must be
+/// empty too. There is no `.length` anywhere in the parity assertion or in
 /// the two arms either side of it. The five in the file are all elsewhere and
-/// all accounted for: two in the coverage case (`swept` against the registry),
-/// two in the budget case's printed line, and one in `_Sweep.agree`, which is
-/// the anti-vacuity guard — the one place a count is the right question,
-/// because "fewer than two legs" is exactly what makes a comparison vacuous.
+/// all accounted for: two in the coverage case (`swept` against
+/// the registry), two in the budget case's printed line, and one in
+/// `_Sweep.agree`, which is the anti-vacuity guard — the one place a count is
+/// the right question, because "fewer than two legs" is exactly what makes a
+/// comparison vacuous.
+///
+/// **The companion arm starts mattering now**, and it is worth saying because
+/// it has been quietly true for nine phases. `the gateway leg passes nothing
+/// the reference does not` was arithmetically hard to violate while the
+/// gateway had thirteen missing handlers: a leg that answers -32601 cannot
+/// pass a check the reference fails. With the table closed it becomes a real
+/// question, and it gets realer in 10-07, when a database-backed
+/// implementation replaces `FakeTimeseries` behind the gateway leg — a real
+/// historian could pass a check the in-memory fake fails, and the honest
+/// reading of that is not "the gateway is better" but "the two legs are being
+/// judged on different things again".
 ///
 /// **The legs are rebound, never reduced.** Both legs run the whole registry
 /// with no capability flag anywhere — strictly stronger than
