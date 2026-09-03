@@ -19,6 +19,7 @@ import '../providers/page_manager.dart';
 import '../providers/state_man.dart';
 import '../theme.dart' show HmiStateColors;
 import '../page_creator/assets/common.dart'; // your Asset, Coordinates, RelativeSize, TextPos, etc.
+import '../page_creator/assets/link_anchors.dart';
 import '../widgets/base_scaffold.dart';
 import '../widgets/hit_boundary.dart';
 import '../widgets/panes/side_pane.dart';
@@ -362,23 +363,33 @@ class _AssetStackState extends ConsumerState<AssetStack> {
         final frames = Map<Object, _AssetFrame>.identity();
 
         for (final asset in widget.assets) {
+          // 0) An asset whose box depends on the rest of the page answers
+          //    with one; everything else sits where it was dropped. Read into
+          //    locals rather than written back into the config -- see
+          //    [Asset.boxOn], and the note above about not editing a config
+          //    during a build.
+          final derived = asset.boxOn(widget.assets, Size(W, H));
+          final baseX = derived?.center.dx ?? asset.coordinates.x;
+          final baseY = derived?.center.dy ?? asset.coordinates.y;
+          final baseW = derived?.width ?? asset.size.width;
+          final baseH = derived?.height ?? asset.size.height;
+
           // 1) normalized coords with optional mirroring
-          final fx = xMirror ? 1 - asset.coordinates.x : asset.coordinates.x;
-          final fy = yMirror ? 1 - asset.coordinates.y : asset.coordinates.y;
+          final fx = xMirror ? 1 - baseX : baseX;
+          final fy = yMirror ? 1 - baseY : baseY;
 
           // 2) canvas-pixel center point
           final cx = fx * W;
           final cy = fy * H;
           final center = Offset(cx, cy);
 
-          final assetW = asset.size.width * W;
-          final assetH = asset.size.height * H;
+          final assetW = baseW * W;
+          final assetH = baseH * H;
           final assetSize = Size(assetW, assetH);
           final halfW = assetW / 2;
           final halfH = assetH / 2;
 
-          final textScaler = TextScaler.linear(
-              math.min(asset.size.width * W, asset.size.height * H) / 25);
+          final textScaler = TextScaler.linear(math.min(assetW, assetH) / 25);
           // Build the label style starting from the ambient DefaultTextStyle
           // and overlaying:
           //   - the scaled font size (preserves the pre-existing behaviour
@@ -778,12 +789,21 @@ class _AssetStackState extends ConsumerState<AssetStack> {
 
         // The scope carries the *effective* flags, so assets that paint
         // their own text can counter-mirror it (see AssetMirrorScope).
+        //
+        // PageAssetsScope sits inside it and carries the page itself, for the
+        // one asset whose appearance depends on the others: a cable has to
+        // find the devices its ends belong to, and `build(BuildContext)` is
+        // the only thing it is handed.
         return AssetMirrorScope(
           xMirror: xMirror,
           yMirror: yMirror,
-          child: Stack(
-            fit: StackFit.expand,
-            children: positionedChildren,
+          child: PageAssetsScope(
+            assets: widget.assets,
+            canvas: Size(W, H),
+            child: Stack(
+              fit: StackFit.expand,
+              children: positionedChildren,
+            ),
           ),
         );
       },
