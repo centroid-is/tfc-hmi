@@ -119,11 +119,15 @@ class EPBoxPainter extends CustomPainter {
         ? Colors.black
         : const Color(0xFFF2F2F0);
 
-    /// Paints [value] with its top-left at [at]. Pass [middleY] to centre the
-    /// line on that y instead — the caption beside a lamp has to sit on the
-    /// lamp's axis, and eyeballing an offset against a font's line height
-    /// gets it wrong by a fraction of a millimetre every time the size
-    /// changes.
+    /// Paints [value] with its top-left at [at]. Pass [middleY] to sit the
+    /// line's *glyphs* on that y instead.
+    ///
+    /// Centring the text box does not do it: the box carries the font's
+    /// descent and leading, which are empty under a caption like `I0` that
+    /// has neither a descender nor a lower-case letter, so a box centred on
+    /// the lamp leaves the digits riding visibly high of it. What has to land
+    /// on the axis is the middle of the cap height, which is measured from
+    /// the baseline.
     void text(
       String value,
       Offset at, {
@@ -149,10 +153,15 @@ class EPBoxPainter extends CustomPainter {
         textAlign: align,
         textDirection: TextDirection.ltr,
       )..layout(minWidth: width ?? 0, maxWidth: width ?? double.infinity);
-      tp.paint(
-        canvas,
-        middleY == null ? at : Offset(at.dx, middleY - tp.height / 2),
-      );
+      if (middleY == null) {
+        tp.paint(canvas, at);
+        return;
+      }
+      // Roboto's caps and digits stand 0.71 of the em above the baseline.
+      final capHeight = fontSize * 0.71;
+      final baseline =
+          tp.computeDistanceToActualBaseline(TextBaseline.alphabetic);
+      tp.paint(canvas, Offset(at.dx, middleY + capHeight / 2 - baseline));
     }
 
     // A round connector. The knurl on the coupling nut is what makes an

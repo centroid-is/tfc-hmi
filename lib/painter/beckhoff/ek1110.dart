@@ -72,10 +72,10 @@ class EK1110Painter extends CustomPainter {
     // The marker tag, when there is one, takes the band an EL terminal gives
     // it and the lamps drop below — the same order as an EL: markers on top,
     // then the lamp block.
-    // Matches [IO8Painter]: a name or id gets the taller band and wraps
-    // rather than shrinking, so a rack row of tags reads as one row.
+    // Matches [IO8Painter]: the band is the height the marker strip is on the
+    // hardware, named or not, so a rack row lines up across every device.
     final labelH = size.height * 0.06;
-    final markerH = markerLabel.isNotEmpty ? labelH * 1.9 : labelH;
+    final markerH = labelH;
     double lampTop = pad;
     if (markerLabel.isNotEmpty) {
       final rect = Rect.fromLTWH(pad, pad, size.width - pad * 2, markerH);

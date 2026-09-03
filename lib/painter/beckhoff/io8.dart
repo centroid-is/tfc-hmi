@@ -237,17 +237,15 @@ class IO8Painter extends CustomPainter {
     }
 
     // --- Calculate heights for all elements ---
-    // A name or id gets a taller band than the printed 07/08 markers do.
-    // Those are two characters and fit anything; a plant id is a dozen and
-    // was being shrunk to the floor to fit a band sized for '07'. The extra
-    // comes out of the LED block's top margin, so nothing below moves.
-    // A name or id gets a band nearly twice the height the printed 07/08
-    // markers need. Those are two characters; a plant id is a dozen, and it
-    // wraps onto a second line rather than being shrunk to a smear. The extra
-    // comes out of the I/O area below, so nothing is covered.
-    final markerH = markerLabel.isNotEmpty && topLabels.$1 == ''
-        ? labelH * 1.9
-        : labelH;
+    // The marker band is the height the strip is on the real terminal, and it
+    // is that height on every device whether or not a name is set.
+    //
+    // A taller band for named terminals was tried, to give a plant id two
+    // lines instead of one shrunk line. It bought legibility and cost
+    // alignment: the band feeds `topLabelsH`, so a rack holding one named
+    // terminal beside one unnamed one had their LED blocks and contact rows
+    // at different heights. A mimic of a rack has to read as a rack first.
+    final markerH = labelH;
     double topLabelsH = markerH + pad * 2;
     double ledBlockH = size.height * 0.22;
     double ledBlockY = topLabelsH;

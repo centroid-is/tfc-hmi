@@ -755,7 +755,9 @@ void paintMarkerTag(
   // One line unless two buy a materially bigger face — wrapping a name that
   // already fits is churn, not legibility.
   final chosen = switch ((single, double_)) {
-    (null, null) => layoutAt(label, minFontSize, 2),
+    // Nothing fits: one ellipsized line, never two, because a second line in
+    // a band sized for one would paint over the LED block below it.
+    (null, null) => layoutAt(label, minFontSize, 1),
     (final s?, null) => s.painter,
     (null, final d?) => d.painter,
     (final s?, final d?) =>
