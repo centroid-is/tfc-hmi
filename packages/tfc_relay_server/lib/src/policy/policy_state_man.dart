@@ -47,22 +47,28 @@
 /// was consolidated into one helper in 06-04 first, and it is what
 /// `policy_test.dart`'s indistinguishability case exists to keep true.
 ///
-/// ## The four sub-APIs are wrapped, and filter nothing yet
+/// ## The four sub-APIs: one filters, three are still transparent
 ///
-/// `browse`, `timeseries`, `historyViews` and `preferences` return wrappers
-/// that delegate every member and mark where the filter goes. They are wrapped
-/// rather than returned bare so the "no unwrapped source to reach" property
-/// holds for them too: a Phase 10 handler that takes `api.browse` must get
+/// `browse`, `timeseries`, `historyViews` and `preferences` return wrappers.
+/// They are wrapped rather than returned bare so the "no unwrapped source to
+/// reach" property holds for them too: a handler that takes `api.browse` gets
 /// something this session owns, not the shared object itself.
 ///
-/// They do **not** consult the policy, deliberately. None of these methods is
-/// on the wire yet — the handler table is nine names, and
-/// `ws_contract_test.dart:145-185` enumerates thirteen unreachable checks
-/// every one of which is a sub-API method — so CONTEXT's "absent from browse
-/// results" clause has nothing to attach to. A policy call nothing can reach
-/// would read like coverage while testing nothing, which
-/// `suite_integrity_test.dart:104-108` calls worse than an absent one. Phase
-/// 10 adds the calls at the marked points, with cases that can see them.
+/// Through Phase 9 all four merely delegated, and the reason was that none of
+/// their methods was on the wire — the handler table was nine names and the
+/// contract legs enumerated thirteen unreachable checks, every one a sub-API
+/// method. A policy call nothing can reach would read like coverage while
+/// testing nothing, which `suite_integrity_test.dart:104-108` calls worse than
+/// an absent one.
+///
+/// **10-02 registered the four `browse.*` handlers, so browse now filters**
+/// and has cases that can see it (`policy_test.dart`'s browse group, and
+/// browse as the seventh entry in the indistinguishability loop). The other
+/// three still delegate, each saying so at its own declaration, and the plans
+/// that make their methods reachable are the plans that fill them in: 10-03
+/// for timeseries, 10-04 for history views, 10-05 for preferences. The rule
+/// stands unchanged — a filter lands in the commit that makes the surface
+/// reachable, never before it and never after.
 library;
 
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
