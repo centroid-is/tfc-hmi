@@ -1052,6 +1052,26 @@ void main() {
               'disconnected", the class of failure this project exists to '
               'prevent (10-CONTEXT amendment 3)');
     }, tags: 'ws');
+
+    test('a getAll too large to send is refused the same way, not -32011',
+        () async {
+      final kit = _kit(preferences: _TooLargePreferences());
+
+      final error = await _refusal(
+          () => kit.handlers
+              .prefGetAll(_params(DataServiceMethods.prefGetAll, const {})),
+          'a getAll over a store larger than the byte ceiling');
+
+      expect(error.code, rpc_error.INVALID_PARAMS,
+          reason: 'the timeseries family was wrapped in _sized when the '
+              'mapping landed and this one was not, so a store over the cap '
+              'reached the wire as handlerFailed (-32011) — documented as '
+              'possibly transient. Five panels opening a settings page would '
+              'each retry forever something no retry can fix');
+      expect(error.message, contains('allowList'),
+          reason: 'and the fix for a getAll that is too large is not another '
+              'method, it is the allow-list');
+    });
   });
 
   // ------------------------------------------------------------ preferences
@@ -1446,5 +1466,22 @@ final class _TooLargeTimeseries extends FakeTimeseries {
         limit: limit,
         measured: limit * 2,
         suggestion: DataServiceMethods.timeseriesQueryDownsampled,
+      );
+}
+
+/// A store whose whole answer is over the byte ceiling.
+///
+/// The shape 10-10's `PreferenceStore` raises: bytes rather than rows, exact
+/// rather than a floor, and the allow-list named as the way out.
+final class _TooLargePreferences extends FakePreferences {
+  static const limit = 1024 * 1024;
+
+  @override
+  Future<Map<String, Object?>> getAll({Set<String>? allowList}) async =>
+      throw const ResultTooLarge.bytes(
+        limit: limit,
+        measured: limit + 1,
+        suggestion: '${DataServiceMethods.prefGetAll} with an allowList '
+            'naming the keys this page actually needs',
       );
 }
