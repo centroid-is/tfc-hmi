@@ -46,8 +46,17 @@ final List<Database> writers = <Database>[];
 const RetentionPolicy keepEverything =
     RetentionPolicy(dropAfter: Duration.zero);
 
+int _serial = 0;
+
+/// A name no other case in this run will use.
+///
+/// The serial is not decoration: several cases in a group seed the same
+/// logical series from `setUp`, and a name that was only unique per RUN would
+/// have each case appending to the previous one's rows — which reads as a
+/// query returning twice what it should rather than as a fixture reusing a
+/// table.
 String freshTable(String base) {
-  final name = 'gw_${base}_$suffix';
+  final name = 'gw_${base}_${suffix}_${_serial++}';
   createdTables.add(name);
   return name;
 }
