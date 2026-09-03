@@ -620,6 +620,23 @@ void main() {
               'deleted');
     });
 
+    test('the guard the exemption cites is still in the cited file', () {
+      // The citation and the floor together still only prove that somebody
+      // wrote a paragraph. This arm is what makes the paragraph falsifiable:
+      // orderBy is exempt *because* of a two-value allow-list, so if that
+      // allow-list is deleted the exemption has to stop being true here rather
+      // than continuing to read like a reviewed decision. `hostile_params_test`
+      // proves the allow-list bites; this proves the exemption is about a
+      // guard that is still there.
+      expect(unguardedExemptions(exemptParameters), isEmpty,
+          reason: 'the exemption for orderBy says a two-value allow-list makes '
+              'it safe and names the file holding it. If the allow-list is '
+              'gone, a client-supplied ORDER BY clause is reaching an '
+              'unescaped SQL interpolation again — the query(sql) RPC this '
+              'project forbids, arriving through a parameter this very list '
+              'excused');
+    });
+
     test('an exemption with its argument blanked is caught, naming it', () {
       final blanked = {'orderBy': ''};
 
