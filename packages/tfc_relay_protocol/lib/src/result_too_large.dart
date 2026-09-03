@@ -54,8 +54,8 @@ enum ResultSizeUnit {
 /// within the limit — so the refusal is something an engineer acts on rather
 /// than a dead end reported as a broken chart.
 final class ResultTooLarge implements Exception {
-  const ResultTooLarge._(
-      this.limit, this.measured, this.unit, this.suggestion);
+  const ResultTooLarge._(this.limit, this.measured, this.unit, this.suggestion,
+      this.atLeast, this.detail);
 
   /// The ceiling, in [unit].
   final int limit;
@@ -63,7 +63,38 @@ final class ResultTooLarge implements Exception {
   /// What the answer would actually have been, in [unit]. Always above
   /// [limit] — the point of carrying it is that "how far over" is what tells
   /// an operator whether to narrow the window a little or a lot.
+  ///
+  /// When [atLeast] is set this is a **floor** rather than the count: see
+  /// there.
   final int measured;
+
+  /// Whether [measured] is a floor rather than the real size.
+  ///
+  /// **The row ceiling cannot know the real count**, and pretending otherwise
+  /// is the same repudiation this class exists to prevent, one size smaller.
+  /// The row cap is enforced as `LIMIT n + 1` — the cheapest detection there
+  /// is, one query, nothing over the limit ever materialised — and what comes
+  /// back from it is "more than n", not "how many". A month of 5 s samples is
+  /// 518 400 rows and the query that refuses it can only report 40 001.
+  ///
+  /// So the sentence says *at least*. An engineer told "would answer 40 001
+  /// rows, over the 40 000 row limit" narrows the window by a hair and hits
+  /// the same wall; one told "at least 40 001" knows the number is a floor and
+  /// reaches for the downsampled method, which is the whole point of naming
+  /// it.
+  ///
+  /// The byte ceiling encodes the answer to measure it, so it knows the exact
+  /// size and does **not** set this.
+  final bool atLeast;
+
+  /// One clause of context, or null — appended to [message] in parentheses.
+  ///
+  /// What it is for: a `queryTimeseriesDataMultiple` is capped on the **sum**
+  /// across its series, so the refusal's one actionable fact is *which* series
+  /// crossed the total. Carrying that only in a field the JSON-RPC `data` map
+  /// may or may not relay would repeat the mistake of leaving the limit out of
+  /// the sentence.
+  final String? detail;
 
   /// Which ceiling [limit] and [measured] are counted against.
   final ResultSizeUnit unit;
@@ -75,26 +106,36 @@ final class ResultTooLarge implements Exception {
   final String suggestion;
 
   /// Too many rows.
+  ///
+  /// Set [atLeast] when [measured] came from a `LIMIT n + 1` detection, which
+  /// is every row refusal 10-10 raises.
   const ResultTooLarge.rows({
     required int limit,
     required int measured,
     required String suggestion,
-  }) : this._(limit, measured, ResultSizeUnit.rows, suggestion);
+    bool atLeast = false,
+    String? detail,
+  }) : this._(
+            limit, measured, ResultSizeUnit.rows, suggestion, atLeast, detail);
 
   /// Too many bytes on the wire.
   const ResultTooLarge.bytes({
     required int limit,
     required int measured,
     required String suggestion,
-  }) : this._(limit, measured, ResultSizeUnit.bytes, suggestion);
+    bool atLeast = false,
+    String? detail,
+  }) : this._(
+            limit, measured, ResultSizeUnit.bytes, suggestion, atLeast, detail);
 
   /// The sentence the refusal travels as: what the limit is, what was asked
   /// for, and what to call instead.
   String get message =>
-      'this query would answer $measured ${unit.name}, over the $limit '
-      '${unit.name} limit. Narrow the window or call $suggestion — the answer '
-      'is refused rather than truncated, because a series cut short reads as '
-      'a series that stopped';
+      'this query would answer ${atLeast ? 'at least ' : ''}$measured '
+      '${unit.name}, over the $limit ${unit.name} limit'
+      '${detail == null ? '' : ' ($detail)'}. Narrow the window or call '
+      '$suggestion — the answer is refused rather than truncated, because a '
+      'series cut short reads as a series that stopped';
 
   @override
   String toString() => 'ResultTooLarge: $message';

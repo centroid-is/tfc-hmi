@@ -1052,6 +1052,76 @@ void main() {
               'disconnected", the class of failure this project exists to '
               'prevent (10-CONTEXT amendment 3)');
     }, tags: 'ws');
+
+    test('a getAll too large to send is refused the same way, not -32011',
+        () async {
+      final kit = _kit(preferences: _TooLargePreferences());
+
+      final error = await _refusal(
+          () => kit.handlers
+              .prefGetAll(_params(DataServiceMethods.prefGetAll, const {})),
+          'a getAll over a store larger than the byte ceiling');
+
+      expect(error.code, rpc_error.INVALID_PARAMS,
+          reason: 'the timeseries family was wrapped in _sized when the '
+              'mapping landed and this one was not, so a store over the cap '
+              'reached the wire as handlerFailed (-32011) — documented as '
+              'possibly transient. Five panels opening a settings page would '
+              'each retry forever something no retry can fix');
+      expect(error.message, contains('allowList'),
+          reason: 'and the fix for a getAll that is too large is not another '
+              'method, it is the allow-list');
+    });
+  });
+
+  // The other half of the same sentence. A refusal that cannot become a
+  // disconnect is worth little if it becomes an infinite retry instead, and
+  // -32011 is documented as "possibly transient: retrying is legitimate".
+  group('a refusal that no retry can fix does not wear a transient code', () {
+    test('a permanent source refusal is INVALID_PARAMS, not handlerFailed',
+        () async {
+      final kit = _kit(timeseries: _RefusingTimeseries(retryable: false));
+
+      final error = await _refusal(
+          () => kit.handlers.timeseriesQuery(
+                  _params(DataServiceMethods.timeseriesQuery, {
+                'table': _series,
+                'to': _ms(_base.add(const Duration(days: 1))),
+                'from': _ms(_base),
+              })),
+          'a series the source will never have');
+
+      expect(error.code, rpc_error.INVALID_PARAMS,
+          reason: '"no series by that name is collected here" cannot become '
+              'true by asking again. Reaching the wire as -32011 — which the '
+              'wire documents as possibly transient — is an invitation to a '
+              'panel to retry forever something no retry can fix. Two waves '
+              'flagged this with no owner (10-07, 10-08, 10-09)');
+      expect(error.message, contains(_RefusingTimeseries.permanentSentence),
+          reason: 'and the source\'s own sentence survives the mapping: the '
+              'reason a permanent refusal is worth a distinct code is that it '
+              'tells the caller what to change, and a mapping that replaced '
+              'the message with "invalid params" would take that back');
+    });
+
+    test('a retryable source refusal is left alone for the catch-all',
+        () async {
+      final kit = _kit(timeseries: _RefusingTimeseries(retryable: true));
+
+      await expectLater(
+          kit.handlers.timeseriesQuery(
+              _params(DataServiceMethods.timeseriesQuery, {
+            'table': _series,
+            'to': _ms(_base.add(const Duration(days: 1))),
+            'from': _ms(_base),
+          })),
+          throwsA(isA<SourceRefusal>()),
+          reason: 'THE ANTI-VACUITY ARM, and the one that matters: "the '
+              'historian is not connected" IS transient and -32011 is the '
+              'right answer for it. A mapping that turned every source '
+              'refusal into a bad request would tell a panel its perfectly '
+              'good query was malformed, every time the database bounced');
+    });
   });
 
   // ------------------------------------------------------------ preferences
@@ -1446,5 +1516,61 @@ final class _TooLargeTimeseries extends FakeTimeseries {
         limit: limit,
         measured: limit * 2,
         suggestion: DataServiceMethods.timeseriesQueryDownsampled,
+      );
+}
+
+/// A source that refuses every raw window, transiently or permanently.
+///
+/// Stands in for `tfc_relay_local`'s `TimeseriesReadRefusal` family, which this
+/// package cannot name: the dependency edge runs local → server and never the
+/// other way. What crosses the boundary is [SourceRefusal], and this is a
+/// minimal implementation of it — which is also the point, because a mapping
+/// that only worked for the one concrete family would not be a mapping.
+final class _RefusingTimeseries extends FakeTimeseries {
+  _RefusingTimeseries({required this.retryable});
+
+  static const permanentSentence =
+      'no series named "ST101.CN01.MOT01.speed" is collected by this gateway';
+
+  final bool retryable;
+
+  @override
+  Future<List<TimeseriesData>> queryTimeseriesData(
+          String tableName, DateTime to,
+          {String? orderBy = 'time ASC', DateTime? from}) async =>
+      throw _Refusal(
+          retryable,
+          retryable
+              ? 'the historian is not connected; this is worth retrying'
+              : permanentSentence);
+}
+
+final class _Refusal implements SourceRefusal {
+  const _Refusal(this.retryable, this.message);
+
+  @override
+  final bool retryable;
+
+  @override
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+/// A store whose whole answer is over the byte ceiling.
+///
+/// The shape 10-10's `PreferenceStore` raises: bytes rather than rows, exact
+/// rather than a floor, and the allow-list named as the way out.
+final class _TooLargePreferences extends FakePreferences {
+  static const limit = 1024 * 1024;
+
+  @override
+  Future<Map<String, Object?>> getAll({Set<String>? allowList}) async =>
+      throw const ResultTooLarge.bytes(
+        limit: limit,
+        measured: limit + 1,
+        suggestion: '${DataServiceMethods.prefGetAll} with an allowList '
+            'naming the keys this page actually needs',
       );
 }

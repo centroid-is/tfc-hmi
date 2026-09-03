@@ -594,9 +594,20 @@ final class DataHandlers {
               .getKeys(allowList: _allowList(params, DataServiceMethods.prefGetKeys)))
           .toList();
 
-  /// Every key and value, filtered the same way.
-  Future<Object?> prefGetAll(rpc.Parameters params) => source.preferences
-      .getAll(allowList: _allowList(params, DataServiceMethods.prefGetAll));
+  /// Every key and value, filtered the same way — and **[_sized]**, because
+  /// this is the second place a `ResultTooLarge` is raised.
+  ///
+  /// It was not wrapped when the mapping landed: 10-03 wrapped the four
+  /// timeseries methods and nothing else raised one yet. 10-10's byte ceiling
+  /// does, and unwrapped it would leave the handler uncaught and reach the
+  /// wire through `relay_session.dart`'s catch-all as `handlerFailed`
+  /// (-32011) — which the wire documents as possibly transient. A settings
+  /// page over a store larger than the cap would then retry forever something
+  /// no retry can fix, on every panel that opened it.
+  Future<Object?> prefGetAll(rpc.Parameters params) => _sized(
+      DataServiceMethods.prefGetAll,
+      () => source.preferences.getAll(
+          allowList: _allowList(params, DataServiceMethods.prefGetAll)));
 
   /// A stored bool, or null when the key is absent.
   ///
@@ -1223,6 +1234,27 @@ final class DataHandlers {
       return await ask();
     } on ResultTooLarge catch (tooLarge) {
       throw _refuse(method, '$method refused: ${tooLarge.message}');
+    } on SourceRefusal catch (refusal) {
+      // **The other half of the same sentence** (10-10). A refusal that cannot
+      // become a disconnect is worth little if it becomes an infinite retry
+      // instead.
+      //
+      // Everything a handler throws and does not catch reaches the wire as
+      // `handlerFailed` (-32011) through `relay_session.dart`'s catch-all, and
+      // the wire documents that code as *possibly transient: retrying is
+      // legitimate*. Right for "the historian is not connected"; wrong for "no
+      // series by that name is collected here", which no retry can make true.
+      // 10-07, 10-08 and 10-09 each flagged it and none could close it: the
+      // refusals are declared in `tfc_relay_local` and the dependency edge runs
+      // local → server, so this file cannot name the sealed family.
+      // [SourceRefusal] is the one fact it can name.
+      //
+      // A retryable refusal is **rethrown untouched**, on purpose: -32011 is
+      // the correct answer for it, and a mapping that turned every source
+      // refusal into a bad request would tell a panel its perfectly good query
+      // was malformed every time the database bounced.
+      if (refusal.retryable) rethrow;
+      throw _refuse(method, '$method refused: ${refusal.message}');
     }
   }
 

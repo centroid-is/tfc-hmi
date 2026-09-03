@@ -60,21 +60,29 @@
 /// an operator reads as "the chart is broken" rather than as "you did not say
 /// which member" (T-10-30).
 ///
-/// ## What the refusals surface as today
+/// ## What the refusals surface as — CLOSED in 10-10
 ///
-/// Every exception in this file reaches the wire as `handlerFailed` (-32011)
-/// through `relay_session.dart`'s catch-all, which is right for
-/// [HistorianUnavailable] and for a database error, and **wrong for the
-/// permanent ones** — -32011 is documented as possibly transient, so a panel
-/// may retry a request that can never succeed. Mapping
-/// [TimeseriesReadRefusal]'s permanent subclasses to `INVALID_PARAMS` at
-/// `data_handlers.dart`, the way `ResultTooLarge` already is (10-03), is a
-/// named follow-up rather than something this file can do. They are a sealed
-/// family so that mapping is a switch and not a string match. In the composed
-/// gateway `_PolicyTimeseries` answers an unmappable series as one that does
-/// not exist *before* the reader sees it, so [UnknownSeries] is reachable only
-/// when the policy's resolver and the reader's disagree — a mis-composition,
-/// which is worth an error rather than an empty chart.
+/// Until 10-10 every exception in this file reached the wire as `handlerFailed`
+/// (-32011) through `relay_session.dart`'s catch-all: right for
+/// [HistorianUnavailable] and for a database error, **wrong for the other
+/// seven**, because -32011 is documented as possibly transient and a panel may
+/// therefore retry forever a request that can never succeed. 10-07, 10-08 and
+/// 10-09 each recorded it as a follow-up with no owner.
+///
+/// It could not be closed from either end, and the reason was structural: the
+/// family is declared here, the wire code is chosen in
+/// `tfc_relay_server/data_handlers.dart`, and the dependency edge runs local →
+/// server and never the other way — so the handler could not name the type. It
+/// is closed by `SourceRefusal` in the package both ends share:
+/// [TimeseriesReadRefusal] implements it, decides `retryable` with an
+/// **exhaustive switch** over its own sealed family, and `_sized` answers
+/// `INVALID_PARAMS` for a permanent one while rethrowing a retryable one to the
+/// catch-all that was always right for it.
+///
+/// In the composed gateway `_PolicyTimeseries` answers an unmappable series as
+/// one that does not exist *before* the reader sees it, so [UnknownSeries] is
+/// reachable only when the policy's resolver and the reader's disagree — a
+/// mis-composition, which is worth an error rather than an empty chart.
 library;
 
 import 'package:drift/drift.dart' show Variable;
@@ -83,23 +91,54 @@ import 'package:drift/drift.dart' show Variable;
 // other. The seam sweep matches the URI, not the prefix.
 import 'package:tfc_dart/core/database.dart' as ts;
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart'
-    show ResolvedSeries, SeriesResolver, TimeseriesApi, TimeseriesData;
+    show
+        DataServiceMethods,
+        ResolvedSeries,
+        ResultTooLarge,
+        SeriesResolver,
+        SourceRefusal,
+        TimeseriesApi,
+        TimeseriesData;
+
+import 'read_limits.dart';
 
 /// Whatever `Database` the composition currently holds, or null while the
 /// historian is not up.
 typedef DatabaseSupplier = ts.Database? Function();
 
-/// Why a read was refused. Sealed so a future mapping at the handler is a
-/// switch the compiler checks rather than a string match.
-sealed class TimeseriesReadRefusal implements Exception {
+/// Why a read was refused. Sealed so the disposition below is a switch the
+/// compiler checks rather than a string match.
+sealed class TimeseriesReadRefusal implements SourceRefusal {
   const TimeseriesReadRefusal(this.message);
 
+  @override
   final String message;
 
-  /// Whether retrying the identical request could ever succeed. False for
-  /// every refusal about the *request*; true only for the historian being
-  /// down.
-  bool get retryable => this is HistorianUnavailable;
+  /// Whether retrying the identical request could ever succeed.
+  ///
+  /// **An exhaustive switch, and that is the whole value of the family being
+  /// sealed.** Written as `this is HistorianUnavailable` until 10-10, which
+  /// was correct and silently fragile: a subclass added later inherited
+  /// "permanent" by default, and the dangerous direction is a new *retryable*
+  /// refusal doing so — a panel would then be told its perfectly good query
+  /// was malformed every time whatever went away came back. Written as a
+  /// switch, adding a subclass is a compile error here.
+  ///
+  /// `data_handlers.dart`'s `_sized` reads this bit and answers
+  /// `INVALID_PARAMS` for false, leaving true to the catch-all's
+  /// `handlerFailed` (-32011), which the wire documents as possibly transient
+  /// and which is right for exactly one of these.
+  @override
+  bool get retryable => switch (this) {
+        HistorianUnavailable() => true,
+        UnknownSeries() => false,
+        StructSeriesUnaddressed() => false,
+        UnknownSeriesMember() => false,
+        SeriesNotNumeric() => false,
+        UnsupportedOrdering() => false,
+        SeriesTableMissing() => false,
+        DownsampleUnbounded() => false,
+      };
 
   @override
   String toString() => message;
@@ -168,13 +207,98 @@ final class HistorianUnavailable extends TimeseriesReadRefusal {
       : super('the historian is not connected; this is worth retrying');
 }
 
+/// The resolver named a table the catalogue does not have.
+final class SeriesTableMissing extends TimeseriesReadRefusal {
+  SeriesTableMissing(this.wireName, this.table)
+      : super('"$wireName" resolves to table "$table", and the catalogue has '
+            'no columns for it — the table is not there. Either the '
+            'collection plan names a table nothing ever created, or '
+            'retention dropped it');
+
+  final String wireName;
+  final String table;
+}
+
+/// Which of `queryTimeseriesDataDownsampled`'s four silent fallbacks fired.
+enum DownsampleFallback {
+  /// `database.dart:1471` — `rangeMs <= 0`.
+  zeroWidthWindow,
+
+  /// `database.dart:1477` — `(maxPoints / 3).floor()` is zero.
+  tooFewPoints,
+
+  /// `database.dart:1487` — the `value` column's type could not be read.
+  undetectableColumn,
+
+  /// `database.dart:1512` — the column's type is not one it aggregates.
+  notAggregatable,
+}
+
+/// The bounded method would have answered with the unbounded raw query.
+///
+/// Four conditions, and each of them is a `return queryTimeseriesData(...)`
+/// inside `queryTimeseriesDataDownsampled` — the raw window over the whole
+/// table, with the bounded method's name on it and nothing in the log. Refused
+/// here rather than caught by the row cap, because a backstop that fires tells
+/// nobody *which* condition sent them there.
+final class DownsampleUnbounded extends TimeseriesReadRefusal {
+  DownsampleUnbounded._(this.wireName, this.condition, String message)
+      : super(message);
+
+  /// `database.dart:1471` — the window has no width.
+  factory DownsampleUnbounded._zeroWidth(String wireName, DateTime at) =>
+      DownsampleUnbounded._(
+          wireName,
+          DownsampleFallback.zeroWidthWindow,
+          'the window for "$wireName" starts and ends at the same instant '
+          '(${at.toUtc().toIso8601String()}), so there is nothing to bucket. '
+          'Downsampling it would return the raw query over the whole table '
+          'instead (database.dart:1471). Ask for a window with width, or '
+          'call queryTimeseriesData if the raw rows are what is wanted');
+
+  /// `database.dart:1477` — `(maxPoints / 3).floor()` is zero buckets.
+  factory DownsampleUnbounded._tooFewPoints(String wireName, int maxPoints) =>
+      DownsampleUnbounded._(
+          wireName,
+          DownsampleFallback.tooFewPoints,
+          'maxPoints was $maxPoints and a bucket produces three points, so '
+          '($maxPoints / 3).floor() is zero buckets and the downsampler '
+          'returns the unbounded raw query (database.dart:1477). The floor is '
+          '3 — the wire refuses this too (ServerConfig.minTimeseriesPoints), '
+          'and this is the belt for a caller that did not come through a '
+          'handler');
+
+  /// `database.dart:1512` — the column's type is not one it aggregates.
+  factory DownsampleUnbounded._notAggregatable(
+          String wireName, String column, String dataType) =>
+      DownsampleUnbounded._(
+          wireName,
+          DownsampleFallback.notAggregatable,
+          '"$wireName" stores its samples in a $dataType column ("$column"), '
+          'which the downsampler does not aggregate — it would answer the '
+          'unbounded raw query over the whole table instead '
+          '(database.dart:1512). A boolean in particular has no meaningful '
+          'min/max/last per bucket; read it raw with queryTimeseriesData, '
+          'where it is served as 1 and 0');
+
+  final String wireName;
+
+  /// Which condition fired, by name.
+  final DownsampleFallback condition;
+}
+
 /// `TimeseriesApi` over a shared `Database`, with every table name resolved
 /// before any statement is built.
 final class TimescaleReader implements TimeseriesApi {
-  TimescaleReader({required this.database, required this.resolver});
+  TimescaleReader(
+      {required this.database, required this.resolver, ReadLimits? limits})
+      : limits = limits ?? ReadLimits();
 
   /// The shared instance, borrowed per call. See the library doc.
   final DatabaseSupplier database;
+
+  /// The outbound ceilings. See `read_limits.dart` for the arithmetic.
+  final ReadLimits limits;
 
   /// The only thing between a client-supplied string and a `FROM` clause.
   final SeriesResolver resolver;
@@ -198,6 +322,29 @@ final class TimescaleReader implements TimeseriesApi {
     'boolean',
   };
 
+  /// Types the **downsampler** can aggregate — `scalarNumericTypes` at
+  /// `database.dart:1496-1503`, spelled here so the reader can refuse before
+  /// delegating rather than discovering the fallback afterwards.
+  ///
+  /// **The only difference from [_numericTypes] is `boolean`**, and that is
+  /// the whole of fallback 4. This reader charts a boolean as 1/0 for the raw
+  /// methods, which is right; the shipped downsampler does not list it, so a
+  /// boolean series asked for downsampled comes back as the unbounded raw
+  /// query over the whole table. Which is a lot of tables: a run/stop flag is
+  /// among the most-collected shapes there is.
+  ///
+  /// Arrays (`_float8` and friends, which the shipped method does handle) are
+  /// absent because they never get this far: `ARRAY` is not in [_numericTypes]
+  /// and `_shapeFor` refuses it as [SeriesNotNumeric] first.
+  static const Set<String> _aggregatable = {
+    'smallint',
+    'integer',
+    'bigint',
+    'real',
+    'double precision',
+    'numeric',
+  };
+
   @override
   Future<List<TimeseriesData>> queryTimeseriesData(
       String tableName, DateTime to,
@@ -206,7 +353,8 @@ final class TimescaleReader implements TimeseriesApi {
     final db = _database();
     final series = _resolve(tableName);
     final shape = await _shapeOf(db, tableName, series);
-    return _read(db, tableName, series, shape, to, orderBy: orderBy, from: from);
+    return _read(db, tableName, series, shape, to,
+        orderBy: orderBy, from: from, budget: limits.maxTimeseriesRows);
   }
 
   @override
@@ -234,11 +382,26 @@ final class TimescaleReader implements TimeseriesApi {
     // every pair of entries with different `sample_interval_us`. N bounded
     // queries against a database on the same host is the honest trade; the
     // breadth is bounded at the handler by `maxKeysPerSubscribe` (10-03).
+    //
+    // **The row cap applies to the SUM, and the budget is spent down as the
+    // loop goes.** A per-table cap would let four tables each at the cap
+    // produce four times the budget in one frame — the exact failure the
+    // budget exists to prevent, arrived at by obeying the limit four times.
+    // A four-series chart is the ordinary shape here, not the exotic one.
     final answer = <String, List<TimeseriesData>>{};
+    var spent = 0;
     for (final entry in series.entries) {
       final shape = await _shapeOf(db, entry.key, entry.value);
-      answer[entry.key] = await _read(db, entry.key, entry.value, shape, to,
-          orderBy: orderBy, from: from);
+      final rows = await _read(db, entry.key, entry.value, shape, to,
+          orderBy: orderBy,
+          from: from,
+          budget: limits.maxTimeseriesRows - spent,
+          spent: spent,
+          // The series that crosses the total is the one actionable fact in
+          // the refusal: it is the one to narrow.
+          crossedBy: entry.key);
+      answer[entry.key] = rows;
+      spent += rows.length;
     }
     // Built from the REQUEST, so one entry per requested series — including
     // the silent ones — is this gateway's property rather than something it
@@ -257,9 +420,46 @@ final class TimescaleReader implements TimeseriesApi {
     final shape = await _shapeOf(db, tableName, series);
     final member = series.member;
 
+    // **The four fallbacks, refused by name before anything is built.**
+    //
+    // `queryTimeseriesDataDownsampled` is the one method in this family that
+    // exists to be bounded, and it loses its bound in four places — each one a
+    // `return queryTimeseriesData(...)`, which is the unbounded raw window over
+    // the whole table, wearing the bounded method's name. Silently: there is no
+    // log line and the return type is the same.
+    //
+    // A backstop would not do. The row cap below IS a backstop and it is the
+    // wrong place for this, because 40 000 rows of a table that should have
+    // been bucketed is still 40 000 rows and a chart with 1920 columns; and
+    // because a backstop that fires tells you nothing about which condition
+    // sent you there. Refusing each one by name means a firing backstop is a
+    // *missed condition*, which is worth knowing.
+    final startTime = from.isBefore(to) ? from.toUtc() : to.toUtc();
+    final endTime = from.isBefore(to) ? to.toUtc() : from.toUtc();
+    final rangeMs = endTime.difference(startTime).inMilliseconds;
+    if (rangeMs <= 0) throw DownsampleUnbounded._zeroWidth(tableName, to);
+    final numBuckets = (maxPoints / 3).floor();
+    if (numBuckets <= 0) {
+      throw DownsampleUnbounded._tooFewPoints(tableName, maxPoints);
+    }
+    // The third condition — `_valueColumnType` answering null
+    // (`database.dart:1487`) — is `_shapeOf`'s already: the probe answers null
+    // exactly when the catalogue has no `value` column for the table, and
+    // after `_shapeOf` the only way that happens is a table that is not there,
+    // which is [SeriesTableMissing]. Named there rather than duplicated here,
+    // because a second probe would be a second round trip answering a question
+    // already answered.
+    if (!_aggregatable.contains(shape.dataType)) {
+      throw DownsampleUnbounded._notAggregatable(
+          tableName, shape.column, shape.dataType);
+    }
+
     if (member == null) {
       // A scalar table is exactly what the shipped method was written for,
-      // including its `_valueColumnType` probe and its array handling.
+      // including its `_valueColumnType` probe and its array handling — and
+      // with the four conditions refused above, it can no longer reach any of
+      // its fallbacks, so what it returns is bounded by `maxPoints` and needs
+      // no row cap of its own.
       return _points(
           tableName,
           shape,
@@ -278,17 +478,6 @@ final class TimescaleReader implements TimeseriesApi {
     // the non-array branch (`database.dart:473-492`) point for point: three
     // points per bucket — min, max, last — at the bucket start, its midpoint
     // and its end.
-    final startTime = from.isBefore(to) ? from.toUtc() : to.toUtc();
-    final endTime = from.isBefore(to) ? to.toUtc() : from.toUtc();
-    final rangeMs = endTime.difference(startTime).inMilliseconds;
-    final numBuckets = (maxPoints / 3).floor();
-    if (rangeMs <= 0 || numBuckets <= 0) {
-      // The same two degenerate cases the shipped method has. The wire never
-      // reaches them: `ServerConfig.minTimeseriesPoints` refuses a maxPoints
-      // under three precisely because the shipped fallback here is unbounded
-      // (10-03). A direct caller gets the bounded raw window instead.
-      return queryTimeseriesData(tableName, endTime, from: startTime);
-    }
     final bucketMs = (rangeMs / numBuckets).ceil();
     final column = _quoted(member);
     final table = _quoted(series.table);
@@ -392,6 +581,16 @@ final class TimescaleReader implements TimeseriesApi {
   Future<_Shape> _shapeOf(
       ts.Database db, String wireName, ResolvedSeries series) async {
     final columns = await _columnsOf(db, series.table);
+    // **An empty catalogue answer is a table that is not there**, and it is
+    // named as such. Before 10-10 it fell through to the struct branch below
+    // and came back as `StructSeriesUnaddressed` with an EMPTY member list —
+    // "Ask for one member: " and then nothing, which sends the reader looking
+    // for a member name that does not exist rather than for a table that does
+    // not. It is also the exact condition the shipped downsampler's
+    // `_valueColumnType` probe answers null for (`database.dart:1487`), which
+    // is fallback 3 of its 4: without this the raw query then runs against a
+    // table Postgres has never heard of.
+    if (columns.isEmpty) throw SeriesTableMissing(wireName, series.table);
     final members = columns.keys.where((c) => c != 'time').toList()..sort();
     final member = series.member;
 
@@ -413,7 +612,7 @@ final class TimescaleReader implements TimeseriesApi {
     if (!_numericTypes.contains(dataType)) {
       throw SeriesNotNumeric(wireName, dataType);
     }
-    return _Shape(column: column, isBoolean: dataType == 'boolean');
+    return _Shape(column: column, dataType: dataType);
   }
 
   /// `column_name → data_type`, from the catalogue.
@@ -437,39 +636,73 @@ final class TimescaleReader implements TimeseriesApi {
     };
   }
 
+  /// One window, one statement, and **never more than [budget] rows built**.
+  ///
+  /// ## `LIMIT budget + 1`
+  ///
+  /// The extra row is how the reader learns the answer is over the cap without
+  /// building it. The two alternatives are both worse:
+  ///
+  ///  * *Count first, with a `SELECT COUNT(*)`.* Two round trips for every
+  ///    query including the ordinary ones, and the count races the writer — at
+  ///    5 s sampling a series gains rows between the count and the read, so the
+  ///    number the refusal quotes is not the number the query would answer.
+  ///  * *Fetch everything and measure afterwards.* By then the rows are in this
+  ///    process's memory, which is the failure `ConflatingSendBuffer` is
+  ///    downstream of. Measuring a 190 MB answer to decide not to send it has
+  ///    already paid for it.
+  ///
+  /// The cost is that a refusal knows "over" and not "how far over", so it is
+  /// raised with `atLeast: true` and says so. See `ResultTooLarge.atLeast`.
+  ///
+  /// ## One spelling, not two
+  ///
+  /// Until 10-10 the scalar path delegated to `Database.queryTimeseriesData`
+  /// and the member path spelled its own `tableQuery`, so the where-clause
+  /// shapes existed twice already. Neither door takes a `LIMIT`
+  /// (`database_drift.dart`'s `tableQuery` has no such parameter, and adding
+  /// one would be a `tfc_dart` change this phase does not make), so both paths
+  /// now take this statement. The identifiers are quoted here because
+  /// `tableQuery` interpolated its column list unquoted — and the member has
+  /// already been checked against the table's real columns, so the quoting is
+  /// the second belt rather than the first.
   Future<List<TimeseriesData>> _read(ts.Database db, String wireName,
       ResolvedSeries series, _Shape shape, DateTime to,
-      {String? orderBy, DateTime? from}) async {
-    if (series.member == null) {
-      // The scalar path delegates, so the where-clause shapes, the
-      // ISO8601/timestamptz handling and the time decoding are not re-spelled
-      // here.
-      return _points(
-          wireName,
-          shape,
-          await db.queryTimeseriesData(series.table, to.toUtc(),
-              orderBy: orderBy, from: from?.toUtc()));
+      {String? orderBy,
+      DateTime? from,
+      required int budget,
+      int spent = 0,
+      String? crossedBy}) async {
+    final where = from != null
+        ? r'time >= $1::timestamptz AND time <= $2::timestamptz'
+        : r'time >= $1::timestamptz';
+    final args = from != null
+        ? [from.toUtc().toIso8601String(), to.toUtc().toIso8601String()]
+        : [to.toUtc().toIso8601String()];
+    // `budget` can be zero when an earlier series in a batch spent the lot;
+    // `LIMIT 1` then refuses on the first row this series has, which is
+    // correct — and a series with none still answers empty.
+    final sql = 'SELECT ${_quoted(shape.column)}, ${_quoted('time')} '
+        'FROM ${_quoted(series.table)} WHERE $where'
+        '${orderBy == null ? '' : ' ORDER BY $orderBy'} '
+        'LIMIT ${budget + 1}';
+    final rows = await db.db.customSelect(sql,
+        variables: [for (final arg in args) Variable.withString(arg)]).get();
+
+    if (rows.length > budget) {
+      throw ResultTooLarge.rows(
+        limit: limits.maxTimeseriesRows,
+        measured: spent + rows.length,
+        atLeast: true,
+        detail: crossedBy == null
+            ? null
+            : 'the series "$crossedBy" crossed the total; the cap is on the '
+                'SUM across the batch, because four series each at the cap '
+                'is four times the budget in one frame',
+        suggestion: DataServiceMethods.timeseriesQueryDownsampled,
+      );
     }
 
-    // The projection: one column plus time. `AppDatabase.tableQuery`
-    // interpolates the column list unquoted (`database_drift.dart:907`), so
-    // the identifiers are quoted here — and the member has already been
-    // checked against the table's real columns, so the quoting is the second
-    // belt rather than the first.
-    final rows = await db.db.tableQuery(
-      series.table,
-      columns: [_quoted(shape.column), _quoted('time')],
-      where: from != null
-          ? r'time >= $1::timestamptz AND time <= $2::timestamptz'
-          : r'time >= $1::timestamptz',
-      whereArgs: from != null
-          ? [
-              from.toUtc().toIso8601String(),
-              to.toUtc().toIso8601String(),
-            ]
-          : [to.toUtc().toIso8601String()],
-      orderBy: orderBy,
-    );
     return [
       for (final row in rows)
         _sample(wireName, shape, row.data[shape.column], row.data['time']),
@@ -523,11 +756,17 @@ final class TimescaleReader implements TimeseriesApi {
       '"${identifier.replaceAll('"', '""')}"';
 }
 
-/// Which column carries this series' samples, and whether it needs the 1/0
-/// treatment.
+/// Which column carries this series' samples, and what Postgres calls its type.
 final class _Shape {
-  const _Shape({required this.column, required this.isBoolean});
+  const _Shape({required this.column, required this.dataType});
 
   final String column;
-  final bool isBoolean;
+
+  /// The catalogue's `data_type`, kept rather than reduced to a flag: the
+  /// downsampler's aggregability question and the 1/0 question are different
+  /// questions about it, and a second one arrived in 10-10.
+  final String dataType;
+
+  /// Whether a sample needs the 1/0 treatment on the way to the wire.
+  bool get isBoolean => dataType == 'boolean';
 }

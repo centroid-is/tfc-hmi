@@ -63,14 +63,17 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:drift/drift.dart' show UpdateKind, Variable;
 import 'package:tfc_dart/core/preferences.dart' show Preferences;
 import 'package:tfc_dart/core/secure_storage/interface.dart'
     show MySecureStorage;
-import 'package:tfc_relay_protocol/tfc_relay_protocol.dart' show PreferencesApi;
+import 'package:tfc_relay_protocol/tfc_relay_protocol.dart'
+    show DataServiceMethods, PreferencesApi, ResultTooLarge, SourceRefusal;
 
 import 'preference_change_feed.dart';
+import 'read_limits.dart';
 import 'timescale_reader.dart' show DatabaseSupplier;
 
 /// The preference store cannot be reached right now.
@@ -80,15 +83,28 @@ import 'timescale_reader.dart' show DatabaseSupplier;
 /// historian is not connected" would go and look at charts. Not a member of
 /// the sealed `TimeseriesReadRefusal` family for the same reason — the switch
 /// that family exists for is about *reads of recorded samples*.
-final class PreferenceStoreUnavailable implements Exception {
+final class PreferenceStoreUnavailable implements SourceRefusal {
   const PreferenceStoreUnavailable();
 
   /// Whether retrying the identical request could ever succeed.
+  ///
+  /// **True, and it is the one refusal in this phase for which -32011 is the
+  /// right answer.** `data_handlers.dart`'s `_sized` reads this and rethrows,
+  /// so the catch-all still maps it to `handlerFailed` — the wire's
+  /// "possibly transient: retrying is legitimate", which is precisely what a
+  /// disconnected historian is. It implements [SourceRefusal] anyway rather
+  /// than staying a bare `Exception`, because the interface is the place the
+  /// claim is written down and an unclaimed refusal is one nobody can tell
+  /// from an unconsidered one.
+  @override
   bool get retryable => true;
 
   @override
-  String toString() =>
+  String get message =>
       'the preference store is not connected; this is worth retrying';
+
+  @override
+  String toString() => message;
 }
 
 /// A secure store that refuses every request.
@@ -125,7 +141,8 @@ final class NoSecretStorage implements MySecureStorage {
 
 /// `PreferencesApi` over the shared `flutter_preferences` table.
 final class PreferenceStore implements PreferencesApi {
-  PreferenceStore({required this.database, this.log}) {
+  PreferenceStore({required this.database, this.log, ReadLimits? limits})
+      : limits = limits ?? ReadLimits() {
     _feed = PreferenceChangeFeed(
       database: database,
       local: _local.stream,
@@ -137,6 +154,9 @@ final class PreferenceStore implements PreferencesApi {
 
   /// The shared instance, borrowed per call. See the library doc.
   final DatabaseSupplier database;
+
+  /// The outbound ceilings. See `read_limits.dart` for the arithmetic.
+  final ReadLimits limits;
 
   /// Where a swallowed failure goes. Optional and injected, following
   /// `HistoryViewStore`'s shape: a store built in a test asserts what it was
@@ -217,8 +237,64 @@ final class PreferenceStore implements PreferencesApi {
   Future<Set<String>> getKeys({Set<String>? allowList}) async =>
       (await _load()).getKeys(allowList: allowList);
 
+  /// Every key and value, or every one in [allowList] — refused if the
+  /// **encoded** answer would be over [ReadLimits.maxPreferenceBytes].
+  ///
+  /// ## Why encoded, and not the sum of the value lengths
+  ///
+  /// The frame is what fills the session's priority lane, and JSON escaping is
+  /// not free: the store's two big rows are themselves JSON documents, so every
+  /// `"` inside them becomes `\"` on the way out. Measured on the live store,
+  /// the encoded map is **11.7 % larger** than the sum of its values — 754 707
+  /// B against 675 890. A cap that measured the raw lengths would let through
+  /// an answer eleven percent over its own ceiling, which is the same class of
+  /// mistake as having no cap.
+  ///
+  /// The measurement is through the same `jsonEncode` the wire uses, and the
+  /// cost is one encode of an answer that is about to be encoded again by
+  /// `json_rpc_2` anyway. That double encode is the price of not guessing; at
+  /// three quarters of a megabyte it is a few milliseconds, on a call a panel
+  /// makes when a settings page opens.
+  ///
+  /// ## And why the allow-list is what the refusal names
+  ///
+  /// There is no smaller method to suggest. `getAll` with no allow-list is the
+  /// whole store by definition, and the store grows with the plant — one
+  /// `key_mappings` entry per tag. The fix is the parameter every real caller
+  /// should already be passing, which the interface's own doc calls "highly
+  /// recommended".
+  ///
+  /// **Nothing is truncated.** A partial map is a settings page rendering its
+  /// *defaults* over values that are really there, with nothing saying so.
   @override
-  Future<Map<String, Object?>> getAll({Set<String>? allowList}) async =>
+  Future<Map<String, Object?>> getAll({Set<String>? allowList}) async {
+    final all = await _allOf(allowList);
+    final encoded = utf8.encode(jsonEncode(all)).length;
+    if (encoded > limits.maxPreferenceBytes) {
+      throw ResultTooLarge.bytes(
+        limit: limits.maxPreferenceBytes,
+        // Exact, unlike the row ceiling's: this one had to build the answer to
+        // measure it, so it knows the size rather than a floor.
+        measured: encoded,
+        detail: 'this is the whole store encoded, and it grows with the plant '
+            '— key_mappings carries one entry per tag',
+        suggestion: '${DataServiceMethods.prefGetAll} with an allowList '
+            'naming the keys this page actually needs',
+      );
+    }
+    return all;
+  }
+
+  /// The cache's whole answer, **uncapped**.
+  ///
+  /// [ReadLimits.maxPreferenceBytes] is a ceiling on what crosses a socket, and
+  /// [resync] is not crossing one: it diffs the store against itself in this
+  /// process to work out which keys to announce. Subjecting it to the wire's
+  /// cap would mean a plant whose store outgrew 1 MiB stopped announcing
+  /// preference changes altogether — [resync] catches and logs, so the failure
+  /// would be a quiet one, and "nobody saw the edit" is the failure DB-03
+  /// exists to prevent.
+  Future<Map<String, Object?>> _allOf(Set<String>? allowList) async =>
       (await _load()).getAll(allowList: allowList);
 
   @override
@@ -380,7 +456,7 @@ final class PreferenceStore implements PreferencesApi {
     if (_closed) return const <String>{};
     final Map<String, Object?> before;
     try {
-      before = await getAll();
+      before = await _allOf(null);
     } catch (e) {
       log?.call('preference resync could not read the store: $e');
       return const <String>{};
@@ -388,7 +464,7 @@ final class PreferenceStore implements PreferencesApi {
     invalidate();
     final Map<String, Object?> after;
     try {
-      after = await getAll();
+      after = await _allOf(null);
     } catch (e) {
       log?.call('preference resync could not re-read the store: $e');
       return const <String>{};
