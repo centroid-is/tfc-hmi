@@ -366,7 +366,11 @@ final class RemoteStateMan implements StateManApi {
 
   /// How long the gateway said it was frozen, in milliseconds — the **absolute**
   /// figure the gateway sent (`ResyncParams.stalledMs`), never recomputed from
-  /// this panel's clock. Null when [stallReason] is null.
+  /// this panel's clock. Null when no stall has been announced on this
+  /// connection, **or** when the gateway announced one without a duration:
+  /// `ResyncParams.stalledMs` is nullable on the wire and is stored as-is, so
+  /// a widget must not treat a non-null [stallReason] as a promise that this
+  /// is non-null — the complaint text already words both cases.
   ///
   /// It is the whole content of the operator sentence: "the plant view was
   /// frozen for N ms". It lives here rather than only in [complaints] because a
