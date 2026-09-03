@@ -11,6 +11,7 @@ import 'dart:async';
 
 import 'package:test/test.dart';
 import 'package:tfc_dart/core/state_man.dart' show KeyMappingEntry, KeyMappings;
+import 'package:tfc_relay_local/src/data/history_view_store.dart';
 import 'package:tfc_relay_local/tfc_relay_local.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
@@ -253,11 +254,35 @@ void main() {
     // and their owner is a LATER PHASE: `supportsDataServices: false` on the
     // contract leg deletes the cases behind them, which is not the same as
     // implementing them, so the ledger says 10-01 rather than saying zero.
-    owes('historyViews', '10-01', () => man.historyViews);
     owes('preferences', '10-01', () => man.preferences);
 
     test('browse is no longer owed — it answers a BrowseApi', () {
       expect(man.browse, isA<LocalBrowse>());
+    });
+
+    test('historyViews is no longer owed — composed, not unwritten', () {
+      // 10-08 task 3. Same distinction the timeseries case below draws, and
+      // for the same reason: the member is implemented and what this fixture
+      // lacks is a database. A gateway with no `collection:` block builds no
+      // `Database` at all, so there is nothing for a HistoryViewStore to
+      // borrow — a deployment fact, which is a StateError naming the
+      // composition and NOT an UnimplementedError naming a plan.
+      expect(() => man.historyViews, throwsA(isA<StateError>()));
+      expect(() => man.historyViews, isNot(throwsUnimplementedError));
+
+      final composed = LocalStateMan(
+        links: const <UpstreamLink>[],
+        router: KeyRouter.overLinks(const <UpstreamLink>[],
+            mappings: KeyMappings(nodes: <String, KeyMappingEntry>{})),
+        // The real store, not a fake: its historian-down answer is proven
+        // offline in `history_view_store_test.dart`, and a fake here would
+        // only prove that a fake can be passed in.
+        historyViews: HistoryViewStore(database: () => null),
+      );
+      addTearDown(composed.dispose);
+      expect(composed.historyViews, isA<HistoryViewApi>(),
+          reason: 'the anti-vacuity arm: a getter that always threw would '
+              'pass the two assertions above');
     });
 
     test('timeseries is no longer owed — this one is composed, not unwritten',

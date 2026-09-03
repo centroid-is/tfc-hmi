@@ -565,6 +565,7 @@ Future<Gateway> buildGateway(
   required Logger log,
   required SeriesResolver resolver,
   TimeseriesApi? timeseries,
+  HistoryViewApi? historyViews,
   void Function(Object error, StackTrace stack, String where)? onError,
 }) async {
   final refused = reservedKeyMappingNames(mappings);
@@ -615,6 +616,11 @@ Future<Gateway> buildGateway(
     // sink is the composition root's — it is started, torn down and flushed
     // there, around this call.
     timeseries: timeseries,
+    // Saved views, from the same borrowed connection as the reader. Passed in
+    // for the same reason `timeseries` is: the `Database` it borrows belongs
+    // to the composition root's `TimescaleSink`, which is started, torn down
+    // and flushed around this call.
+    historyViews: historyViews,
   );
   final server = RelayServer(
     // **The identity this whole phase exists to make true.** The server's

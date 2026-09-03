@@ -22,6 +22,7 @@ import 'package:tfc_relay_protocol/tfc_relay_protocol.dart'
     show ResolvedSeries, SeriesResolver;
 import 'package:tfc_relay_local/src/collect/timescale_sink.dart';
 import 'package:tfc_relay_local/src/data/collection_plan_resolver.dart';
+import 'package:tfc_relay_local/src/data/history_view_store.dart';
 import 'package:tfc_relay_local/src/data/timescale_reader.dart';
 import 'package:tfc_relay_local/tfc_relay_local.dart';
 
@@ -83,9 +84,21 @@ Future<void> main(List<String> args) async {
       // The supplier, not the instance: `sink.start()` returns before it has
       // connected (WR-03), and the instance is replaced on reconnect.
       : TimescaleReader(database: () => held.database, resolver: resolver);
+  // The same borrowed connection, and no second one: saved views live in the
+  // database the sink already holds. `log.w` is the sink for the one thing
+  // this store has to say — a retention horizon it could not determine, which
+  // upstream would have reported as "nothing has been discarded yet" and said
+  // nothing about.
+  final views = held == null
+      ? null
+      : HistoryViewStore(database: () => held.database, log: log.w);
 
   final gateway = await buildGateway(config,
-      mappings: mappings, log: log, resolver: resolver, timeseries: history);
+      mappings: mappings,
+      log: log,
+      resolver: resolver,
+      timeseries: history,
+      historyViews: views);
 
   // Once, at boot, naming every offender — HLTH-03 (T-08-51). Not one line per
   // panel that asks for one, and not a refusal to start: the rest of the file

@@ -353,12 +353,18 @@ const String contractKitPackage = 'tfc_stateman_contract';
 /// `collection:` block, so no database object exists anywhere — throws a
 /// `StateError` naming the composition instead, which is a deployment fact
 /// rather than an unwritten member, and the ledger would be lying if it still
-/// counted it. `historyViews` and `preferences` remain, owed by **10-08 task 3**
-/// and **10-09 task 3** — the two plans that wire those getters and decrement
-/// this number, not 10-04 and 10-05, which shipped the server-side handlers
-/// and left both getters throwing. A ledger that names a finished plan as the
-/// owner is a ledger nobody can act on.
-const int declaredUnimplementedMembers = 2;
+/// counted it.
+///
+/// **10-08 took it from two to one**, in the commit that made
+/// `LocalStateMan.historyViews` answer a `HistoryViewStore` — the same move,
+/// the same argument, and the same `StateError` naming a composition with no
+/// database rather than an `UnimplementedError` naming a plan.
+///
+/// **One remains: `preferences`, owed by 10-09 task 3** — the plan that wires
+/// that getter and decrements this number, not 10-05, which shipped the
+/// server-side handlers and left the getter throwing. A ledger that names a
+/// finished plan as the owner is a ledger nobody can act on.
+const int declaredUnimplementedMembers = 1;
 
 /// Files under `lib/` allowed to import the database layer — the wrap seam.
 ///
