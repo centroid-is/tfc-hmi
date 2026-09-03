@@ -13,17 +13,15 @@
 @Tags(['golden'])
 library;
 
-import 'dart:convert';
-import 'dart:io';
 
 import 'package:dbus/dbus.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nm/nm.dart';
 import 'package:tfc/pages/ip_settings.dart';
 
 import '../helpers/fake_network_manager.dart';
+import '../helpers/golden_fonts.dart';
 import '../helpers/test_helpers.dart';
 
 /// Tall enough for four device cards; wide enough for the details wrap to
@@ -259,47 +257,8 @@ FakeNetworkManagerClient _bondableClient() => FakeNetworkManagerClient(
 // Fonts — see server_config_reorder_golden_test.dart for the why.
 // ---------------------------------------------------------------------------
 
-Future<void> _loadFonts() async {
-  Future<void> load(String family, String path) async {
-    final file = File(path);
-    if (!file.existsSync()) return;
-    await (FontLoader(family)
-          ..addFont(Future.value(ByteData.view(file.readAsBytesSync().buffer))))
-        .load();
-  }
-
-  await load('Roboto', 'lib/fonts/roboto-mono/RobotoMono-Regular.ttf');
-
-  final flutterRoot = Platform.environment['FLUTTER_ROOT'];
-  if (flutterRoot != null) {
-    await load('MaterialIcons',
-        '$flutterRoot/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf');
-  }
-
-  final faRoot = _packageRoot('font_awesome_flutter');
-  if (faRoot != null) {
-    await load('packages/font_awesome_flutter/FontAwesomeSolid',
-        '$faRoot/lib/fonts/Font-Awesome-7-Free-Solid-900.otf');
-    await load('packages/font_awesome_flutter/FontAwesomeRegular',
-        '$faRoot/lib/fonts/Font-Awesome-7-Free-Regular-400.otf');
-  }
-}
-
-String? _packageRoot(String package) {
-  final config = File('.dart_tool/package_config.json');
-  if (!config.existsSync()) return null;
-  final packages = (jsonDecode(config.readAsStringSync())
-      as Map<String, dynamic>)['packages'] as List<dynamic>;
-  for (final entry in packages.cast<Map<String, dynamic>>()) {
-    if (entry['name'] == package) {
-      return Uri.parse(entry['rootUri'] as String).toFilePath();
-    }
-  }
-  return null;
-}
-
 void main() {
-  setUpAll(_loadFonts);
+  setUpAll(loadGoldenFonts);
 
   setUp(() {
     _eth0Stats = FakeDeviceStatistics(

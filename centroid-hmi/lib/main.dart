@@ -40,7 +40,8 @@ import 'package:tfc/page_creator/page.dart';
 
 import 'package:tfc/theme.dart';
 import 'package:tfc/page_creator/assets/registry.dart';
-import 'package:tfc/widgets/base_scaffold.dart';
+import 'package:tfc/core/system_clock.dart';
+import 'package:tfc/widgets/dbus_gate.dart';
 import 'package:tfc/widgets/nav_dropdown.dart';
 import 'package:mcp_dart/mcp_dart.dart' show ElicitResult;
 import 'package:tfc/chat/chat_overlay.dart';
@@ -268,6 +269,24 @@ Future<void> _startApp([bool debugMode = false]) async {
   final pageManager = PageManager(pages: {}, prefs: prefs);
   await pageManager.load();
 
+  // systemd forgets runtime NTP servers on every restart and offers no way
+  // to persist them over D-Bus, so the HMI is what carries the operator's
+  // choice across a reboot. Fire-and-forget: a station without the polkit
+  // rule will be refused, and that must not hold up or break startup.
+  if (Platform.isLinux) {
+    unawaited(applyStoredNtpServers(
+      prefs: prefs,
+      connect: () => DBusTimeSync(DBusClient.system()),
+    ).then((applied) {
+      if (applied != null) {
+        logger.i('Re-applied ${applied.length} stored NTP server(s)');
+      }
+    }).catchError((Object e) {
+      logger.w('Could not re-apply stored NTP servers: $e');
+      return null;
+    }));
+  }
+
   final extraMenuItems = pageManager.getRootMenuItems();
 
   // Home comes from the page manager like every other page — it is not
@@ -433,63 +452,22 @@ RoutesLocationBuilder createLocationBuilder(
     '/advanced/ip-settings': (context, state, args) => BeamPage(
           key: const ValueKey('/advanced/ip-settings'),
           title: 'IP Settings',
-          child: Consumer(
-            builder: (context, ref, _) {
-              // I dont like this but lets continue
-              return FutureBuilder<DBusClient>(
-                future: dbusCompleter.future,
-                builder: (context, snapshot) {
-                  if (!snapshot.hasData) {
-                    return BaseScaffold(
-                      title: 'IP Settings',
-                      body: Center(
-                        child: LoginForm(
-                          onLoginSuccess: (newDbusClient) async {
-                            logger.i('Login successful');
-                            await Future.delayed(const Duration(milliseconds: 100));
-                            if (!dbusCompleter.isCompleted) {
-                              dbusCompleter.complete(newDbusClient);
-                            }
-                          },
-                        ),
-                      ),
-                    );
-                  }
-                  return IpSettingsPage(dbusClient: snapshot.data!);
-                },
-              );
-            },
+          child: DbusGate(
+            title: 'IP Settings',
+            shared: dbusCompleter,
+            builder: (context, client, _) => IpSettingsPage(dbusClient: client),
           ),
         ),
     '/advanced/about-linux': (context, state, args) => BeamPage(
           key: const ValueKey('/advanced/about-linux'),
           title: 'About Linux',
-          child: Consumer(
-            builder: (context, ref, _) {
-              // I dont like this but lets continue
-              return FutureBuilder<DBusClient>(
-                future: dbusCompleter.future,
-                builder: (context, snapshot) {
-                  if (!snapshot.hasData) {
-                    return BaseScaffold(
-                      title: 'About Linux',
-                      body: Center(
-                        child: LoginForm(
-                          onLoginSuccess: (newDbusClient) async {
-                            logger.i('Login successful');
-                            await Future.delayed(const Duration(milliseconds: 100));
-                            if (!dbusCompleter.isCompleted) {
-                              dbusCompleter.complete(newDbusClient);
-                            }
-                          },
-                        ),
-                      ),
-                    );
-                  }
-                  return AboutLinuxPage(dbusClient: snapshot.data!);
-                },
-              );
-            },
+          child: DbusGate(
+            title: 'About Linux',
+            shared: dbusCompleter,
+            builder: (context, client, switchConnection) => AboutLinuxPage(
+              dbusClient: client,
+              onSwitchConnection: switchConnection,
+            ),
           ),
         ),
     '/advanced/page-editor': (context, state, args) => BeamPage(

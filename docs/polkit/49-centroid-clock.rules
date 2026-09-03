@@ -1,0 +1,37 @@
+/* Let the HMI set the host clock and NTP servers.
+ *
+ * Provisioned by ansible-playbook.yml in centroid-is/debos-conf, alongside
+ * 50-networkmanager-container.rules. This copy is the reference.
+ *
+ * Without it the Date & Time section on the About Linux page renders its
+ * status fine -- reading timedate1 and timesync1 needs no authorisation --
+ * but every setter fails. systemd ships all four timedate1 actions and
+ * timesync1's set-runtime-servers as `auth_admin_keep`, and the HMI
+ * container has no polkit agent to answer the prompt with, so the reply is
+ * `org.freedesktop.DBus.Error.InteractiveAuthorizationRequired`.
+ *
+ * The subject test is `subject.user`, deliberately, and NOT the
+ * `subject.local && subject.active && isInGroup(...)` form Debian uses for
+ * NetworkManager. The HMI runs in a container: its process sits in
+ * /system.slice/docker-<id>.scope with no logind session, so it is neither
+ * local nor active as far as polkit is concerned and a rule of that shape
+ * would never fire. Verified on a station by running
+ *
+ *   pkcheck --action-id <id> --process $(docker inspect -f '{{.State.Pid}}' flutter)
+ *
+ * which returns 0 for the NetworkManager actions -- granted by the sibling
+ * user-based rule -- and 2 for these until this file is installed.
+ */
+polkit.addRule(function(action, subject) {
+    var allowed = [
+        "org.freedesktop.timedate1.set-time",
+        "org.freedesktop.timedate1.set-timezone",
+        "org.freedesktop.timedate1.set-local-rtc",
+        "org.freedesktop.timedate1.set-ntp",
+        "org.freedesktop.timesync1.set-runtime-servers"
+    ];
+
+    if (allowed.indexOf(action.id) !== -1 && subject.user == "centroid") {
+        return polkit.Result.YES;
+    }
+});

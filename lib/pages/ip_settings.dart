@@ -11,6 +11,7 @@ import '../core/network_manager_ops.dart';
 import '../core/network_settings.dart';
 import '../widgets/base_scaffold.dart';
 import '../widgets/panes/pane_chrome.dart';
+import '../widgets/panes/standard_dialog.dart';
 
 /// Network configuration for the station: every ethernet/wifi/bond interface
 /// as a card with its live addressing, a per-interface IPv4 dialog, and
@@ -306,6 +307,118 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
     await _loadSaved();
   }
 
+  /// Whether [device] has a connection profile at all — an active one, or a
+  /// saved one bound to its interface.
+  bool _hasProfile(NetworkManagerDevice device) =>
+      device.activeConnection?.connection != null ||
+      _savedConnections.any((c) => c.interfaceName == device.interface);
+
+  /// Renames the profile behind an interface's active connection.
+  ///
+  /// Reached from the interface card, because the saved-connections list only
+  /// shows profiles that are *not* active — and a bond an operator wants to
+  /// rename is usually up.
+  Future<void> _renameDeviceConnection(NetworkManagerDevice device) async {
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final connection = device.activeConnection?.connection ??
+        await findConnectionForInterface(client, device.interface);
+    if (connection == null) {
+      scaffoldMessenger.showSnackBar(SnackBar(
+        content: Text('${device.interface} has no connection profile to rename'),
+      ));
+      return;
+    }
+
+    String id;
+    try {
+      id = connectionField(await connection.getSettings(), 'id');
+    } catch (e) {
+      scaffoldMessenger.showSnackBar(
+        SnackBar(content: Text('Could not read the profile: $e')),
+      );
+      return;
+    }
+    if (!mounted) return;
+
+    await _renameSaved(SavedConnection(
+      connection: connection,
+      id: id,
+      uuid: '',
+      type: '',
+      interfaceName: device.interface,
+      ipv4: const Ipv4Prefill(),
+    ));
+  }
+
+  /// Renames the saved profile — its label, not the interface it binds to.
+  ///
+  /// The distinction is the point for a bond: an operator wants "Plant bond"
+  /// in the list without detaching the profile from the bond0 device.
+  Future<void> _renameSaved(SavedConnection saved) async {
+    final others = _savedConnections
+        .where((c) => c.uuid != saved.uuid)
+        .map((c) => c.id)
+        .toList();
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (context) => _RenameConnectionDialog(
+        currentId: saved.id,
+        existingIds: others,
+        interfaceName: saved.interfaceName,
+      ),
+    );
+    if (newName == null || !mounted) return;
+
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    try {
+      await renameConnection(saved.connection, newName);
+      scaffoldMessenger.showSnackBar(
+        SnackBar(content: Text('Renamed to "$newName"')),
+      );
+    } catch (e) {
+      scaffoldMessenger.showSnackBar(
+        SnackBar(content: Text('Failed to rename: $e')),
+      );
+    }
+    if (!mounted) return;
+    setState(() {});
+    await _loadSaved();
+  }
+
+  /// Deletes a saved profile, and — for a bond master — its members too.
+  Future<void> _deleteSaved(SavedConnection saved) async {
+    final removed = await connectionsRemovedWith(client, saved.connection);
+    if (!mounted) return;
+
+    final extra = removed.length - 1;
+    final confirmed = await showConfirmDialog(
+      context: context,
+      title: 'Delete "${saved.id}"?',
+      message: extra > 0
+          // Naming the count matters: deleting a bond quietly takes its
+          // member profiles with it, and the ports go down.
+          ? 'This also removes $extra member '
+              '${extra == 1 ? 'profile' : 'profiles'} enslaved to it. '
+              'Members fall back to their own profiles, if any.'
+          : 'The saved connection profile is removed. If it is active, the '
+              'interface loses its addressing.',
+      confirmLabel: 'Delete',
+      destructive: true,
+    );
+    if (!confirmed || !mounted) return;
+
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final failed = await deleteConnections(removed);
+    scaffoldMessenger.showSnackBar(SnackBar(
+      content: Text(failed.isEmpty
+          ? 'Deleted "${saved.id}"'
+          : 'Deleted, but ${failed.length} profile(s) could not be removed'),
+    ));
+    if (!mounted) return;
+    setState(() {});
+    await _loadSaved();
+  }
+
   Future<void> _activateSaved(SavedConnection saved) async {
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     final device = _deviceFor(saved.interfaceName);
@@ -485,6 +598,12 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
                                         NetworkManagerDeviceType.bond
                                     ? () => _deleteBond(device)
                                     : null,
+                                // Only when there is a profile to rename:
+                                // offering it on a bare port would open a
+                                // dialog that can only fail.
+                                onRenameConnection: _hasProfile(device)
+                                    ? () => _renameDeviceConnection(device)
+                                    : null,
                               ),
                             if (inactive.isNotEmpty) ...[
                               Padding(
@@ -505,6 +624,8 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
                                       _deviceFor(saved.interfaceName) == null
                                           ? null
                                           : () => _activateSaved(saved),
+                                  onRename: () => _renameSaved(saved),
+                                  onDelete: () => _deleteSaved(saved),
                                 ),
                             ],
                           ],
@@ -536,6 +657,11 @@ class DeviceCard extends StatefulWidget {
   /// giving it up is not.
   final VoidCallback? onManage;
   final VoidCallback? onDeleteBond;
+
+  /// Renames the profile behind the active connection. Null when the
+  /// interface has none — there is no label to change.
+  final VoidCallback? onRenameConnection;
+
   final DateTime Function() clock;
 
   const DeviceCard({
@@ -547,6 +673,7 @@ class DeviceCard extends StatefulWidget {
     required this.onDisconnect,
     this.onManage,
     this.onDeleteBond,
+    this.onRenameConnection,
     this.clock = DateTime.now,
   });
 
@@ -604,6 +731,9 @@ class _DeviceCardState extends State<DeviceCard> {
         const PopupMenuItem(value: 'disconnect', child: Text('Disconnect')),
       if (device.state == NetworkManagerDeviceState.disconnected)
         const PopupMenuItem(value: 'connect', child: Text('Connect')),
+      if (widget.onRenameConnection != null)
+        const PopupMenuItem(
+            value: 'rename', child: Text('Rename connection…')),
       if (widget.onDeleteBond != null)
         const PopupMenuItem(value: 'delete', child: Text('Delete bond')),
     ];
@@ -774,6 +904,8 @@ class _DeviceCardState extends State<DeviceCard> {
                                   widget.onConnect();
                                 case 'manage':
                                   widget.onManage?.call();
+                                case 'rename':
+                                  widget.onRenameConnection?.call();
                                 case 'delete':
                                   onDeleteBond?.call();
                               }
@@ -1538,11 +1670,16 @@ class SavedConnectionTile extends StatelessWidget {
   /// nothing to activate it on.
   final VoidCallback? onActivate;
 
+  final VoidCallback? onRename;
+  final VoidCallback? onDelete;
+
   const SavedConnectionTile({
     super.key,
     required this.saved,
     required this.onEdit,
     this.onActivate,
+    this.onRename,
+    this.onDelete,
   });
 
   @override
@@ -1573,6 +1710,109 @@ class SavedConnectionTile extends StatelessWidget {
             TextButton(
               onPressed: onActivate,
               child: const Text('Activate'),
+            ),
+            if (onRename != null || onDelete != null)
+              PopupMenuButton<String>(
+                tooltip: 'More',
+                onSelected: (value) {
+                  if (value == 'rename') onRename?.call();
+                  if (value == 'delete') onDelete?.call();
+                },
+                itemBuilder: (context) => [
+                  if (onRename != null)
+                    const PopupMenuItem(
+                        value: 'rename', child: Text('Rename…')),
+                  if (onDelete != null)
+                    const PopupMenuItem(
+                        value: 'delete', child: Text('Delete')),
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Asks for a new connection name, refusing one that collides with another
+/// profile before anything is written.
+class _RenameConnectionDialog extends StatefulWidget {
+  final String currentId;
+  final List<String> existingIds;
+  final String interfaceName;
+
+  const _RenameConnectionDialog({
+    required this.currentId,
+    required this.existingIds,
+    required this.interfaceName,
+  });
+
+  @override
+  State<_RenameConnectionDialog> createState() =>
+      _RenameConnectionDialogState();
+}
+
+class _RenameConnectionDialogState extends State<_RenameConnectionDialog> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.currentId);
+  String? _error;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final error = validateConnectionName(
+      _controller.text,
+      currentId: widget.currentId,
+      existingIds: widget.existingIds,
+    );
+    if (error != null) {
+      setState(() => _error = error);
+      return;
+    }
+    Navigator.of(context).pop(_controller.text.trim());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StandardDialogFrame(
+      title: 'Rename connection',
+      icon: Icons.drive_file_rename_outline,
+      actions: [
+        PaneAction(
+          label: 'Cancel',
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        PaneAction.primary(label: 'Rename', onPressed: _submit),
+      ],
+      child: SizedBox(
+        width: 380,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _controller,
+              autofocus: true,
+              decoration: InputDecoration(
+                labelText: 'Connection name',
+                errorText: _error,
+              ),
+              onSubmitted: (_) => _submit(),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              widget.interfaceName.isEmpty
+                  ? 'This is the profile\'s name only.'
+                  // Say it plainly: operators reasonably expect renaming a
+                  // connection called "bond0" to rename the interface.
+                  : 'This renames the connection profile only. It stays bound '
+                      'to the ${widget.interfaceName} interface.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant),
             ),
           ],
         ),
