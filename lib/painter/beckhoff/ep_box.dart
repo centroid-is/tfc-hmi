@@ -15,7 +15,7 @@
 /// white marker card to its left that the box is shipped with, with the two
 /// channel lamps between card and plug.
 ///
-///  * **EP2338-1002** — 8-channel digital combi, each socket usable as an
+///  * **EP2338-0002** — 8-channel digital combi, each socket usable as an
 ///    input or an output. The PLC publishes it as an `ST_EP2338_0002`
 ///    (`I0..I7`, `O0..O7`), so its sockets are lit from live data.
 ///  * **EP1918-0002** — TwinSAFE, 8 safe digital inputs. Yellow housing, and
@@ -39,7 +39,8 @@ const Size epBoxFaceMm = Size(30, 126);
 /// different part in a different material and they do not match the rack.
 const epBoxBodyColor = Color(0xFF3C4043);
 
-/// The blank marker cards shipped on the front of every box, one per channel.
+/// The marker cards on the front of every box — two per plug, one per
+/// channel, stacked above and below that plug's pair of lamps.
 const epBoxMarkerColor = Color(0xFFF4F4F1);
 
 /// Signal channels an EtherCAT Box carries.
@@ -70,7 +71,8 @@ class EPBoxPainter extends CustomPainter {
     this.housingColor = epBoxBodyColor,
   }) : assert(channels.length == epBoxChannelCount);
 
-  /// Printed on the housing, e.g. `EP2338`.
+  /// Printed on the housing — the full ordering number, e.g. `EP2338-0002`,
+  /// which is what the moulding carries.
   final String model;
 
   /// The tag under the model — `ST301.RM05`, the box erector's box.
@@ -187,19 +189,37 @@ class EPBoxPainter extends CustomPainter {
       final centre = Offset(21.0, firstPlug + plug * plugPitch);
       socket(centre, 6, pins: 5);
 
-      // The blank marker card above the pair, as shipped.
-      final card = Rect.fromLTWH(2.5, centre.dy - 7.6, 12.0, 4.6);
-      canvas.drawRect(card, Paint()..color = epBoxMarkerColor);
-      canvas.drawRect(card, stroke);
-
-      // The lamp captions are the PLC's own member names — 'I0'..'I7', in
-      // channel order down the box. The plug-and-side names ('1A', '1B')
-      // read off the moulding, but nobody looking at this page is holding
-      // the box: they are holding a variable list, and the caption has to be
-      // the string they can search for there.
+      // Two marker cards per plug, one per channel, with the pair of lamps
+      // between them — the arrangement on the box, where each channel gets
+      // its own strip to be written on. The card carries the caption rather
+      // than the housing does, because that is where the label physically
+      // goes; the caption itself stays the PLC's own member name ('I0'..'I7'),
+      // since nobody reading this page is holding the box — they are holding
+      // a variable list, and the caption has to be the string they can search
+      // for there.
       for (int side = 0; side < 2; side++) {
-        final lampX = side == 0 ? 4.5 : 10.0;
-        final lamp = Rect.fromLTWH(lampX, centre.dy - 1.8, 3, 3);
+        final card = Rect.fromLTWH(
+          2.5,
+          side == 0 ? centre.dy - 8.2 : centre.dy + 2.8,
+          12.0,
+          4.4,
+        );
+        canvas.drawRect(card, Paint()..color = epBoxMarkerColor);
+        canvas.drawRect(card, stroke);
+        text(
+          'I${plug * 2 + side}',
+          Offset(card.left, card.top + 0.6),
+          fontSize: 3.0,
+          color: Colors.black,
+          width: card.width,
+        );
+      }
+
+      // The lamps sit between the two cards, left for the first channel and
+      // right for the second, in the same order the cards read down.
+      for (int side = 0; side < 2; side++) {
+        final lampX = side == 0 ? 5.0 : 10.5;
+        final lamp = Rect.fromLTWH(lampX, centre.dy - 1.5, 3, 3);
         final state = channels[plug * 2 + side];
         paintLed(
           canvas,
@@ -210,12 +230,6 @@ class EPBoxPainter extends CustomPainter {
               state == IOState.error,
           strokeWidth: 0.4,
           border: stroke,
-        );
-        text(
-          'I${plug * 2 + side}',
-          Offset(lampX - 1.9, centre.dy + 1.6),
-          fontSize: 2.8,
-          width: 6.8,
         );
       }
     }

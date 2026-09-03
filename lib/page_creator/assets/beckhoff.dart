@@ -3172,7 +3172,7 @@ class _BeckhoffEPBox extends ConsumerWidget {
                   );
                 },
                 child: EPBoxWidget(
-                  model: config.variantModel.model,
+                  model: config.variantModel.partNumber,
                   name: config.nameOrId,
                   channels: epBoxFaceLeds(channels),
                   // The "!" is for a box that should be talking and is not.

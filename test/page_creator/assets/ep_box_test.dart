@@ -240,7 +240,7 @@ void main() {
         struct: _struct(inputsHigh: {0}, outputsHigh: {4}),
       );
 
-      expect(face.model, 'EP2338');
+      expect(face.model, 'EP2338-0002');
       expect(face.channels[0], IOState.high);
       expect(face.channels[4], IOState.high);
       expect(face.disconnected, isFalse);
@@ -262,7 +262,7 @@ void main() {
         stateKey: null,
       );
 
-      expect(face.model, 'EP1918');
+      expect(face.model, 'EP1918-0002');
       expect(face.disconnected, isFalse);
       expect(face.housingColor, twinSafeBodyColor);
       expect(face.channels, everyElement(IOState.low));

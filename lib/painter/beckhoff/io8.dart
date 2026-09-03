@@ -26,8 +26,15 @@ const ioLabelColor = Color(0xFFC7D62E);
 /// lighter still, which is the opposite of what a dark LED looks like.
 const ledWindowColor = Color(0xFF6E7573);
 
-/// An unlit indicator. A dead LED is a dark lens, not a white tile.
-const ledOffColor = Color(0xFF474E4C);
+/// An unlit indicator: clear glass, drawn translucent so the dark recess
+/// behind it shows through.
+///
+/// A dead LED is not a dark tile any more than it is a white one — it is a
+/// colourless lens over an unlit die, and what you actually see is most of
+/// the pocket behind it. Painting it opaque, in either direction, is what
+/// made this look wrong; letting the recess read through the lens is what
+/// makes it look like glass.
+const ledOffColor = Color(0x8FE4EADF);
 
 enum IOState { low, high, forcedLow, forcedHigh, error }
 

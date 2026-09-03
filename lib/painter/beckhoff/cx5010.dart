@@ -360,9 +360,10 @@ class CXxxxx extends CustomPainter {
       text: TextSpan(
         text: name,
         style: TextStyle(
-          // White, like the wordmark above it: the model is printed on the
-          // red band and black on Beckhoff red is barely a contrast at all.
-          color: Colors.white,
+          // Black, even though the wordmark above it on the same red band is
+          // white — that is how Beckhoff prints it, checked against a CX5340
+          // photo. Legibility argues for white and the hardware wins.
+          color: Colors.black,
           fontSize: 12.0 * fontScale,
           fontWeight: FontWeight.w800,
           fontFamily: 'Roboto',
