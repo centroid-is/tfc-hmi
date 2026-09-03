@@ -1207,6 +1207,37 @@ class AssetTypeCatalog {
       ],
     ),
     AssetTypeInfo(
+      assetName: 'FestoVTUGConfig',
+      displayName: 'Festo VTUG-14 (8 valves)',
+      category: 'Festo Devices',
+      description:
+          'Festo VTUG-14 valve terminal with a CTEU-EC bus node: eight valve '
+          'positions, up to sixteen solenoid coils, with a coil lamp per '
+          'pilot solenoid on the drawing and hand control (force open, force '
+          'close, momentary push per coil) in the side pane. What is fitted '
+          'at each position is set on the page, not read from a key -- a '
+          'blanking plate publishes nothing to discover it by.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'nameOrId',
+            type: 'String',
+            description: 'Terminal name or node id, printed on the end plate'),
+        AssetPropertyInfo(
+            name: 'stateKey',
+            type: 'String',
+            description:
+                'Tag key for the ST_VTUG_16 struct (p_stat_Coils, '
+                'p_stat_Forced, p_cmd_Force, p_cmd_Value)'),
+        AssetPropertyInfo(
+            name: 'slices',
+            type: 'List',
+            description:
+                'The eight valve positions, position 1 first. Each entry is '
+                '{kind, name}, where kind is blank, singleSolenoid or '
+                'doubleSolenoid.'),
+      ],
+    ),
+    AssetTypeInfo(
       assetName: 'STBDDO3705Config',
       displayName: 'STBDDO3705 (16-Ch DO)',
       category: 'Advantys STB Devices',
