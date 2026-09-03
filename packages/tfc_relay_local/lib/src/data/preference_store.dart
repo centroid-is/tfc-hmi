@@ -69,6 +69,7 @@ import 'package:tfc_dart/core/secure_storage/interface.dart'
     show MySecureStorage;
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart' show PreferencesApi;
 
+import 'preference_change_feed.dart';
 import 'timescale_reader.dart' show DatabaseSupplier;
 
 /// The preference store cannot be reached right now.
@@ -123,7 +124,15 @@ final class NoSecretStorage implements MySecureStorage {
 
 /// `PreferencesApi` over the shared `flutter_preferences` table.
 final class PreferenceStore implements PreferencesApi {
-  PreferenceStore({required this.database, this.log});
+  PreferenceStore({required this.database, this.log}) {
+    _feed = PreferenceChangeFeed(
+      database: database,
+      local: _local.stream,
+      invalidate: invalidate,
+      resync: resync,
+      log: log,
+    );
+  }
 
   /// The shared instance, borrowed per call. See the library doc.
   final DatabaseSupplier database;
@@ -142,6 +151,11 @@ final class PreferenceStore implements PreferencesApi {
   /// is swapped, and a subscriber holding the old instance's stream would go
   /// quiet without anything closing.
   final StreamController<String> _local = StreamController<String>.broadcast();
+
+  late final PreferenceChangeFeed _feed;
+
+  /// The merged change signal: this gateway's writes and everybody else's.
+  PreferenceChangeFeed get feed => _feed;
 
   /// The `Preferences` currently loaded, or null when it must be rebuilt.
   Future<Preferences>? _loaded;
@@ -287,22 +301,83 @@ final class PreferenceStore implements PreferencesApi {
 
   // ------------------------------------------------------------------ events
 
-  /// Every key whose value changed **through this gateway**.
+  /// Every key whose value changed, **whoever changed it**.
   ///
-  /// Half the answer, and 10-09 task 2 supplies the other half. This stream
-  /// carries writes made through this process's `Preferences`
-  /// (`preferences.dart:154-155`), which is every write a connected client
-  /// makes, because the gateway is the single writer for all of them. It does
-  /// **not** carry a write an HMI station makes straight at the table, and at
-  /// SVN that happens today — `preference_change_feed.dart` merges the
-  /// LISTEN/NOTIFY half in and this getter becomes the merged feed.
+  /// The merged feed and not `Preferences`' own stream: that one fires only
+  /// for writes made through this instance (`preferences.dart:154-155`), and
+  /// at SVN an HMI station writes the table directly.
+  /// `preference_change_feed.dart` carries the merge, the de-duplication and
+  /// the gap handling.
   @override
-  Stream<String> get onPreferencesChanged => _local.stream;
+  Stream<String> get onPreferencesChanged => _feed.changes;
 
-  /// Releases the forwarded stream and everything it holds.
+  /// Drops the loaded cache so the next call rebuilds it from the table.
+  ///
+  /// Called by the feed when somebody else wrote. Synchronous and lazy on
+  /// purpose: a burst of notifications with no read between them costs one
+  /// rebuild, not one per key.
+  void invalidate() {
+    _loaded = null;
+    _loadedOver = null;
+  }
+
+  /// Rebuilds from the table and answers every key whose value changed.
+  ///
+  /// This is how a gap in the notification stream stops being silent. The
+  /// feed calls it after every successful (re-)listen, so changes made while
+  /// nothing was listening — a dead notify connection, or simply no session
+  /// connected, because the channel is listener-gated — are announced rather
+  /// than lost.
+  ///
+  /// Answers an empty set, and says so in the log, when the store could not
+  /// be read: a resync that failed must never be reported as "nothing
+  /// changed".
+  Future<Set<String>> resync() async {
+    if (_closed) return const <String>{};
+    final Map<String, Object?> before;
+    try {
+      before = await getAll();
+    } catch (e) {
+      log?.call('preference resync could not read the store: $e');
+      return const <String>{};
+    }
+    invalidate();
+    final Map<String, Object?> after;
+    try {
+      after = await getAll();
+    } catch (e) {
+      log?.call('preference resync could not re-read the store: $e');
+      return const <String>{};
+    }
+    final changed = <String>{};
+    for (final key in <String>{...before.keys, ...after.keys}) {
+      if (!_sameStoredValue(before[key], after[key])) changed.add(key);
+    }
+    return changed;
+  }
+
+  /// Whether two cached values are indistinguishable.
+  ///
+  /// Lists element by element: `getStringList` hands back a new `List` on
+  /// every rebuild, and `==` on two lists is identity — so a comparison that
+  /// did not do this would report every string-list preference as changed on
+  /// every resync.
+  static bool _sameStoredValue(Object? a, Object? b) {
+    if (a is List && b is List) {
+      if (a.length != b.length) return false;
+      for (var i = 0; i < a.length; i++) {
+        if (a[i] != b[i]) return false;
+      }
+      return true;
+    }
+    return a == b;
+  }
+
+  /// Releases the feed, its channel subscription and the forwarded stream.
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+    await _feed.close();
     await _localSource?.cancel();
     _localSource = null;
     await _local.close();

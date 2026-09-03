@@ -10,9 +10,11 @@
 @TestOn('vm')
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:test/test.dart';
+import 'package:tfc_relay_local/src/data/preference_change_feed.dart';
 
 /// Lines of [source] that are not `//` or `///` comments.
 ///
@@ -73,6 +75,107 @@ void main() {
 
       expect(offenders, isEmpty,
           reason: 'a write that skips Postgres is a write that undoes itself');
+    });
+  });
+
+  group('the de-duplication window, on a clock nobody has to provision', () {
+    /// A feed with no database: the channel half cannot open, which is what a
+    /// gateway looks like before the sink has connected. The local half must
+    /// keep working regardless — a preference written through the pipe is
+    /// still a preference written.
+    ({
+      PreferenceChangeFeed feed,
+      StreamController<String> local,
+      List<String> seen,
+      void Function(Duration) advance,
+    }) build() {
+      var clock = DateTime.utc(2026, 9, 3, 12);
+      final local = StreamController<String>.broadcast();
+      final feed = PreferenceChangeFeed(
+        database: () => null,
+        local: local.stream,
+        now: () => clock,
+        window: const Duration(milliseconds: 250),
+        // Short, so a case does not sit through the production backoff. The
+        // channel can never open here, so this only bounds how often it
+        // tries.
+        relistenBackoff: const Duration(milliseconds: 50),
+      );
+      final seen = <String>[];
+      addTearDown(feed.close);
+      return (
+        feed: feed,
+        local: local,
+        seen: seen,
+        advance: (Duration d) => clock = clock.add(d),
+      );
+    }
+
+    test('the same key twice inside the window is announced once', () async {
+      final f = build();
+      final sub = f.feed.changes.listen(f.seen.add);
+      addTearDown(sub.cancel);
+
+      f.local.add('theme');
+      f.advance(const Duration(milliseconds: 249));
+      f.local.add('theme');
+      await pumpEventQueue();
+
+      expect(f.seen, ['theme'],
+          reason: 'a gateway-originated write reaches the local stream and '
+              'comes back as its own NOTIFY a few milliseconds later. 250 ms '
+              'is the bound on that round trip — the notify connection is '
+              'idle, so delivery is one TCP hop after commit — with roughly '
+              'fifty times the measured margin');
+    });
+
+    test('the same key again just outside the window is announced again',
+        () async {
+      final f = build();
+      final sub = f.feed.changes.listen(f.seen.add);
+      addTearDown(sub.cancel);
+
+      f.local.add('theme');
+      f.advance(const Duration(milliseconds: 251));
+      f.local.add('theme');
+      await pumpEventQueue();
+
+      expect(f.seen, ['theme', 'theme'],
+          reason: 'the half that keeps the window honest: two genuinely '
+              'distinct edits must not collapse into one, or a panel keeps '
+              'showing the first');
+    });
+
+    test('two different keys inside the window are both announced', () async {
+      final f = build();
+      final sub = f.feed.changes.listen(f.seen.add);
+      addTearDown(sub.cancel);
+
+      f.local.add('theme');
+      f.local.add('language');
+      await pumpEventQueue();
+
+      expect(f.seen, ['theme', 'language'],
+          reason: 'the window is per key. A clear() over five hundred keys '
+              'is five hundred distinct keys, and collapsing them would lose '
+              '499 of them — the coalescing that turns that burst into ONE '
+              'frame is data_handlers.dart\'s job, not this one\'s');
+    });
+
+    test('a feed with no database keeps the local half working', () async {
+      final f = build();
+      final sub = f.feed.changes.listen(f.seen.add);
+      addTearDown(sub.cancel);
+
+      f.local.add('theme');
+      await pumpEventQueue();
+
+      expect(f.seen, ['theme'],
+          reason: 'the sink connects in the background and the supplier '
+              'answers null until it has. A feed that threw, or went quiet '
+              'for good, would make every preference written in the first '
+              'seconds after a restart invisible');
+      expect(f.feed.channelUp, isFalse);
     });
   });
 }
