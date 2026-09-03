@@ -8,6 +8,7 @@ import 'package:tfc_dart/core/alarm.dart' show alarmHistoryOverlaps;
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/database_drift.dart';
 import 'docker_compose.dart';
+import 'eventually.dart';
 
 // docker exec -it test-db /bin/ash -c "psql -d testdb --user testuser -c 'select * from test_timeseries;'"
 
@@ -97,7 +98,33 @@ void main() {
       expect(await database.db.isOpen, true);
     });
 
-    setUp(() async {});
+    setUp(() async {
+      // Start every test from tables that do not exist.
+      //
+      // The tearDown below already drops them, but it is best-effort: it
+      // swallows every error and gives the DROP five seconds. When that
+      // silently fails the next test inherits the last one's rows, and the
+      // assertions go wrong in ways that read like logic bugs — CI has failed
+      // here expecting min=8.0 and getting 42.0, a value written by a
+      // different test in the same group.
+      //
+      // Flush *before* dropping, and the order matters. The write buffer is
+      // shared by every test in this file, so a row still sitting in it when
+      // the table is dropped is not discarded — it is written into whatever
+      // table exists when the buffer next drains, which is the next test's
+      // freshly recreated one. Flushing first sends those stragglers to the
+      // table that is about to be destroyed, where they belong.
+      try {
+        await database.flush().timeout(const Duration(seconds: 10));
+      } catch (_) {/* a failed flush must not fail the test that follows */}
+      for (final t in [testTableName, testTableName2]) {
+        try {
+          await database.db
+              .customStatement('DROP TABLE IF EXISTS "$t" CASCADE')
+              .timeout(const Duration(seconds: 10));
+        } catch (_) {/* the test recreates what it needs */}
+      }
+    });
 
     tearDown(() async {
       // Flush any pending writes before dropping tables
@@ -1296,6 +1323,12 @@ void main() {
       const mvName = 'mv_join_test';
 
       setUp(() async {
+        // The outer setUp has already dropped both base tables, so the view
+        // below spans only what this test writes. That matters here more than
+        // anywhere else in the file: `all_times` is a UNION over the base
+        // tables, so one leftover row becomes one extra view row — this test
+        // has failed on CI with four rows as well as with two.
+
         // Make sure base tables exist as hypertables
         await database.registerRetentionPolicy(
           testTableName,
@@ -1329,6 +1362,25 @@ void main() {
         await database.insertTimeseriesData(testTableName2, t1, 200);
         await database.insertTimeseriesData(testTableName2, t2, 300);
         await database.flush();
+
+        // Both base tables must hold exactly what this test wrote before the
+        // view is built over them.
+        //
+        // `CREATE MATERIALIZED VIEW` snapshots the base tables at that
+        // instant, so a row still sitting in the write buffer is a row the
+        // view will never have — which is how this failed on CI with two rows
+        // instead of three. flush() ought to be enough; asserting that it was
+        // costs one query and turns "the view is short" into "the insert had
+        // not landed", which is a different bug with a different fix.
+        for (final t in [testTableName, testTableName2]) {
+          await eventually(
+            () => database.queryTimeseriesData(
+                t, base.subtract(const Duration(minutes: 1))),
+            hasLength(2),
+            reason: 'base table "$t" must hold its two rows before the view '
+                'is created over it',
+          );
+        }
 
         // Create MV with columns {table: column}
         await database.createView(mvName, {
