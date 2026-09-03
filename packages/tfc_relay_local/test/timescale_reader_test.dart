@@ -22,6 +22,7 @@ import 'package:tfc_dart/core/database_drift.dart';
 import 'package:tfc_dart/core/state_man.dart' show KeyMappingEntry, KeyMappings;
 import 'package:tfc_relay_local/src/key_router.dart';
 import 'package:tfc_relay_local/src/local_state_man.dart';
+import 'package:tfc_relay_local/src/data/read_limits.dart';
 import 'package:tfc_relay_local/src/data/timescale_reader.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart'
     show ResolvedSeries, SeriesAddress, SeriesResolver, TimeseriesApi;
@@ -56,6 +57,14 @@ class RecordingBackend extends AppDatabase {
 
   bool get touchedSql => tableQueries.isNotEmpty || statements.isNotEmpty;
 
+  /// Just the reader's bounded window queries, in call order.
+  ///
+  /// `statements` also carries the `information_schema` probe that runs before
+  /// every read, and a case asserting "the query that was built" means the one
+  /// that touches the series' own table.
+  List<String> get windowQueries =>
+      statements.where((s) => s.contains('::timestamptz')).toList();
+
   @override
   Future<List<QueryRow>> tableQuery(
     String tableName, {
@@ -74,6 +83,14 @@ class RecordingBackend extends AppDatabase {
       {List<Variable> variables = const [],
       Set<ResultSetImplementation<dynamic, dynamic>> readsFrom = const {}}) {
     statements.add(query);
+    if (query.contains('::timestamptz')) {
+      // The reader's own bounded window query (10-10). Answered from [rows]
+      // rather than executed: the backend underneath is SQLite and knows
+      // nothing of `timestamptz`, and what these cases measure is the SQL that
+      // was built rather than what Postgres would do with it. The db lane in
+      // `read_limits_test.dart` is where a real server answers it.
+      return _CannedRows([for (final row in rows) QueryRow(row, this)]);
+    }
     if (query.contains('information_schema.columns')) {
       // The shape `TimescaleReader._columnsOf` reads.
       return super.customSelect(
@@ -85,6 +102,26 @@ class RecordingBackend extends AppDatabase {
     }
     return super.customSelect(query, variables: variables, readsFrom: readsFrom);
   }
+}
+
+/// Rows handed straight back, for a statement the SQLite underneath cannot run.
+///
+/// Only `get()` is answered. Everything else throws by name rather than
+/// returning an empty stream, because a `watch()` that silently produced
+/// nothing would make a case pass by measuring the absence of its own subject.
+final class _CannedRows implements Selectable<QueryRow> {
+  _CannedRows(this._rows);
+
+  final List<QueryRow> _rows;
+
+  @override
+  Future<List<QueryRow>> get() async => _rows;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnsupportedError(
+      'the recording backend answers only get(); '
+      '${invocation.memberName} was called and would have been silently '
+      'empty');
 }
 
 /// Maps exactly what the cases below need and refuses everything else, so a
@@ -205,8 +242,9 @@ void main() {
       await reader.queryTimeseriesData('Line1.Motor1', to,
           orderBy: 'time DESC');
 
-      expect(backend.tableQueries.map((q) => q.orderBy),
-          ['time ASC', 'time DESC'],
+      expect(backend.windowQueries, hasLength(2));
+      expect(backend.windowQueries[0], contains('ORDER BY time ASC'));
+      expect(backend.windowQueries[1], contains('ORDER BY time DESC'),
           reason: 'the anti-vacuity arm: a belt that refused everything '
               'would pass every refusal case above');
     });
@@ -231,12 +269,15 @@ void main() {
           from: from);
 
       expect(samples.single.value, 47.5);
-      expect(backend.tableQueries.single.columns, ['"speed"', '"time"'],
+      final sql = backend.windowQueries.single;
+      expect(sql, contains('SELECT "speed", "time"'),
           reason: 'ruling 2 is "bytes proportional to the chart\'s ask". '
               'Fetching every member and discarding all but one produces the '
               'same output as projecting, so the output cannot tell them '
               'apart — the column list is the only place the difference is '
               'visible, and it is the whole point');
+      expect(sql, isNot(contains('current')),
+          reason: 'and the members that were not asked for do not appear');
     });
 
     test('a member the table does not have is refused, naming what it has',
@@ -270,7 +311,7 @@ void main() {
   });
 
   group('a scalar table is unaffected', () {
-    test('two columns serve the bare series with no member machinery',
+    test('the bare series takes the same bounded statement, naming "value"',
         () async {
       backend.rows = [
         {'value': 7, 'time': to}
@@ -279,10 +320,38 @@ void main() {
 
       expect(samples.single.value, 7);
       expect(samples.single.time.isUtc, isTrue);
-      expect(backend.tableQueries.single.columns, isNull,
-          reason: 'the scalar path delegates to Database.queryTimeseriesData '
-              'so the shipped where/args and time decoding are not '
-              're-spelled here');
+      expect(backend.windowQueries.single, contains('SELECT "value", "time"'),
+          reason: 'ONE spelling, not two. Until 10-10 the scalar path '
+              'delegated to Database.queryTimeseriesData and the member path '
+              'spelled its own query, so the shapes were already written '
+              'twice; the row ceiling needs a LIMIT and the shipped method '
+              'has no parameter for one (and tfc_dart is not this phase\'s to '
+              'change), so both paths now take the reader\'s own statement');
+      expect(backend.tableQueries, isEmpty,
+          reason: 'and nothing reaches AppDatabase.tableQuery, which cannot '
+              'carry a LIMIT — a bound that one path can bypass is not a '
+              'bound');
+    });
+
+    test('every window query carries LIMIT maxRows + 1, and nothing else does',
+        () async {
+      backend.rows = [
+        {'value': 7, 'time': to}
+      ];
+      final bounded = TimescaleReader(
+          database: () => db,
+          resolver: const OneSeries(),
+          limits: ReadLimits(maxTimeseriesRows: 7));
+
+      await bounded.queryTimeseriesData('Line1.Motor1', to, from: from);
+
+      expect(backend.windowQueries.single, contains('LIMIT 8'),
+          reason: 'the detection is LIMIT n + 1: the extra row is how the '
+              'reader learns the answer is over the cap WITHOUT building it. '
+              'Counting first with a second query would double the work and '
+              'race the writer; fetching everything and measuring afterwards '
+              'would have the rows in memory already, which is the failure '
+              'the send buffer is downstream of');
     });
 
     test('a boolean column charts as 1 and 0', () async {

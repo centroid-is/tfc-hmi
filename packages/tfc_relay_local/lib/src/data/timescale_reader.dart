@@ -83,7 +83,15 @@ import 'package:drift/drift.dart' show Variable;
 // other. The seam sweep matches the URI, not the prefix.
 import 'package:tfc_dart/core/database.dart' as ts;
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart'
-    show ResolvedSeries, SeriesResolver, TimeseriesApi, TimeseriesData;
+    show
+        DataServiceMethods,
+        ResolvedSeries,
+        ResultTooLarge,
+        SeriesResolver,
+        TimeseriesApi,
+        TimeseriesData;
+
+import 'read_limits.dart';
 
 /// Whatever `Database` the composition currently holds, or null while the
 /// historian is not up.
@@ -168,13 +176,56 @@ final class HistorianUnavailable extends TimeseriesReadRefusal {
       : super('the historian is not connected; this is worth retrying');
 }
 
+/// The resolver named a table the catalogue does not have.
+final class SeriesTableMissing extends TimeseriesReadRefusal {
+  SeriesTableMissing(this.wireName, this.table)
+      : super('"$wireName" resolves to table "$table", and the catalogue has '
+            'no columns for it — the table is not there. Either the '
+            'collection plan names a table nothing ever created, or '
+            'retention dropped it');
+
+  final String wireName;
+  final String table;
+}
+
+/// Which of `queryTimeseriesDataDownsampled`'s four silent fallbacks fired.
+enum DownsampleFallback {
+  /// `database.dart:1471` — `rangeMs <= 0`.
+  zeroWidthWindow,
+
+  /// `database.dart:1477` — `(maxPoints / 3).floor()` is zero.
+  tooFewPoints,
+
+  /// `database.dart:1487` — the `value` column's type could not be read.
+  undetectableColumn,
+
+  /// `database.dart:1512` — the column's type is not one it aggregates.
+  notAggregatable,
+}
+
+/// The bounded method would have answered with the unbounded raw query.
+final class DownsampleUnbounded extends TimeseriesReadRefusal {
+  DownsampleUnbounded._(this.wireName, this.condition, String message)
+      : super(message);
+
+  final String wireName;
+
+  /// Which condition fired, by name.
+  final DownsampleFallback condition;
+}
+
 /// `TimeseriesApi` over a shared `Database`, with every table name resolved
 /// before any statement is built.
 final class TimescaleReader implements TimeseriesApi {
-  TimescaleReader({required this.database, required this.resolver});
+  TimescaleReader(
+      {required this.database, required this.resolver, ReadLimits? limits})
+      : limits = limits ?? ReadLimits();
 
   /// The shared instance, borrowed per call. See the library doc.
   final DatabaseSupplier database;
+
+  /// The outbound ceilings. See `read_limits.dart` for the arithmetic.
+  final ReadLimits limits;
 
   /// The only thing between a client-supplied string and a `FROM` clause.
   final SeriesResolver resolver;

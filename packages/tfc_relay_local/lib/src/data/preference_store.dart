@@ -71,6 +71,7 @@ import 'package:tfc_dart/core/secure_storage/interface.dart'
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart' show PreferencesApi;
 
 import 'preference_change_feed.dart';
+import 'read_limits.dart';
 import 'timescale_reader.dart' show DatabaseSupplier;
 
 /// The preference store cannot be reached right now.
@@ -125,7 +126,8 @@ final class NoSecretStorage implements MySecureStorage {
 
 /// `PreferencesApi` over the shared `flutter_preferences` table.
 final class PreferenceStore implements PreferencesApi {
-  PreferenceStore({required this.database, this.log}) {
+  PreferenceStore({required this.database, this.log, ReadLimits? limits})
+      : limits = limits ?? ReadLimits() {
     _feed = PreferenceChangeFeed(
       database: database,
       local: _local.stream,
@@ -137,6 +139,9 @@ final class PreferenceStore implements PreferencesApi {
 
   /// The shared instance, borrowed per call. See the library doc.
   final DatabaseSupplier database;
+
+  /// The outbound ceilings. See `read_limits.dart` for the arithmetic.
+  final ReadLimits limits;
 
   /// Where a swallowed failure goes. Optional and injected, following
   /// `HistoryViewStore`'s shape: a store built in a test asserts what it was
