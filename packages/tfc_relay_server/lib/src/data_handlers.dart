@@ -1,5 +1,5 @@
-/// The bodies of the data-service methods: browse, and — from 10-03 onward —
-/// timeseries, history views and preferences.
+/// The bodies of the data-service methods: browse, timeseries, history views,
+/// and — from 10-05 — preferences.
 ///
 /// Same rule as `value_handlers.dart` and `session_handlers.dart`, for the same
 /// reason: **nothing in here registers anything.** Handlers are handed to
@@ -247,7 +247,335 @@ final class DataHandlers {
     };
   }
 
+  // ----------------------------------------------------------- history views
+
+  /// Saves a view and answers its id.
+  ///
+  /// ## The graph-index trap, and why it cannot be reached from here
+  ///
+  /// `graphConfigs` is keyed by **graph index**, an `int`, and JSON objects key
+  /// by `String` — so the map crosses the wire String-keyed and is converted
+  /// back exactly once, at this boundary, by `historyViewGraphsFromJson`.
+  ///
+  /// Upstream's own `createHistoryView` parses those keys with `int.tryParse`
+  /// and, when one fails, **silently skips the entry**
+  /// (`database_drift.dart:610` and `:655`, the update path). A chart that
+  /// saved four graphs would get three back and nothing would have said so.
+  /// That drop is unreachable through this gateway for one reason and it is
+  /// worth stating rather than trusting: **the wire type is
+  /// `Map<int, HistoryViewGraphRecord>`**, so a key that will not parse is
+  /// refused here, before the source is touched — see [_graphConfigs].
+  ///
+  /// **Do not "simplify" this to an untyped map.** An `Object?`-valued bag
+  /// forwarded straight down would put the silent drop back on the wire, and
+  /// it would be invisible: the call succeeds, the id comes back, and the
+  /// missing graph is discovered by an engineer wondering why the second axis
+  /// has no title.
+  ///
+  /// On the way **up** the same conversion runs in reverse
+  /// (`historyViewGraphsToJson`), and a String key that will not parse is a
+  /// decode failure on the client rather than a dropped entry — which is the
+  /// correct asymmetry: a gateway may refuse its caller's input, but a client
+  /// silently discarding part of a stored view would hide a database problem.
+  Future<Object?> historyCreateView(rpc.Parameters params) async {
+    const method = DataServiceMethods.historyCreateView;
+    return source.historyViews.createHistoryView(
+      _viewName(params, method),
+      _viewKeys(params, method),
+      _keyConfigs(params, method),
+      _graphConfigs(params, method),
+    );
+  }
+
+  /// Replaces the name, keys and configuration of a view.
+  ///
+  /// **Replaces, never merges** — the frozen signature's semantics, and the
+  /// only method that exists for taking a line off a chart. A union here would
+  /// make removing a key impossible through the API.
+  Future<Object?> historyUpdateView(rpc.Parameters params) async {
+    const method = DataServiceMethods.historyUpdateView;
+    await source.historyViews.updateHistoryView(
+      _viewId(params, 'id', method),
+      _viewName(params, method),
+      _viewKeys(params, method),
+      _keyConfigs(params, method),
+      _graphConfigs(params, method),
+    );
+    return null;
+  }
+
+  /// Deletes a view and everything recorded against it.
+  ///
+  /// The cascade — key rows, graph rows, saved windows — is spelled out by
+  /// hand in the database layer rather than left to a foreign key, so it is
+  /// behaviour this gateway carries across rather than inherits. Rows that
+  /// outlive their view are how a deleted view comes back as a partial one
+  /// after the next restart.
+  Future<Object?> historyDeleteView(rpc.Parameters params) async {
+    const method = DataServiceMethods.historyDeleteView;
+    await source.historyViews.deleteHistoryView(_viewId(params, 'id', method));
+    return null;
+  }
+
+  /// Every saved view, for the picker.
+  ///
+  /// Takes no parameters, and answers a list — empty when nothing has been
+  /// saved, never null, for `browse.fetchRoots`' reason.
+  Future<Object?> historySelectViews(rpc.Parameters _) async => [
+        for (final view in await source.historyViews.selectHistoryViews())
+          view.toJson(),
+      ];
+
+  /// The plotted keys of a view, keyed by key name.
+  ///
+  /// **A short answer is a legitimate one.** The policy layer below this drops
+  /// keys a station may not see, so a view can honestly come back plotting
+  /// fewer keys than were saved — and, at the limit, none. That is the rule
+  /// `_PolicyHistoryViews` exists for: a view that vanished would itself say a
+  /// view exists.
+  Future<Object?> historyGetKeys(rpc.Parameters params) async {
+    const method = DataServiceMethods.historyGetKeys;
+    final keys = await source.historyViews
+        .getHistoryViewKeys(_viewId(params, 'viewId', method));
+    return {
+      for (final entry in keys.entries) entry.key: entry.value.toJson(),
+    };
+  }
+
+  /// The per-graph configuration of a view, keyed by graph index.
+  ///
+  /// String-keyed on the wire and back again exactly once, for the reason
+  /// [historyCreateView] gives at length. **Unfiltered by policy**: a graph
+  /// index is not a key and there is nothing to hide in a title or an axis
+  /// unit.
+  Future<Object?> historyGetGraphs(rpc.Parameters params) async {
+    const method = DataServiceMethods.historyGetGraphs;
+    return historyViewGraphsToJson(await source.historyViews
+        .getHistoryViewGraphs(_viewId(params, 'viewId', method)));
+  }
+
+  /// Just the key names of a view, for callers that need no aliases.
+  Future<Object?> historyGetKeyNames(rpc.Parameters params) async {
+    const method = DataServiceMethods.historyGetKeyNames;
+    return source.historyViews
+        .getHistoryViewKeyNames(_viewId(params, 'viewId', method));
+  }
+
+  /// Saves a time window on a view and answers its id.
+  ///
+  /// **Both instants are epoch milliseconds and both decode as UTC.** This is
+  /// the surface where that convention earns its keep: "Vakt 1" is a shift an
+  /// operator comes back to, and a window that returns an hour off lands on
+  /// the wrong shift with nothing on screen saying so. Every conclusion drawn
+  /// from the chart is then about hours nobody looked at.
+  Future<Object?> historyAddPeriod(rpc.Parameters params) async {
+    const method = DataServiceMethods.historyAddPeriod;
+    final viewId = _viewId(params, 'viewId', method);
+    final name = _viewName(params, method);
+    final start = _requiredInstant(params, 'start', method);
+    final end = _requiredInstant(params, 'end', method);
+    // Refused rather than stored, for `_requireForwardWindow`'s reason: a
+    // saved shift that ends before it starts renders as nothing later, and a
+    // chart showing nothing is read as a plant that did nothing.
+    _requireForwardWindow(start, end, method);
+    return source.historyViews.addHistoryViewPeriod(viewId, name, start, end);
+  }
+
+  /// Deletes a saved window.
+  Future<Object?> historyDeletePeriod(rpc.Parameters params) async {
+    const method = DataServiceMethods.historyDeletePeriod;
+    await source.historyViews
+        .deleteHistoryViewPeriod(_viewId(params, 'id', method));
+    return null;
+  }
+
+  /// Every saved window on a view, oldest first.
+  Future<Object?> historyListPeriods(rpc.Parameters params) async {
+    const method = DataServiceMethods.historyListPeriods;
+    return [
+      for (final period in await source.historyViews
+          .listHistoryViewPeriods(_viewId(params, 'viewId', method)))
+        period.toJson(),
+    ];
+  }
+
+  /// The oldest instant any series is still retained for, or null.
+  ///
+  /// **Null and an instant at the epoch are opposite answers**, and this is
+  /// the one method on this wire where confusing them is easy: 0 is a
+  /// perfectly good epoch millisecond. Null means "nothing has been discarded
+  /// yet" — a chart may scroll back as far as it likes and absence of data is
+  /// absence of events. Zero would mean everything before 1970 is gone, which
+  /// against any real window means *all* of it. The client decodes against
+  /// exactly this distinction (`raw == null ? null : timeOf(raw)`), so the
+  /// null must survive as null rather than being defaulted here.
+  ///
+  /// **No contract check covers this method.**
+  /// `data_services_contract.dart:4-30` forbids an eighth data-services case
+  /// upstream, and none of the seven that exist calls it — so a wrong answer
+  /// here leaves every leg of the contract suite green. Its judgement lives in
+  /// `data_handlers_test.dart`, in a group that says so by name.
+  ///
+  /// The gateway does **not** widen upstream's catch. `getGlobalRetentionHorizon`
+  /// swallows a permissions error and answers null (`database_drift.dart:776-779`),
+  /// which reads on the wire as "nothing has been discarded" — a repudiation
+  /// hazard this plan accepts at the wire and 10-08 makes visible at the
+  /// reader. Catching more here would only move the same silence.
+  Future<Object?> historyRetentionHorizon(rpc.Parameters _) async =>
+      (await source.historyViews.getGlobalRetentionHorizon())
+          ?.millisecondsSinceEpoch;
+
   // ------------------------------------------------------------------ shared
+
+  /// A view's own label.
+  ///
+  /// Not bounded here, and that is deliberate rather than an omission: the
+  /// only way a name reaches this method is inside a request frame, and
+  /// ingress already refuses a frame over `ServerConfig.maxFrameBytes`. A
+  /// second bound on the same hazard is a second number to keep in step.
+  static String _viewName(rpc.Parameters params, String method) {
+    final raw = params['name'].valueOr(null);
+    if (raw is! String) {
+      throw _refuse(
+          method,
+          '$method needs a string "name": what the view is called in the '
+          'picker, not ${raw.runtimeType}');
+    }
+    return raw;
+  }
+
+  /// The plant keys a view plots.
+  ///
+  /// **Plant keys, not series names**, which is why nothing here consults the
+  /// resolver: a view is a list of tags an engineer picked off the browse
+  /// tree, and the timeseries family's `<series>[:<member>]` grammar is a
+  /// different namespace with a different parser.
+  ///
+  /// Bounded by `maxKeysPerSubscribe` rather than by a fourth number, on
+  /// 10-03's argument for `tables`: it is the same hazard — an unbounded
+  /// breadth argument on one round trip, here writing one row per entry — and
+  /// a second number for it is a second number to keep in step.
+  List<String> _viewKeys(rpc.Parameters params, String method) {
+    final raw = params['keys'].valueOr(null);
+    if (raw is! List) {
+      throw _refuse(
+          method,
+          '$method needs a "keys" list: the plant keys this view plots. An '
+          'empty list is allowed — a view with no lines yet is a normal state '
+          'while an engineer is building one — but an absent list is not, '
+          'because it cannot be told from a caller that forgot the argument');
+    }
+    if (raw.length > config.maxKeysPerSubscribe) {
+      throw _refuse(
+          method,
+          '$method carried ${raw.length} keys, over this server\'s limit of '
+          '${config.maxKeysPerSubscribe}; split the view or raise '
+          'maxKeysPerSubscribe');
+    }
+    final keys = <String>[];
+    for (var i = 0; i < raw.length; i++) {
+      final entry = raw[i];
+      if (entry is! String || entry.isEmpty) {
+        throw _refuse(
+            method,
+            '$method\'s "keys" carries a non-string or empty entry at index '
+            '$i: every entry names a plant key');
+      }
+      keys.add(entry);
+    }
+    return keys;
+  }
+
+  /// Per-key configuration — legend label, axis placement, graph — or null.
+  ///
+  /// Optional in the frozen signature and optional here: a view saved with no
+  /// per-key configuration is the ordinary case, and every field the record
+  /// carries has a default (`alias` falls back to the key's own name, which is
+  /// upstream's `row.alias ?? row.key` moved inside the constructor).
+  static Map<String, HistoryViewKeyRecord>? _keyConfigs(
+      rpc.Parameters params, String method) {
+    final raw = params['keyConfigs'].valueOr(null);
+    if (raw == null) return null;
+    if (raw is! Map) {
+      throw _refuse(
+          method,
+          '$method needs "keyConfigs" as an object keyed by plant key, or '
+          'absent — not ${raw.runtimeType}');
+    }
+    final configs = <String, HistoryViewKeyRecord>{};
+    for (final entry in raw.entries) {
+      final value = entry.value;
+      if (value is! Map) {
+        throw _refuse(
+            method,
+            '$method\'s "keyConfigs" entry for "${entry.key}" is '
+            '${value.runtimeType}, not an object carrying that key\'s legend '
+            'label and axis placement');
+      }
+      configs['${entry.key}'] = HistoryViewKeyRecord.fromJson(_object(value));
+    }
+    return configs;
+  }
+
+  /// Per-graph configuration, keyed by graph index — or null.
+  ///
+  /// **The refusal below is the one that keeps upstream's silent drop
+  /// unreachable.** `historyViewGraphsFromJson` parses each key with
+  /// `int.parse`, which throws a `FormatException` — inside the handler, where
+  /// the session would report it as `handlerFailed` (-32011), documented as
+  /// "possibly transient: retrying is legitimate" for a request that will
+  /// never succeed. So the keys are checked first and a bad one is refused as
+  /// INVALID_PARAMS, with the reason naming what the alternative would have
+  /// cost: upstream's own `createHistoryView` answers a non-numeric key by
+  /// **skipping the entry** (`database_drift.dart:610`), which is a chart
+  /// saving four graphs and getting three back in silence.
+  static Map<int, HistoryViewGraphRecord>? _graphConfigs(
+      rpc.Parameters params, String method) {
+    final raw = params['graphConfigs'].valueOr(null);
+    if (raw == null) return null;
+    if (raw is! Map) {
+      throw _refuse(
+          method,
+          '$method needs "graphConfigs" as an object keyed by graph index, or '
+          'absent — not ${raw.runtimeType}');
+    }
+    for (final key in raw.keys) {
+      if (key is! String || int.tryParse(key) == null) {
+        throw _refuse(
+            method,
+            '$method\'s "graphConfigs" is keyed by graph index and "$key" is '
+            'not a number. It is refused rather than dropped: the database '
+            'layer parses these keys with int.tryParse and silently skips an '
+            'entry that fails, so a chart would save four graphs, get three '
+            'back, and nothing would have said so. The wire type is '
+            'Map<int, …>, which is what makes that drop unreachable — do not '
+            'widen it to an untyped map');
+      }
+    }
+    return historyViewGraphsFromJson(raw);
+  }
+
+  /// A view or period id out of [name].
+  ///
+  /// **Not bounded, and not required to be positive.** An id that addresses no
+  /// row is a miss, and a miss is a legitimate answer this surface has to give
+  /// anyway: a picker open while somebody else deletes a view asks about it
+  /// once more, and "the view is gone" is the truth rather than an error. What
+  /// is refused is a value that is not an id at all — including the String
+  /// `"1"`, because `params[name].asInt` would raise an `RpcException` with no
+  /// `data`, which `serialize` then fills with the offending request.
+  static int _viewId(rpc.Parameters params, String name, String method) {
+    final raw = params[name].valueOr(null);
+    if (raw is! int) {
+      throw _refuse(
+          method,
+          '$method needs an integer "$name": the id a view or window was '
+          'saved under, not ${raw.runtimeType}. Ids travel as numbers on this '
+          'wire, never as their decimal spelling');
+    }
+    return raw;
+  }
+
 
   /// The only two orderings a client may ask for.
   ///
