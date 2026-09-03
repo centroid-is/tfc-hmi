@@ -15,6 +15,8 @@ import '../page_creator/assets/common.dart';
 import '../page_creator/assets/editor_clipboard.dart';
 import '../page_creator/assets/image.dart';
 import '../page_creator/assets/image_store.dart';
+import '../page_creator/assets/ethercat_link.dart';
+import '../page_creator/assets/link_edit_overlay.dart';
 import '../page_creator/assets/registry.dart';
 import '../providers/page_images.dart';
 import '../widgets/base_scaffold.dart';
@@ -2257,6 +2259,17 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     });
   }
 
+  /// The selected cable, when the selection is exactly one.
+  ///
+  /// Its handles are a different surface from the shared chrome, and showing
+  /// them for a multi-selection would put corner handles on top of whatever
+  /// else is selected.
+  EtherCatLinkConfig? get _selectedLink {
+    if (_selectedAssets.length != 1) return null;
+    final only = _selectedAssets.first;
+    return only is EtherCatLinkConfig ? only : null;
+  }
+
   void _handleCopy() {
     if (_selectedAssets.isEmpty) return;
     _copyAssets(_selectedAssets.toList());
@@ -3282,6 +3295,20 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                                     start: _selectionStart!,
                                     current: _selectionCurrent!,
                                   ),
+                                ),
+                              // A run is drawn, not placed, so the box-and-
+                              // handles chrome has nothing useful to offer it.
+                              // Topmost, so grabbing a handle is never read as
+                              // the start of a marquee.
+                              if (_selectedLink != null)
+                                LinkEditOverlay(
+                                  link: _selectedLink!,
+                                  assets: assets,
+                                  canvas: Size(constraints.maxWidth,
+                                      constraints.maxHeight),
+                                  onBeginEdit: _saveToHistory,
+                                  onChanged: () =>
+                                      setState(_updateCurrentJson),
                                 ),
                               Positioned(
                                 top: 16,
