@@ -64,6 +64,7 @@ library;
 
 import 'dart:async';
 
+import 'package:drift/drift.dart' show UpdateKind, Variable;
 import 'package:tfc_dart/core/preferences.dart' show Preferences;
 import 'package:tfc_dart/core/secure_storage/interface.dart'
     show MySecureStorage;
@@ -281,6 +282,23 @@ final class PreferenceStore implements PreferencesApi {
   /// burst into **one** `preferences.changed` frame carrying the whole set
   /// (10-05), rather than one frame per key.
   ///
+  /// **One statement and one turn, not a `remove` per key.** The obvious
+  /// implementation — loop over the keys calling [remove] — was written,
+  /// measured and rejected: each `remove` awaits a round trip, so the event
+  /// loop turns between them, and `data_handlers._scheduleFlush`'s `Timer.run`
+  /// fires in every gap. Eight keys produced **eight** frames. At the five
+  /// hundred keys 10-05 sized the coalescing for, that is T-10-19 restored
+  /// from the caller's side: five hundred priority-lane frames per connected
+  /// client and then `close(4004)`, which every operator reads as the network
+  /// having dropped.
+  ///
+  /// So the rows go in one `DELETE`, the memory cache is emptied by upstream's
+  /// own `clear` — which touches memory and nothing else, the one place that
+  /// behaviour is what is wanted — and the keys are announced in a single
+  /// pass with no `await` between them. Everything the burst announces is
+  /// therefore pending before the flush timer can run, and the wire sees one
+  /// frame carrying the whole set.
+  ///
   /// **The blast radius is real and is not this file's to narrow.** With no
   /// allow-list this deletes `key_mappings` — the gateway's own routing
   /// configuration — from the shared table, and the interface's own doc says
@@ -294,10 +312,36 @@ final class PreferenceStore implements PreferencesApi {
   @override
   Future<void> clear({Set<String>? allowList}) async {
     final prefs = await _load();
-    for (final key in await prefs.getKeys(allowList: allowList)) {
-      await prefs.remove(key);
+    final keys = (await prefs.getKeys(allowList: allowList)).toList();
+    if (keys.isEmpty) return;
+
+    // Placeholders rather than an array parameter, following
+    // `preferences_watch.dart:56-63` — the one shape in this repository that
+    // is known to bind a key list through this driver.
+    final placeholders =
+        List.generate(keys.length, (i) => '\$${i + 1}').join(', ');
+    await (database() ?? _noStore()).db.customUpdate(
+          'DELETE FROM flutter_preferences WHERE key IN ($placeholders)',
+          variables: [for (final key in keys) Variable.withString(key)],
+          updateKind: UpdateKind.delete,
+        );
+    // Memory only, deliberately: this is the single call site where
+    // upstream's Postgres-untouching `clear` is the right primitive, because
+    // the statement above has already done the durable half.
+    await prefs.clear(allowList: keys.toSet());
+
+    // No `await` in this loop. That is the whole point — see the doc above.
+    for (final key in keys) {
+      if (!_local.isClosed) _local.add(key);
     }
   }
+
+  /// The supplier answered null between [_load] and here.
+  ///
+  /// Written as a `Never` so the expression it guards keeps the static type
+  /// [DatabaseSupplier] declares — 10-08's seam trick, which is what lets
+  /// this file call a drift method without importing the database layer.
+  Never _noStore() => throw const PreferenceStoreUnavailable();
 
   // ------------------------------------------------------------------ events
 
