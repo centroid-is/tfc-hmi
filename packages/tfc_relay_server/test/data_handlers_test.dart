@@ -103,15 +103,28 @@ final class _Kit {
 _Kit _kit(
     {FakeBrowse? browse,
     FakeTimeseries? timeseries,
-    FakeHistoryViews? historyViews}) {
+    FakeHistoryViews? historyViews,
+    FakePreferences? preferences,
+    List<({String method, Map<String, Object?> params})>? sent}) {
   final api = FakeStateMan(
-      browse: browse, timeseries: timeseries, historyViews: historyViews);
+      browse: browse,
+      timeseries: timeseries,
+      historyViews: historyViews,
+      preferences: preferences);
   addTearDown(api.dispose);
   return _Kit(
       DataHandlers(
           source: api,
           config: ServerConfig(),
-          resolver: const PermissiveSeriesResolver()),
+          resolver: const PermissiveSeriesResolver(),
+          // The session owns the peer; this object is handed a narrow way to
+          // announce and nothing else, which is why a case can collect what it
+          // announced without a socket. `preferences_notify_test.dart` is
+          // where the same sender is judged over a real one.
+          notify: (method, params) => sent?.add((
+                method: method,
+                params: params,
+              ))),
       api);
 }
 
@@ -1030,6 +1043,364 @@ void main() {
               'prevent (10-CONTEXT amendment 3)');
     }, tags: 'ws');
   });
+
+  // ------------------------------------------------------------ preferences
+  //
+  // The last family, and the one whose *types* are the whole surface: a store
+  // holds `Object?` and the wire promises seven typed accessors over it, so
+  // what these bodies get wrong is never the round trip — it is a double that
+  // comes back an int, a list that comes back a string, or a `800` a
+  // hand-written client sent where Dart's own encoder would have written
+  // `800.0`.
+  group('preferences round-trip over the handler bodies', () {
+    Future<Object?> get_(_Kit kit, String method,
+            Future<Object?> Function(rpc.Parameters) body, String key) =>
+        body(_params(method, {'key': key}));
+
+    test('every typed setter stores what a getter reads back', () async {
+      final kit = _kit();
+
+      await kit.handlers.prefSetBool(
+          _params(DataServiceMethods.prefSetBool, {'key': 'ui.dark', 'value': true}));
+      await kit.handlers.prefSetInt(_params(
+          DataServiceMethods.prefSetInt, {'key': 'chart.maxPoints', 'value': 800}));
+      await kit.handlers.prefSetDouble(_params(DataServiceMethods.prefSetDouble,
+          {'key': 'weigher.tolerance', 'value': 0.25}));
+      await kit.handlers.prefSetString(_params(
+          DataServiceMethods.prefSetString, {'key': 'site.name', 'value': 'Sæból'}));
+      await kit.handlers.prefSetStringList(_params(
+          DataServiceMethods.prefSetStringList,
+          {'key': 'page.recent', 'value': ['frystir', 'pökkun']}));
+
+      expect(
+          await get_(kit, DataServiceMethods.prefGetBool,
+              kit.handlers.prefGetBool, 'ui.dark'),
+          isTrue);
+      expect(
+          await get_(kit, DataServiceMethods.prefGetInt,
+              kit.handlers.prefGetInt, 'chart.maxPoints'),
+          800);
+      expect(
+          await get_(kit, DataServiceMethods.prefGetDouble,
+              kit.handlers.prefGetDouble, 'weigher.tolerance'),
+          0.25);
+      expect(
+          await get_(kit, DataServiceMethods.prefGetString,
+              kit.handlers.prefGetString, 'site.name'),
+          'Sæból',
+          reason: 'the site names here carry Icelandic characters, and a '
+              'boundary that mangles them mangles them on every page header');
+      expect(
+          await get_(kit, DataServiceMethods.prefGetStringList,
+              kit.handlers.prefGetStringList, 'page.recent'),
+          ['frystir', 'pökkun']);
+    });
+
+    test('an integral JSON number is a double, not a refusal', () async {
+      // **`asNum.toDouble()`, never `asDouble`** — the one decode in this
+      // family that is a deliberate widening rather than a narrowing. Dart's
+      // encoder writes an integral double as `800.0`, but a hand-written
+      // client — a curl, a Python script, a panel written by the integrator —
+      // sends `800`, and `jsonDecode` hands that back as an `int`. Refusing it
+      // would be refusing a value the type admits
+      // (`served_state_man.dart:683-692`).
+      final kit = _kit();
+
+      await kit.handlers.prefSetDouble(_params(
+          DataServiceMethods.prefSetDouble,
+          {'key': 'weigher.tolerance', 'value': 800}));
+
+      final stored = await get_(kit, DataServiceMethods.prefGetDouble,
+          kit.handlers.prefGetDouble, 'weigher.tolerance');
+      expect(stored, 800.0);
+      expect(stored, isA<double>(),
+          reason: 'stored as an int, the next `getDouble` throws a TypeError '
+              'the wire reports as -32010 — a settings page that saved a '
+              'tolerance and cannot read it back');
+    });
+
+    test('containsKey tells absent from set-to-null, and remove is real',
+        () async {
+      final kit = _kit();
+      await kit.handlers.prefSetBool(
+          _params(DataServiceMethods.prefSetBool, {'key': 'ui.dark', 'value': true}));
+
+      expect(
+          await get_(kit, DataServiceMethods.prefContainsKey,
+              kit.handlers.prefContainsKey, 'ui.dark'),
+          isTrue);
+      expect(
+          await get_(kit, DataServiceMethods.prefContainsKey,
+              kit.handlers.prefContainsKey, 'never.set'),
+          isFalse,
+          reason: '"absent" and "set to null" are different answers: a '
+              'settings page renders the default for one and a blank for the '
+              'other');
+
+      await kit.handlers
+          .prefRemove(_params(DataServiceMethods.prefRemove, {'key': 'ui.dark'}));
+
+      expect(
+          await get_(kit, DataServiceMethods.prefContainsKey,
+              kit.handlers.prefContainsKey, 'ui.dark'),
+          isFalse);
+      expect(
+          await get_(kit, DataServiceMethods.prefGetBool,
+              kit.handlers.prefGetBool, 'ui.dark'),
+          isNull);
+    });
+
+    test('getKeys and getAll answer the store, and honour an allow list',
+        () async {
+      final kit = _kit();
+      await kit.handlers.prefSetInt(_params(
+          DataServiceMethods.prefSetInt, {'key': 'chart.maxPoints', 'value': 800}));
+      await kit.handlers.prefSetString(_params(
+          DataServiceMethods.prefSetString, {'key': 'site.name', 'value': 'Sæból'}));
+
+      expect(
+          await kit.handlers.prefGetKeys(
+              _params(DataServiceMethods.prefGetKeys, const {'allowList': null})),
+          unorderedEquals(['chart.maxPoints', 'site.name']),
+          reason: 'a list, not a set: JSON has no set, and the client rebuilds '
+              'one on the far side');
+      expect(
+          await kit.handlers.prefGetAll(
+              _params(DataServiceMethods.prefGetAll, const {'allowList': null})),
+          containsPair('chart.maxPoints', 800));
+      expect(
+          await kit.handlers.prefGetKeys(_params(DataServiceMethods.prefGetKeys,
+              const {'allowList': ['site.name']})),
+          ['site.name'],
+          reason: 'an allow list narrows the answer; a client that sends one '
+              'is a settings page reading its own section of a store it '
+              'shares with everything else on the site');
+    });
+
+    test('clear with an allow list removes only what it names', () async {
+      final kit = _kit();
+      await kit.handlers.prefSetInt(_params(
+          DataServiceMethods.prefSetInt, {'key': 'chart.maxPoints', 'value': 800}));
+      await kit.handlers.prefSetString(_params(
+          DataServiceMethods.prefSetString, {'key': 'site.name', 'value': 'Sæból'}));
+
+      await kit.handlers.prefClear(_params(DataServiceMethods.prefClear, const {
+        'allowList': ['site.name'],
+      }));
+
+      expect(
+          await kit.handlers.prefGetKeys(
+              _params(DataServiceMethods.prefGetKeys, const {'allowList': null})),
+          ['chart.maxPoints'],
+          reason: 'an allow list on `clear` is the difference between wiping '
+              'one page\'s settings and wiping the gateway\'s, `key_mappings` '
+              'included. A handler that dropped the argument would take the '
+              'plant\'s tag map with it');
+    });
+
+    test('a stored value of the wrong type is a TypeError, which the session '
+        'answers as -32010', () async {
+      // The gateway does **not** convert. `PreferencesApi` promises a
+      // `TypeError` for a mismatch and 10-01 taught the client to read exactly
+      // -32010 for it (`client_sub_apis.dart`'s `withTypedErrors`), so what
+      // this body must do is let the store's cast throw and let
+      // `RelaySession._answer` map it. A handler that caught and answered null
+      // would render a default over a value that is really there.
+      final kit = _kit();
+      await kit.handlers.prefSetString(_params(
+          DataServiceMethods.prefSetString, {'key': 'chart.maxPoints', 'value': 'lots'}));
+
+      await expectLater(
+          get_(kit, DataServiceMethods.prefGetInt, kit.handlers.prefGetInt,
+              'chart.maxPoints'),
+          throwsA(isA<TypeError>()),
+          reason: 'the cast has to reach the session, which is the one place '
+              'that knows -32010 is the wire code for it');
+    });
+  });
+
+  group('a malformed preference parameter is refused, never coerced', () {
+    test('a missing key is refused, naming the parameter', () async {
+      final kit = _kit();
+
+      final error = await _refusal(
+          () => kit.handlers.prefGetBool(
+              _params(DataServiceMethods.prefGetBool, const {})),
+          'a getBool with no key');
+
+      expect(error.code, rpc_error.INVALID_PARAMS);
+      expect(error.message, contains('key'));
+      expect((error.data! as Map)['request'], isNotNull,
+          reason: 'every refusal on this wire carries a pre-substituted '
+              '`data.request`, or `serialize` fills it with the offending '
+              'request and one carrying 1e999 makes the error unencodable');
+    });
+
+    test('an empty key is refused', () async {
+      final kit = _kit();
+
+      final error = await _refusal(
+          () => kit.handlers.prefGetString(
+              _params(DataServiceMethods.prefGetString, const {'key': ''})),
+          'a getString with an empty key');
+
+      expect(error.code, rpc_error.INVALID_PARAMS);
+    });
+
+    test('a value of the wrong type is refused before the store', () async {
+      final kit = _kit();
+
+      final error = await _refusal(
+          () => kit.handlers.prefSetBool(_params(
+              DataServiceMethods.prefSetBool, {'key': 'ui.dark', 'value': 'true'})),
+          'a setBool carrying the string "true"');
+
+      expect(error.code, rpc_error.INVALID_PARAMS);
+      expect(error.message, contains('bool'));
+      expect(
+          await kit.handlers.prefContainsKey(
+              _params(DataServiceMethods.prefContainsKey, {'key': 'ui.dark'})),
+          isFalse,
+          reason: 'the refusal is pre-effect: a store holding the string '
+              '"true" under a key every later `getBool` reads is a settings '
+              'page that throws a TypeError forever');
+    });
+
+    test('a string list carrying a number is refused, not stringified',
+        () async {
+      // The port source writes `'$entry'` for each element, which turns `[1]`
+      // into `['1']` silently. A gateway that coerces is a gateway that
+      // decides what the client meant.
+      final kit = _kit();
+
+      final error = await _refusal(
+          () => kit.handlers.prefSetStringList(_params(
+              DataServiceMethods.prefSetStringList,
+              {'key': 'page.recent', 'value': [1, 2]})),
+          'a setStringList carrying numbers');
+
+      expect(error.code, rpc_error.INVALID_PARAMS);
+      expect(error.message, contains('index 0'));
+    });
+
+    test('an allow list carrying a non-string is refused', () async {
+      final kit = _kit();
+
+      final error = await _refusal(
+          () => kit.handlers.prefGetKeys(_params(
+              DataServiceMethods.prefGetKeys, const {'allowList': [7]})),
+          'a getKeys whose allow list holds a number');
+
+      expect(error.code, rpc_error.INVALID_PARAMS);
+      expect(error.message, contains('allowList'));
+    });
+
+    test('an allow list that is not a list at all is refused', () async {
+      final kit = _kit();
+
+      final error = await _refusal(
+          () => kit.handlers.prefClear(_params(
+              DataServiceMethods.prefClear, const {'allowList': 'site.name'})),
+          'a clear whose allow list is a bare string');
+
+      expect(error.code, rpc_error.INVALID_PARAMS);
+      expect(error.message, contains('allowList'));
+    });
+  });
+
+  group('the changed notification is one frame per burst', () {
+    test('a five-hundred-key clear announces once, naming five hundred keys',
+        () async {
+      // The coalescing property, judged at the body rather than over a socket:
+      // `preferences_notify_test.dart` runs the same burst through the real
+      // priority lane. Both are worth having — this one can count the source's
+      // own events, which is what makes the assertion non-vacuous.
+      final sent = <({String method, Map<String, Object?> params})>[];
+      final kit = _kit(sent: sent);
+      kit.handlers.watchPreferences();
+      addTearDown(kit.handlers.releasePreferenceWatch);
+
+      final store = kit.api.preferences;
+      for (var i = 0; i < 500; i++) {
+        await store.setInt('svn.page.$i', i);
+      }
+      // Everything above is a burst the watcher has already coalesced; what is
+      // measured is the `clear` below.
+      await pumpEventQueue();
+      sent.clear();
+
+      final sourceEvents = <String>[];
+      final tap = store.onPreferencesChanged.listen(sourceEvents.add);
+      addTearDown(tap.cancel);
+
+      await store.clear();
+      await pumpEventQueue();
+
+      expect(sourceEvents, hasLength(500),
+          reason: 'the anti-vacuity arm, and it goes first: the store really '
+              'does fire once per key, so "one frame" below is coalescing '
+              'rather than a store that announced a clear as a single event. '
+              'Without this the case would pass against a source that said '
+              'nothing at all');
+      expect(sent, hasLength(1),
+          reason: 'five hundred frames in the priority lane is a '
+              'BufferDisconnect and a 4004 — a settings page evicting every '
+              'panel in the plant, reported to the operator as backpressure '
+              '(T-10-19). The lane is byte-capped, entry-capped, drained only '
+              'by the tick and **not conflated**, so nothing downstream of '
+              'here would have merged them');
+      expect(sent.single.method, 'preferences.changed');
+      expect(sent.single.params['keys'], hasLength(500));
+    });
+
+    test('a key written twice in one burst is named once', () async {
+      final sent = <({String method, Map<String, Object?> params})>[];
+      final kit = _kit(sent: sent);
+      kit.handlers.watchPreferences();
+      addTearDown(kit.handlers.releasePreferenceWatch);
+
+      final store = kit.api.preferences;
+      await store.setInt('chart.maxPoints', 800);
+      await store.setInt('chart.maxPoints', 900);
+      await pumpEventQueue();
+
+      expect(sent, hasLength(1));
+      expect(sent.single.params['keys'], ['chart.maxPoints'],
+          reason: 'a **set**, not a list. A key saved twice while an operator '
+              'held the slider is one key that changed, and a frame naming it '
+              'twice makes every listener redraw twice');
+    });
+
+    test('a source with no preference store is not a startup failure',
+        () async {
+      final sent = <({String method, Map<String, Object?> params})>[];
+      final kit = _kit(preferences: _NoPreferenceStore(), sent: sent);
+
+      kit.handlers.watchPreferences();
+      addTearDown(kit.handlers.releasePreferenceWatch);
+
+      expect(sent, isEmpty);
+      expect(
+          await kit.handlers.browseFetchRoots(_params('browse.fetchRoots', {})),
+          isNotEmpty,
+          reason: 'a declared absence is not a startup failure: the rest of '
+              'the surface has to keep answering. `UnsupportedError` is the '
+              'one thing caught here, and nothing else, because nothing else '
+              'is a shape a correct source can have');
+    });
+  });
+}
+
+/// A store that declares it has no change stream at all.
+///
+/// The shape `served_state_man.dart:428-437` catches: a source with no
+/// preference store is legitimate — the data-services sub-suite is skipped for
+/// it, with a reason on the record — and refusing to serve it would turn a
+/// declared absence into a startup failure.
+final class _NoPreferenceStore extends FakePreferences {
+  @override
+  Stream<String> get onPreferencesChanged =>
+      throw UnsupportedError('this source has no preference change stream');
 }
 
 /// One decoded sample list, as the wire would carry it.

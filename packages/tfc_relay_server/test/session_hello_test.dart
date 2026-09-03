@@ -350,7 +350,7 @@ void main() {
             'a deadline and the pump would be pure cost');
   });
 
-  test('the handler table is exactly the twenty-eight names a client may call, '
+  test('the handler table is exactly the forty-three names a client may call, '
       'plus the one it announces', () async {
     final link = _link();
     addTearDown(link.dispose);
@@ -394,19 +394,39 @@ void main() {
           DataServiceMethods.historyDeletePeriod,
           DataServiceMethods.historyListPeriods,
           DataServiceMethods.historyRetentionHorizon,
+          // 10-05: the preferences fifteen, which close the table. Seven of
+          // them are the only names on this wire a `view` station may not
+          // call — the ledger records that they are *registered*, and
+          // `policy_test.dart` records who may reach them.
+          DataServiceMethods.prefGetKeys,
+          DataServiceMethods.prefGetAll,
+          DataServiceMethods.prefGetBool,
+          DataServiceMethods.prefGetInt,
+          DataServiceMethods.prefGetDouble,
+          DataServiceMethods.prefGetString,
+          DataServiceMethods.prefGetStringList,
+          DataServiceMethods.prefContainsKey,
+          DataServiceMethods.prefSetBool,
+          DataServiceMethods.prefSetInt,
+          DataServiceMethods.prefSetDouble,
+          DataServiceMethods.prefSetString,
+          DataServiceMethods.prefSetStringList,
+          DataServiceMethods.prefRemove,
+          DataServiceMethods.prefClear,
           // 05-05: the hold tick, a client→server notification. It is in the
           // ledger because json_rpc_2 dispatches an un-idded frame through
           // the same table, and it is not a name a client may *call* — see
           // `surface_test.dart`, which keeps the two in separate literals.
           Methods.holdTick,
         },
-        reason: 'the wire surface is a closed set of twenty-nine '
+        reason: 'the wire surface is a closed set of forty-four '
             'registrations: 03-05 added subscribe and unsubscribe, 03-08 '
             'froze it, 04-02 added the five value methods the contract leg '
             'cannot run without, 10-02 the four browse ones that retired six '
             'of the thirteen proven-unreachable checks, 10-03 the four '
-            'timeseries ones that retired three more, and 10-04 the eleven '
-            'history-view ones that retired two more. A handler nobody '
+            'timeseries ones that retired three more, 10-04 the eleven '
+            'history-view ones that retired two more, and 10-05 the '
+            'preferences fifteen that retired the last two. A handler nobody '
             'counted is surface nobody reviewed');
   });
 }
