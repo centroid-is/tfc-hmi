@@ -1,7 +1,8 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
-import 'ethernet.dart';
+import 'ek1100.dart' show EthernetPortPainter;
+import 'hardware.dart';
 import 'usb.dart';
 import 'io8.dart';
 
@@ -55,20 +56,21 @@ class CXxxxx extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.0 / gScale;
 
-    final backgroundFill = Paint()
-      ..style = PaintingStyle.fill
-      ..color = fillColor;
-
     // Design-space origin now at (0,0)
     const double left = 0.0;
     const double top = 0.0;
     final double widthPixels = designW;
     final double heightPixels = designH;
 
-    // Outer rectangle
+    // Outer rectangle, as a moulding.
     final rect = Rect.fromLTWH(left, top, widthPixels, heightPixels);
-    canvas.drawRect(rect, backgroundFill);
-    canvas.drawRect(rect, stroke);
+    paintHousing(
+      canvas,
+      RRect.fromRectAndRadius(rect, const Radius.circular(2)),
+      color: fillColor,
+      strokeWidth: 1.0 / gScale,
+      outline: Colors.black,
+    );
 
     // Inner rectangle (32×40 mm) at 2.5mm/6mm offsets
     final double innerLeft = left + (2.5 * pxPerMm);
@@ -76,14 +78,20 @@ class CXxxxx extends CustomPainter {
     final double innerWidthPixels = 32.0 * pxPerMm;
     final double innerHeightPixels = 40.0 * pxPerMm;
 
+    // The connector panel is set into the front of the CPU module, so it is
+    // a pocket rather than an outlined square drawn on top of it.
     final innerRect = Rect.fromLTWH(
       innerLeft,
       innerTop,
       innerWidthPixels,
       innerHeightPixels,
     );
-    canvas.drawRect(innerRect, backgroundFill);
-    canvas.drawRect(innerRect, stroke);
+    paintRecess(
+      canvas,
+      RRect.fromRectAndRadius(innerRect, const Radius.circular(1.5)),
+      face: shiftLightness(fillColor, -0.05),
+      strokeWidth: 1.0 / gScale,
+    );
 
     // Ethernet (top)
     final double ethernetLeft = innerLeft + (1.0 * pxPerMm);
@@ -94,7 +102,7 @@ class CXxxxx extends CustomPainter {
     canvas.translate(ethernetLeft, ethernetTop);
     canvas.scale(ethernetWidthPixels / 100.0, ethernetWidthPixels / 100.0);
     final ethernetPainter =
-        EthernetPortPainter(color: Colors.black, strokeWidthPx: 1.0);
+        EthernetPortPainter(strokeColor: Colors.black, strokeWidth: 1.0);
     ethernetPainter.paint(canvas, const Size(100, 100));
     canvas.restore();
 
@@ -162,29 +170,19 @@ class CXxxxx extends CustomPainter {
     final double boxHeightPixels = 95.0 * pxPerMm;
     final double boxTop = top + (heightPixels - boxHeightPixels) / 2;
 
+    // Extruded aluminium fins. Filling every second section solid black made
+    // this read as a barcode stuck to the side of the machine; a metal ground
+    // with a shadow in each groove and a lit crown on each fin reads as the
+    // heat sink it is.
     final boxRect =
         Rect.fromLTWH(boxLeft, boxTop, boxWidthPixels, boxHeightPixels);
-    canvas.drawRect(boxRect, backgroundFill);
-    canvas.drawRect(boxRect, stroke);
-
-    // Split into 39 sections, fill every second
-    final double sectionHeight = boxHeightPixels / 39.0;
-    final filledPaint = Paint()
-      ..color = Colors.black
-      ..style = PaintingStyle.fill;
-
-    for (int i = 0; i < 39; i++) {
-      final double y = boxTop + i * sectionHeight;
-      if (i > 0) {
-        canvas.drawLine(
-            Offset(boxLeft, y), Offset(boxLeft + boxWidthPixels, y), stroke);
-      }
-      if (i.isOdd) {
-        canvas.drawRect(
-            Rect.fromLTWH(boxLeft, y, boxWidthPixels, sectionHeight),
-            filledPaint);
-      }
-    }
+    paintFinnedHeatsink(
+      canvas,
+      boxRect,
+      fins: 26,
+      housing: fillColor,
+      strokeWidth: 1.0 / gScale,
+    );
 
     // New box (15×27mm) that partially covers the duct; 54mm from left, 9.8mm from top
     final double newBoxLeft = left + (54.0 * pxPerMm);
@@ -199,12 +197,13 @@ class CXxxxx extends CustomPainter {
       newBoxHeightPixels,
     );
 
-    final hidePaint = Paint()
-      ..color = fillColor
-      ..style = PaintingStyle.fill;
-
-    canvas.drawRect(newBoxRect, hidePaint);
-    canvas.drawRect(newBoxRect, stroke);
+    paintHousing(
+      canvas,
+      RRect.fromRectAndRadius(newBoxRect, const Radius.circular(1)),
+      color: fillColor,
+      strokeWidth: 1.0 / gScale,
+      outline: Colors.black,
+    );
 
     // Five small boxes 4.1×4.1mm, 1.3mm from right, evenly spaced
     final double smallBoxSize = 4.1 * pxPerMm;
@@ -228,11 +227,19 @@ class CXxxxx extends CustomPainter {
       final double boxY = startY + i * (smallBoxSize + gapSize);
       final smallBoxRect =
           Rect.fromLTWH(leftStart, boxY, smallBoxSize, smallBoxSize);
-      final sbPaint = Paint()
-        ..color = smallBoxColors[i]
-        ..style = PaintingStyle.fill;
-      canvas.drawRect(smallBoxRect, sbPaint);
-      canvas.drawRect(smallBoxRect, stroke);
+      // A transparent colour is how a caller says "no state published", and
+      // an unlit CX status LED is a dull grey lens, not a hole in the front.
+      final lampColor =
+          smallBoxColors[i].a == 0 ? ledOffColor : smallBoxColors[i];
+      paintLed(
+        canvas,
+        RRect.fromRectAndRadius(
+            smallBoxRect, Radius.circular(smallBoxSize * 0.18)),
+        color: lampColor,
+        lit: smallBoxColors[i].a != 0,
+        strokeWidth: 1.0 / gScale,
+        border: stroke,
+      );
     }
 
     // Text labels to the left of the small boxes
@@ -275,12 +282,13 @@ class CXxxxx extends CustomPainter {
       boxHeightPixels,
     );
 
-    final beckhoffRedPaint = Paint()
-      ..color = const Color(0xFFE30613)
-      ..style = PaintingStyle.fill;
-
-    canvas.drawRect(rightBoxRect, beckhoffRedPaint);
-    canvas.drawRect(rightBoxRect, stroke);
+    paintHousing(
+      canvas,
+      RRect.fromRectAndRadius(rightBoxRect, Radius.zero),
+      color: beckhoffRed,
+      strokeWidth: 1.0 / gScale,
+      outline: Colors.black,
+    );
 
     // IO8 widget on far right (16mm wide, full height)
     final double io8Width = 16.0 * pxPerMm;
@@ -352,7 +360,9 @@ class CXxxxx extends CustomPainter {
       text: TextSpan(
         text: name,
         style: TextStyle(
-          color: Colors.black,
+          // White, like the wordmark above it: the model is printed on the
+          // red band and black on Beckhoff red is barely a contrast at all.
+          color: Colors.white,
           fontSize: 12.0 * fontScale,
           fontWeight: FontWeight.w800,
           fontFamily: 'Roboto',

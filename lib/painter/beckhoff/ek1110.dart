@@ -10,7 +10,8 @@ library;
 import 'package:flutter/material.dart';
 
 import 'ek1100.dart' show EthernetPortPainter;
-import 'io8.dart' show bodyColor, ioLabelColor;
+import 'hardware.dart';
+import 'io8.dart' show bodyColor, ioLabelColor, ledOffColor;
 
 /// Whether the extension's outgoing segment is up, as far as the mimic knows.
 ///
@@ -56,7 +57,8 @@ class EK1110Painter extends CustomPainter {
       Rect.fromLTWH(0, 0, size.width, size.height),
       Radius.circular(size.width * 0.06),
     );
-    canvas.drawRRect(fillRect, Paint()..color = housingColor);
+    canvas.drawRRect(
+        fillRect, housingPaint(fillRect.outerRect, housingColor));
     canvas.drawRRect(
       RRect.fromRectAndRadius(
         Rect.fromLTWH(0, 0, size.width - strokeWidth, size.height - strokeWidth),
@@ -115,8 +117,14 @@ class EK1110Painter extends CustomPainter {
     for (int i = 0; i < 2; i++) {
       final rect =
           Rect.fromLTWH(pad + i * (lampW + pad), lampTop, lampW, lampH);
-      canvas.drawRect(rect, Paint()..color = _lampColor);
-      canvas.drawRect(rect, stroke);
+      paintLed(
+        canvas,
+        RRect.fromRectAndRadius(rect, Radius.circular(lampH * 0.25)),
+        color: _lampColor,
+        lit: link == EK1110Link.up,
+        strokeWidth: strokeWidth,
+        border: stroke,
+      );
     }
 
     // The RJ45, centred on the upper third — where it sits on the real part.
@@ -163,8 +171,8 @@ class EK1110Painter extends CustomPainter {
 
   Color get _lampColor => switch (link) {
         EK1110Link.up => const Color(0xFF6CA545),
-        EK1110Link.down => const Color(0xFFCCCCCC),
-        EK1110Link.unknown => const Color(0xFFE8E8E8),
+        EK1110Link.down => ledOffColor,
+        EK1110Link.unknown => const Color(0xFF5C6462),
       };
 
   @override
