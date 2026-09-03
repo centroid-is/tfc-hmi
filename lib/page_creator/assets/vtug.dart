@@ -24,6 +24,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 
+import '../../painter/festo/valve_symbol.dart';
 import '../../painter/festo/vtug.dart' show CteuLed, CteuLedState;
 import '../../theme.dart' show HmiStateColors;
 import '../../widgets/panes/pane_chrome.dart';
@@ -47,22 +48,62 @@ const int vtugCoilCount = vtugPositionCount * 2;
 /// A position is not always a valve: unused positions on a VTUG carry a
 /// blanking plate, which has no coil and therefore no LED. Drawing a lamp
 /// there would invent a channel the hardware does not have.
+///
+/// The two valves actually ordered for this manifold are here by name. They
+/// are not interchangeable in the way a coil count would suggest: a 5/3 and
+/// a bistable 5/2 both have two coils and two lamps, and they do completely
+/// different things when neither coil is energised. That difference is the
+/// reason this is an enum of parts rather than a number of solenoids.
 enum VtugValveKind {
   /// Blanking plate. No coil, no LED, nothing to command.
-  blank('Blank', 'Blanking plate'),
+  blank(
+    'Blank',
+    'Blanking plate',
+    0,
+    'nothing — there is no valve here',
+  ),
 
-  /// One pilot solenoid — 3/2 or 5/2 single solenoid. Coil 14 shifts the
-  /// valve; the spring returns it. De-energised is a real, known position,
-  /// which is why a single-solenoid valve has no "close" coil to push.
-  singleSolenoid('Single', 'Single solenoid, spring return'),
+  /// `VUVG-B14-M52-AZT-F-1T1L` — 5/2 monostable. Five of these are fitted.
+  ///
+  /// One pilot solenoid. Coil 14 shifts the valve and a spring returns it,
+  /// so de-energised is a real, known position and there is no second coil
+  /// to push.
+  valve52Mono(
+    '5/2 single',
+    'VUVG-B14-M52 — 5/2 monostable, spring return',
+    1,
+    'port 2 — the spring returns the valve',
+  ),
 
-  /// Two pilot solenoids — 5/2 double solenoid. Coil 14 shifts one way,
-  /// coil 12 the other, and the valve stays where it was last driven. There
-  /// is no spring, so de-energising both coils holds the current position
-  /// rather than returning anywhere.
-  doubleSolenoid('Double', 'Double solenoid, bistable');
+  /// 5/2 bistable — two pilot solenoids, no spring.
+  ///
+  /// Not fitted on this manifold, and kept because it is the standard VTUG
+  /// alternative to the 5/3 and the two are easy to confuse. Coil 14 shifts
+  /// one way, coil 12 the other, and with neither energised the valve stays
+  /// exactly where it was last driven.
+  valve52Bistable(
+    '5/2 double',
+    '5/2 bistable — stays where it was last driven',
+    2,
+    'wherever it was last driven — a bistable valve has no rest position',
+  ),
 
-  const VtugValveKind(this.label, this.blurb);
+  /// `VUVG-B14-P53C-ZT-F-1T1L` — 5/3 closed centre. Three are fitted.
+  ///
+  /// Two pilot solenoids and a centring spring. Coil 14 gives port 4, coil
+  /// 12 gives port 2, and with neither energised the valve springs to the
+  /// middle with **both work ports blocked** — the cylinder is pneumatically
+  /// locked where it stands. That middle is a third commandable position,
+  /// not the absence of a command, which is why this valve gets a control a
+  /// 5/2 does not.
+  valve53Closed(
+    '5/3 closed',
+    'VUVG-B14-P53C — 5/3 closed centre, springs to mid',
+    2,
+    'the closed centre — both work ports blocked, cylinder locked',
+  );
+
+  const VtugValveKind(this.label, this.blurb, this.coilCount, this.restBlurb);
 
   /// Short name for the configure form's picker.
   final String label;
@@ -72,10 +113,31 @@ enum VtugValveKind {
 
   /// How many coils this position drives — and so how many LEDs the real
   /// slice wears.
-  int get coilCount => switch (this) {
-        VtugValveKind.blank => 0,
-        VtugValveKind.singleSolenoid => 1,
-        VtugValveKind.doubleSolenoid => 2,
+  final int coilCount;
+
+  /// Where the valve goes with no coil energised, in words the pane uses.
+  ///
+  /// The whole reason [valve52Bistable] and [valve53Closed] are separate
+  /// kinds: same two coils, same two lamps, and this sentence differs.
+  final String restBlurb;
+
+  /// Whether de-energising every coil is a position worth offering as a
+  /// command of its own.
+  ///
+  /// True for both two-coil valves, and it means different things on each —
+  /// see [midLabel]. False on a monostable, where "no coil energised" is
+  /// simply the port-2 end and already has a button.
+  bool get hasMidPosition => coilCount == 2;
+
+  /// What the pane calls the both-coils-off position.
+  ///
+  /// `Centre` on a 5/3, which springs to a defined middle. `Hold` on a
+  /// bistable, which does not spring anywhere and simply stays put. Calling
+  /// both of them 'Centre' would tell an operator a bistable valve has a
+  /// mid position, which is the mistake this whole enum exists to prevent.
+  String get midLabel => switch (this) {
+        VtugValveKind.valve53Closed => 'Centre',
+        _ => 'Hold',
       };
 }
 
@@ -120,18 +182,38 @@ int vtugBitIndex(int position, VtugCoil coil) {
 
 /// Hand control in effect at one valve position.
 ///
+/// Named after the ports rather than after "open" and "closed". On a 5/2
+/// those two words are a fair description of a cylinder's two ends; on a 5/3
+/// closed centre they are actively wrong, because the position an operator
+/// most wants — both coils off, both work ports blocked — is neither open
+/// nor closed. `4` and `2` are also what is moulded into the valve, so the
+/// pane and the hardware use one vocabulary.
+///
 /// [auto] is not an override at all — it is the absence of one, and the
 /// position it leaves the valve in is whatever the PLC's own logic drives.
 enum VtugForce {
   /// The PLC has the valve. Nothing is held.
-  auto,
+  auto('Auto'),
 
-  /// Held with coil 14 energised — the valve driven to port 4.
-  open,
+  /// Held with coil 14 energised — pressure on port 4.
+  port4('Port 4'),
 
-  /// Held with coil 12 energised on a double, or with coil 14 dropped on a
-  /// single so the spring takes it back.
-  closed;
+  /// Both coils held de-energised.
+  ///
+  /// Only offered on a two-coil valve, and it means what that valve's
+  /// spring does: the closed centre on a 5/3, the last position on a
+  /// bistable. See [VtugValveKind.midLabel].
+  mid('Centre'),
+
+  /// Held with coil 12 energised on a two-coil valve, or with coil 14
+  /// de-energised on a monostable so the spring takes it back.
+  port2('Port 2');
+
+  const VtugForce(this.label);
+
+  /// The segment's caption. [mid] is overridden per valve kind — ask
+  /// [VtugValveKind.midLabel] rather than reading this one for it.
+  final String label;
 }
 
 /// One valve position as the terminal last reported it, plus whatever the
@@ -178,15 +260,62 @@ class VtugValve {
   /// The coil state for [coil], or null when this valve has no such coil.
   bool? coilState(VtugCoil coil) => switch (coil) {
         VtugCoil.p14 => kind == VtugValveKind.blank ? null : coil14,
-        VtugCoil.p12 => kind == VtugValveKind.doubleSolenoid ? coil12 : null,
+        VtugCoil.p12 => kind.coilCount == 2 ? coil12 : null,
       };
 
   /// Whether pushing [coil] does anything on this valve.
   bool hasCoil(VtugCoil coil) => switch (coil) {
-        VtugCoil.p14 => kind != VtugValveKind.blank,
-        VtugCoil.p12 => kind == VtugValveKind.doubleSolenoid,
+        VtugCoil.p14 => kind.coilCount >= 1,
+        VtugCoil.p12 => kind.coilCount == 2,
       };
+
+  /// Whether this valve has a both-coils-off position worth commanding —
+  /// see [VtugValveKind.hasMidPosition].
+  bool get hasMid => kind.hasMidPosition;
+
+  /// The force settings this valve can actually be put into, in the order
+  /// the positions sit on its symbol: port 4, the middle, port 2.
+  List<VtugForce> get availableForces => [
+        VtugForce.auto,
+        VtugForce.port4,
+        if (hasMid) VtugForce.mid,
+        VtugForce.port2,
+      ];
+
+  /// Which box of this valve's schematic the spool is in, or null when the
+  /// terminal has not said.
+  ///
+  /// Read off the coils rather than off [force], because the schematic is a
+  /// picture of the valve and not of who is driving it: a valve the PLC has
+  /// energised is in exactly the same position as one an operator is
+  /// holding there, and the symbol should show that position either way.
+  ValveSymbolPosition get symbolPosition {
+    final on14 = coil14;
+    if (on14 == null) return null;
+    if (on14) return 0;
+    if (kind.coilCount == 2) {
+      final on12 = coil12;
+      if (on12 == null) return null;
+      if (on12) return kind.hasMidPosition ? 2 : 1;
+      // Neither coil energised on a two-coil valve. A 5/3 has sprung to its
+      // centre; a bistable is wherever it was last driven, and this page
+      // has no way to know where that is — so it claims no box rather than
+      // guessing one.
+      return kind == VtugValveKind.valve53Closed ? 1 : null;
+    }
+    // Monostable, de-energised: the spring has it, and that is a position
+    // this page does know.
+    return 1;
+  }
 }
+
+/// The schematic [kind] draws as, or null for a position with no valve.
+ValveSymbolKind? vtugSymbolKind(VtugValveKind kind) => switch (kind) {
+      VtugValveKind.blank => null,
+      VtugValveKind.valve52Mono => ValveSymbolKind.fiveTwoMono,
+      VtugValveKind.valve52Bistable => ValveSymbolKind.fiveTwoBistable,
+      VtugValveKind.valve53Closed => ValveSymbolKind.fiveThreeClosed,
+    };
 
 /// A whole terminal, decoded — eight positions and the two words behind them.
 ///
@@ -280,9 +409,8 @@ class VtugTerminal {
               kind: kind,
               coil14:
                   kind == VtugValveKind.blank ? null : bitOf(coils, bit14),
-              coil12: kind == VtugValveKind.doubleSolenoid
-                  ? bitOf(coils, bit12)
-                  : null,
+              coil12:
+                  kind.coilCount == 2 ? bitOf(coils, bit12) : null,
               force: vtugForceOf(
                 kind: kind,
                 position: position,
@@ -316,9 +444,15 @@ class VtugTerminal {
 
 /// Reads the force state of one position out of the two command words.
 ///
-/// A single-solenoid valve has one coil, so "closed" is that coil held OFF
+/// A single-solenoid valve has one coil, so port 2 is that coil held OFF
 /// rather than a second coil held on. Held-off is still a hold: the mask bit
 /// is set, so the PLC has handed the coil over and is not driving it.
+///
+/// On a two-coil valve, both coils held with neither driven is
+/// [VtugForce.mid] — the closed centre on a 5/3, the last position on a
+/// bistable. That is a command somebody gave, not an absence of one, and
+/// reading it back as [VtugForce.auto] would show the PLC in charge of a
+/// valve it has been taken off.
 VtugForce vtugForceOf({
   required VtugValveKind kind,
   required int position,
@@ -332,20 +466,16 @@ VtugForce vtugForceOf({
   final bit12 = vtugBitIndex(position, VtugCoil.p12);
 
   final held14 = bit(forceMask, bit14);
-  final held12 = kind == VtugValveKind.doubleSolenoid && bit(forceMask, bit12);
+  final held12 = kind.coilCount == 2 && bit(forceMask, bit12);
   if (!held14 && !held12) return VtugForce.auto;
 
-  if (kind == VtugValveKind.doubleSolenoid) {
-    if (held12 && bit(forceValue, bit12)) return VtugForce.closed;
-    if (held14 && bit(forceValue, bit14)) return VtugForce.open;
-    // Both coils taken and neither driven — a double solenoid holds where
-    // it was, so this is a hold with no direction. Call it closed: it is
-    // the state the operator reached by releasing 14, and 'auto' would be
-    // a lie about who has the valve.
-    return VtugForce.closed;
+  if (kind.coilCount == 2) {
+    if (held12 && bit(forceValue, bit12)) return VtugForce.port2;
+    if (held14 && bit(forceValue, bit14)) return VtugForce.port4;
+    return VtugForce.mid;
   }
 
-  return bit(forceValue, bit14) ? VtugForce.open : VtugForce.closed;
+  return bit(forceValue, bit14) ? VtugForce.port4 : VtugForce.port2;
 }
 
 /// The command words that put [position] into [force], applied over the
@@ -353,6 +483,11 @@ VtugForce vtugForceOf({
 ///
 /// Returns the pair to write. Both words go in one write of the struct's
 /// command members — see [VtugTerminal] for why they cannot be split.
+///
+/// A [force] the valve cannot reach is a no-op rather than an approximation:
+/// asking a monostable for [VtugForce.mid] leaves the words alone, because
+/// the nearest thing that valve has is port 2 and quietly substituting it
+/// would move a cylinder nobody asked to move.
 ({int mask, int value}) vtugApplyForce({
   required int forceMask,
   required int forceValue,
@@ -363,42 +498,39 @@ VtugForce vtugForceOf({
   if (kind == VtugValveKind.blank) {
     return (mask: forceMask, value: forceValue);
   }
+  if (force == VtugForce.mid && !kind.hasMidPosition) {
+    return (mask: forceMask, value: forceValue);
+  }
 
   final bit14 = vtugBitIndex(position, VtugCoil.p14);
   final bit12 = vtugBitIndex(position, VtugCoil.p12);
-  final isDouble = kind == VtugValveKind.doubleSolenoid;
-
-  var mask = forceMask;
-  var value = forceValue;
+  final twoCoil = kind.coilCount == 2;
 
   int set(int word, int index, bool on) =>
       on ? word | (1 << index) : word & ~(1 << index);
 
-  switch (force) {
-    case VtugForce.auto:
-      mask = set(mask, bit14, false);
-      value = set(value, bit14, false);
-      if (isDouble) {
-        mask = set(mask, bit12, false);
-        value = set(value, bit12, false);
-      }
-    case VtugForce.open:
-      mask = set(mask, bit14, true);
-      value = set(value, bit14, true);
-      if (isDouble) {
-        mask = set(mask, bit12, true);
-        value = set(value, bit12, false);
-      }
-    case VtugForce.closed:
-      mask = set(mask, bit14, true);
-      value = set(value, bit14, false);
-      if (isDouble) {
-        mask = set(mask, bit12, true);
-        value = set(value, bit12, true);
-      }
+  /// Applies [take] to the mask and [drive] to the value for both coils.
+  ({int mask, int value}) both(bool take, bool drive14, bool drive12) {
+    var mask = set(forceMask, bit14, take);
+    var value = set(forceValue, bit14, drive14);
+    if (twoCoil) {
+      mask = set(mask, bit12, take);
+      value = set(value, bit12, drive12);
+    }
+    return (mask: mask, value: value);
   }
 
-  return (mask: mask, value: value);
+  return switch (force) {
+    // Handing a coil back with its value bit still set would bring it up
+    // energised the moment anything set the mask bit again, so auto clears
+    // both words, not just the mask.
+    VtugForce.auto => both(false, false, false),
+    VtugForce.port4 => both(true, true, false),
+    VtugForce.port2 => both(true, !twoCoil ? false : false, true),
+    // Both coils taken and neither driven. On a 5/3 the spring puts the
+    // valve in its closed centre; on a bistable it stays where it was.
+    VtugForce.mid => both(true, false, false),
+  };
 }
 
 /// The command words that energise one coil for as long as it is held.
@@ -736,9 +868,10 @@ class _VtugForceRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final symbolKind = vtugSymbolKind(valve.kind);
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
@@ -765,6 +898,35 @@ class _VtugForceRow extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 4),
+          // The schematic and the momentary overrides share a line: the
+          // symbol says where the spool is and the two buttons are the
+          // manual override on the valve itself, which is the pairing an
+          // electrician already has in their hands.
+          Padding(
+            padding: const EdgeInsets.only(left: 34),
+            child: Row(
+              children: [
+                if (symbolKind != null)
+                  ValveSymbol(
+                    kind: symbolKind,
+                    active: valve.symbolPosition,
+                  ),
+                const Spacer(),
+                for (final coil in VtugCoil.values)
+                  if (valve.hasCoil(coil))
+                    Padding(
+                      padding: const EdgeInsets.only(left: 6),
+                      child: VtugPushButton(
+                        label: coil.label,
+                        onPressedChanged: onPush == null
+                            ? null
+                            : (pressed) => onPush!(valve, coil, pressed),
+                      ),
+                    ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 6),
           Padding(
             padding: const EdgeInsets.only(left: 34),
             child: Row(
@@ -792,19 +954,19 @@ class _VtugForceRow extends StatelessWidget {
                         ),
                       ),
                     ),
-                    segments: const [
-                      ButtonSegment(
-                        value: VtugForce.auto,
-                        label: Text('Auto'),
-                      ),
-                      ButtonSegment(
-                        value: VtugForce.open,
-                        label: Text('Open'),
-                      ),
-                      ButtonSegment(
-                        value: VtugForce.closed,
-                        label: Text('Close'),
-                      ),
+                    // Built from the valve, not from the enum: a monostable
+                    // has no middle to offer, and a segment that does
+                    // nothing when pressed is worse than an absent one.
+                    segments: [
+                      for (final force in valve.availableForces)
+                        ButtonSegment(
+                          value: force,
+                          label: Text(
+                            force == VtugForce.mid
+                                ? valve.kind.midLabel
+                                : force.label,
+                          ),
+                        ),
                     ],
                     selected: {valve.force},
                     onSelectionChanged: onForce == null
@@ -813,18 +975,6 @@ class _VtugForceRow extends StatelessWidget {
                             onForce!(valve, selection.first),
                   ),
                 ),
-                const SizedBox(width: 8),
-                for (final coil in VtugCoil.values)
-                  if (valve.hasCoil(coil))
-                    Padding(
-                      padding: const EdgeInsets.only(left: 4),
-                      child: VtugPushButton(
-                        label: coil.label,
-                        onPressedChanged: onPush == null
-                            ? null
-                            : (pressed) => onPush!(valve, coil, pressed),
-                      ),
-                    ),
               ],
             ),
           ),
@@ -898,7 +1048,7 @@ void showVtugPane({
 // The bus node
 // ---------------------------------------------------------------------------
 
-/// What is known about the CTEU-EC on the terminal's left end plate.
+/// What is known about the CTEU-EC bolted to the terminal.
 ///
 /// Nothing on this plant publishes the node. Its LEDs are not in any GVL,
 /// the EtherCAT slave state is not exported, and no PLC variable names it —
@@ -908,15 +1058,14 @@ void showVtugPane({
 ///
 /// That is a real diagnostic and it is the one an operator wants. Data
 /// arriving means the node is in OPERATIONAL, the I-Port link to the valve
-/// cluster is up, and at least one EtherCAT port has link — RUN, X1 and L/A1
-/// green, and this says so. Data not arriving means the node is somewhere
-/// between INIT and a pulled cable, and this does *not* guess which: the
-/// lamps go to [CteuLedState.unknown] rather than picking a fault the node
-/// never reported.
+/// cluster is up, and the incoming EtherCAT port has link — `Run`, `X1` and
+/// `L/A1` green, and this says so. Data not arriving means the node is
+/// somewhere between INIT and a pulled cable, and this does *not* guess
+/// which: the lamps go to [CteuLedState.unknown] rather than picking a
+/// fault the node never reported.
 ///
-/// The lamps this cannot know — ERROR, X2, L/A2 — stay unknown in both
-/// cases. Drawing ERROR dark because no error arrived would be reading a
-/// silence as an all-clear.
+/// The lamps this cannot know — `X2` and `L/A2`, the second I-Port device
+/// and the outgoing bus port — stay unknown in both cases.
 enum CteuLink {
   /// Process data is arriving from the valve cluster behind this node.
   live,
@@ -924,8 +1073,15 @@ enum CteuLink {
   /// It is not. Why is not known from here.
   dark;
 
-  /// The node's lamps in face order — the CTEU's own column then the
-  /// EtherCAT column, which is how they are silkscreened.
+  /// The node's lamps, in the order they are silkscreened down the face.
+  ///
+  /// Six, in one column: `PS`, `X1`, `X2`, `Run`, `L/A2`, `L/A1`. Taken
+  /// from a photograph of the node itself, and worth stating because the
+  /// installation instructions do not draw the face — reading them alone
+  /// gives you a seventh lamp, `ERROR`, in a second column, and the
+  /// hardware has neither. An HMI that draws a diagnostic lamp the
+  /// electrician cannot find on the housing is worse than one that draws
+  /// none.
   List<CteuLed> get leds {
     final known = this == CteuLink.live;
     CteuLedState green() => known ? CteuLedState.green : CteuLedState.unknown;
@@ -933,11 +1089,9 @@ enum CteuLink {
       CteuLed('PS', green()),
       CteuLed('X1', green()),
       const CteuLed('X2', CteuLedState.unknown),
-      const CteuLed('', CteuLedState.unknown),
-      CteuLed('RUN', green()),
-      const CteuLed('ERR', CteuLedState.unknown),
-      CteuLed('L/A1', green()),
+      CteuLed('Run', green()),
       const CteuLed('L/A2', CteuLedState.unknown),
+      CteuLed('L/A1', green()),
     ];
   }
 }
@@ -967,16 +1121,16 @@ class CteuPaneSection extends StatelessWidget {
         Text(
           link == CteuLink.live
               ? 'The valve cluster is publishing, so the node is in '
-                  'OPERATIONAL with the I-Port link up and at least one '
-                  'EtherCAT port connected. PS, X1, RUN and L/A1 are drawn '
+                  'OPERATIONAL with the I-Port link up and the incoming '
+                  'EtherCAT port connected. PS, X1, Run and L/A1 are drawn '
                   'green on that basis. The node itself publishes nothing '
-                  'to this page — ERROR, X2 and L/A2 are the terminal\'s to '
-                  'read, not ours.'
+                  'to this page — X2 and L/A2 are the housing\'s to read, '
+                  'not ours.'
               : 'Nothing is arriving from the valve cluster. The node could '
                   'be in INIT, the I-Port link could be down, or the '
                   'EtherCAT cable could be out — the node publishes nothing '
                   'to this page, so its lamps are drawn unknown rather than '
-                  'guessing which. Read them on the terminal.',
+                  'guessing which. Read them on the housing.',
           style: theme.textTheme.bodySmall,
         ),
       ],

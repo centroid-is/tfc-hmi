@@ -9,7 +9,7 @@ part of 'festo.dart';
 VtugSliceConfig _$VtugSliceConfigFromJson(Map<String, dynamic> json) =>
     VtugSliceConfig(
       kind: $enumDecodeNullable(_$VtugValveKindEnumMap, json['kind']) ??
-          VtugValveKind.doubleSolenoid,
+          VtugValveKind.valve52Mono,
       name: json['name'] as String? ?? '',
     );
 
@@ -21,8 +21,9 @@ Map<String, dynamic> _$VtugSliceConfigToJson(VtugSliceConfig instance) =>
 
 const _$VtugValveKindEnumMap = {
   VtugValveKind.blank: 'blank',
-  VtugValveKind.singleSolenoid: 'singleSolenoid',
-  VtugValveKind.doubleSolenoid: 'doubleSolenoid',
+  VtugValveKind.valve52Mono: 'valve52Mono',
+  VtugValveKind.valve52Bistable: 'valve52Bistable',
+  VtugValveKind.valve53Closed: 'valve53Closed',
 };
 
 FestoVTUGConfig _$FestoVTUGConfigFromJson(Map<String, dynamic> json) =>

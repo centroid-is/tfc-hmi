@@ -42,9 +42,23 @@ void main() {
         ),
       );
 
-  FestoVTUGConfig config() => FestoVTUGConfig(
+  /// A terminal whose population the assertions can rely on.
+  ///
+  /// Spelled out rather than taken from the default, which is the manifold
+  /// as ordered — five 5/2s then three 5/3s. These tests are about the word
+  /// arithmetic reaching `StateMan`, and a default that changes when
+  /// somebody re-reads the parts list should not silently change what they
+  /// assert.
+  FestoVTUGConfig config({
+    VtugValveKind kind = VtugValveKind.valve53Closed,
+  }) =>
+      FestoVTUGConfig(
         nameOrId: 'ST303.A1',
         stateKey: key,
+        slices: [
+          for (var i = 0; i < vtugPositionCount; i++)
+            VtugSliceConfig(kind: kind),
+        ],
       )..size = RelativeSize(width: 0.9, height: 0.4);
 
   /// Pumps the asset, lets the StateMan future land, pushes one struct, and
@@ -97,12 +111,13 @@ void main() {
     addTearDown(closeSidePane);
   });
 
-  testWidgets('Open on position 1 writes both command words', (tester) async {
+  testWidgets('Port 4 on position 1 writes both command words',
+      (tester) async {
     final stateMan = _FakeStateMan();
     await openPane(tester, config(), stateMan);
     addTearDown(closeSidePane);
 
-    await tester.tap(find.text('Open').first);
+    await tester.tap(find.text('Port 4').first);
     await tester.pumpAndSettle();
 
     expect(stateMan.writes, hasLength(1));
@@ -113,6 +128,45 @@ void main() {
     expect(write.forceValue, 0x1);
   });
 
+  testWidgets('Centre on a 5/3 takes both coils and drives neither',
+      (tester) async {
+    // The command a 5/3 exists for, and the one that has no equivalent on a
+    // 5/2: both coils off, spring centres the valve, both work ports
+    // blocked.
+    final stateMan = _FakeStateMan();
+    await openPane(tester, config(), stateMan);
+    addTearDown(closeSidePane);
+
+    await tester.tap(find.text('Centre').first);
+    await tester.pumpAndSettle();
+
+    final write = stateMan.writes.single;
+    expect(write.forceMask, 0x3);
+    expect(write.forceValue, 0);
+  });
+
+  testWidgets('a monostable offers no Centre at all', (tester) async {
+    final stateMan = _FakeStateMan();
+    await openPane(
+      tester,
+      config(kind: VtugValveKind.valve52Mono),
+      stateMan,
+    );
+    addTearDown(closeSidePane);
+
+    expect(find.text('Centre'), findsNothing,
+        reason: 'a segment that does nothing when pressed is worse than an '
+            'absent one');
+
+    // And port 2 on that valve is its one coil held OFF, not a second coil
+    // driven on.
+    await tester.tap(find.text('Port 2').first);
+    await tester.pumpAndSettle();
+    final write = stateMan.writes.single;
+    expect(write.forceMask, 0x1);
+    expect(write.forceValue, 0);
+  });
+
   testWidgets('a force applies over the words already in effect',
       (tester) async {
     final stateMan = _FakeStateMan();
@@ -121,8 +175,8 @@ void main() {
         forceMask: 0x3, forceValue: 0x1);
     addTearDown(closeSidePane);
 
-    // Close position 2 — bits 2 and 3.
-    await tester.tap(find.text('Close').at(1));
+    // Drive position 2 to port 2 — bits 2 and 3.
+    await tester.tap(find.text('Port 2').at(1));
     await tester.pumpAndSettle();
 
     final write = stateMan.writes.single;
@@ -209,7 +263,7 @@ void main() {
     await openPane(tester, config(), stateMan, coils: 0x0A);
     addTearDown(closeSidePane);
 
-    await tester.tap(find.text('Open').first);
+    await tester.tap(find.text('Port 4').first);
     await tester.pumpAndSettle();
 
     final sent = stateMan.writes.single.struct;

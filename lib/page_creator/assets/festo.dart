@@ -39,7 +39,7 @@ part 'festo.g.dart';
 @JsonSerializable(explicitToJson: true)
 class VtugSliceConfig {
   VtugSliceConfig({
-    this.kind = VtugValveKind.doubleSolenoid,
+    this.kind = VtugValveKind.valve52Mono,
     this.name = '',
   });
 
@@ -57,13 +57,24 @@ class VtugSliceConfig {
   Map<String, dynamic> toJson() => _$VtugSliceConfigToJson(this);
 }
 
-/// A default manifold: eight double-solenoid positions.
+/// The manifold as ordered: five 5/2 monostables, then three 5/3 closed
+/// centres.
 ///
-/// Eight doubles is what `VAEM-L1-S-8-PT [16DO]` is wired for, so it is the
-/// configuration that uses every output the cluster has — the right thing to
-/// drop on a page and then blank down, rather than the other way round.
+/// From the parts list — `573482 VUVG-B14-M52 x5` and
+/// `573485 VUVG-B14-P53C x3` — which is eight positions and eleven of the
+/// sixteen coils `VAEM-L1-S-8-PT [16DO]` can drive.
+///
+/// **The order along the manifold is a guess**: the parts list says how many
+/// of each, not which position each sits at, so this puts them in the order
+/// they were listed. Every position's kind is editable, so a page built
+/// against the real terminal fixes it in the editor rather than here.
 List<VtugSliceConfig> defaultVtugSlices() => [
-      for (var i = 0; i < vtugPositionCount; i++) VtugSliceConfig(),
+      for (var i = 0; i < vtugPositionCount; i++)
+        VtugSliceConfig(
+          kind: i < 5
+              ? VtugValveKind.valve52Mono
+              : VtugValveKind.valve53Closed,
+        ),
     ];
 
 /// Festo VTUG-14 valve terminal with a CTEU-EC bus node.

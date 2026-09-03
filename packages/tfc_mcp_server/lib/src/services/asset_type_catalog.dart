@@ -1212,11 +1212,14 @@ class AssetTypeCatalog {
       category: 'Festo Devices',
       description:
           'Festo VTUG-14 valve terminal with a CTEU-EC bus node: eight valve '
-          'positions, up to sixteen solenoid coils, with a coil lamp per '
-          'pilot solenoid on the drawing and hand control (force open, force '
-          'close, momentary push per coil) in the side pane. What is fitted '
-          'at each position is set on the page, not read from a key -- a '
-          'blanking plate publishes nothing to discover it by.',
+          'positions on a VAEM-L1-S-8-PT interface, up to sixteen solenoid '
+          'coils. As ordered it carries five VUVG-B14-M52 (5/2 monostable) '
+          'and three VUVG-B14-P53C (5/3 closed centre). The drawing gives '
+          'each position a lamp per pilot solenoid; the side pane gives each '
+          'one an ISO 1219 schematic showing where the spool is, a latch '
+          '(port 4 / centre / port 2) and a momentary push per coil. What is '
+          'fitted at each position is set on the page, not read from a key -- '
+          'a blanking plate publishes nothing to discover it by.',
       properties: [
         AssetPropertyInfo(
             name: 'nameOrId',
@@ -1233,8 +1236,9 @@ class AssetTypeCatalog {
             type: 'List',
             description:
                 'The eight valve positions, position 1 first. Each entry is '
-                '{kind, name}, where kind is blank, singleSolenoid or '
-                'doubleSolenoid.'),
+                '{kind, name}, where kind is blank, valve52Mono, '
+                'valve52Bistable or valve53Closed. A 5/3 and a bistable 5/2 '
+                'both have two coils; only the 5/3 has a commandable centre.'),
       ],
     ),
     AssetTypeInfo(

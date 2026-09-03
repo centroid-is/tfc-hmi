@@ -3,10 +3,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/festo.dart';
 import 'package:tfc/page_creator/assets/vtug.dart';
+import 'package:tfc/painter/festo/valve_symbol.dart';
 import 'package:tfc/painter/festo/vtug.dart'
     show
         CteuLedState,
         cteuFaceMm,
+        vaemWidthMm,
         vtugEndPlateWidthMm,
         vtugFaceMm,
         vtugSliceCount,
@@ -51,8 +53,10 @@ void main() {
         ),
       );
 
-  List<VtugValveKind> allDouble() =>
-      List.filled(vtugPositionCount, VtugValveKind.doubleSolenoid);
+  /// A manifold of nothing but 5/3s — the two-coil case, where every
+  /// position has a coil 12 and a middle.
+  List<VtugValveKind> allTwoCoil() =>
+      List.filled(vtugPositionCount, VtugValveKind.valve53Closed);
 
   DynamicValue struct({
     int coils = 0,
@@ -102,7 +106,7 @@ void main() {
 
   group('decode', () {
     test('a null struct leaves every fitted position unknown', () {
-      final terminal = VtugTerminal.read(null, kinds: allDouble());
+      final terminal = VtugTerminal.read(null, kinds: allTwoCoil());
       expect(terminal.isUnknown, isTrue);
       expect(terminal.valves, hasLength(vtugPositionCount));
       for (final valve in terminal.valves) {
@@ -115,7 +119,7 @@ void main() {
     test('an energised coil reads back on the position that owns it', () {
       // Position 3's coil 12 is bit 5.
       final terminal =
-          VtugTerminal.read(struct(coils: 1 << 5), kinds: allDouble());
+          VtugTerminal.read(struct(coils: 1 << 5), kinds: allTwoCoil());
       expect(terminal.valves[2].coil12, isTrue);
       expect(terminal.valves[2].coil14, isFalse);
       expect(terminal.energisedCount, 1);
@@ -127,7 +131,7 @@ void main() {
     });
 
     test('a blanked position reports no coils at all', () {
-      final kinds = allDouble()..[4] = VtugValveKind.blank;
+      final kinds = allTwoCoil()..[4] = VtugValveKind.blank;
       // Every bit set — a blank must still show nothing, because the bits
       // behind it drive no coil.
       final terminal = VtugTerminal.read(struct(coils: 0xFFFF), kinds: kinds);
@@ -138,7 +142,7 @@ void main() {
     });
 
     test('a single-solenoid position reports coil 14 only', () {
-      final kinds = allDouble()..[0] = VtugValveKind.singleSolenoid;
+      final kinds = allTwoCoil()..[0] = VtugValveKind.valve52Mono;
       final terminal = VtugTerminal.read(
         // Bits 0 and 1 — coil 14 and the bit where coil 12 would be.
         struct(coils: 0x3),
@@ -154,7 +158,7 @@ void main() {
     test('descriptions land on the positions they were given for', () {
       final terminal = VtugTerminal.read(
         struct(),
-        kinds: allDouble(),
+        kinds: allTwoCoil(),
         descriptions: const ['Gate lift', '', '  ', 'Pusher'],
       );
       expect(terminal.valves[0].description, 'Gate lift');
@@ -167,40 +171,40 @@ void main() {
   });
 
   group('force words', () {
-    test('open takes both coils and drives 14 on a double', () {
+    test('port 4 takes both coils and drives 14 on a two-coil valve', () {
       final next = vtugApplyForce(
         forceMask: 0,
         forceValue: 0,
-        kind: VtugValveKind.doubleSolenoid,
+        kind: VtugValveKind.valve53Closed,
         position: 1,
-        force: VtugForce.open,
+        force: VtugForce.port4,
       );
-      // Both coils taken: on a bistable valve, holding 14 on while leaving
-      // 12 to the PLC is a valve two masters are driving at once.
+      // Both coils taken: holding 14 on while leaving 12 to the PLC is a
+      // valve two masters are driving at once.
       expect(next.mask, 0x3);
       expect(next.value, 0x1);
     });
 
-    test('close takes both coils and drives 12 on a double', () {
+    test('port 2 takes both coils and drives 12 on a two-coil valve', () {
       final next = vtugApplyForce(
         forceMask: 0,
         forceValue: 0,
-        kind: VtugValveKind.doubleSolenoid,
+        kind: VtugValveKind.valve53Closed,
         position: 1,
-        force: VtugForce.closed,
+        force: VtugForce.port2,
       );
       expect(next.mask, 0x3);
       expect(next.value, 0x2);
     });
 
-    test('close on a single holds the one coil OFF rather than driving a '
-        'second', () {
+    test('port 2 on a monostable holds the one coil OFF rather than driving '
+        'a second', () {
       final next = vtugApplyForce(
         forceMask: 0,
         forceValue: 0,
-        kind: VtugValveKind.singleSolenoid,
+        kind: VtugValveKind.valve52Mono,
         position: 2,
-        force: VtugForce.closed,
+        force: VtugForce.port2,
       );
       // Bit 2 taken, bit 2 low, and bit 3 — the coil that is not fitted —
       // untouched in both words.
@@ -212,14 +216,14 @@ void main() {
       final held = vtugApplyForce(
         forceMask: 0,
         forceValue: 0,
-        kind: VtugValveKind.doubleSolenoid,
+        kind: VtugValveKind.valve53Closed,
         position: 4,
-        force: VtugForce.open,
+        force: VtugForce.port4,
       );
       final released = vtugApplyForce(
         forceMask: held.mask,
         forceValue: held.value,
-        kind: VtugValveKind.doubleSolenoid,
+        kind: VtugValveKind.valve53Closed,
         position: 4,
         force: VtugForce.auto,
       );
@@ -233,16 +237,16 @@ void main() {
       final first = vtugApplyForce(
         forceMask: 0,
         forceValue: 0,
-        kind: VtugValveKind.doubleSolenoid,
+        kind: VtugValveKind.valve53Closed,
         position: 7,
-        force: VtugForce.open,
+        force: VtugForce.port4,
       );
       final second = vtugApplyForce(
         forceMask: first.mask,
         forceValue: first.value,
-        kind: VtugValveKind.doubleSolenoid,
+        kind: VtugValveKind.valve53Closed,
         position: 2,
-        force: VtugForce.closed,
+        force: VtugForce.port2,
       );
       // Position 7 is bits 12/13, position 2 is bits 2/3.
       expect(second.mask, (0x3 << 12) | (0x3 << 2));
@@ -255,7 +259,7 @@ void main() {
         forceValue: 0,
         kind: VtugValveKind.blank,
         position: 5,
-        force: VtugForce.open,
+        force: VtugForce.port4,
       );
       expect(next.mask, 0);
       expect(next.value, 0);
@@ -264,9 +268,15 @@ void main() {
     test('the words round-trip back through the decode', () {
       for (final force in VtugForce.values) {
         for (final kind in [
-          VtugValveKind.singleSolenoid,
-          VtugValveKind.doubleSolenoid,
+          VtugValveKind.valve52Mono,
+          VtugValveKind.valve52Bistable,
+          VtugValveKind.valve53Closed,
         ]) {
+          // A monostable has no middle to be put into, so asking for one is
+          // a no-op and reads back as whatever it already was — not as
+          // `mid`. Skip that pair rather than assert a round trip that the
+          // hardware cannot make.
+          if (force == VtugForce.mid && !kind.hasMidPosition) continue;
           final next = vtugApplyForce(
             forceMask: 0,
             forceValue: 0,
@@ -286,6 +296,168 @@ void main() {
           );
         }
       }
+    });
+  });
+
+  group('the middle position', () {
+    // The whole reason 5/3 and 5/2-bistable are separate kinds. Both have
+    // two coils and two lamps; only one of them springs to a defined
+    // middle, and only one of them should offer it as a command.
+    test('a 5/3 offers a centre and a monostable does not', () {
+      VtugValve valve(VtugValveKind kind) => VtugValve(
+            position: 1,
+            kind: kind,
+            coil14: false,
+            coil12: kind.coilCount == 2 ? false : null,
+            force: VtugForce.auto,
+          );
+
+      expect(valve(VtugValveKind.valve53Closed).availableForces,
+          [VtugForce.auto, VtugForce.port4, VtugForce.mid, VtugForce.port2]);
+      expect(valve(VtugValveKind.valve52Mono).availableForces,
+          [VtugForce.auto, VtugForce.port4, VtugForce.port2]);
+    });
+
+    test('a 5/3 calls it Centre and a bistable calls it Hold', () {
+      // Same both-coils-off command, two different things happening in the
+      // pipe. Calling both 'Centre' would tell an operator a bistable valve
+      // has a mid position it does not have.
+      expect(VtugValveKind.valve53Closed.midLabel, 'Centre');
+      expect(VtugValveKind.valve52Bistable.midLabel, 'Hold');
+    });
+
+    test('centring takes both coils and drives neither', () {
+      final next = vtugApplyForce(
+        forceMask: 0,
+        forceValue: 0,
+        kind: VtugValveKind.valve53Closed,
+        position: 1,
+        force: VtugForce.mid,
+      );
+      expect(next.mask, 0x3,
+          reason: 'both coils must be taken off the PLC — the middle is a '
+              'command, not an absence of one');
+      expect(next.value, 0);
+      expect(
+        vtugForceOf(
+          kind: VtugValveKind.valve53Closed,
+          position: 1,
+          forceMask: next.mask,
+          forceValue: next.value,
+        ),
+        VtugForce.mid,
+      );
+    });
+
+    test('asking a monostable for the middle changes nothing', () {
+      // The nearest thing that valve has is port 2, and quietly
+      // substituting it would move a cylinder nobody asked to move.
+      final next = vtugApplyForce(
+        forceMask: 0x40,
+        forceValue: 0x40,
+        kind: VtugValveKind.valve52Mono,
+        position: 3,
+        force: VtugForce.mid,
+      );
+      expect(next.mask, 0x40);
+      expect(next.value, 0x40);
+    });
+  });
+
+  group('the schematic', () {
+    VtugValve valve(VtugValveKind kind, {bool? on14, bool? on12}) => VtugValve(
+          position: 1,
+          kind: kind,
+          coil14: on14,
+          coil12: on12,
+          force: VtugForce.auto,
+        );
+
+    test('each valve draws the symbol for the part it is', () {
+      expect(vtugSymbolKind(VtugValveKind.valve52Mono),
+          ValveSymbolKind.fiveTwoMono);
+      expect(vtugSymbolKind(VtugValveKind.valve52Bistable),
+          ValveSymbolKind.fiveTwoBistable);
+      expect(vtugSymbolKind(VtugValveKind.valve53Closed),
+          ValveSymbolKind.fiveThreeClosed);
+      expect(vtugSymbolKind(VtugValveKind.blank), isNull);
+    });
+
+    test('a 5/3 shows its closed centre when neither coil is energised', () {
+      expect(
+        valve(VtugValveKind.valve53Closed, on14: false, on12: false)
+            .symbolPosition,
+        1,
+        reason: 'the spring has centred it, and that is a position we know',
+      );
+      expect(
+        valve(VtugValveKind.valve53Closed, on14: true, on12: false)
+            .symbolPosition,
+        0,
+      );
+      expect(
+        valve(VtugValveKind.valve53Closed, on14: false, on12: true)
+            .symbolPosition,
+        2,
+      );
+    });
+
+    test('a bistable with both coils off claims no position', () {
+      // It is wherever it was last driven and this page has no way to know
+      // where that is. Drawing a box would be a guess presented as a fact.
+      expect(
+        valve(VtugValveKind.valve52Bistable, on14: false, on12: false)
+            .symbolPosition,
+        isNull,
+      );
+    });
+
+    test('a monostable de-energised is in its spring position', () {
+      expect(valve(VtugValveKind.valve52Mono, on14: false).symbolPosition, 1);
+      expect(valve(VtugValveKind.valve52Mono, on14: true).symbolPosition, 0);
+    });
+
+    test('nothing received claims no position at all', () {
+      expect(valve(VtugValveKind.valve53Closed).symbolPosition, isNull);
+      expect(valve(VtugValveKind.valve52Mono).symbolPosition, isNull);
+    });
+
+    test('the symbol follows the coils, not who is driving them', () {
+      // A valve the PLC has energised sits in exactly the same place as one
+      // an operator is holding there, and the schematic is a picture of the
+      // valve.
+      final auto = VtugValve(
+        position: 1,
+        kind: VtugValveKind.valve53Closed,
+        coil14: true,
+        coil12: false,
+        force: VtugForce.auto,
+      );
+      final held = VtugValve(
+        position: 1,
+        kind: VtugValveKind.valve53Closed,
+        coil14: true,
+        coil12: false,
+        force: VtugForce.port4,
+      );
+      expect(auto.symbolPosition, held.symbolPosition);
+    });
+
+    testWidgets('the pane draws one symbol per fitted position', (tester) async {
+      final kinds = List.filled(vtugPositionCount, VtugValveKind.blank)
+        ..[0] = VtugValveKind.valve52Mono
+        ..[1] = VtugValveKind.valve53Closed;
+      await tester.pumpWidget(wrap(
+        VtugPaneBody(
+          terminal: VtugTerminal.read(struct(), kinds: kinds),
+          onForce: (_, __) {},
+          onPush: (_, __, ___) {},
+        ),
+      ));
+      expect(find.byType(ValveSymbol), findsNWidgets(2));
+      // And the 5/3's control offers the centre the 5/2's does not.
+      expect(find.text('Centre'), findsOneWidget);
+      expect(find.text('Port 4'), findsNWidgets(2));
     });
   });
 
@@ -325,9 +497,9 @@ void main() {
       final held = vtugApplyForce(
         forceMask: 0,
         forceValue: 0,
-        kind: VtugValveKind.doubleSolenoid,
+        kind: VtugValveKind.valve53Closed,
         position: 1,
-        force: VtugForce.open,
+        force: VtugForce.port4,
       );
       final pushed = vtugApplyPush(
         forceMask: held.mask,
@@ -340,12 +512,12 @@ void main() {
       expect(pushed.value & 0x3, 0x1);
       expect(
         vtugForceOf(
-          kind: VtugValveKind.doubleSolenoid,
+          kind: VtugValveKind.valve53Closed,
           position: 1,
           forceMask: pushed.mask,
           forceValue: pushed.value,
         ),
-        VtugForce.open,
+        VtugForce.port4,
       );
     });
 
@@ -360,7 +532,7 @@ void main() {
     test('a held valve outranks a busy one', () {
       final terminal = VtugTerminal.read(
         struct(coils: 0xFF, forceMask: 0x3, forceValue: 0x1),
-        kinds: allDouble(),
+        kinds: allTwoCoil(),
       );
       expect(terminal.forcedCount, 1);
       expect(vtugPaneStatus(terminal).label, '1 held');
@@ -368,7 +540,7 @@ void main() {
 
     test('nothing received reads as no data, not as all quiet', () {
       expect(
-        vtugPaneStatus(VtugTerminal.read(null, kinds: allDouble())).label,
+        vtugPaneStatus(VtugTerminal.read(null, kinds: allTwoCoil())).label,
         'No data',
       );
     });
@@ -382,7 +554,7 @@ void main() {
     });
 
     test('quiet and busy are counted against the fitted positions', () {
-      final kinds = allDouble()
+      final kinds = allTwoCoil()
         ..[6] = VtugValveKind.blank
         ..[7] = VtugValveKind.blank;
       expect(
@@ -399,16 +571,27 @@ void main() {
   });
 
   group('bus node', () {
+    test('the face carries the six lamps the housing does, and no more', () {
+      // Straight off a photograph of the node. The installation
+      // instructions describe an EtherCAT error indicator and an earlier
+      // pass of this asset drew one; the housing has no such lamp, and a
+      // diagnostic an electrician cannot find on the hardware is worse than
+      // one that is missing.
+      expect(
+        [for (final led in CteuLink.live.leds) led.label],
+        ['PS', 'X1', 'X2', 'Run', 'L/A2', 'L/A1'],
+      );
+    });
+
     test('a live link lights only the lamps the data actually vouches for',
         () {
       final leds = {for (final led in CteuLink.live.leds) led.label: led.state};
       expect(leds['PS'], CteuLedState.green);
       expect(leds['X1'], CteuLedState.green);
-      expect(leds['RUN'], CteuLedState.green);
+      expect(leds['Run'], CteuLedState.green);
       expect(leds['L/A1'], CteuLedState.green);
       // Silence is not an all-clear: nothing published these, so nothing
       // claims them.
-      expect(leds['ERR'], CteuLedState.unknown);
       expect(leds['X2'], CteuLedState.unknown);
       expect(leds['L/A2'], CteuLedState.unknown);
     });
@@ -423,7 +606,7 @@ void main() {
 
   group('pane body', () {
     testWidgets('lists every position, blanks included', (tester) async {
-      final kinds = allDouble()..[3] = VtugValveKind.blank;
+      final kinds = allTwoCoil()..[3] = VtugValveKind.blank;
       await tester.pumpWidget(wrap(
         VtugPaneBody(terminal: VtugTerminal.read(struct(), kinds: kinds)),
       ));
@@ -438,7 +621,7 @@ void main() {
     testWidgets('with no command callbacks the force section says so',
         (tester) async {
       await tester.pumpWidget(wrap(
-        VtugPaneBody(terminal: VtugTerminal.read(struct(), kinds: allDouble())),
+        VtugPaneBody(terminal: VtugTerminal.read(struct(), kinds: allTwoCoil())),
       ));
       expect(find.textContaining('No command keys are configured'),
           findsOneWidget);
@@ -447,7 +630,7 @@ void main() {
 
     testWidgets('a blank position gets no force row', (tester) async {
       final kinds = List.filled(vtugPositionCount, VtugValveKind.blank)
-        ..[0] = VtugValveKind.doubleSolenoid;
+        ..[0] = VtugValveKind.valve53Closed;
       await tester.pumpWidget(wrap(
         VtugPaneBody(
           terminal: VtugTerminal.read(struct(), kinds: kinds),
@@ -461,8 +644,8 @@ void main() {
     testWidgets('a single-solenoid position offers one push button, a double '
         'offers two', (tester) async {
       final kinds = List.filled(vtugPositionCount, VtugValveKind.blank)
-        ..[0] = VtugValveKind.singleSolenoid
-        ..[1] = VtugValveKind.doubleSolenoid;
+        ..[0] = VtugValveKind.valve52Mono
+        ..[1] = VtugValveKind.valve53Closed;
       await tester.pumpWidget(wrap(
         VtugPaneBody(
           terminal: VtugTerminal.read(struct(), kinds: kinds),
@@ -482,7 +665,7 @@ void main() {
       // cannot see this" teaches an operator to stop opening panes.
       await tester.pumpWidget(wrap(
         VtugPaneBody(
-          terminal: VtugTerminal.read(struct(), kinds: allDouble()),
+          terminal: VtugTerminal.read(struct(), kinds: allTwoCoil()),
           link: CteuLink.live,
         ),
       ));
@@ -491,7 +674,7 @@ void main() {
 
       await tester.pumpWidget(wrap(
         VtugPaneBody(
-          terminal: VtugTerminal.read(null, kinds: allDouble()),
+          terminal: VtugTerminal.read(null, kinds: allTwoCoil()),
           link: CteuLink.dark,
         ),
       ));
@@ -503,14 +686,14 @@ void main() {
       final calls = <(int, VtugForce)>[];
       await tester.pumpWidget(wrap(
         VtugPaneBody(
-          terminal: VtugTerminal.read(struct(), kinds: allDouble()),
+          terminal: VtugTerminal.read(struct(), kinds: allTwoCoil()),
           onForce: (valve, force) => calls.add((valve.position, force)),
         ),
       ));
 
-      await tester.tap(find.text('Open').first);
+      await tester.tap(find.text('Port 4').first);
       await tester.pump();
-      expect(calls, [(1, VtugForce.open)]);
+      expect(calls, [(1, VtugForce.port4)]);
     });
   });
 
@@ -583,11 +766,25 @@ void main() {
   });
 
   group('config', () {
-    test('a fresh terminal is eight double-solenoid positions', () {
+    test('a fresh terminal is the manifold as ordered — five 5/2s and '
+        'three 5/3s', () {
+      // 573482 VUVG-B14-M52 x5 and 573485 VUVG-B14-P53C x3: eight
+      // positions and eleven of the sixteen coils the interface can drive.
       final config = FestoVTUGConfig();
       expect(config.slices, hasLength(vtugPositionCount));
-      expect(config.kinds,
-          everyElement(equals(VtugValveKind.doubleSolenoid)));
+      expect(
+        config.kinds.where((k) => k == VtugValveKind.valve52Mono).length,
+        5,
+      );
+      expect(
+        config.kinds.where((k) => k == VtugValveKind.valve53Closed).length,
+        3,
+      );
+      expect(
+        config.kinds.fold<int>(0, (sum, k) => sum + k.coilCount),
+        11,
+        reason: 'five single coils and three pairs',
+      );
     });
 
     test('a short saved slice list is padded out with blanks', () {
@@ -615,13 +812,13 @@ void main() {
 
     test('slice kind and name survive a JSON round trip', () {
       final config = FestoVTUGConfig(nameOrId: 'ST303.A1');
-      config.slices[2].kind = VtugValveKind.singleSolenoid;
+      config.slices[2].kind = VtugValveKind.valve52Mono;
       config.slices[2].name = 'Gate 1 lift';
       config.slices[5].kind = VtugValveKind.blank;
 
       final back = FestoVTUGConfig.fromJson(config.toJson());
       expect(back.nameOrId, 'ST303.A1');
-      expect(back.slices[2].kind, VtugValveKind.singleSolenoid);
+      expect(back.slices[2].kind, VtugValveKind.valve52Mono);
       expect(back.slices[2].name, 'Gate 1 lift');
       expect(back.slices[5].kind, VtugValveKind.blank);
     });
@@ -635,6 +832,7 @@ void main() {
       expect(
         vtugFaceMm.width,
         cteuFaceMm.width +
+            vaemWidthMm +
             vtugEndPlateWidthMm * 2 +
             vtugSliceWidthMm * vtugSliceCount,
       );

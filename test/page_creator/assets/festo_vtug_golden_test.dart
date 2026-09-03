@@ -5,6 +5,7 @@ import 'package:flutter/services.dart' show ByteData, FontLoader;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/vtug.dart';
+import 'package:tfc/painter/festo/valve_symbol.dart';
 import 'package:tfc/painter/festo/vtug.dart';
 import 'package:tfc/theme.dart';
 
@@ -25,7 +26,12 @@ import 'package:tfc/theme.dart';
 ///    ERROR dark because no error arrived reads a silence as an all-clear.
 ///  * A **held** valve wears an orange bar. Orange is forced everywhere in
 ///    this repo, and a hand-held valve that looked like an automatic one is
-///    a valve somebody forgets to give back.
+///    a valve somebody forgets to give back. The bar is drawn whether or not
+///    the coil is energised — holding a monostable at port 2 means holding
+///    its coil off, and that valve is just as taken as a lit one.
+///  * A **5/3** and a **5/2 bistable** draw the same two lamps and the same
+///    two coils, and only their schematics say that one of them has a
+///    closed centre. `valve_symbols.png` is where that is checked.
 Future<void> loadRealFont() async {
   Future<void> loadFont(String family, String path) async {
     final bytes = File(path).readAsBytesSync();
@@ -81,17 +87,19 @@ void main() {
         ),
       );
 
+  /// The manifold as ordered unless a test says otherwise: five 5/2
+  /// monostables then three 5/3 closed centres.
   List<VtugValveKind> kinds({
     Set<int> blanks = const {},
-    Set<int> singles = const {},
+    Set<int> mono = const {1, 2, 3, 4, 5},
   }) =>
       [
         for (var i = 1; i <= vtugPositionCount; i++)
           blanks.contains(i)
               ? VtugValveKind.blank
-              : singles.contains(i)
-                  ? VtugValveKind.singleSolenoid
-                  : VtugValveKind.doubleSolenoid,
+              : mono.contains(i)
+                  ? VtugValveKind.valve52Mono
+                  : VtugValveKind.valve53Closed,
       ];
 
   DynamicValue struct({
@@ -132,7 +140,7 @@ void main() {
       );
 
   group('the drawing', () {
-    testWidgets('eight doubles, nothing energised', (tester) async {
+    testWidgets('the manifold as ordered, nothing energised', (tester) async {
       await tester.pumpWidget(host(drawing(
         VtugTerminal.read(struct(), kinds: kinds()),
         CteuLink.live,
@@ -161,12 +169,11 @@ void main() {
       );
     }, skip: !Platform.isMacOS);
 
-    testWidgets('a mixed manifold — blanks and a single solenoid',
-        (tester) async {
+    testWidgets('a mixed manifold — two positions blanked', (tester) async {
       await tester.pumpWidget(host(drawing(
         VtugTerminal.read(
           struct(coils: 1 << 2),
-          kinds: kinds(blanks: {6, 7, 8}, singles: {2}),
+          kinds: kinds(blanks: {7, 8}),
         ),
         CteuLink.live,
         name: 'ST303.A1',
@@ -178,20 +185,24 @@ void main() {
     }, skip: !Platform.isMacOS);
 
     testWidgets('two valves held by hand', (tester) async {
-      // Position 2 open, position 5 closed.
+      // Position 2 held at port 4 — coil 14 lit. Position 5 held at port 2,
+      // and because that position is a monostable, port 2 is coil 14 held
+      // OFF: an unlit lamp under an orange bar. A held valve that is not
+      // energised is exactly the case an operator would otherwise read as
+      // idle, so it belongs in a golden.
       final open = vtugApplyForce(
         forceMask: 0,
         forceValue: 0,
-        kind: VtugValveKind.doubleSolenoid,
+        kind: VtugValveKind.valve53Closed,
         position: 2,
-        force: VtugForce.open,
+        force: VtugForce.port4,
       );
       final both = vtugApplyForce(
         forceMask: open.mask,
         forceValue: open.value,
-        kind: VtugValveKind.doubleSolenoid,
+        kind: VtugValveKind.valve53Closed,
         position: 5,
-        force: VtugForce.closed,
+        force: VtugForce.port2,
       );
       await tester.pumpWidget(host(drawing(
         VtugTerminal.read(
@@ -264,7 +275,7 @@ void main() {
 
     VtugTerminal populated() => VtugTerminal.read(
           struct(coils: 0x5, forceMask: 0x3, forceValue: 0x1),
-          kinds: kinds(blanks: {8}, singles: {3}),
+          kinds: kinds(),
           descriptions: const [
             'Gate 1 lift',
             'Gate 1 clamp',
@@ -304,6 +315,94 @@ void main() {
       await expectLater(
         find.byKey(const Key('pane-golden')),
         matchesGoldenFile('goldens/festo/vtug_pane_read_only.png'),
+      );
+    }, skip: !Platform.isMacOS);
+  });
+
+  group('the valve schematics', () {
+    /// Every symbol in every position it can be in, captioned.
+    ///
+    /// This grid is the review surface for `ValveSymbolPainter`, and no
+    /// widget test can replace it: whether the flow arrows point the way
+    /// the air goes, whether a closed centre reads as blocked rather than
+    /// as empty, whether a spring looks like a spring — all of it is
+    /// judged by eye or not at all.
+    Widget grid({bool dark = false}) {
+      Widget cell(String caption, ValveSymbolKind kind, int? active) => Padding(
+            padding: const EdgeInsets.all(8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ValveSymbol(kind: kind, active: active, height: 88),
+                const SizedBox(height: 4),
+                Text(caption, style: const TextStyle(fontSize: 11)),
+              ],
+            ),
+          );
+
+      return host(
+        SizedBox(
+          width: 720,
+          child: Builder(
+            builder: (context) => ColoredBox(
+              key: const Key('symbol-grid'),
+              color: Theme.of(context).colorScheme.surface,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      cell('5/2 mono · port 4', ValveSymbolKind.fiveTwoMono, 0),
+                      cell('5/2 mono · spring', ValveSymbolKind.fiveTwoMono, 1),
+                      cell('5/2 mono · unknown',
+                          ValveSymbolKind.fiveTwoMono, null),
+                    ],
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      cell('5/3 closed · port 4',
+                          ValveSymbolKind.fiveThreeClosed, 0),
+                      cell('5/3 closed · centre',
+                          ValveSymbolKind.fiveThreeClosed, 1),
+                      cell('5/3 closed · port 2',
+                          ValveSymbolKind.fiveThreeClosed, 2),
+                    ],
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      cell('5/2 bistable · port 4',
+                          ValveSymbolKind.fiveTwoBistable, 0),
+                      cell('5/2 bistable · port 2',
+                          ValveSymbolKind.fiveTwoBistable, 1),
+                      cell('5/2 bistable · unknown',
+                          ValveSymbolKind.fiveTwoBistable, null),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        dark: dark,
+      );
+    }
+
+    testWidgets('every symbol in every position', (tester) async {
+      await tester.pumpWidget(grid());
+      await expectLater(
+        find.byKey(const Key('symbol-grid')),
+        matchesGoldenFile('goldens/festo/valve_symbols.png'),
+      );
+    }, skip: !Platform.isMacOS);
+
+    testWidgets('the same grid on a dark station', (tester) async {
+      await tester.pumpWidget(grid(dark: true));
+      await expectLater(
+        find.byKey(const Key('symbol-grid')),
+        matchesGoldenFile('goldens/festo/valve_symbols_dark.png'),
       );
     }, skip: !Platform.isMacOS);
   });
