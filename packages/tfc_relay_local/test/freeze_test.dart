@@ -719,6 +719,29 @@ void main() {
               'and nothing else was watching');
     });
 
+    test('the lever sweep can see an offender, one per lever', () {
+      // The pin above is ZERO, so the empty-directory arm alone proves
+      // nothing: a sweep that always returned empty would pass both. And a
+      // list-driven regex has a second way to go quiet — a lever added to
+      // [harnessLevers] that the pattern cannot match — so this seeds one
+      // declaration per lever and requires the count to track the list.
+      final seeded = Directory.systemTemp.createTempSync('relay-lever-');
+      addTearDown(() => seeded.deleteSync(recursive: true));
+      for (final lever in harnessLevers) {
+        File('${seeded.path}/$lever.dart')
+            .writeAsStringSync('void $lever() {}\n');
+      }
+      File('${seeded.path}/innocent.dart')
+          .writeAsStringSync('void setSomethingElse() {}\n');
+
+      expect(harnessLeverSites(seeded), hasLength(harnessLevers.length),
+          reason: 'every lever in the list must be one the sweep can '
+              'actually see. A name added to harnessLevers that the '
+              'declaration pattern does not match reads as a lever being '
+              'guarded and guards nothing — which is worse than not listing '
+              'it, because the list is what a reader checks');
+    });
+
     test('no file under lib/ forwards with noSuchMethod', () {
       // Comments are skipped here, unlike freeze 2's kit sweep. The two are
       // different hazards: a commented-out *import* is one keystroke from a
@@ -1068,6 +1091,15 @@ const List<String> harnessLevers = <String>[
   'dropKey',
   'disconnectUpstream',
   'reconnectUpstream',
+  // The seventh, added by 10-11 when the `db` contract leg grew one.
+  // `StateManDataHarness` is declared beside its cases rather than on
+  // `StateManApi` for the reason its own doc gives: *"a client that could
+  // insert samples could forge history, and a chart is evidence"*. A
+  // `seedTimeseries` on a class a session can reach is that client, and it is
+  // worse than the other six — a forged value expires the moment the next
+  // real sample lands, and a forged row is on disk until retention takes it.
+  // Recording is the gateway's job, upstream of anything a socket reaches.
+  'seedTimeseries',
 ];
 
 /// Every non-comment line under [directory] declaring one of [harnessLevers].
