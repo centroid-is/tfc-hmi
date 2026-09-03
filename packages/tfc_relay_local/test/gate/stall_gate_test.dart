@@ -71,7 +71,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
-import 'package:postgres/postgres.dart' as pg;
 import 'package:test/test.dart';
 import 'package:tfc_relay_client/tfc_relay_client.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
