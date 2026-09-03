@@ -116,7 +116,12 @@ void main() {
       final sub = f.feed.changes.listen(f.seen.add);
       addTearDown(sub.cancel);
 
+      // Pumped between the two adds because a broadcast controller delivers
+      // asynchronously: advancing the clock before the first event has been
+      // delivered would stamp both with the same instant and the case would
+      // be measuring nothing.
       f.local.add('theme');
+      await pumpEventQueue();
       f.advance(const Duration(milliseconds: 249));
       f.local.add('theme');
       await pumpEventQueue();
@@ -136,6 +141,7 @@ void main() {
       addTearDown(sub.cancel);
 
       f.local.add('theme');
+      await pumpEventQueue();
       f.advance(const Duration(milliseconds: 251));
       f.local.add('theme');
       await pumpEventQueue();
