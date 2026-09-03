@@ -15,14 +15,8 @@
 /// names, which lose the `harness.` prefix because these are the names the
 /// gateway will answer.
 ///
-/// **There is no server handler for any of these yet.** `relay_session.dart`'s
-/// table is `{hello, ping, subscribe, unsubscribe}` plus Phase 4's five value
-/// methods; the data services arrive in Phase 10. Until then every method here
-/// surfaces the gateway's own `-32601 Unknown method` (04-RESEARCH Finding 4,
-/// executed). That is reported honestly rather than intercepted: an
-/// implementation that answered locally would let `runDataServicesContract` run
-/// against a pipe carrying nothing and report a colour, and 04-10's named
-/// constant is what counts the gap instead.
+/// **Phase 10 landed all thirty-four handlers**, so every method here now
+/// reaches a gateway that answers it.
 ///
 /// ## The two things that are not translation
 ///

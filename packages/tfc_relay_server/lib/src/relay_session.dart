@@ -927,13 +927,27 @@ final class RelaySession {
     // method echo its request?" is answered no for every method rather than
     // per handler.
     //
-    // The registration stays, and its code stays `METHOD_NOT_FOUND`, for two
-    // reasons. The contract kit's `expectUnreachableMethod` pins `-32601`
-    // exactly — its barrel, the one this package takes as a dev dependency
-    // and which `handler_table_test` forbids naming here — and that is Phase
-    // 10's gap-proving mechanism; and a fallback that declines is the correct
-    // behaviour for a name this session does not serve — it is only the
-    // *armor* that is inert, not the answer.
+    // The registration stays, and its code stays `METHOD_NOT_FOUND`. 06-04
+    // gave two reasons for keeping it and **one of them has since been
+    // spent**, so the next reader is owed both halves rather than a list they
+    // would find half-true.
+    //
+    // The spent one: the contract kit's `expectUnreachableMethod` pins
+    // `-32601` exactly, and while the gateway still had thirteen data-service
+    // names nothing answered, that pin was how each gap was *proved* rather
+    // than assumed. Phase 10 closed the table — all thirty-four are registered
+    // above — and both socket legs now pass their fifty checks with an empty
+    // gap list, so there is no longer a gap for the exactness to prove. The
+    // parameter that carried them is retained with an empty set so a future
+    // gap has a mechanism instead of a precedent (10-05), but nothing is
+    // riding on this code today.
+    //
+    // The standing one, and the reason the registration is not vestigial: a
+    // fallback that declines is the correct behaviour for a name this session
+    // does not serve. It is only the *armor* that is inert, not the answer —
+    // deleting it would not change what a client sees, and it would leave the
+    // next reader to rediscover `Server._tryFallbacks` from scratch when they
+    // wonder where the refusal comes from.
     //
     // It does not gate: an unknown name is unknown whether or not the client
     // has said hello, and answering "unknown method" before the handshake
