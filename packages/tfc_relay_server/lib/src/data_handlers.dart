@@ -152,7 +152,7 @@ final class DataHandlers {
   /// listener belonged to the session. `teardown_test.dart` counts exactly
   /// that, as a rate, across kill cycles.
   ///
-  /// ## Coalesced on a microtask
+  /// ## Coalesced, and on a timer rather than a microtask
   ///
   /// `sendNotification` lands in the session's priority lane, which is
   /// byte-capped at 8 MiB, entry-capped, drained only by the tick and **not
