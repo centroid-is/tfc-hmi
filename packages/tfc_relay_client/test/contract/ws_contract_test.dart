@@ -120,11 +120,12 @@ const int reachableChecks = 43;
 
 /// Every check this leg does not pass, by name — all of them for one cause.
 ///
-/// **The gateway has no handler.** `browse.*`, `timeseries.*`, `historyViews.*`
-/// and `preferences.*` all answer -32601 method-not-found. Phase 10 owns them.
-/// Nothing on the client side can close these: the client's sub-APIs
-/// (`client_sub_apis.dart`) already send the right methods and get told the
-/// server has never heard of them.
+/// **The gateway has no handler.** `timeseries.*`, `historyViews.*` and
+/// `preferences.*` all answer -32601 method-not-found; 10-03 through 10-05 own
+/// them. (`browse.*` used to be here too — 10-02 landed those four and the six
+/// checks behind them left this list in the same commit.) Nothing on the client
+/// side can close these: the client's sub-APIs (`client_sub_apis.dart`) already
+/// send the right methods and get told the server has never heard of them.
 ///
 /// These are **not** skipped and **not** red. Each one is handed to
 /// `runStateManContract`'s `expectUnreachable`, which runs it and asserts it
