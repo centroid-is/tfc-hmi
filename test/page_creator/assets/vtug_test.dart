@@ -475,6 +475,29 @@ void main() {
       expect(find.text('12'), findsOneWidget);
     });
 
+    testWidgets('carries the bus node section, and it follows the link',
+        (tester) async {
+      // The node's account belongs in this pane rather than one of its own:
+      // it has no state to open, and a pane whose whole content is "we
+      // cannot see this" teaches an operator to stop opening panes.
+      await tester.pumpWidget(wrap(
+        VtugPaneBody(
+          terminal: VtugTerminal.read(struct(), kinds: allDouble()),
+          link: CteuLink.live,
+        ),
+      ));
+      expect(find.text('BUS NODE'), findsOneWidget);
+      expect(find.text('Arriving'), findsOneWidget);
+
+      await tester.pumpWidget(wrap(
+        VtugPaneBody(
+          terminal: VtugTerminal.read(null, kinds: allDouble()),
+          link: CteuLink.dark,
+        ),
+      ));
+      expect(find.text('Not arriving'), findsOneWidget);
+    });
+
     testWidgets('choosing Open reports the position and the force',
         (tester) async {
       final calls = <(int, VtugForce)>[];

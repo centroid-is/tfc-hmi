@@ -610,11 +610,17 @@ class VtugPaneBody extends StatelessWidget {
   const VtugPaneBody({
     super.key,
     required this.terminal,
+    this.link = CteuLink.dark,
     this.onForce,
     this.onPush,
   });
 
   final VtugTerminal terminal;
+
+  /// What is known about the bus node in front of these valves. Rendered as
+  /// the pane's last section — the valves are what an operator opened this
+  /// for, and the node is what they read when the valves say nothing.
+  final CteuLink link;
 
   /// Latches a position. Null disables the whole force section — no command
   /// keys configured, so there is nothing to write to.
@@ -706,6 +712,10 @@ class VtugPaneBody extends StatelessWidget {
               ],
             ),
           ),
+        PaneBodySection.details(
+          title: 'Bus node',
+          child: CteuPaneSection(link: link),
+        ),
       ],
     );
   }
@@ -871,6 +881,10 @@ void showVtugPane({
           ],
           child: VtugPaneBody(
             terminal: terminal,
+            // The pane has no separate window on the node: data arriving is
+            // the whole of what this page knows about it, and it is the same
+            // fact the header's chip is built from.
+            link: terminal.isUnknown ? CteuLink.dark : CteuLink.live,
             onForce: onForce,
             onPush: onPush,
           ),

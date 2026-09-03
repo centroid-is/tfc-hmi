@@ -248,6 +248,9 @@ void main() {
                     color: Colors.transparent,
                     child: VtugPaneBody(
                       terminal: terminal,
+                      link: terminal.isUnknown
+                          ? CteuLink.dark
+                          : CteuLink.live,
                       onForce: commandable ? (_, __) {} : null,
                       onPush: commandable ? (_, __, ___) {} : null,
                     ),
