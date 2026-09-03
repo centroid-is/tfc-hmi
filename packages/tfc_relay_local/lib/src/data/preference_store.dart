@@ -70,7 +70,7 @@ import 'package:tfc_dart/core/preferences.dart' show Preferences;
 import 'package:tfc_dart/core/secure_storage/interface.dart'
     show MySecureStorage;
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart'
-    show DataServiceMethods, PreferencesApi, ResultTooLarge;
+    show DataServiceMethods, PreferencesApi, ResultTooLarge, SourceRefusal;
 
 import 'preference_change_feed.dart';
 import 'read_limits.dart';
@@ -83,15 +83,28 @@ import 'timescale_reader.dart' show DatabaseSupplier;
 /// historian is not connected" would go and look at charts. Not a member of
 /// the sealed `TimeseriesReadRefusal` family for the same reason — the switch
 /// that family exists for is about *reads of recorded samples*.
-final class PreferenceStoreUnavailable implements Exception {
+final class PreferenceStoreUnavailable implements SourceRefusal {
   const PreferenceStoreUnavailable();
 
   /// Whether retrying the identical request could ever succeed.
+  ///
+  /// **True, and it is the one refusal in this phase for which -32011 is the
+  /// right answer.** `data_handlers.dart`'s `_sized` reads this and rethrows,
+  /// so the catch-all still maps it to `handlerFailed` — the wire's
+  /// "possibly transient: retrying is legitimate", which is precisely what a
+  /// disconnected historian is. It implements [SourceRefusal] anyway rather
+  /// than staying a bare `Exception`, because the interface is the place the
+  /// claim is written down and an unclaimed refusal is one nobody can tell
+  /// from an unconsidered one.
+  @override
   bool get retryable => true;
 
   @override
-  String toString() =>
+  String get message =>
       'the preference store is not connected; this is worth retrying';
+
+  @override
+  String toString() => message;
 }
 
 /// A secure store that refuses every request.

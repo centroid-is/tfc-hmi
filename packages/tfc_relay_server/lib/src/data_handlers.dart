@@ -1234,6 +1234,27 @@ final class DataHandlers {
       return await ask();
     } on ResultTooLarge catch (tooLarge) {
       throw _refuse(method, '$method refused: ${tooLarge.message}');
+    } on SourceRefusal catch (refusal) {
+      // **The other half of the same sentence** (10-10). A refusal that cannot
+      // become a disconnect is worth little if it becomes an infinite retry
+      // instead.
+      //
+      // Everything a handler throws and does not catch reaches the wire as
+      // `handlerFailed` (-32011) through `relay_session.dart`'s catch-all, and
+      // the wire documents that code as *possibly transient: retrying is
+      // legitimate*. Right for "the historian is not connected"; wrong for "no
+      // series by that name is collected here", which no retry can make true.
+      // 10-07, 10-08 and 10-09 each flagged it and none could close it: the
+      // refusals are declared in `tfc_relay_local` and the dependency edge runs
+      // local → server, so this file cannot name the sealed family.
+      // [SourceRefusal] is the one fact it can name.
+      //
+      // A retryable refusal is **rethrown untouched**, on purpose: -32011 is
+      // the correct answer for it, and a mapping that turned every source
+      // refusal into a bad request would tell a panel its perfectly good query
+      // was malformed every time the database bounced.
+      if (refusal.retryable) rethrow;
+      throw _refuse(method, '$method refused: ${refusal.message}');
     }
   }
 

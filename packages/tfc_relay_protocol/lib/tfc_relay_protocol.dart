@@ -28,6 +28,7 @@ export 'src/browse.dart';
 export 'src/timeseries.dart';
 export 'src/series_address.dart';
 export 'src/result_too_large.dart';
+export 'src/source_refusal.dart';
 export 'src/history_view.dart';
 export 'src/ulid.dart';
 export 'src/preferences_api.dart';

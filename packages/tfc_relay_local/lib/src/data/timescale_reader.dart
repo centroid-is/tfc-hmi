@@ -60,21 +60,29 @@
 /// an operator reads as "the chart is broken" rather than as "you did not say
 /// which member" (T-10-30).
 ///
-/// ## What the refusals surface as today
+/// ## What the refusals surface as — CLOSED in 10-10
 ///
-/// Every exception in this file reaches the wire as `handlerFailed` (-32011)
-/// through `relay_session.dart`'s catch-all, which is right for
-/// [HistorianUnavailable] and for a database error, and **wrong for the
-/// permanent ones** — -32011 is documented as possibly transient, so a panel
-/// may retry a request that can never succeed. Mapping
-/// [TimeseriesReadRefusal]'s permanent subclasses to `INVALID_PARAMS` at
-/// `data_handlers.dart`, the way `ResultTooLarge` already is (10-03), is a
-/// named follow-up rather than something this file can do. They are a sealed
-/// family so that mapping is a switch and not a string match. In the composed
-/// gateway `_PolicyTimeseries` answers an unmappable series as one that does
-/// not exist *before* the reader sees it, so [UnknownSeries] is reachable only
-/// when the policy's resolver and the reader's disagree — a mis-composition,
-/// which is worth an error rather than an empty chart.
+/// Until 10-10 every exception in this file reached the wire as `handlerFailed`
+/// (-32011) through `relay_session.dart`'s catch-all: right for
+/// [HistorianUnavailable] and for a database error, **wrong for the other
+/// seven**, because -32011 is documented as possibly transient and a panel may
+/// therefore retry forever a request that can never succeed. 10-07, 10-08 and
+/// 10-09 each recorded it as a follow-up with no owner.
+///
+/// It could not be closed from either end, and the reason was structural: the
+/// family is declared here, the wire code is chosen in
+/// `tfc_relay_server/data_handlers.dart`, and the dependency edge runs local →
+/// server and never the other way — so the handler could not name the type. It
+/// is closed by `SourceRefusal` in the package both ends share:
+/// [TimeseriesReadRefusal] implements it, decides `retryable` with an
+/// **exhaustive switch** over its own sealed family, and `_sized` answers
+/// `INVALID_PARAMS` for a permanent one while rethrowing a retryable one to the
+/// catch-all that was always right for it.
+///
+/// In the composed gateway `_PolicyTimeseries` answers an unmappable series as
+/// one that does not exist *before* the reader sees it, so [UnknownSeries] is
+/// reachable only when the policy's resolver and the reader's disagree — a
+/// mis-composition, which is worth an error rather than an empty chart.
 library;
 
 import 'package:drift/drift.dart' show Variable;
@@ -88,6 +96,7 @@ import 'package:tfc_relay_protocol/tfc_relay_protocol.dart'
         ResolvedSeries,
         ResultTooLarge,
         SeriesResolver,
+        SourceRefusal,
         TimeseriesApi,
         TimeseriesData;
 
@@ -97,17 +106,39 @@ import 'read_limits.dart';
 /// historian is not up.
 typedef DatabaseSupplier = ts.Database? Function();
 
-/// Why a read was refused. Sealed so a future mapping at the handler is a
-/// switch the compiler checks rather than a string match.
-sealed class TimeseriesReadRefusal implements Exception {
+/// Why a read was refused. Sealed so the disposition below is a switch the
+/// compiler checks rather than a string match.
+sealed class TimeseriesReadRefusal implements SourceRefusal {
   const TimeseriesReadRefusal(this.message);
 
+  @override
   final String message;
 
-  /// Whether retrying the identical request could ever succeed. False for
-  /// every refusal about the *request*; true only for the historian being
-  /// down.
-  bool get retryable => this is HistorianUnavailable;
+  /// Whether retrying the identical request could ever succeed.
+  ///
+  /// **An exhaustive switch, and that is the whole value of the family being
+  /// sealed.** Written as `this is HistorianUnavailable` until 10-10, which
+  /// was correct and silently fragile: a subclass added later inherited
+  /// "permanent" by default, and the dangerous direction is a new *retryable*
+  /// refusal doing so — a panel would then be told its perfectly good query
+  /// was malformed every time whatever went away came back. Written as a
+  /// switch, adding a subclass is a compile error here.
+  ///
+  /// `data_handlers.dart`'s `_sized` reads this bit and answers
+  /// `INVALID_PARAMS` for false, leaving true to the catch-all's
+  /// `handlerFailed` (-32011), which the wire documents as possibly transient
+  /// and which is right for exactly one of these.
+  @override
+  bool get retryable => switch (this) {
+        HistorianUnavailable() => true,
+        UnknownSeries() => false,
+        StructSeriesUnaddressed() => false,
+        UnknownSeriesMember() => false,
+        SeriesNotNumeric() => false,
+        UnsupportedOrdering() => false,
+        SeriesTableMissing() => false,
+        DownsampleUnbounded() => false,
+      };
 
   @override
   String toString() => message;

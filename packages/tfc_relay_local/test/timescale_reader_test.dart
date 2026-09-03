@@ -25,7 +25,12 @@ import 'package:tfc_relay_local/src/local_state_man.dart';
 import 'package:tfc_relay_local/src/data/read_limits.dart';
 import 'package:tfc_relay_local/src/data/timescale_reader.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart'
-    show ResolvedSeries, SeriesAddress, SeriesResolver, TimeseriesApi;
+    show
+        ResolvedSeries,
+        SeriesAddress,
+        SeriesResolver,
+        SourceRefusal,
+        TimeseriesApi;
 
 import 'support/fake_upstream_link.dart';
 
@@ -377,6 +382,86 @@ void main() {
 
       await expectLater(reader.queryTimeseriesData('Line1.Motor1', to),
           throwsA(isA<SeriesNotNumeric>()));
+    });
+  });
+
+  group('every refusal carries its own disposition to the wire', () {
+    // One instance of every member of the sealed family, so the switch that
+    // decides `retryable` is exercised on all of them rather than on the one
+    // a passing test happened to construct. Adding a subclass makes the switch
+    // in `timescale_reader.dart` a compile error; this is the runtime half —
+    // that the bit each arm answers is the right bit.
+    final family = <TimeseriesReadRefusal, bool>{
+      HistorianUnavailable(): true,
+      UnknownSeries('Line1.Nope'): false,
+      StructSeriesUnaddressed('Line1.Motor2', ['speed', 'temp']): false,
+      UnknownSeriesMember('Line1.Motor2', 'torque', ['speed']): false,
+      SeriesNotNumeric('Line1.State', 'text'): false,
+      UnsupportedOrdering('value DESC'): false,
+      SeriesTableMissing('Line1.Ghost', 'gw_gone'): false,
+    };
+
+    test('exactly one of them is worth retrying', () {
+      expect(
+          {
+            for (final entry in family.entries)
+              entry.key.runtimeType.toString(): entry.key.retryable,
+          },
+          {
+            for (final entry in family.entries)
+              entry.key.runtimeType.toString(): entry.value,
+          },
+          reason: 'the disposition is what `data_handlers.dart` maps on: false '
+              'becomes INVALID_PARAMS and true is left to the catch-all\'s '
+              'handlerFailed (-32011), which the wire documents as possibly '
+              'transient. Getting one of these backwards is either a panel '
+              'retrying forever something no retry can fix, or a panel told '
+              'its perfectly good query was malformed because the database '
+              'bounced');
+      expect(family.values.where((r) => r).length, 1,
+          reason: 'and the anti-vacuity arm: a family that answered the same '
+              'bit for everything would pass a map comparison built from '
+              'itself, but not this');
+    });
+
+    test('all of them reach the handler as a SourceRefusal', () {
+      expect(family.keys, everyElement(isA<SourceRefusal>()),
+          reason: 'the interface is the only thing tfc_relay_server can name: '
+              'this family is declared here and the dependency edge runs '
+              'local -> server, which is why 10-07, 10-08 and 10-09 each '
+              'flagged the -32011 mapping and none of them could close it');
+    });
+
+    test('a DownsampleUnbounded is permanent whichever condition fired',
+        () async {
+      // Built through the reader rather than by hand: the three factories are
+      // private, which is deliberate — the conditions are decided in one place
+      // and a case constructing one directly would be asserting its own
+      // arithmetic.
+      backend.rows = [
+        {'value': 7, 'time': to}
+      ];
+      final refusals = <DownsampleUnbounded>[];
+      for (final ask in <Future<void> Function()>[
+        () => reader.queryTimeseriesDataDownsampled('Line1.Motor1', to, to),
+        () => reader.queryTimeseriesDataDownsampled('Line1.Motor1', from, to,
+            maxPoints: 2),
+      ]) {
+        try {
+          await ask();
+        } on DownsampleUnbounded catch (e) {
+          refusals.add(e);
+        }
+      }
+
+      expect(refusals.map((r) => r.condition), [
+        DownsampleFallback.zeroWidthWindow,
+        DownsampleFallback.tooFewPoints,
+      ]);
+      expect(refusals.map((r) => r.retryable), everyElement(isFalse),
+          reason: 'asking for zero buckets again produces zero buckets again. '
+              'These are the two conditions reachable without a database, and '
+              'the other two are covered in read_limits_test.dart\'s db lane');
     });
   });
 
