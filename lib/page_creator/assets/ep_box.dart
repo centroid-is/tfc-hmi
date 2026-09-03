@@ -40,25 +40,20 @@ import 'led.dart' show LEDPainter, LEDType;
 /// the asset and re-place it.
 enum EPBoxVariant {
   /// 8-channel digital combi, M12. Live off `ST_EP2338_0002`.
-  ep2338('EP2338', 'EP2338-0002', '8-channel digital combi', 'I/O box'),
+  ep2338('EP2338', '8-channel digital combi', 'I/O box'),
 
   /// TwinSAFE, 8 safe digital inputs, M12. No process data.
-  ep1918('EP1918', 'EP1918-0002', 'TwinSAFE, 8 safe inputs', 'safe inputs');
+  ep1918('EP1918', 'TwinSAFE, 8 safe inputs', 'safe inputs');
 
-  const EPBoxVariant(
-    this.model,
-    this.partNumber,
-    this.blurb,
-    this.paneSubtitle,
-  );
+  const EPBoxVariant(this.model, this.blurb, this.paneSubtitle);
 
-  /// The short model, for the palette and the editor's asset label. Nobody
-  /// picking a box off a palette wants to read a suffix that never varies.
+  /// Printed on the housing, and used in the palette.
+  ///
+  /// Without the `-0002` variant suffix the real moulding carries. It is the
+  /// same on every box of a type, so on a 30 mm-wide drawing it is four
+  /// characters that never tell you anything, taking width from the tag that
+  /// does.
   final String model;
-
-  /// The full ordering number, which is what is actually printed on the
-  /// housing — the drawing says `EP1918-0002` because the box does.
-  final String partNumber;
 
   /// The line beside the model in the configure form's picker, where there
   /// is room to say what the box actually is.

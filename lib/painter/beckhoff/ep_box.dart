@@ -71,8 +71,10 @@ class EPBoxPainter extends CustomPainter {
     this.housingColor = epBoxBodyColor,
   }) : assert(channels.length == epBoxChannelCount);
 
-  /// Printed on the housing — the full ordering number, e.g. `EP2338-0002`,
-  /// which is what the moulding carries.
+  /// Printed on the housing, e.g. `EP2338`. Without the `-0002` variant
+  /// suffix: it is the same on every box of a type, so it is four characters
+  /// that never distinguish anything, competing for width with the tag that
+  /// does.
   final String model;
 
   /// The tag under the model — `ST301.RM05`, the box erector's box.
@@ -117,12 +119,18 @@ class EPBoxPainter extends CustomPainter {
         ? Colors.black
         : const Color(0xFFF2F2F0);
 
+    /// Paints [value] with its top-left at [at]. Pass [middleY] to centre the
+    /// line on that y instead — the caption beside a lamp has to sit on the
+    /// lamp's axis, and eyeballing an offset against a font's line height
+    /// gets it wrong by a fraction of a millimetre every time the size
+    /// changes.
     void text(
       String value,
       Offset at, {
       required double fontSize,
       Color? color,
       double? width,
+      double? middleY,
       TextAlign align = TextAlign.center,
     }) {
       final tp = TextPainter(
@@ -141,7 +149,10 @@ class EPBoxPainter extends CustomPainter {
         textAlign: align,
         textDirection: TextDirection.ltr,
       )..layout(minWidth: width ?? 0, maxWidth: width ?? double.infinity);
-      tp.paint(canvas, at);
+      tp.paint(
+        canvas,
+        middleY == null ? at : Offset(at.dx, middleY - tp.height / 2),
+      );
     }
 
     // A round connector. The knurl on the coupling nut is what makes an
@@ -169,17 +180,17 @@ class EPBoxPainter extends CustomPainter {
     text('OUT', const Offset(15, 17), fontSize: 2.6, width: 12);
 
     // --- Wordmark ---
+    // The wordmark and the model set the tag off rather than competing with
+    // it. Both are the same on every box of this type; the tag is the one
+    // string that says *which* box this is, so it is the largest line in the
+    // block and the other two step back to make room for it.
     text('BECKHOFF', const Offset(0, 22),
-        fontSize: 3.4,
+        fontSize: 2.9,
         color: ink == Colors.black ? beckhoffRed : null,
         width: design.width);
-    text(model, const Offset(0, 26.5), fontSize: 3.0, width: design.width);
+    text(model, const Offset(0, 25.9), fontSize: 2.6, width: design.width);
     if (name.isNotEmpty) {
-      // Larger than the model line above it, not smaller. The model is the
-      // same on every box of this type; the tag is the one string that says
-      // which box you are looking at, and it was the smallest thing on the
-      // housing.
-      text(name, const Offset(0, 30.4), fontSize: 3.2, width: design.width);
+      text(name, const Offset(0, 29.9), fontSize: 3.5, width: design.width);
     }
 
     // --- The four signal plugs, one column, two channels each ---
@@ -233,7 +244,8 @@ class EPBoxPainter extends CustomPainter {
         );
         text(
           'I${plug * 2 + side}',
-          Offset(side == 0 ? 2.2 : 11.5, centre.dy - 1.5),
+          Offset(side == 0 ? 2.2 : 11.5, 0),
+          middleY: lamp.center.dy,
           fontSize: 2.5,
           width: 3.0,
           align: side == 0 ? TextAlign.right : TextAlign.left,
