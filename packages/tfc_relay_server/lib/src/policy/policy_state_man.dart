@@ -47,7 +47,7 @@
 /// was consolidated into one helper in 06-04 first, and it is what
 /// `policy_test.dart`'s indistinguishability case exists to keep true.
 ///
-/// ## The four sub-APIs: two filter, two are still transparent
+/// ## The four sub-APIs, and all four now decide something
 ///
 /// `browse`, `timeseries`, `historyViews` and `preferences` return wrappers.
 /// They are wrapped rather than returned bare so the "no unwrapped source to
@@ -61,20 +61,23 @@
 /// testing nothing, which `suite_integrity_test.dart:104-108` calls worse than
 /// an absent one.
 ///
-/// **10-02 registered the four `browse.*` handlers, so browse filters**, and
+/// **10-02 registered the four `browse.*` handlers, so browse filters**;
 /// **10-03 the four `timeseries.*` ones, so timeseries does too** — each with
 /// cases that can see it, and each as an entry in the indistinguishability
-/// loop (browse seventh, timeseries eighth). The other two still delegate,
-/// each saying so at its own declaration, and the plans that make their
-/// methods reachable are the plans that fill them in: 10-04 for history
-/// views, 10-05 for preferences. The rule stands unchanged — a filter lands
-/// in the commit that makes the surface reachable, never before it and never
-/// after.
+/// loop (browse seventh, timeseries eighth). **10-04 filled in history views**,
+/// which drops a hidden key from a view rather than the view from the picker,
+/// and **10-05 preferences**, which is the one of the four that does not hide
+/// anything: it *gates*, because a preference key is not a plant key and the
+/// question it settles is who may write `key_mappings`. The rule stands
+/// unchanged — a filter lands in the commit that makes the surface reachable,
+/// never before it and never after.
 library;
 
+import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import '../auth/identity.dart';
+import '../error_codes.dart';
 import 'key_policy.dart';
 import 'series_mapping_tally.dart';
 
@@ -255,7 +258,8 @@ final class PolicyStateMan implements StateManApi {
       _PolicyHistoryViews(source.historyViews, canSee);
 
   @override
-  PreferencesApi get preferences => _PolicyPreferences(source.preferences);
+  PreferencesApi get preferences =>
+      _PolicyPreferences(source.preferences, identityOf);
 
   /// Delegates, and owns nothing of its own to release.
   ///
@@ -271,10 +275,10 @@ final class PolicyStateMan implements StateManApi {
 }
 
 // ---------------------------------------------------------------------------
-// The four sub-APIs. Browse filters as of 10-02, timeseries as of 10-03 and
-// history views as of 10-04; preferences is still wrapped and delegating, and
-// says so at its own declaration. See the library doc for why each of those
-// words is deliberate.
+// The four sub-APIs. Browse filters as of 10-02, timeseries as of 10-03,
+// history views as of 10-04, and preferences gates as of 10-05 — three that
+// hide and one that refuses, and the difference is at each declaration. See
+// the library doc for why each of those words is deliberate.
 // ---------------------------------------------------------------------------
 
 /// Navigating the address space, **with the hiding rule applied** (10-02).
@@ -694,16 +698,126 @@ final class _PolicyHistoryViews implements HistoryViewApi {
       _source.getGlobalRetentionHorizon();
 }
 
-/// Stored preferences. **The filter point for Phase 10** is here, and it is
-/// the least obvious of the four: preference keys are not plant keys, so
-/// [KeyPolicy] as it stands has nothing to say about them. Whoever wires this
-/// decides whether preferences are policed by identity at all — and
-/// `preferences_api.dart` is where the SEC-01 argument about secret material
-/// already lives.
+/// Stored preferences: **anyone authenticated may read them, and writing one
+/// takes the same role writing a motor setpoint takes** (10-05, 10-CONTEXT
+/// ruling 1).
+///
+/// The least obvious of the four seams, because a preference key is not a
+/// plant key: `svn.chart.maxPoints` names a row in the gateway's own settings
+/// store, and [KeyPolicy] — which answers about tags — has nothing to say about
+/// it. So the question this class had to settle was not *which* preferences a
+/// station may touch but whether preferences are policed by identity at all.
+///
+/// ## Why `operate`, and why that is not a new rule
+///
+/// **`key_mappings`.** That one preference row is the gateway's own routing
+/// configuration — 518 KiB of it — and a station that can `setString` it
+/// re-points the plant's tag map for every panel on the site. A `view` station
+/// doing that is at least as consequential as a `view` station writing a motor
+/// setpoint, which is precisely what `operate` already guards. So the rule
+/// reused here is [AllVisibleOperatorWrites]'s own, verbatim: everything is
+/// readable, and the `operate` role is what a write takes. The comparison
+/// below is the only one in this file — one rule, not seven copies of it.
+///
+/// **No new rule shape**, and that is a deliberate scope fence rather than
+/// laziness. A `canWritePreference(String key, Identity)` on [KeyPolicy] would
+/// be a second policy surface to keep in step with the first, for behaviour
+/// nobody has asked for and no policy data exists to fill; tightening this
+/// later — a per-key preference rule, a read rule — stays a change to policy
+/// *data* rather than to plumbing, which is the whole point of the Phase 6
+/// hiding architecture. The `operate` gate is the safe floor either way.
+///
+/// ## The refusal is `forbidden`, and here that is the *correct* answer
+///
+/// Everywhere else in this file a refusal that names what it refused is the
+/// leak being closed: answer `forbidden` for a hidden tag and a station can
+/// enumerate the plant by asking. Preferences invert that, because **reads are
+/// all-visible**. A station that is refused a write has already read the key,
+/// or could have; there is no existence left to conceal, and the two facts a
+/// client acts on differently are "fix the key name" (`unknownKey`) and
+/// "obtain the permission" (`forbidden`). This is the second, and it is the one
+/// place in Phase 10 where saying so out loud is right.
+///
+/// The refusal is also **pre-effect**: raised before the source is touched, in
+/// the same shape `value_handlers.dart:445-455` raises it for a plant write —
+/// `ServerErrorCodes.forbidden` with a pre-substituted `data`, never
+/// `RpcException.invalidParams`, because a refusal with no `data` is the one
+/// `serialize` fills in with the offending request (the 02-05 hang). A gate
+/// that fired after the write had landed would not be a gate; for
+/// `key_mappings` it would be a report that the tag map has already moved.
+///
+/// ## Secret material is impossible by construction, and not because of this
+///
+/// Worth stating at the gate, because the two are easy to conflate and the
+/// mistake is one-directional. This class is about `key_mappings`. It is **not**
+/// what keeps credentials off the pipe: `PreferencesApi` simply omits the
+/// `{bool secret = false}` parameter the concrete `Preferences` carries at
+/// twelve sites, so there is no route from this wire to the secure store at
+/// all, and `api_surface_test.dart` fails if any wire interface ever declares a
+/// parameter with that name (SEC-01, T-10-18). A reader who reads this gate as
+/// "secrets are handled" will eventually restore the parameter behind it.
+///
+/// Ruling 1 is **resolved**, not open: the user's 2026-09-02 morning review
+/// kept `key_mappings` wire-writable behind this gate, on the argument that the
+/// audit trail is what makes a gated configuration write defensible, and closed
+/// the off-wire option.
+///
+/// Written as explicit member-by-member delegation like everything else in this
+/// file — **never `noSuchMethod`**: a forwarder would absorb a mutator added to
+/// the interface later and serve it ungated, which is this class's whole job.
+///
+/// Under the shipped `PermissiveTokenValidator`, which mints `operate` for
+/// every station it accepts, this class is a no-op — which is why both
+/// preference contract checks pass through it unchanged, and is the acceptance
+/// shape 06-08 established.
 final class _PolicyPreferences implements PreferencesApi {
-  const _PolicyPreferences(this._source);
+  const _PolicyPreferences(this._source, this._identityOf);
 
   final PreferencesApi _source;
+
+  /// [PolicyStateMan.identityOf], passed as a function rather than as the whole
+  /// decorator so this class cannot reach anything else on it.
+  ///
+  /// The identity itself rather than a `canWrite`-shaped predicate, because
+  /// there is no key to ask about: the comparison below **is** the rule, and it
+  /// is made once so there are not seven copies of it to keep in step.
+  final Identity? Function() _identityOf;
+
+  /// Refuses [method] unless the asking station may actuate.
+  ///
+  /// Null identity is refused too, by the same `identity != null` rule
+  /// [PolicyStateMan.canSee] and [PolicyStateMan.canWrite] answer by: a session
+  /// between `serve` and `hello` has no station for the policy to answer about,
+  /// and null means "nothing", not "everything". The state is unreachable from
+  /// the wire — the handshake gate refuses every method before `hello` — but
+  /// that is a property of today's gate rather than of this class.
+  void _requireOperate(String method, String what) {
+    final identity = _identityOf();
+    if (identity != null && identity.role == Role.operate) return;
+    throw rpc.RpcException(
+        ServerErrorCodes.forbidden,
+        'this station may read preferences but may not write them, so '
+        '"$method" was refused. $what: the preference store was not touched, '
+        'so this call definitively had no effect. Do not retry — the session '
+        'is fine and reading continues; what is missing is a permission, and '
+        'permissions change in the gateway\'s token file rather than on the '
+        'next attempt',
+        data: _substitute(method));
+  }
+
+  /// A refusal's `data`, pre-substituted.
+  ///
+  /// Copied from `value_handlers.dart` and `data_handlers.dart` rather than
+  /// shared, for the reason those two carry: `RpcException.serialize` fills an
+  /// empty `data` with the offending **request**, and one request carrying
+  /// `1e999` then makes the error itself unencodable — at which point the peer
+  /// drops it and a caller with no deadline waits forever.
+  static Map<String, Object?> _substitute(String method) => {
+        'method': method,
+        'request': 'omitted: echoing a request that may carry a non-finite '
+            'number is what makes the error itself unencodable, and an '
+            'unencodable error on a path with no deadline is a hang',
+      };
 
   @override
   Future<Set<String>> getKeys({Set<String>? allowList}) =>
@@ -732,30 +846,56 @@ final class _PolicyPreferences implements PreferencesApi {
   @override
   Future<bool> containsKey(String key) => _source.containsKey(key);
 
-  @override
-  Future<void> setBool(String key, bool value) => _source.setBool(key, value);
+  // The seven mutators. Each states the gate on its own line, above the
+  // delegation, so a reader adding an eighth sees what the other seven do.
 
   @override
-  Future<void> setInt(String key, int value) => _source.setInt(key, value);
+  Future<void> setBool(String key, bool value) {
+    _requireOperate('preferences.setBool', 'nothing was stored under "$key"');
+    return _source.setBool(key, value);
+  }
 
   @override
-  Future<void> setDouble(String key, double value) =>
-      _source.setDouble(key, value);
+  Future<void> setInt(String key, int value) {
+    _requireOperate('preferences.setInt', 'nothing was stored under "$key"');
+    return _source.setInt(key, value);
+  }
 
   @override
-  Future<void> setString(String key, String value) =>
-      _source.setString(key, value);
+  Future<void> setDouble(String key, double value) {
+    _requireOperate('preferences.setDouble', 'nothing was stored under "$key"');
+    return _source.setDouble(key, value);
+  }
 
   @override
-  Future<void> setStringList(String key, List<String> value) =>
-      _source.setStringList(key, value);
+  Future<void> setString(String key, String value) {
+    // The one this ruling is about: `key_mappings` is a string, and it is the
+    // gateway's own routing configuration.
+    _requireOperate('preferences.setString', 'nothing was stored under "$key"');
+    return _source.setString(key, value);
+  }
 
   @override
-  Future<void> remove(String key) => _source.remove(key);
+  Future<void> setStringList(String key, List<String> value) {
+    _requireOperate(
+        'preferences.setStringList', 'nothing was stored under "$key"');
+    return _source.setStringList(key, value);
+  }
 
   @override
-  Future<void> clear({Set<String>? allowList}) =>
-      _source.clear(allowList: allowList);
+  Future<void> remove(String key) {
+    _requireOperate('preferences.remove', '"$key" is still stored');
+    return _source.remove(key);
+  }
+
+  @override
+  Future<void> clear({Set<String>? allowList}) {
+    // Gated like the setters and not more loudly, though it is the widest of
+    // the seven: `clear()` with no allow-list removes every preference this
+    // gateway holds, `key_mappings` among them.
+    _requireOperate('preferences.clear', 'nothing was removed');
+    return _source.clear(allowList: allowList);
+  }
 
   @override
   Stream<String> get onPreferencesChanged => _source.onPreferencesChanged;
