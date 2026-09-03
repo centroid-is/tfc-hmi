@@ -558,11 +558,26 @@ jobs:
         total=$(grep -o '"type":"testStart"' test-report.json | wc -l)
         loading=$(grep -o '"name":"loading ' test-report.json | wc -l)
         ran=$((total - loading))
-        echo "relay collection (db) tests reported: $ran"
-        # 10 as of 8b-02. The floor sits just under that, so it catches the
-        # suite collapsing without tripping on every new test 8b-03 adds.
-        if [ "$ran" -lt 8 ]; then
-          echo "::error::relay collection ran only $ran db-tagged tests, expected ~10 — the db tag is not selecting"
+        echo "relay db-tagged tests reported: $ran"
+        # MEASURED 148 at 10-11, by this exact arithmetic, on a local run of
+        # `dart test --tags db` over the whole package. It was 90 when 8b-02
+        # wrote this step (its comment said 10, which was the reporter's `+N`
+        # rather than this count — the two differ because testStart also
+        # fires for a group's setUpAll and tearDownAll). Phase 10 added the
+        # difference: the timeseries, history-view and preference read legs
+        # and, in 10-11, the fifty-check contract leg over a real database.
+        #
+        # The floor is 120 — 19% under the measured count, the same
+        # proportion 8b chose, and the reason for the gap is a legitimate
+        # RETIREMENT rather than growth: adding tests only ever raises this
+        # number, so a floor never trips on an addition, and one pinned at
+        # the count would have to be edited by every plan that removes a
+        # single case. 120 still catches the two failures worth catching:
+        # the tag selecting nothing at all (0), and the phase's largest leg
+        # silently dropping out (contract_db_test.dart is ~54 of the 148, so
+        # losing it lands at ~94).
+        if [ "$ran" -lt 120 ]; then
+          echo "::error::the relay db lane ran only $ran db-tagged tests, expected ~148 — the db tag is not selecting what it used to"
           exit 1
         fi
 

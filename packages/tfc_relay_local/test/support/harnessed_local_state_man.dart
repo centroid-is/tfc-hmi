@@ -88,6 +88,7 @@ library;
 import 'dart:async';
 
 import 'package:tfc_relay_local/tfc_relay_local.dart';
+import 'package:tfc_relay_local/src/data/preference_store.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 
@@ -255,7 +256,28 @@ final class _ScriptedAddressSpace implements UpstreamAddressSpace {
 /// `addTearDown`. The links connect eagerly here rather than in a `setUp`
 /// because `runStateManContract` takes a synchronous factory and a case that
 /// had to remember to `await start()` would be a case that could forget.
-StateManApi makeHarnessedLocalStateMan() {
+StateManApi makeHarnessedLocalStateMan() => buildHarnessedLocalStateMan();
+
+/// The same subject, optionally with the three data services behind it.
+///
+/// Two legs share this body and differ in exactly one thing: whether a
+/// database was composed in. `contract_test.dart` passes nothing and stays in
+/// the pure lane; `contract_db_test.dart` passes a `TimescaleReader`, a
+/// `HistoryViewStore` and a `PreferenceStore` over a real TimescaleDB and a
+/// [recorder] that puts rows in front of the reader.
+///
+/// [recorder] is the async half of [StateManDataHarness.seedTimeseries]. The
+/// kit's lever returns `void` — it was written for an in-memory fake, where
+/// recording a sample is a map assignment — and a real recorder is a database
+/// round trip. See [HarnessedLocalStateMan.seedTimeseries] for how the two are
+/// reconciled without the case having to know.
+StateManApi buildHarnessedLocalStateMan({
+  TimeseriesApi? timeseries,
+  HistoryViewApi? historyViews,
+  PreferenceStore? preferences,
+  Future<void> Function(String tableName, List<TimeseriesData> points)?
+      recorder,
+}) {
   final plant = FakeUpstreamLink(
     alias: contractPlantAlias,
     keys: contractPlantKeys(),
@@ -283,6 +305,13 @@ StateManApi makeHarnessedLocalStateMan() {
     // not dominate the leg's runtime. Every freshness check reads its budget
     // from `StateManHarness.staleAfter`, so this one number judges them all.
     staleAfter: const Duration(milliseconds: 400),
+    // Null for the pure lane and real for the `db` leg. Passed here rather
+    // than built here for the reason `gateway_config.dart:617-630` gives at
+    // the only other composition site: all three borrow one `Database`, and
+    // whoever owns that connection owns opening and closing it.
+    timeseries: timeseries,
+    historyViews: historyViews,
+    preferences: preferences,
   );
   // Connected BEFORE the composer exists, and this is not a shortcut.
   // `LocalStateMan.start()` subscribes to each link's state stream and then
@@ -296,18 +325,26 @@ StateManApi makeHarnessedLocalStateMan() {
   unawaited(plant.connect(deadline: const Duration(seconds: 1)));
   unawaited(weigher.connect(deadline: const Duration(seconds: 1)));
   unawaited(man.start());
-  return HarnessedLocalStateMan(man, plant: plant, links: counted);
+  return HarnessedLocalStateMan(man,
+      plant: plant, links: counted, recorder: recorder);
 }
 
 /// `LocalStateMan` plus the test-only control surface, and nothing else.
 final class HarnessedLocalStateMan
-    implements StateManApi, StateManHarness, StateManWriteHarness {
+    implements
+        StateManApi,
+        StateManHarness,
+        StateManWriteHarness,
+        StateManDataHarness {
   HarnessedLocalStateMan(
     this._man, {
     required FakeUpstreamLink plant,
     required List<BatchCountingLink> links,
+    Future<void> Function(String tableName, List<TimeseriesData> points)?
+        recorder,
   })  : _plant = plant,
-        _links = links;
+        _links = links,
+        _recorder = recorder;
 
   final LocalStateMan _man;
 
@@ -315,6 +352,13 @@ final class HarnessedLocalStateMan
   final FakeUpstreamLink _plant;
 
   final List<BatchCountingLink> _links;
+
+  /// Where a seeded sample actually goes, or null on a leg with no recorder.
+  final Future<void> Function(String tableName, List<TimeseriesData> points)?
+      _recorder;
+
+  /// Everything [seedTimeseries] has been asked for, in order, as one future.
+  Future<void> _seeded = Future<void>.value();
 
   // ------------------------------------------------------ the nine kit levers
 
@@ -468,6 +512,60 @@ final class HarnessedLocalStateMan
   /// that can tell a re-issue from a re-try: `LocalStateMan._crossIntoThePlant`
   /// is one call site and `freeze_test.dart` pins it at one, but a pin counts
   /// call sites in source and this counts crossings at runtime.
+  // -------------------------------------------------- the data-harness lever
+
+  /// Records [points] against [tableName] — really, in the database.
+  ///
+  /// ## The lever is `void` and a database is not
+  ///
+  /// `StateManDataHarness.seedTimeseries` returns nothing, because it was
+  /// declared for an in-memory fake where recording a sample is a map
+  /// assignment. Here it is a round trip, and the case that calls it does
+  /// this:
+  ///
+  /// ```dart
+  /// seed(api, _table, _minutely(base, 7));
+  /// final got = await within(api.timeseries.queryTimeseriesData(...), '…');
+  /// ```
+  ///
+  /// — no await between the two, and none available to be written. So the
+  /// settling happens where the *reader* is, not where the writer is: the
+  /// work is queued here and [timeseries] waits for it before it answers.
+  /// Every query this leg makes is therefore behind every seed this leg was
+  /// asked for, in the order it was asked, which is the property the case is
+  /// relying on when it writes those two lines.
+  ///
+  /// Chained rather than collected, because two seeds against one table must
+  /// not interleave their inserts: `Database` buffers per table and flushes
+  /// on a count, so two concurrent seeders would each flush the other's rows
+  /// and neither would know when its own were on disk.
+  ///
+  /// The failure is deliberately *not* swallowed into `_seeded` alone: an
+  /// error there would surface at the next query as an unrelated-looking
+  /// exception, so it is left on the chain and re-thrown by the gate, which
+  /// is the call the case is awaiting.
+  @override
+  void seedTimeseries(String tableName, List<TimeseriesData> points) {
+    final recorder = _recorder;
+    if (recorder == null) {
+      throw UnsupportedError(
+          'this leg was composed with no recorder, so it cannot put a sample '
+          'in front of the reader. Only the `db` leg passes one: a leg with '
+          'no database must declare `supportsDataServices: false` rather than '
+          'seed into nothing — see contract_test.dart\'s call site');
+    }
+    _seeded = _seeded.then((_) => recorder(tableName, points));
+  }
+
+  /// Waits for every queued seed, and lets its failure out here.
+  Future<void> _settleSeeds() async {
+    final queued = _seeded;
+    // Reset first: a failed seed must fail the query that needed it and then
+    // stop failing every later one, or one broken case reports as seven.
+    _seeded = Future<void>.value();
+    await queued;
+  }
+
   @override
   int upstreamWriteAttempts(String cmd) {
     var total = 0;
@@ -522,8 +620,16 @@ final class HarnessedLocalStateMan
   @override
   BrowseApi get browse => _man.browse;
 
+  /// The gateway's reader, behind the seed gate.
+  ///
+  /// Undecorated when there is no recorder: the pure lane must reach
+  /// `LocalStateMan.timeseries`' refusal by name, and a wrapper would put a
+  /// harness frame in front of the message that tells a reader what is
+  /// missing.
   @override
-  TimeseriesApi get timeseries => _man.timeseries;
+  TimeseriesApi get timeseries => _recorder == null
+      ? _man.timeseries
+      : _SeedGatedTimeseries(_man.timeseries, _settleSeeds);
 
   @override
   HistoryViewApi get historyViews => _man.historyViews;
@@ -533,6 +639,56 @@ final class HarnessedLocalStateMan
 
   @override
   Future<void> dispose() => _man.dispose();
+}
+
+/// The reader, with every queued seed settled before it answers.
+///
+/// Four methods and no judgement in any of them: this decorator exists to
+/// order two things the kit's `void` lever cannot order itself
+/// ([HarnessedLocalStateMan.seedTimeseries] argues why), and a decorator that
+/// also filtered, capped or reshaped an answer would be a leg marking its own
+/// homework.
+final class _SeedGatedTimeseries implements TimeseriesApi {
+  _SeedGatedTimeseries(this._inner, this._settle);
+
+  final TimeseriesApi _inner;
+  final Future<void> Function() _settle;
+
+  @override
+  Future<List<TimeseriesData>> queryTimeseriesData(
+      String tableName, DateTime to,
+      {String? orderBy = 'time ASC', DateTime? from}) async {
+    await _settle();
+    return _inner.queryTimeseriesData(tableName, to,
+        orderBy: orderBy, from: from);
+  }
+
+  @override
+  Future<Map<String, List<TimeseriesData>>> queryTimeseriesDataMultiple(
+      List<String> tableNames, DateTime to,
+      {String? orderBy = 'time ASC', DateTime? from}) async {
+    await _settle();
+    return _inner.queryTimeseriesDataMultiple(tableNames, to,
+        orderBy: orderBy, from: from);
+  }
+
+  @override
+  Future<List<TimeseriesData>> queryTimeseriesDataDownsampled(
+      String tableName, DateTime from, DateTime to,
+      {int maxPoints = 1000}) async {
+    await _settle();
+    return _inner.queryTimeseriesDataDownsampled(tableName, from, to,
+        maxPoints: maxPoints);
+  }
+
+  @override
+  Future<Map<DateTime, int>> countTimeseriesDataMultiple(
+      String tableName, Duration interval, int howMany,
+      {DateTime? since}) async {
+    await _settle();
+    return _inner.countTimeseriesDataMultiple(tableName, interval, howMany,
+        since: since);
+  }
 }
 
 /// A link that counts **bursts** of upstream reads rather than reads.

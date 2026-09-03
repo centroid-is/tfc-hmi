@@ -418,7 +418,6 @@ final class TimescaleReader implements TimeseriesApi {
     final db = _database();
     final series = _resolve(tableName);
     final shape = await _shapeOf(db, tableName, series);
-    final member = series.member;
 
     // **The four fallbacks, refused by name before anything is built.**
     //
@@ -454,37 +453,55 @@ final class TimescaleReader implements TimeseriesApi {
           tableName, shape.column, shape.dataType);
     }
 
-    if (member == null) {
-      // A scalar table is exactly what the shipped method was written for,
-      // including its `_valueColumnType` probe and its array handling — and
-      // with the four conditions refused above, it can no longer reach any of
-      // its fallbacks, so what it returns is bounded by `maxPoints` and needs
-      // no row cap of its own.
-      return _points(
-          tableName,
-          shape,
-          await db.queryTimeseriesDataDownsampled(series.table, from, to,
-              maxPoints: maxPoints));
-    }
-
-    // **A struct table has no column named `value`, so the shipped method's
-    // `_valueColumnType` probe answers null and it returns the UNBOUNDED raw
-    // query instead** (`database.dart:1486-1489`) — silently, for every
-    // struct table there is, which is ninety of the live plant's 140
-    // collected keys. That is why the bucketing is spelled again here with
-    // the member column parameterised: `buildDownsampleSql` hardcodes
-    // `value` and takes only a table name, so it cannot be reused. This is
-    // the ONE re-spelling of that shape in this repository, and it mirrors
-    // the non-array branch (`database.dart:473-492`) point for point: three
-    // points per bucket — min, max, last — at the bucket start, its midpoint
-    // and its end.
+    // **One statement for both shapes, and it is not the shipped one.**
+    //
+    // Until 10-11 a scalar table was handed to `Database.
+    // queryTimeseriesDataDownsampled` and only a member projection was spelled
+    // here, because that method looks for a column literally named `value` and
+    // silently answers the UNBOUNDED raw query when it finds none — which is
+    // every struct table there is, ninety of the live plant's 140 collected
+    // keys. Turning `supportsDataServices` on put the delegating branch in
+    // front of `checkDownsampledRespectsMaxPoints` for the first time and it
+    // broke three promises at once, on any window a bucket boundary does not
+    // happen to land on:
+    //
+    //  1. **The bound.** `time_bucket` aligns to its own default origin, so a
+    //     window divided into `numBuckets` straddles `numBuckets + 1` of them
+    //     and the answer is 3 × (n + 1) points. Measured: 51 where 50 was
+    //     asked for. Three points is not a denial of service; a bound the one
+    //     bounded method in the family does not keep is still not a bound.
+    //  2. **The left edge.** The first row is emitted at a bucket START, which
+    //     with an epoch-aligned origin is *before* the window. Measured at
+    //     24 ms early — and `queryTimeseriesData` two methods up refuses to
+    //     return anything outside its window at all.
+    //  3. **The right edge.** The last row is emitted at `bucket + interval`,
+    //     past the window by up to one bucket. Measured at 31.172 s late; at
+    //     the interface's default of 1000 maxPoints over a month a bucket is
+    //     forty-three minutes, and the newest point is the one an operator
+    //     reads as the current value.
+    //
+    // Two changes close all three, and neither invents data. `origin` anchors
+    // the buckets to the window the caller asked for, so there are exactly
+    // `numBuckets` of them and the first starts at `from`; `LEAST` clamps the
+    // two synthetic instants to `to`. Synthetic is the operative word — the
+    // midpoint and the bucket end are stamps this query mints, not any
+    // sample's own time, so clamping one back inside the window it was
+    // computed for is a correction rather than a falsification.
+    //
+    // The scalar branch loses nothing by joining: the shipped method's four
+    // fallbacks are each already refused by name above, its `_valueColumnType`
+    // probe is a second round trip answering what `_shapeOf` answered, and its
+    // array handling is unreachable because `ARRAY` is not in [_numericTypes]
+    // and `_shapeFor` refuses it first. `shape.column` is `value` for a scalar
+    // table and the member for a projection, which is the only difference the
+    // two ever had.
     final bucketMs = (rangeMs / numBuckets).ceil();
-    final column = _quoted(member);
+    final column = _quoted(shape.column);
     final table = _quoted(series.table);
     final sql = '''
         WITH agg AS (
           SELECT
-            time_bucket(\$1::interval, time) AS bucket,
+            time_bucket(\$1::interval, time, \$2::timestamptz) AS bucket,
             min($column)          AS min_val,
             max($column)          AS max_val,
             last($column, time)   AS last_val
@@ -492,11 +509,13 @@ final class TimescaleReader implements TimeseriesApi {
           WHERE time >= \$2::timestamptz AND time <= \$3::timestamptz
           GROUP BY bucket
         )
-        SELECT bucket                      AS time, min_val  AS value FROM agg
+        SELECT bucket AS time, min_val AS value FROM agg
         UNION ALL
-        SELECT bucket + \$1::interval * 0.5,       max_val  AS value FROM agg
+        SELECT LEAST(bucket + \$1::interval * 0.5, \$3::timestamptz),
+               max_val  AS value FROM agg
         UNION ALL
-        SELECT bucket + \$1::interval,             last_val AS value FROM agg
+        SELECT LEAST(bucket + \$1::interval, \$3::timestamptz),
+               last_val AS value FROM agg
         ORDER BY 1
       ''';
     final rows = await db.db.customSelect(sql, variables: [
@@ -708,13 +727,6 @@ final class TimescaleReader implements TimeseriesApi {
         _sample(wireName, shape, row.data[shape.column], row.data['time']),
     ];
   }
-
-  List<TimeseriesData> _points(
-          String wireName, _Shape shape, List<ts.TimeseriesData> raw) =>
-      [
-        for (final point in raw)
-          _sample(wireName, shape, point.value, point.time),
-      ];
 
   /// One sample, built through the protocol's own constructor.
   ///

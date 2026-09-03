@@ -39,7 +39,7 @@ Everything below is the reasoning and the exact shapes.
 - One backend is the only thing talking to PLCs (ST101/ST201/ST301 + Baader)
   and TimescaleDB. ~1556 keys, 10 Hz worst case (which cannot actually occur).
 - Bidirectional: dominant server→client telemetry push + request/response
-  (write/read/browse, ~14 timeseries/history methods, preferences,
+  (write/read plus 34 browse/timeseries/history-view/preference methods,
   LISTEN/NOTIFY-style notifications).
 - Safety: PLC writes are never silently retried, and their outcome is never
   silently ambiguous.
@@ -383,9 +383,10 @@ semantic.
   The wire frames, the PLC-side function block that makes the ruling true on
   the plant, the 1 s deadman constant, the discrete-command pattern and the
   Flutter binding are all §4.6a.
-- Reads/RPCs (timeseries, history-view, preferences) are ordinary requests —
-  ~14 named methods mapped verbatim from the drift API. **No `query(sql)`
-  RPC, ever.**
+- Reads/RPCs (browse, timeseries, history-view, preferences) are ordinary
+  requests — **34 named methods** mapped verbatim from the drift API, plus one
+  server→client notification. **No `query(sql)` RPC, ever.** The count and the
+  two conventions it introduced are §4.6b.
 
 ### 4.6a Hold-to-run and momentary commands
 
@@ -543,6 +544,51 @@ nothing about the link needs binding.
   the hold it just took and **never starts the pulse timer**: the alternative
   is a deadman fed at full cadence from a panel nobody is touching. The same
   holds for a lifecycle event and for `dispose()` inside that window.
+
+### 4.6b Amendment, 2026-09-03 (Phase 10): the data services, as they shipped
+
+§4.6's "~14 named methods" was an estimate made before the families were
+counted. They have been counted, and they are **34 requests**:
+
+| Family | Count | Interface |
+|---|---|---|
+| browse | 4 | `BrowseApi` |
+| timeseries | 4 | `TimeseriesApi` |
+| history views | 11 | `HistoryViewApi` |
+| preferences | 15 | `PreferencesApi` |
+
+`DataServiceMethods.all.length` in `tfc_relay_protocol` is the single spelling
+of that 34, built from the four per-family sets rather than as a second copy
+of the strings, and `method_table_closed_test.dart` iterates it. With the
+pipe's own methods the gateway's handler table is **43** entries.
+
+Plus **one server→client notification**, `preferences.changed`, which takes
+the notification set from 5 to **6**. It is deliberately in none of the four
+sets and not in `all`: a set that carried it would make the
+method-table-closure test demand a handler for a frame that must never have
+one.
+
+Two conventions this phase introduced are **visible on the wire**, so they are
+written here rather than left in a phase summary:
+
+**Struct series are addressed `<series>:<member>`.** Ninety of the plant's 140
+collected keys are whole drive structs, one table with one column per member.
+The gateway projects **one scalar series per member** and the wire's sample
+type stays `num` — a request for `ST101.CN01.MOT01:speed` gets a list of
+numbers, not a list of maps. The alternative (rows of `Object?`) was rejected
+because it breaks the arithmetic in every chart and ships members nobody
+asked for. An **unaddressed** struct is a refusal naming the available
+members, never a `Map`: the client decodes every point as
+`TimeseriesData<num>`, so a map there is a cast error that reaches the
+operator as "the chart is broken" rather than as "say which member".
+
+**`preferences.changed` carries a key LIST, not a key.** A `clear()` over 500
+keys must be one frame per client, not 500 frames in the priority lane. The
+payload is therefore a list of the keys that changed, and a single-key change
+is a list of one. Note what the frame is and is not: it announces *that* a
+write happened, never the value, and it is gated on hello — but every
+authenticated station is told which preference keys changed, so whoever ships
+per-key preference hiding has to filter this frame as well as the getters.
 
 ### 4.7 Status channel & pipeline health
 
