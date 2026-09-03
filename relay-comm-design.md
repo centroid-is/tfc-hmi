@@ -337,9 +337,19 @@ phase summary:
 The same stall also reaches the historian honestly: collection's interval
 tick declines a wake-up sample (the timer's own missed-window count, past a
 250 ms floor) instead of stamping the pre-freeze held value at `now()`, so a
-frozen gateway leaves a **gap plus a counted drop** in the trend — never a
+frozen gateway leaves a **gap plus a counted decline** in the trend — never a
 flat line — which is F22's third clause ("historian marks the gap") and the
-same fail-safe instinct as the band-0-only quality gate.
+same fail-safe instinct as the band-0-only quality gate. Be precise about
+what the counter counts (09-REVIEW IN-03): `Timer.periodic` coalesces every
+missed window into one wake-up callback, so `PIPE.collect.rows_dropped`
+moves by **~1 per stall**, not by one per missed window — after a 45 s
+freeze at 100 ms, ~450 samples are missing and the counter moves by 1–2.
+The **loss measure is the gap in the trend**; the counter says a
+stall-decline happened. It is kept that way deliberately: the wake-up
+callback cannot know whether the gate was open or the held value's band
+good during windows it slept through, so a per-window count would be a
+census of the unknowable, and F22e's gate expectations pin the per-decline
+semantic.
 
 ### 4.6 Writes (the safety path)
 

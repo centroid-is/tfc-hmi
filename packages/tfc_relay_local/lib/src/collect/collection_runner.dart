@@ -352,11 +352,28 @@ final class CollectionRunner {
           // it at now() stamps a pre-stall reading as current — after a 45 s
           // backup freeze that is a 45-second-old number wearing a fresh
           // timestamp, the one-row flat line F22e catches (09-09). Decline
-          // and count: the missed window is a real loss the operator can
-          // read off PIPE.collect.rows_dropped. Within one sweep interval
-          // the sweep rules on the value's real age, and a live upstream
-          // re-vouches it with its next arrival — an on-schedule tick then
-          // resumes writing.
+          // and count the DECLINE, singular: `Timer.periodic` coalesces
+          // every missed window into this one wake-up callback, so
+          // PIPE.collect.rows_dropped moves by ~1 per stall however many
+          // windows the freeze swallowed (~450 at 100 ms over 45 s). The
+          // counter vouches for declines it made, not for windows it slept
+          // through — whether the gate was open or the held band good
+          // mid-freeze is unknowable from here — so the LOSS measure is the
+          // gap itself, which stays legible in the trend; the counter says
+          // that a stall-decline happened (09-REVIEW IN-03). A fresh
+          // arrival processed earlier in this same wake burst is declined
+          // too — the heuristic reads tick counts, not the held value's
+          // age — at the cost of one row plus one counted decline
+          // (09-REVIEW IN-04, edge a). Within one sweep interval the sweep
+          // rules on the value's real age, and a live upstream re-vouches
+          // it with its next arrival — an on-schedule tick then resumes
+          // writing. What those post-decline ticks may stamp is bounded by
+          // `staleAfter` (09-REVIEW IN-04, edge b): a quiet plant after a
+          // short freeze resumes writes of the pre-freeze value, but a
+          // value younger than staleAfter is one the system's own
+          // freshness policy calls current, and the overdue sweep — which
+          // fires in the same wake burst, before the next scheduled sample
+          // tick can — rules the moment its real age crosses that line.
           if (heldIsArrival) _countSkip();
           return;
         }
