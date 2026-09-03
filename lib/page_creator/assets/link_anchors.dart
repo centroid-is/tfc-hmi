@@ -8,7 +8,8 @@
 library;
 
 import 'dart:math' as math;
-import 'dart:ui' show Offset, Size;
+import 'package:flutter/widgets.dart'
+    show BuildContext, InheritedWidget, Offset, Size;
 
 import 'common.dart';
 import 'link_geometry.dart';
@@ -146,4 +147,46 @@ class PageLinkAnchors implements LinkAnchors {
     final ry = px * math.sin(r) + py * math.cos(r);
     return Offset(rx / canvas.width, ry / canvas.height);
   }
+}
+
+/// Publishes the page an asset is being built inside.
+///
+/// A run is the only asset whose appearance depends on the others: it needs
+/// their positions to find its own ends, and its configure form needs their
+/// names to offer as endpoints. `build(BuildContext)` and
+/// `configure(BuildContext)` take nothing but a context, so the page arrives
+/// this way rather than through forty constructors that do not want it.
+///
+/// Absent in a bare widget test, which is the case [maybeOf] exists for: a run
+/// with no page around it falls back to [LinkAnchors.none] and draws between
+/// its own stored coordinates.
+class PageAssetsScope extends InheritedWidget {
+  const PageAssetsScope({
+    super.key,
+    required this.assets,
+    required this.canvas,
+    required super.child,
+  });
+
+  final List<Asset> assets;
+
+  /// Canvas pixel size, needed only to turn a port on a rotated asset.
+  final Size canvas;
+
+  static PageAssetsScope? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<PageAssetsScope>();
+
+  /// The anchors for this page, or [LinkAnchors.none] outside one.
+  static LinkAnchors anchorsOf(BuildContext context) {
+    final scope = maybeOf(context);
+    return scope == null
+        ? LinkAnchors.none
+        : PageLinkAnchors(scope.assets, scope.canvas);
+  }
+
+  @override
+  bool updateShouldNotify(PageAssetsScope old) =>
+      old.canvas != canvas ||
+      old.assets.length != assets.length ||
+      !identical(old.assets, assets);
 }

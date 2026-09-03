@@ -171,6 +171,20 @@ abstract class Asset {
   /// equipment even when it is identical in every other respect.
   String assignNewId();
 
+  /// The page-relative box this asset occupies, when that is not the one
+  /// [coordinates] and [size] already describe.
+  ///
+  /// Null for every asset whose position is simply where it was dropped, which
+  /// is all of them but one. A run is the exception: its box is wherever the
+  /// assets it plugs into happen to be, so it can only be known once the page
+  /// is known.
+  ///
+  /// Handed back rather than written into [coordinates] on purpose.
+  /// `AssetStack` builds from a config that lives for the whole mount and
+  /// must not edit it in place — deriving the box into a local is how a run
+  /// gets positioned without breaking that.
+  Rect? boxOn(List<Asset> page, Size canvas);
+
   /// Rewrites references this asset holds to *other* assets' ids.
   ///
   /// Called after a paste with a map from each copied asset's old id to its
@@ -343,6 +357,11 @@ abstract class BaseAsset implements Asset {
   /// override this.
   @override
   void remapAssetIds(Map<String, String> idMap) {}
+
+  /// An asset sits where it was dropped; see [Asset.boxOn] for the exception.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  Rect? boxOn(List<Asset> page, Size canvas) => null;
 
   @JsonKey(name: 'coordinates')
   Coordinates _coordinates = Coordinates(x: 0.0, y: 0.0);
