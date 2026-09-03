@@ -195,21 +195,102 @@ void main() {
 
     test('downsampled honours maxPoints and reaches both ends of the window',
         () async {
+      final from = anchor.subtract(const Duration(minutes: 11));
       final samples = await reader.queryTimeseriesDataDownsampled(
-          'Line1.Motor1', anchor.subtract(const Duration(minutes: 11)), anchor,
+          'Line1.Motor1', from, anchor,
           maxPoints: 9);
 
       expect(samples, isNotEmpty);
-      expect(samples.length, lessThanOrEqualTo(9 + 3),
+      expect(samples.length, lessThanOrEqualTo(9),
           reason: 'three points per bucket (min, max, last) and '
-              '(maxPoints / 3).floor() buckets — the shipped arithmetic, '
-              'with one bucket of slack for the boundary');
+              '(maxPoints / 3).floor() buckets — and NO slack for a boundary '
+              'bucket. `time_bucket` aligns to the Postgres epoch unless it '
+              'is given an origin, so an arbitrary window straddles one more '
+              'bucket than it was divided into and the answer comes back at '
+              '3 × (buckets + 1). maxPoints is the interface\'s word '
+              '(state_man_api.dart: "At most [maxPoints] samples") and a '
+              'bound that is exceeded on every unaligned window is not a '
+              'bound');
       final values = samples.map((s) => (s.value as num)).toList();
       expect(values.reduce(min), 1400,
           reason: 'the oldest sample must survive downsampling: a chart '
               'whose left edge is missing is a chart that lies about when '
               'the run started');
       expect(values.reduce(max), 1490);
+      expect(samples.first.time, from,
+          reason: 'the downsampled series starts at ${samples.first.time} '
+              'where the caller asked for $from. An epoch-aligned bucket '
+              'starts BEFORE the window, so the chart draws its first point '
+              'to the left of its own axis — and it is a synthetic instant, '
+              'not a sample\'s own, so nothing downstream can tell');
+      expect(samples.last.time, anchor,
+          reason: 'the downsampled series ends at ${samples.last.time} where '
+              'the window ends at $anchor. The last bucket is emitted at '
+              '`bucket + interval`, which is past the window by up to one '
+              'bucket — on a month-wide chart at the default 1000 maxPoints '
+              'that is forty minutes into the future, and the newest point '
+              'is the one an operator reads as now');
+    });
+
+    /// **The case above is bucket-aligned by luck, and this one is not.**
+    ///
+    /// An eleven-minute window at `maxPoints: 9` is three 220-second buckets,
+    /// and 220 seconds happens to divide the offset from `time_bucket`'s
+    /// default origin exactly — so the boundary bucket never appears there
+    /// and the two edges land on the window's own instants for free. Every
+    /// assertion above therefore passes against an implementation that keeps
+    /// none of those properties on an *arbitrary* window, which is every
+    /// window a chart actually asks for.
+    ///
+    /// This is that window: 500 one-second samples, `maxPoints: 50`, so
+    /// `(50 / 3).floor()` is sixteen buckets of 31 188 ms over a 499-second
+    /// span, aligned to nothing. It is deliberately the shape
+    /// `checkDownsampledRespectsMaxPoints` uses — the contract check that
+    /// found this when 10-11 turned `supportsDataServices` on — so the
+    /// property is defended in the package that owns the code and not only
+    /// through a contract leg five files away.
+    test('a window aligned to nothing keeps the bound and both edges',
+        () async {
+      final unaligned = freshTable('speed_unaligned');
+      final base = anchor.subtract(const Duration(hours: 1));
+      await seed(db, unaligned, [
+        for (var i = 0; i < 500; i++) (base.add(Duration(seconds: i)), i),
+      ]);
+      final over = TimescaleReader(
+        database: () => db,
+        resolver: FixtureResolver({'Line1.Unaligned': unaligned}),
+      );
+      final to = base.add(const Duration(seconds: 499));
+
+      final samples = await over.queryTimeseriesDataDownsampled(
+          'Line1.Unaligned', base, to,
+          maxPoints: 50);
+
+      expect(samples.length, lessThanOrEqualTo(50),
+          reason: 'sixteen buckets is 48 points and the window straddles a '
+              'seventeenth, so the shipped arithmetic answers 51 where 50 '
+              'was asked for. Three points is not a denial of service — the '
+              'reason to close it is that a bound nobody keeps is a bound '
+              'nobody can reason about, and this is the one method in the '
+              'family that exists to be bounded');
+      expect(samples.first.time, base,
+          reason: 'the first point came back at ${samples.first.time}, '
+              'BEFORE the window starts at $base. It is a bucket boundary, '
+              'not a sample\'s own instant, so nothing downstream can '
+              'recognise it as invented — and queryTimeseriesData refuses to '
+              'return anything outside its window at all');
+      expect(samples.last.time, to,
+          reason: 'the last point came back at ${samples.last.time}, AFTER '
+              'the window ends at $to. At the interface\'s default of 1000 '
+              'maxPoints over a month a bucket is forty-three minutes, so '
+              'the point an operator reads as the current value is drawn '
+              'three quarters of an hour into the future');
+      final values = samples.map((s) => s.value as num).toList();
+      expect(values.reduce(min), 0,
+          reason: 'the anti-vacuity arm: a downsampler that answered a '
+              'clamped, empty or truncated list would satisfy the bound '
+              'above without reaching either end of the data');
+      expect(values.reduce(max), 499);
     });
   });
 
@@ -273,22 +354,70 @@ void main() {
 
     test('a member series downsamples without falling back to the raw query',
         () async {
+      final from = anchor.subtract(const Duration(minutes: 7));
       final samples = await reader.queryTimeseriesDataDownsampled(
-          'Line1.Motor2:speed',
-          anchor.subtract(const Duration(minutes: 7)),
-          anchor,
+          'Line1.Motor2:speed', from, anchor,
           maxPoints: 6);
 
       expect(samples, isNotEmpty);
       final values = samples.map((s) => s.value as num).toList();
       expect(values.reduce(min), 40.0);
       expect(values.reduce(max), 45.0);
-      expect(samples.length, lessThanOrEqualTo(6 + 3),
+      expect(samples.length, lessThanOrEqualTo(6),
           reason: 'Database.queryTimeseriesDataDownsampled looks for a '
               'column literally named `value` and silently returns the '
               'UNBOUNDED raw query when it finds none — which is every '
               'struct table there is. The member path must bucket for '
-              'itself or a month-long struct chart is a month of raw rows');
+              'itself or a month-long struct chart is a month of raw rows — '
+              'and it must keep the bound while doing it, boundary bucket '
+              'included');
+      expect(samples.first.time, from,
+          reason: 'the projection has the same window edges to keep as the '
+              'scalar path: ninety of the plant\'s 140 collected keys come '
+              'through here');
+      expect(samples.last.time, anchor,
+          reason: 'and the same right-hand edge');
+    });
+
+    /// The projection's own unaligned window — see the scalar group's
+    /// equivalent for why an aligned one proves nothing. Ninety of the
+    /// plant's 140 collected keys come through this branch, and it spells its
+    /// own bucketing rather than delegating, so the two have to be shown
+    /// separately: a fix applied to one and forgotten on the other would
+    /// leave two thirds of the historian unbounded.
+    test('the projection keeps the bound and both edges on an unaligned '
+        'window', () async {
+      final unaligned = freshTable('drive_unaligned');
+      final base = anchor.subtract(const Duration(hours: 2));
+      await seed(db, unaligned, [
+        for (var i = 0; i < 500; i++)
+          (
+            base.add(Duration(seconds: i)),
+            <String, dynamic>{'speed': 40.0 + i, 'current': 3.0 + i},
+          ),
+      ]);
+      final over = TimescaleReader(
+        database: () => db,
+        resolver: FixtureResolver({'Line1.Drive': unaligned}),
+      );
+      final to = base.add(const Duration(seconds: 499));
+
+      final samples = await over.queryTimeseriesDataDownsampled(
+          'Line1.Drive:speed', base, to,
+          maxPoints: 50);
+
+      expect(samples.length, lessThanOrEqualTo(50),
+          reason: 'the member path computes the same '
+              '(maxPoints / 3).floor() buckets and calls the same '
+              'epoch-aligned time_bucket, so it overshoots the same way');
+      expect(samples.first.time, base,
+          reason: 'and starts before its own window the same way');
+      expect(samples.last.time, to,
+          reason: 'and ends after it the same way');
+      final values = samples.map((s) => s.value as num).toList();
+      expect(values.reduce(min), 40.0,
+          reason: 'the anti-vacuity arm, as in the scalar group');
+      expect(values.reduce(max), 539.0);
     });
   });
 
