@@ -161,6 +161,12 @@ void main() {
       final seen = <String>[];
       final sub = store.onPreferencesChanged.listen(seen.add);
       addTearDown(sub.cancel);
+      // Waited for, and the de-duplication sabotage is what proved this line
+      // has to be here: without it the write goes out before the LISTEN is
+      // registered, its own NOTIFY is dropped by Postgres rather than
+      // delivered, and the case counts one event whether or not anything
+      // de-duplicates. It passed with the de-duplication deleted.
+      expect(await settle(() => store.feed.channelUp), isTrue);
       final key = '${ns}mine';
 
       await store.setString(key, 'through the pipe');
