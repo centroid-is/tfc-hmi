@@ -24,6 +24,11 @@ import '../../providers/preferences.dart';
 import '../../widgets/boolean_expression.dart';
 import '../../widgets/bit_mask_grid.dart';
 import '../../widgets/key_mapping_sections.dart';
+import 'bulk_property.dart';
+
+// The `Asset.bulkProperties` contract is declared here, so every asset file
+// that implements it gets the descriptor types along with `Asset` itself.
+export 'bulk_property.dart';
 
 part 'common.g.dart';
 
@@ -148,6 +153,20 @@ abstract class Asset {
   /// block. An asset that is one piece of equipment returns the empty list.
   List<Asset> get childAssets;
 
+  /// The settings the page editor may change on several assets at once.
+  ///
+  /// [configure] is a hand-written form per asset type and can only edit one
+  /// asset, so selecting four drives and widening them all needs a second,
+  /// narrower description of what an asset holds. `BaseAsset` supplies the
+  /// settings every asset has — position, size, angle, label — and an asset
+  /// adds its own by appending to `super.bulkProperties`. Anything left out
+  /// simply does not appear in the multi-select editor; the per-asset form
+  /// remains the complete one.
+  ///
+  /// See `bulk_property.dart` for the descriptor types and how a selection is
+  /// reduced to the settings its assets have in common.
+  List<BulkProperty> get bulkProperties;
+
   Widget build(BuildContext context);
   Widget configure(BuildContext context);
   Map<String, dynamic> toJson();
@@ -256,6 +275,140 @@ abstract class BaseAsset implements Asset {
   @override
   set textPos(TextPos? textPos) {
     _textPos = textPos;
+  }
+
+  /// Position, size, angle and label — the settings every asset has, and so
+  /// the ones a mixed selection is left with. An asset adds its own on top:
+  ///
+  /// ```dart
+  /// @JsonKey(includeFromJson: false, includeToJson: false)
+  /// @override
+  /// List<BulkProperty> get bulkProperties => [
+  ///       ...super.bulkProperties,
+  ///       NumberBulkProperty(id: 'FooConfig.bar', ...),
+  ///     ];
+  /// ```
+  ///
+  /// Coordinates and sizes are canvas fractions on the wire but percentages
+  /// in the pane: `0.08` is not a width anyone reads off a drawing, and every
+  /// asset on a page is measured against the same canvas, so the conversion
+  /// is a fixed ×100 rather than a per-asset one.
+  ///
+  /// The setters rebuild [Coordinates] rather than mutating it because the
+  /// editor's undo history compares serialized snapshots, and an angle that
+  /// travels on the same object as x/y has to survive an x-only edit.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<BulkProperty> get bulkProperties => [
+        NumberBulkProperty(
+          id: 'x',
+          label: 'X',
+          group: bulkGeometryGroup,
+          unit: '%',
+          min: 0,
+          max: 100,
+          read: () => coordinates.x * 100,
+          apply: (value) => coordinates = Coordinates(
+            x: (value ?? 0) / 100,
+            y: coordinates.y,
+            angle: coordinates.angle,
+          ),
+        ),
+        NumberBulkProperty(
+          id: 'y',
+          label: 'Y',
+          group: bulkGeometryGroup,
+          unit: '%',
+          min: 0,
+          max: 100,
+          read: () => coordinates.y * 100,
+          apply: (value) => coordinates = Coordinates(
+            x: coordinates.x,
+            y: (value ?? 0) / 100,
+            angle: coordinates.angle,
+          ),
+        ),
+        NumberBulkProperty(
+          id: 'width',
+          label: 'Width',
+          group: bulkGeometryGroup,
+          unit: '%',
+          // The same floor the editor's grow/shrink buttons clamp to: an
+          // asset scaled to nothing cannot be found again to fix it.
+          min: 1,
+          max: 100,
+          read: () => size.width * 100,
+          apply: (value) => size = RelativeSize(
+            width: (value ?? 0) / 100,
+            height: size.height,
+          ),
+        ),
+        NumberBulkProperty(
+          id: 'height',
+          label: 'Height',
+          group: bulkGeometryGroup,
+          unit: '%',
+          min: 1,
+          max: 100,
+          read: () => size.height * 100,
+          apply: (value) => size = RelativeSize(
+            width: size.width,
+            height: (value ?? 0) / 100,
+          ),
+        ),
+        NumberBulkProperty(
+          id: 'angle',
+          label: 'Angle',
+          group: bulkGeometryGroup,
+          unit: '°',
+          decimals: 0,
+          // Null is "unrotated" for an asset that has never been turned, and
+          // clearing the field is how a selection gets back to it — the
+          // mirror logic in `AssetStack` treats a null angle differently
+          // from a zero one, so the two are not interchangeable.
+          nullable: true,
+          read: () => coordinates.angle,
+          apply: (value) => coordinates = Coordinates(
+            x: coordinates.x,
+            y: coordinates.y,
+            angle: value?.toDouble(),
+          ),
+        ),
+        TextBulkProperty(
+          id: 'label.text',
+          label: 'Text',
+          group: bulkLabelGroup,
+          read: () => text,
+          apply: (value) => text = value,
+        ),
+        ChoiceBulkProperty<TextPos>(
+          id: 'label.position',
+          label: 'Position',
+          group: bulkLabelGroup,
+          options: TextPos.values,
+          optionLabel: (value) => bulkEnumLabel(value.name),
+          // A null position renders in the asset's default spot. The dropdown
+          // has no entry for it, so an asset that has never had one set shows
+          // as `below` until the row is touched — reading the default rather
+          // than inventing a sixth option nobody would recognise.
+          read: () => textPos ?? TextPos.below,
+          apply: (value) => textPos = value,
+        ),
+      ];
+
+  /// Section headings for the settings on this class. Assets reuse these for
+  /// their own geometry- or label-shaped fields so that a row lands under the
+  /// heading an operator would look for it under, not under the asset name.
+  static const String bulkGeometryGroup = 'Geometry';
+  static const String bulkLabelGroup = 'Label';
+
+  /// An enum constant's name as a dropdown entry: `disableWhenTrue` reads
+  /// "Disable when true". [_humanize] is the wrong tool — it is built for
+  /// `FooBarConfig` type names and leaves a leading lowercase word alone.
+  static String bulkEnumLabel(String name) {
+    final spaced = _humanize(name).toLowerCase();
+    if (spaced.isEmpty) return spaced;
+    return spaced[0].toUpperCase() + spaced.substring(1);
   }
 
   /// The ID of the linked technical document, or null if none linked.

@@ -127,10 +127,13 @@ void main() {
     final prefs = await pumpEditorWith(
         tester, [editorBox(0.3, 0.3), editorBox(0.6, 0.6)]);
 
-    // Copy both, then open the pane on the first.
+    // Copy both, then open the pane on the first. Selecting it alone first
+    // is what makes Edit mean the single-asset config pane: with the pair
+    // still selected the entry opens the properties grid instead.
     await marquee(tester, 0.15, 0.15, 0.75, 0.75);
     expect(selectedCount(tester), 2);
     await pressCopy(tester);
+    await tapAsset(tester, 0.3, 0.3);
     await chooseFromAssetMenu(tester, 0.3, 0.3, 'Edit');
 
     // Reselect the pair — the marquee also brings keyboard focus back to

@@ -30,6 +30,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:tfc/page_creator/assets/drawn_box.dart';
 import 'package:tfc/pages/page_view.dart' show AssetStack;
+import 'package:tfc/widgets/bulk_property_editor.dart';
 import 'package:tfc/widgets/panes/side_pane.dart';
 
 import '../helpers/page_editor_harness.dart';
@@ -268,14 +269,13 @@ void main() {
       );
     });
 
-    testWidgets('Edit opens the config pane for the asset under the cursor',
-        (tester) async {
-      // Two selected, but Edit configures the one that was right-clicked —
-      // the pane edits a single asset, unlike the entries below it.
+    testWidgets('Edit opens the config pane for a lone asset', (tester) async {
+      // One target, so Edit means the asset's own `configure()` form — the
+      // complete one, with its key pickers and device specifics.
       await pumpEditorWith(
           tester, [editorBox(0.25, 0.5), editorBox(0.45, 0.5)]);
-      await marquee(tester, 0.1, 0.3, 0.6, 0.7);
-      expect(selectedCount(tester), 2);
+      await tapAsset(tester, 0.45, 0.5);
+      expect(selectedCount(tester), 1);
 
       await chooseFromAssetMenu(tester, 0.45, 0.5, 'Edit');
       expect(find.byType(SidePane), findsOneWidget);
@@ -297,5 +297,42 @@ void main() {
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
     });
+
+    testWidgets('Edit opens the properties pane for a selection',
+        (tester) async {
+      // With more than one target Edit follows the same rule as every other
+      // entry — it acts on the whole selection — but through the properties
+      // grid, since `configure()` can only edit one asset.
+      await pumpEditorWith(
+          tester, [editorBox(0.25, 0.5), editorBox(0.45, 0.5)]);
+      await marquee(tester, 0.1, 0.3, 0.6, 0.7);
+      expect(selectedCount(tester), 2);
+
+      await chooseFromAssetMenu(tester, 0.45, 0.5, 'Edit 2 assets');
+      expect(find.byType(BulkPropertyEditor), findsOneWidget);
+      expect(find.text('2 assets'), findsOneWidget);
+
+      // One typed width moves both, which is the whole point of the pane.
+      await tester.enterText(
+        find.descendant(
+          of: find.byKey(bulkControlKey('width')),
+          matching: find.byType(TextField),
+        ),
+        '20',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+
+      final canvas = tester.getRect(find.byType(AssetStack));
+      for (final box in find.byType(DrawnBox).evaluate()) {
+        final rect = tester.getRect(find.byWidget(box.widget));
+        expect(rect.width / canvas.width, closeTo(0.2, 0.01));
+      }
+
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(find.byType(BulkPropertyEditor), findsNothing);
+    });
+
   });
 }

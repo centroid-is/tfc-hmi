@@ -64,6 +64,66 @@ class NumberConfig extends BaseAsset {
         graphConfig = GraphAssetConfig.preview(),
         writable = false;
 
+  /// How the figure reads. The tag it reads from is not here: see
+  /// [AnalogBoxConfig.bulkProperties] for why keys stay in the per-asset form.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<BulkProperty> get bulkProperties => [
+        ...super.bulkProperties,
+        BoolBulkProperty(
+          id: 'NumberConfig.showDecimalPoint',
+          label: 'Show decimal point',
+          group: _bulkGroup,
+          read: () => showDecimalPoint,
+          apply: (value) => showDecimalPoint = value,
+        ),
+        NumberBulkProperty(
+          id: 'NumberConfig.decimalPlaces',
+          label: 'Decimal places',
+          group: _bulkGroup,
+          isInt: true,
+          decimals: 0,
+          min: 0,
+          max: 6,
+          read: () => decimalPlaces,
+          apply: (value) => decimalPlaces = (value ?? decimalPlaces).round(),
+        ),
+        NumberBulkProperty(
+          id: 'NumberConfig.scale',
+          label: 'Scale',
+          group: _bulkGroup,
+          decimals: 4,
+          // Null is "unscaled", which is not the same as x1 to every reader of
+          // the form, so clearing the field has to be able to say so.
+          nullable: true,
+          read: () => scale,
+          apply: (value) => scale = value?.toDouble(),
+        ),
+        TextBulkProperty(
+          id: 'NumberConfig.units',
+          label: 'Units',
+          group: _bulkGroup,
+          read: () => units,
+          apply: (value) => units = value,
+        ),
+        BoolBulkProperty(
+          id: 'NumberConfig.writable',
+          label: 'Writable',
+          group: _bulkGroup,
+          read: () => writable,
+          apply: (value) => writable = value,
+        ),
+        ColorBulkProperty(
+          id: 'NumberConfig.textColor',
+          label: 'Text colour',
+          group: _bulkGroup,
+          read: () => textColor,
+          apply: (value) => textColor = value ?? textColor,
+        ),
+      ];
+
+  static const String _bulkGroup = 'Number';
+
   factory NumberConfig.fromJson(Map<String, dynamic> json) =>
       _$NumberConfigFromJson(json);
   Map<String, dynamic> toJson() => _$NumberConfigToJson(this);

@@ -136,6 +136,115 @@ class AnalogBoxConfig extends BaseAsset {
         enableDialog = true,
         graphConfig = GraphAssetConfig.preview();
 
+  /// The scale, shape and colours — everything about how the bar reads that
+  /// is worth setting on a row of them at once. The OPC UA keys are left to
+  /// the per-asset form: pointing eight boxes at one tag is a mistake that
+  /// looks like eight working boxes.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<BulkProperty> get bulkProperties => [
+        ...super.bulkProperties,
+        NumberBulkProperty(
+          id: 'AnalogBoxConfig.minValue',
+          label: 'Min value',
+          group: _bulkGroup,
+          read: () => minValue,
+          apply: (value) => minValue = (value ?? minValue).toDouble(),
+        ),
+        NumberBulkProperty(
+          id: 'AnalogBoxConfig.maxValue',
+          label: 'Max value',
+          group: _bulkGroup,
+          read: () => maxValue,
+          apply: (value) => maxValue = (value ?? maxValue).toDouble(),
+        ),
+        TextBulkProperty(
+          id: 'AnalogBoxConfig.units',
+          label: 'Units',
+          group: _bulkGroup,
+          read: () => units,
+          apply: (value) => units = value,
+        ),
+        TextBulkProperty(
+          id: 'AnalogBoxConfig.rangeUnits',
+          label: 'Range units',
+          group: _bulkGroup,
+          read: () => rangeUnits,
+          apply: (value) => rangeUnits = value,
+        ),
+        NumberBulkProperty(
+          id: 'AnalogBoxConfig.borderRadiusPct',
+          label: 'Corner radius',
+          group: _bulkGroup,
+          unit: '%',
+          // The field is a fraction of the shortest side, capped at a half —
+          // beyond that the "rounded rectangle" is a stadium and further
+          // values do nothing visible.
+          min: 0,
+          max: 50,
+          read: () => borderRadiusPct * 100,
+          apply: (value) => borderRadiusPct = (value ?? 0) / 100,
+        ),
+        BoolBulkProperty(
+          id: 'AnalogBoxConfig.vertical',
+          label: 'Vertical',
+          group: _bulkGroup,
+          read: () => vertical,
+          apply: (value) => vertical = value,
+        ),
+        BoolBulkProperty(
+          id: 'AnalogBoxConfig.reverseFill',
+          label: 'Reverse fill',
+          group: _bulkGroup,
+          read: () => reverseFill,
+          apply: (value) => reverseFill = value,
+        ),
+        BoolBulkProperty(
+          id: 'AnalogBoxConfig.enableDialog',
+          label: 'Opens pane',
+          group: _bulkGroup,
+          read: () => enableDialog,
+          apply: (value) => enableDialog = value,
+        ),
+        ColorBulkProperty(
+          id: 'AnalogBoxConfig.bgColor',
+          label: 'Background',
+          group: _bulkGroup,
+          read: () => bgColor,
+          apply: (value) => bgColor = value ?? bgColor,
+        ),
+        ColorBulkProperty(
+          id: 'AnalogBoxConfig.fillColor',
+          label: 'Fill',
+          group: _bulkGroup,
+          read: () => fillColor,
+          apply: (value) => fillColor = value ?? fillColor,
+        ),
+        ColorBulkProperty(
+          id: 'AnalogBoxConfig.setpoint1Color',
+          label: 'Setpoint 1',
+          group: _bulkGroup,
+          read: () => setpoint1Color,
+          apply: (value) => setpoint1Color = value ?? setpoint1Color,
+        ),
+        ColorBulkProperty(
+          id: 'AnalogBoxConfig.setpoint2Color',
+          label: 'Setpoint 2',
+          group: _bulkGroup,
+          read: () => setpoint2Color,
+          apply: (value) => setpoint2Color = value ?? setpoint2Color,
+        ),
+        ColorBulkProperty(
+          id: 'AnalogBoxConfig.hysteresisColor',
+          label: 'Hysteresis',
+          group: _bulkGroup,
+          read: () => hysteresisColor,
+          apply: (value) => hysteresisColor = value ?? hysteresisColor,
+        ),
+      ];
+
+  static const String _bulkGroup = 'Analog Box';
+
   factory AnalogBoxConfig.fromJson(Map<String, dynamic> json) =>
       _$AnalogBoxConfigFromJson(json);
   Map<String, dynamic> toJson() => _$AnalogBoxConfigToJson(this);
