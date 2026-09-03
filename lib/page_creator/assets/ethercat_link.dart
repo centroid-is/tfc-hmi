@@ -12,6 +12,8 @@
 /// FB owes it.
 library;
 
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
@@ -167,9 +169,19 @@ class EtherCatLinkConfig extends BaseAsset {
     this.key = '',
     LinkRun? run,
     this.thickness = 0.006,
-  }) : run = run ?? LinkRun();
+  }) : run = run ?? LinkRun() {
+    // BaseAsset defaults to a 3% square, which is the wrong shape for
+    // something whose whole nature is being long and thin. A cable dropped
+    // from the palette wants to be wide enough to see and to grab before it
+    // is plugged into anything. `fromJson` overwrites this from the stored
+    // size, so it only ever affects a newly made one.
+    size = const RelativeSize(width: 0.18, height: 0.08);
+  }
 
-  EtherCatLinkConfig.preview() : this();
+  /// The palette tile: a bend, because a straight line is not recognisable as
+  /// a cable and every other tile in the grid is a picture of its thing.
+  EtherCatLinkConfig.preview()
+      : this(run: LinkRun(waypoints: [LinkWaypoint.onRun(0.5, -0.22)]));
 
   factory EtherCatLinkConfig.fromJson(Map<String, dynamic> json) =>
       _$EtherCatLinkConfigFromJson(json);
@@ -200,18 +212,44 @@ class EtherCatLinkConfig extends BaseAsset {
           if (w.pinnedTo != null) w.pinnedTo!,
       ];
 
+  /// True once either end is plugged into something.
+  ///
+  /// An unplugged cable has nothing to derive a position from, so it stays an
+  /// ordinary box asset: it sits where it was dropped, drags with the mouse
+  /// and is selected by its rectangle, exactly like everything else off the
+  /// palette. The moment an end names a device, that device decides where the
+  /// cable is and [boxOn] takes over.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  bool get isPluggedIn => run.from.assetId != null || run.to.assetId != null;
+
+  /// The run laid across this asset's own box, for a cable plugged into
+  /// nothing.
+  ///
+  /// The stored free-end coordinates are a *fallback for a binding that
+  /// broke*, not a position an operator ever set, so they are not what an
+  /// unplugged cable should be drawn between. Its own box is.
+  LinkRun runAcrossOwnBox() {
+    final half = size.width / 2;
+    final copy = run.copy();
+    copy.from
+      ..assetId = null
+      ..x = coordinates.x - half
+      ..y = coordinates.y;
+    copy.to
+      ..assetId = null
+      ..x = coordinates.x + half
+      ..y = coordinates.y;
+    return copy;
+  }
+
   /// The box the run occupies, from wherever its devices currently are.
   ///
   /// Padded by the stroke so the end caps are inside it: a rect measured on
   /// the centreline clips half the cable away at the extremes.
   @override
   Rect? boxOn(List<Asset> page, Size canvas) {
-    if (canvas.isEmpty) return null;
-    final anchors = PageLinkAnchors(page, canvas);
-    // Page-relative padding is anisotropic on a non-square canvas; the larger
-    // of the two keeps the cap inside the box on both axes.
-    final pad = thickness;
-    return run.boundsIn(anchors, pad: pad);
+    if (canvas.isEmpty || !isPluggedIn) return null;
+    return run.boundsIn(PageLinkAnchors(page, canvas), pad: thickness);
   }
 
   @override
@@ -293,10 +331,21 @@ class _EtherCatLinkState extends ConsumerState<EtherCatLink> {
       final canvas =
           scope?.canvas ?? Size(constraints.maxWidth, constraints.maxHeight);
       final box = widget.config.boxOn(scope?.assets ?? const [], canvas);
-      final resolved = widget.config.run.resolve(canvas, anchors);
-      final origin = box == null
-          ? Offset.zero
-          : Offset(box.left * canvas.width, box.top * canvas.height);
+      final ResolvedLink resolved;
+      final Offset origin;
+      if (box == null) {
+        // Unplugged: an ordinary box asset, drawn across itself.
+        resolved =
+            widget.config.runAcrossOwnBox().resolve(canvas, LinkAnchors.none);
+        origin = Offset(
+          widget.config.coordinates.x * canvas.width - constraints.maxWidth / 2,
+          widget.config.coordinates.y * canvas.height -
+              constraints.maxHeight / 2,
+        );
+      } else {
+        resolved = widget.config.run.resolve(canvas, anchors);
+        origin = Offset(box.left * canvas.width, box.top * canvas.height);
+      }
 
       final painter = EtherCatLinkPainter(
         link: ResolvedLink(
@@ -306,7 +355,11 @@ class _EtherCatLinkState extends ConsumerState<EtherCatLink> {
           resolved.radius,
         ),
         color: linkHealthColor(states, health),
-        strokeWidth: widget.config.thickness * canvas.shortestSide,
+        // Floored at two pixels. The thickness is a fraction of the canvas, so
+        // on a palette tile -- or any small preview -- it resolves to less
+        // than a pixel and the cable disappears entirely.
+        strokeWidth:
+            math.max(widget.config.thickness * canvas.shortestSide, 2.0),
       );
 
       return AssetHitShape(
