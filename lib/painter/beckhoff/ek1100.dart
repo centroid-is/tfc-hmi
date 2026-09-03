@@ -7,10 +7,16 @@ class EK1100 extends CustomPainter {
   final double heightMm = 100.0;
 
   final String name;
+  /// The device's configured name or id, worn as a marker tag over the
+  /// terminal-marker band of the block's own I/O slice — the same tag, in the
+  /// same place, that an EL terminal beside it wears. Empty draws nothing, so
+  /// an unnamed block is the drawing it always was.
+  final String markerLabel;
   final Color fillColor;
 
   EK1100({
     required this.name,
+    this.markerLabel = '',
     this.fillColor = bodyColor,
   });
 
@@ -154,6 +160,7 @@ class EK1100 extends CustomPainter {
       selected: false,
       topLabels: ('', ''),
       topLabelColors: (null, null),
+      markerLabel: markerLabel,
       name: '',
       bottomLabel: '',
       ioLabels: const ['24V', '0V', '+', '+', '-', '-', 'PE', 'PE'],
@@ -184,7 +191,9 @@ class EK1100 extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant EK1100 old) {
-    return name != old.name || fillColor != old.fillColor;
+    return name != old.name ||
+        markerLabel != old.markerLabel ||
+        fillColor != old.fillColor;
   }
 }
 

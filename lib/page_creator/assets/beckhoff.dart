@@ -76,6 +76,16 @@ abstract class BeckhoffCXConfig extends BaseAsset {
   @AssetListConverter()
   List<Asset> subdevices = [];
 
+  /// Operator-facing label, worn as a marker tag on the drawing the way the
+  /// EL terminals wear theirs — a page carrying several racks wants to
+  /// say which is which, and the tag is where the plant writes it.
+  ///
+  /// The model name stays where it was printed. Empty draws no tag at all,
+  /// which is what every page saved before the field existed deserialises
+  /// to, so those drawings are unchanged.
+  @JsonKey(defaultValue: '')
+  String nameOrId = '';
+
   // The slices are child assets: a pane opened from one slice marks that
   // slice on the mimic, not the whole rack. Excluded from JSON like the
   // BaseAsset getter it overrides — `subdevices` is the serialized field.
@@ -118,6 +128,7 @@ abstract class BeckhoffCXConfig extends BaseAsset {
               size: cxNativeSize,
               painter: CXxxxx(
                 name: model,
+                markerLabel: nameOrId,
                 pwrColor: Colors.green,
                 tcColor: Colors.green,
               ),
@@ -244,6 +255,15 @@ class _CXxxxxConfigContentState extends State<_CXxxxxConfigContent> {
                   initialValue: widget.config.coordinates,
                   onChanged: (c) => widget.config.coordinates = c,
                   enableAngle: true,
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  decoration: const InputDecoration(
+                    labelText: 'Name or ID',
+                    border: OutlineInputBorder(),
+                  ),
+                  initialValue: widget.config.nameOrId,
+                  onChanged: (value) => widget.config.nameOrId = value,
                 ),
               ],
             ),
@@ -380,6 +400,16 @@ class BeckhoffEK1100Config extends BaseAsset {
   @override
   List<Asset> get childAssets => subdevices;
 
+  /// Operator-facing label, worn as a marker tag on the drawing the way the
+  /// EL terminals wear theirs — a page carrying several couplers wants to
+  /// say which is which, and the tag is where the plant writes it.
+  ///
+  /// The model name stays where it was printed. Empty draws no tag at all,
+  /// which is what every page saved before the field existed deserialises
+  /// to, so those drawings are unchanged.
+  @JsonKey(defaultValue: '')
+  String nameOrId = '';
+
   BeckhoffEK1100Config();
 
   /// Native painter size for the EK1100 drawing (keeps 44:100 aspect).
@@ -406,6 +436,7 @@ class BeckhoffEK1100Config extends BaseAsset {
               size: _ekNativeSize,
               painter: EK1100(
                 name: "EK1100",
+                markerLabel: nameOrId,
               ),
             ),
             // Subdevices to the right, normalized to match EK height.
@@ -478,6 +509,15 @@ class _EK1100ConfigContentState extends State<_EK1100ConfigContent> {
                   initialValue: widget.config.coordinates,
                   onChanged: (c) => widget.config.coordinates = c,
                   enableAngle: true,
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  decoration: const InputDecoration(
+                    labelText: 'Name or ID',
+                    border: OutlineInputBorder(),
+                  ),
+                  initialValue: widget.config.nameOrId,
+                  onChanged: (value) => widget.config.nameOrId = value,
                 ),
               ],
             ),
@@ -1272,6 +1312,16 @@ class BeckhoffEL9187Config extends BaseAsset {
   @override
   String get category => 'Beckhoff Devices';
 
+  /// Operator-facing label, worn as a marker tag on the drawing the way the
+  /// EL terminals wear theirs — a page carrying several terminals wants to
+  /// say which is which, and the tag is where the plant writes it.
+  ///
+  /// The model name stays where it was printed. Empty draws no tag at all,
+  /// which is what every page saved before the field existed deserialises
+  /// to, so those drawings are unchanged.
+  @JsonKey(defaultValue: '')
+  String nameOrId = '';
+
   BeckhoffEL9187Config();
 
   @override
@@ -1321,6 +1371,15 @@ class _EL9187ConfigContentState extends State<_EL9187ConfigContent> {
           onChanged: (coordinates) => widget.config.coordinates = coordinates,
           enableAngle: false,
         ),
+        const SizedBox(height: 16),
+        TextFormField(
+          decoration: const InputDecoration(
+            labelText: 'Name or ID',
+            border: OutlineInputBorder(),
+          ),
+          initialValue: widget.config.nameOrId,
+          onChanged: (value) => widget.config.nameOrId = value,
+        ),
       ],
     );
   }
@@ -1339,6 +1398,7 @@ class _BeckhoffEL9187 extends StatelessWidget {
     return IO8Widget(
       ledStates: leds,
       name: name,
+      markerLabel: config.nameOrId,
       animation: const AlwaysStoppedAnimation(0),
       ioLabels: const ['OV', 'OV', 'OV', 'OV', 'OV', 'OV', 'OV', 'OV'],
       ioLabelColors: const [
@@ -2749,6 +2809,16 @@ class BeckhoffEL6070Config extends BaseAsset {
   @override
   List<String> get searchKeywords => const ['licence', 'license', 'twincat'];
 
+  /// Operator-facing label, worn as a marker tag on the drawing the way the
+  /// EL terminals wear theirs — a page carrying several terminals wants to
+  /// say which is which, and the tag is where the plant writes it.
+  ///
+  /// The model name stays where it was printed. Empty draws no tag at all,
+  /// which is what every page saved before the field existed deserialises
+  /// to, so those drawings are unchanged.
+  @JsonKey(defaultValue: '')
+  String nameOrId = '';
+
   BeckhoffEL6070Config();
 
   @override
@@ -2758,6 +2828,7 @@ class BeckhoffEL6070Config extends BaseAsset {
       child: IO8Widget(
         ledStates: List.filled(8, IOState.low),
         name: 'EL6070',
+        markerLabel: nameOrId,
         animation: const AlwaysStoppedAnimation(0),
         ioLabels: const ['', '', '', '', '', '', '', ''],
         ioLabelColors: List.filled(8, const Color(0xFFE0E0E0)),
@@ -2766,8 +2837,13 @@ class BeckhoffEL6070Config extends BaseAsset {
   }
 
   @override
-  Widget configure(BuildContext context) =>
-      _beckhoffConfigureShell(context, _PlacementOnlyConfig(config: this));
+  Widget configure(BuildContext context) => _beckhoffConfigureShell(
+      context,
+      _NamedPlacementConfig(
+        config: this,
+        nameOrId: () => nameOrId,
+        onNameOrIdChanged: (value) => nameOrId = value,
+      ));
 
   BeckhoffEL6070Config.preview() : super();
 
@@ -2792,19 +2868,34 @@ class BeckhoffEK1110Config extends BaseAsset {
   @override
   List<String> get searchKeywords => const ['ethercat', 'extension'];
 
+  /// Operator-facing label, worn as a marker tag on the drawing the way the
+  /// EL terminals wear theirs — a page carrying several extensions wants to
+  /// say which is which, and the tag is where the plant writes it.
+  ///
+  /// The model name stays where it was printed. Empty draws no tag at all,
+  /// which is what every page saved before the field existed deserialises
+  /// to, so those drawings are unchanged.
+  @JsonKey(defaultValue: '')
+  String nameOrId = '';
+
   BeckhoffEK1110Config();
 
   @override
   Widget build(BuildContext context) {
-    return const FittedBox(
+    return FittedBox(
       fit: BoxFit.contain,
-      child: EK1110Widget(name: 'EK1110'),
+      child: EK1110Widget(name: 'EK1110', markerLabel: nameOrId),
     );
   }
 
   @override
-  Widget configure(BuildContext context) =>
-      _beckhoffConfigureShell(context, _PlacementOnlyConfig(config: this));
+  Widget configure(BuildContext context) => _beckhoffConfigureShell(
+      context,
+      _NamedPlacementConfig(
+        config: this,
+        nameOrId: () => nameOrId,
+        onNameOrIdChanged: (value) => nameOrId = value,
+      ));
 
   BeckhoffEK1110Config.preview() : super();
 
@@ -3164,18 +3255,28 @@ Widget _beckhoffConfigureShell(BuildContext context, Widget content) {
   );
 }
 
-/// The configure form for a device with nothing to configure but where it
-/// sits — the passive parts that publish no data and take no name.
-class _PlacementOnlyConfig extends StatefulWidget {
+/// The configure form for a device that publishes nothing — the only
+/// settings are where it sits and what it is called.
+///
+/// The name is read and written through callbacks rather than off a shared
+/// base class: the passive assets have no common supertype beyond
+/// [BaseAsset], and one form beats a near-identical copy per model.
+class _NamedPlacementConfig extends StatefulWidget {
   final BaseAsset config;
+  final String Function() nameOrId;
+  final ValueChanged<String> onNameOrIdChanged;
 
-  const _PlacementOnlyConfig({required this.config});
+  const _NamedPlacementConfig({
+    required this.config,
+    required this.nameOrId,
+    required this.onNameOrIdChanged,
+  });
 
   @override
-  State<_PlacementOnlyConfig> createState() => _PlacementOnlyConfigState();
+  State<_NamedPlacementConfig> createState() => _NamedPlacementConfigState();
 }
 
-class _PlacementOnlyConfigState extends State<_PlacementOnlyConfig> {
+class _NamedPlacementConfigState extends State<_NamedPlacementConfig> {
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -3191,6 +3292,15 @@ class _PlacementOnlyConfigState extends State<_PlacementOnlyConfig> {
           initialValue: widget.config.coordinates,
           onChanged: (coordinates) => widget.config.coordinates = coordinates,
           enableAngle: false,
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          decoration: const InputDecoration(
+            labelText: 'Name or ID',
+            border: OutlineInputBorder(),
+          ),
+          initialValue: widget.nameOrId(),
+          onChanged: widget.onNameOrIdChanged,
         ),
       ],
     );
