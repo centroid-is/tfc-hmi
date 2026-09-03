@@ -231,6 +231,65 @@ void main() {
       expect(refusal.toString(), contains(refusal.message),
           reason: 'the uncaught-in-a-log case still says what happened');
     });
+
+    test('a floor measurement says so, rather than overclaiming a count', () {
+      final refusal = ResultTooLarge.rows(
+        limit: 40000,
+        measured: 40001,
+        atLeast: true,
+        suggestion: DataServiceMethods.timeseriesQueryDownsampled,
+      );
+
+      expect(refusal.message, contains('at least 40001'),
+          reason: 'the row ceiling is detected with LIMIT n + 1, so the '
+              'refusal knows the answer is over the limit and does NOT know '
+              'by how much — the real count may be 6.3 million. A sentence '
+              'that says "would answer 40001 rows" tells an engineer to '
+              'narrow the window by 0.0025% and hit the same wall. The '
+              'doc\'s own claim for `measured` is that "how far over" is '
+              'what tells an operator whether to narrow a little or a lot, '
+              'and a floor has to admit it is a floor for that to be true');
+    });
+
+    test('an exact measurement does not say "at least"', () {
+      final refusal = ResultTooLarge.bytes(
+        limit: 1048576,
+        measured: 2000000,
+        suggestion: DataServiceMethods.prefGetAll,
+      );
+
+      expect(refusal.message, isNot(contains('at least')),
+          reason: 'anti-vacuity for the arm above: the byte ceiling encodes '
+              'the whole answer and therefore knows the exact size, so a '
+              'message that hedged unconditionally would pass that arm while '
+              'throwing away a number it really has');
+    });
+
+    test('the detail names what pushed a batch over, inside the sentence', () {
+      final refusal = ResultTooLarge.rows(
+        limit: 40000,
+        measured: 40001,
+        atLeast: true,
+        detail: 'the series "ST301.CN21.SEN01.temp" crossed the total',
+        suggestion: DataServiceMethods.timeseriesQueryDownsampled,
+      );
+
+      expect(refusal.message, contains('ST301.CN21.SEN01.temp'),
+          reason: 'a four-series chart refused on the SUM has one actionable '
+              'fact in it — which series to narrow. Carrying that only in a '
+              'field the JSON-RPC error data map may or may not relay is the '
+              'same mistake the limit itself would be');
+    });
+
+    test('no detail leaves the sentence unchanged', () {
+      final plain = ResultTooLarge.rows(
+          limit: 10, measured: 11, suggestion: DataServiceMethods.prefGetAll);
+
+      expect(plain.message, isNot(contains('(')),
+          reason: 'anti-vacuity: the detail is parenthesised, so a sentence '
+              'that always carried the parentheses would pass the arm above '
+              'with an empty aside in every refusal that has nothing to add');
+    });
   });
 }
 
