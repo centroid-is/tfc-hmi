@@ -78,6 +78,49 @@ bool marqueeHitTestRotatedAsset({
   return localDx.abs() <= halfW && localDy.abs() <= halfH;
 }
 
+/// Whether [pointer] lands on [asset], as the editor decides it.
+///
+/// Two steps. The rotated rectangle first, which is the whole answer for
+/// every asset drawn to fill its box. Then the asset's own shape, for the one
+/// whose box is mostly empty: a cable's rectangle spans the two devices it
+/// plugs into, so without the second step a run crossing the canvas would
+/// claim every drag over that area and a marquee could not be started
+/// anywhere near it.
+///
+/// The local conversion ignores rotation deliberately. Only a run refines its
+/// hit shape, and a run is never rotated — its angle comes from where its
+/// devices are, not from a field.
+@visibleForTesting
+bool editorHitTestAsset({
+  required Offset pointer,
+  required Asset asset,
+  required List<Asset> assets,
+  required Size canvas,
+}) {
+  final derived = asset.boxOn(assets, canvas);
+  final cx = (derived?.center.dx ?? asset.coordinates.x) * canvas.width;
+  final cy = (derived?.center.dy ?? asset.coordinates.y) * canvas.height;
+  final w = (derived?.width ?? asset.size.width) * canvas.width;
+  final h = (derived?.height ?? asset.size.height) * canvas.height;
+
+  if (!marqueeHitTestRotatedAsset(
+    pointer: pointer,
+    cx: cx,
+    cy: cy,
+    halfW: w / 2,
+    halfH: h / 2,
+    angleDegrees: asset.coordinates.angle ?? 0.0,
+  )) {
+    return false;
+  }
+  return asset.hitTestBox(
+    Offset(pointer.dx - (cx - w / 2), pointer.dy - (cy - h / 2)),
+    Size(w, h),
+    assets,
+    canvas,
+  );
+}
+
 /// Reorders [assets] so that [targets] sit beneath everything else.
 ///
 /// Paint order is list order — `AssetStack` renders assets in sequence, so the
@@ -3116,20 +3159,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                                     // operator clicks empty visual space inside
                                     // the pre-rotation rect.
                                     bool hitAsset = assets.any((asset) {
-                                      return marqueeHitTestRotatedAsset(
+                                      return editorHitTestAsset(
                                         pointer: pointerEvent.localPosition,
-                                        cx: asset.coordinates.x *
-                                            constraints.maxWidth,
-                                        cy: asset.coordinates.y *
-                                            constraints.maxHeight,
-                                        halfW: (asset.size.width *
-                                                constraints.maxWidth) /
-                                            2,
-                                        halfH: (asset.size.height *
-                                                constraints.maxHeight) /
-                                            2,
-                                        angleDegrees:
-                                            asset.coordinates.angle ?? 0.0,
+                                        asset: asset,
+                                        assets: assets,
+                                        canvas: Size(constraints.maxWidth,
+                                            constraints.maxHeight),
                                       );
                                     });
 

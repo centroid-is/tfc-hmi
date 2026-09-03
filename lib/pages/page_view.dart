@@ -595,42 +595,54 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                     child: _wrapWithSelectionBorder(
                       isSelected: isSelected,
                       child: widget.absorb
-                          ? GestureDetector(
-                              behavior: HitTestBehavior.opaque,
-                              onTap: widget.onTap != null
-                                  ? () => widget.onTap!(asset)
-                                  : null,
-                              onDoubleTap: widget.onDoubleTap != null
-                                  ? () => widget.onDoubleTap!(asset)
-                                  : null,
-                              onPanUpdate: widget.onPanUpdate != null
-                                  ? (d) => widget.onPanUpdate!(asset, d)
-                                  : null,
-                              onPanStart: widget.onPanStart != null
-                                  ? (details) =>
-                                      widget.onPanStart!(asset, details)
-                                  : null,
-                              // The host's menu wins when supplied: it
-                              // carries editing actions that must be
-                              // reachable whether or not MCP chat is
-                              // available, and folds the AI entries in
-                              // itself.
-                              onSecondaryTapUp: widget.onSecondaryTap != null
-                                  ? (details) => widget.onSecondaryTap!(
-                                        asset,
-                                        details.globalPosition,
-                                      )
-                                  : kChatEnabled && isMcpChatAvailable()
-                                      ? (details) {
-                                          showEditorAssetContextMenu(
-                                            context,
-                                            ref,
-                                            details.globalPosition,
-                                            asset,
-                                          );
-                                        }
-                                      : null,
-                            )
+                          // The opaque detector below covers the asset's whole
+                          // rectangle, which is right until an asset's box is
+                          // mostly empty. A run's is: it spans the two devices
+                          // it plugs into, so without the shape gate the cable
+                          // eats every editor tap meant for the equipment it
+                          // passes.
+                          ? ShapedHitRegion(
+                              test: (local) => asset.hitTestBox(
+                                  local,
+                                  Size(assetW, assetH),
+                                  widget.assets,
+                                  Size(W, H)),
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: widget.onTap != null
+                                    ? () => widget.onTap!(asset)
+                                    : null,
+                                onDoubleTap: widget.onDoubleTap != null
+                                    ? () => widget.onDoubleTap!(asset)
+                                    : null,
+                                onPanUpdate: widget.onPanUpdate != null
+                                    ? (d) => widget.onPanUpdate!(asset, d)
+                                    : null,
+                                onPanStart: widget.onPanStart != null
+                                    ? (details) =>
+                                        widget.onPanStart!(asset, details)
+                                    : null,
+                                // The host's menu wins when supplied: it
+                                // carries editing actions that must be
+                                // reachable whether or not MCP chat is
+                                // available, and folds the AI entries in
+                                // itself.
+                                onSecondaryTapUp: widget.onSecondaryTap != null
+                                    ? (details) => widget.onSecondaryTap!(
+                                          asset,
+                                          details.globalPosition,
+                                        )
+                                    : kChatEnabled && isMcpChatAvailable()
+                                        ? (details) {
+                                            showEditorAssetContextMenu(
+                                              context,
+                                              ref,
+                                              details.globalPosition,
+                                              asset,
+                                            );
+                                          }
+                                        : null,
+                              ))
                           : GestureDetector(
                               // Runtime view: only secondary tap is
                               // handled here (chat context menu). Primary

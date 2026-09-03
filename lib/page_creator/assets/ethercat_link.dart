@@ -252,6 +252,32 @@ class EtherCatLinkConfig extends BaseAsset {
     return run.boundsIn(PageLinkAnchors(page, canvas), pad: thickness);
   }
 
+  /// Taps land on the cable, not on the rectangle that spans its two devices.
+  ///
+  /// The editor puts an opaque gesture detector over an asset's whole box. On
+  /// a run that box is most of the page, so without this the cable would eat
+  /// every tap meant for the equipment it passes and a marquee could not be
+  /// started anywhere it crosses.
+  @override
+  bool hitTestBox(Offset local, Size boxSize, List<Asset> page, Size canvas) {
+    final box = boxOn(page, canvas);
+    // Unplugged, so it really is an ordinary box asset.
+    if (box == null) return true;
+    final resolved = run.resolve(canvas, PageLinkAnchors(page, canvas));
+    final origin = Offset(box.left * canvas.width, box.top * canvas.height);
+    return resolved.distanceTo(local + origin) <= hitWidthOn(canvas) / 2;
+  }
+
+  /// Stroke width actually painted on [canvas]; see the two-pixel floor.
+  double strokeWidthOn(Size canvas) =>
+      math.max(thickness * canvas.shortestSide, 2.0);
+
+  /// How wide the cable is to a finger, which is wider than its ink.
+  double hitWidthOn(Size canvas) {
+    final w = strokeWidthOn(canvas);
+    return w < 18 ? 18 : w;
+  }
+
   @override
   Widget build(BuildContext context) => EtherCatLink(config: this);
 
@@ -355,11 +381,7 @@ class _EtherCatLinkState extends ConsumerState<EtherCatLink> {
           resolved.radius,
         ),
         color: linkHealthColor(states, health),
-        // Floored at two pixels. The thickness is a fraction of the canvas, so
-        // on a palette tile -- or any small preview -- it resolves to less
-        // than a pixel and the cable disappears entirely.
-        strokeWidth:
-            math.max(widget.config.thickness * canvas.shortestSide, 2.0),
+        strokeWidth: widget.config.strokeWidthOn(canvas),
       );
 
       return AssetHitShape(

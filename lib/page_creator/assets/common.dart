@@ -185,6 +185,17 @@ abstract class Asset {
   /// gets positioned without breaking that.
   Rect? boxOn(List<Asset> page, Size canvas);
 
+  /// Whether a pointer at [local] — in this asset's own unrotated box, of
+  /// [boxSize] pixels — is on the asset rather than merely inside its
+  /// rectangle.
+  ///
+  /// True for the whole box by default, which is right for everything drawn
+  /// to fill its rectangle. A run is the exception and the reason this
+  /// exists: its box is the span between two devices and is almost entirely
+  /// empty, so an opaque rectangle over it would swallow taps meant for every
+  /// device it passes and stop a marquee from being started anywhere near it.
+  bool hitTestBox(Offset local, Size boxSize, List<Asset> page, Size canvas);
+
   /// Rewrites references this asset holds to *other* assets' ids.
   ///
   /// Called after a paste with a map from each copied asset's old id to its
@@ -362,6 +373,12 @@ abstract class BaseAsset implements Asset {
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
   Rect? boxOn(List<Asset> page, Size canvas) => null;
+
+  /// An asset fills its box; see [Asset.hitTestBox] for the exception.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  bool hitTestBox(Offset local, Size boxSize, List<Asset> page, Size canvas) =>
+      true;
 
   @JsonKey(name: 'coordinates')
   Coordinates _coordinates = Coordinates(x: 0.0, y: 0.0);
