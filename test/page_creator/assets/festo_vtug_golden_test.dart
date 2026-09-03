@@ -56,18 +56,27 @@ Future<void> loadRealFont() async {
 void main() {
   setUpAll(loadRealFont);
 
-  ThemeData theme() => ThemeData(
-        useMaterial3: true,
-        fontFamily: 'roboto-mono',
-        extensions: const [HmiStateColors.solarizedLight],
-      );
+  /// The real station themes, not a hand-rolled one.
+  ///
+  /// A pane golden built on a bare `ThemeData` cannot catch the thing dark
+  /// goldens exist to catch: neither Solarized scheme sets
+  /// `colorScheme.outline`, so a widget that borrows it draws an edge that
+  /// is invisible on base03 and perfectly fine in the light image.
+  final (lightTheme, darkTheme) = solarized();
 
-  Widget host(Widget child, {Color background = const Color(0xFFEEE8D5)}) =>
+  Widget host(Widget child, {bool dark = false, Color? background}) =>
       MaterialApp(
         debugShowCheckedModeBanner: false,
-        theme: theme(),
+        theme: (dark ? darkTheme : lightTheme).copyWith(
+          textTheme: (dark ? darkTheme : lightTheme)
+              .textTheme
+              .apply(fontFamily: 'roboto-mono'),
+        ),
         home: Scaffold(
-          backgroundColor: background,
+          backgroundColor: background ??
+              (dark
+                  ? const Color(0xFF002B36)
+                  : const Color(0xFFEEE8D5)),
           body: Center(child: child),
         ),
       );
@@ -217,39 +226,70 @@ void main() {
   });
 
   group('the pane', () {
-    Widget pane(VtugTerminal terminal, {bool commandable = true}) => host(
+    Widget pane(
+      VtugTerminal terminal, {
+      bool commandable = true,
+      bool dark = false,
+    }) =>
+        host(
           SizedBox(
             width: 380,
-            child: SingleChildScrollView(
-              child: Material(
-                child: VtugPaneBody(
-                  terminal: terminal,
-                  onForce: commandable ? (_, __) {} : null,
-                  onPush: commandable ? (_, __, ___) {} : null,
+            // Keyed and given the theme's own surface: the golden captures
+            // this box, so the image carries the background a pane actually
+            // sits on. Capturing the body alone put a dark-theme pane on
+            // white, which is exactly the image a dark golden exists to
+            // avoid.
+            child: Builder(
+              builder: (context) => ColoredBox(
+                key: const Key('pane-golden'),
+                color: Theme.of(context).colorScheme.surface,
+                child: SingleChildScrollView(
+                  child: Material(
+                    color: Colors.transparent,
+                    child: VtugPaneBody(
+                      terminal: terminal,
+                      onForce: commandable ? (_, __) {} : null,
+                      onPush: commandable ? (_, __, ___) {} : null,
+                    ),
+                  ),
                 ),
               ),
             ),
           ),
-          background: const Color(0xFFFDF6E3),
+          dark: dark,
+        );
+
+    VtugTerminal populated() => VtugTerminal.read(
+          struct(coils: 0x5, forceMask: 0x3, forceValue: 0x1),
+          kinds: kinds(blanks: {8}, singles: {3}),
+          descriptions: const [
+            'Gate 1 lift',
+            'Gate 1 clamp',
+            'Blow-off',
+            'Pusher extend',
+            'Pusher lift',
+            'Reject flap',
+            'Lane divert',
+          ],
         );
 
     testWidgets('a named manifold with two valves held', (tester) async {
-      await tester.pumpWidget(pane(VtugTerminal.read(
-        struct(coils: 0x5, forceMask: 0x3, forceValue: 0x1),
-        kinds: kinds(blanks: {8}, singles: {3}),
-        descriptions: const [
-          'Gate 1 lift',
-          'Gate 1 clamp',
-          'Blow-off',
-          'Pusher extend',
-          'Pusher lift',
-          'Reject flap',
-          'Lane divert',
-        ],
-      )));
+      await tester.pumpWidget(pane(populated()));
       await expectLater(
-        find.byType(VtugPaneBody),
+        find.byKey(const Key('pane-golden')),
         matchesGoldenFile('goldens/festo/vtug_pane.png'),
+      );
+    }, skip: !Platform.isMacOS);
+
+    testWidgets('the same pane on a dark station', (tester) async {
+      // The dark variant is not decoration. Every low-emphasis edge in this
+      // pane — the push buttons' borders, the segmented button's divider —
+      // is the kind of detail that vanishes on base03 while the light image
+      // stays perfectly readable.
+      await tester.pumpWidget(pane(populated(), dark: true));
+      await expectLater(
+        find.byKey(const Key('pane-golden')),
+        matchesGoldenFile('goldens/festo/vtug_pane_dark.png'),
       );
     }, skip: !Platform.isMacOS);
 
@@ -259,7 +299,7 @@ void main() {
         commandable: false,
       ));
       await expectLater(
-        find.byType(VtugPaneBody),
+        find.byKey(const Key('pane-golden')),
         matchesGoldenFile('goldens/festo/vtug_pane_read_only.png'),
       );
     }, skip: !Platform.isMacOS);
@@ -271,6 +311,7 @@ void main() {
         SizedBox(
           width: 380,
           child: Material(
+            color: Colors.transparent,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: const [
@@ -281,7 +322,6 @@ void main() {
             ),
           ),
         ),
-        background: const Color(0xFFFDF6E3),
       ));
       await expectLater(
         find.byType(Column).first,

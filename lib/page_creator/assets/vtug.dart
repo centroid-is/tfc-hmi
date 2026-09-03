@@ -564,11 +564,18 @@ class _VtugPushButtonState extends State<VtugPushButton> {
           alignment: Alignment.center,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(6),
-            color: _down ? colors.yellow : theme.colorScheme.surfaceContainerHighest,
+            // Both the fill and the border are derived from the theme's own
+            // body colour rather than taken from `colorScheme.outline` and
+            // `surfaceContainerHighest`. Neither Solarized scheme sets
+            // `outline`, so it falls back to a Material default that is all
+            // but invisible against base03 — a button whose edge disappears
+            // on every dark station while the light golden looks fine.
+            color: _down
+                ? colors.yellow
+                : theme.colorScheme.onSurface.withValues(alpha: 0.08),
             border: Border.all(
-              color: live
-                  ? theme.colorScheme.outline
-                  : theme.colorScheme.outlineVariant,
+              color: theme.colorScheme.onSurface
+                  .withValues(alpha: live ? 0.35 : 0.15),
             ),
           ),
           child: Text(
@@ -760,6 +767,19 @@ class _VtugForceRow extends StatelessWidget {
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       textStyle: WidgetStatePropertyAll(
                         theme.textTheme.labelSmall,
+                      ),
+                      // Material's default outline for a segmented button
+                      // comes from `colorScheme.outline`, which neither
+                      // Solarized scheme sets — on a dark station the three
+                      // segments lost their border and their dividers, and
+                      // the control read as three words floating in the
+                      // pane. Derived from the body colour instead, the way
+                      // the push buttons beside it are.
+                      side: WidgetStatePropertyAll(
+                        BorderSide(
+                          color: theme.colorScheme.onSurface
+                              .withValues(alpha: 0.35),
+                        ),
                       ),
                     ),
                     segments: const [
