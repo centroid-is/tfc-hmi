@@ -154,7 +154,10 @@ _Kit _kit({ServerConfig? config}) {
       DataHandlers(
           source: api,
           config: config ?? ServerConfig(),
-          resolver: const PermissiveSeriesResolver()),
+          resolver: const PermissiveSeriesResolver(),
+          // This file is about what the timeseries bodies refuse; nothing in
+          // it watches preferences, so nothing in it announces.
+          notify: (_, __) {}),
       timeseries);
 }
 

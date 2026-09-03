@@ -327,7 +327,13 @@ void main() {
       addTearDown(api.dispose);
 
       final handlers = DataHandlers(
-          source: api, config: ServerConfig(), resolver: resolver);
+          source: api,
+          config: ServerConfig(),
+          resolver: resolver,
+          // Nothing here announces anything: this fixture is about the
+          // handler bodies, and the sender is judged in its own file.
+          notify: (_, __) {},
+          );
 
       expect(identical(handlers.resolver, resolver), isTrue,
           reason: 'the same object, not an equal one: there is exactly one '
@@ -350,7 +356,11 @@ void main() {
       final handlers = DataHandlers(
           source: api,
           config: ServerConfig(),
-          resolver: const _RefusesEverything());
+          resolver: const _RefusesEverything(),
+          // Nothing here announces anything: this fixture is about the
+          // handler bodies, and the sender is judged in its own file.
+          notify: (_, __) {},
+          );
 
       final roots = await handlers
           .browseFetchRoots(_params('browse.fetchRoots', {}));

@@ -37,11 +37,25 @@
 /// forever (the 02-05 hang).
 library;
 
+import 'dart:async';
+
 import 'package:json_rpc_2/error_code.dart' as rpc_errors;
 import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import 'server_config.dart';
+
+/// How this object announces something to the client, and the only thing it
+/// can do to the peer.
+///
+/// A callback rather than the `rpc.Peer` itself, and the narrowness is the
+/// point: this file's first rule is that **nothing in here registers
+/// anything**, and a peer in scope is a peer something could call
+/// `registerMethod` on. What `RelaySession` passes is a closure that sends one
+/// notification and refuses to send anything at all before `hello`, before
+/// which there is no station the gateway can name.
+typedef PreferenceNotifier = void Function(
+    String method, Map<String, Object?> params);
 
 /// The handler bodies for one session's data-service methods.
 ///
@@ -55,6 +69,7 @@ final class DataHandlers {
     required this.source,
     required this.config,
     required this.resolver,
+    required this.notify,
   });
 
   /// The source being served, already seen through this session's policy.
@@ -93,6 +108,149 @@ final class DataHandlers {
   /// Required, with no default, all the way up to `RelayServer` — see that
   /// class's `resolver` parameter for the argument.
   final SeriesResolver resolver;
+
+  /// How this object tells its client that a preference moved.
+  ///
+  /// See [PreferenceNotifier] for why it is a callback and not the peer, and
+  /// [watchPreferences] for what is sent through it.
+  final PreferenceNotifier notify;
+
+  // ------------------------------------------------------- preference change
+
+  /// This session's listener on the shared preference store.
+  ///
+  /// Null before [watchPreferences] runs, after [releasePreferenceWatch], and
+  /// for a source that declares no preference store at all.
+  StreamSubscription<String>? _preferenceChanges;
+
+  /// The keys that have moved since the last flush.
+  ///
+  /// **A set, not a list.** A key written twice while an operator held a
+  /// slider is one key that changed, and a frame naming it twice makes every
+  /// listener on the far side redraw twice.
+  final _pending = <String>{};
+
+  var _flushScheduled = false;
+  var _released = false;
+
+  /// Starts announcing preference changes to this session's client.
+  ///
+  /// ## One listener per session, deliberately
+  ///
+  /// The gateway serves every session from **one shared source**
+  /// (`relay_server.dart:213-214`, "One instance, shared"), so what attaches
+  /// here is one listener per session on one broadcast stream, and each
+  /// session cancels its own in `RelaySession._teardown`, beside
+  /// `subscriptions.clear()`.
+  ///
+  /// The alternative — one server-level subscription fanning out over the
+  /// session registry — is the tidier-looking shape and is **not** what this
+  /// is, for two reasons worth writing down. It would need its own registry
+  /// walk to replace what `_teardown` already does for free; and it would take
+  /// the teardown property away from the place that can measure it, because
+  /// "the listener came off when the session died" is only assertable when the
+  /// listener belonged to the session. `teardown_test.dart` counts exactly
+  /// that, as a rate, across kill cycles.
+  ///
+  /// ## Coalesced on a microtask
+  ///
+  /// `sendNotification` lands in the session's priority lane, which is
+  /// byte-capped at 8 MiB, entry-capped, drained only by the tick and **not
+  /// conflated** (`session_sink.dart:56-57`, `send_buffer.dart:185-196`). So a
+  /// `clear()` over five hundred preference keys, un-coalesced, is five
+  /// hundred frames per connected client and then a `BufferDisconnect`, which
+  /// `relay_session.dart:416-424` turns into `close(4004)`: a settings page
+  /// evicting every panel in the plant and reporting it to the operators as
+  /// backpressure (T-10-19).
+  ///
+  /// The flush is scheduled with **`Timer.run`** — a zero-duration one-shot —
+  /// and **not** with `scheduleMicrotask`, which is the shape the contract
+  /// kit's own flush uses. That difference was measured rather than assumed,
+  /// and the reason is in the source this listens to.
+  ///
+  /// The kit coalesces changes that arrive from `ValueListenable` callbacks,
+  /// which fire **synchronously** inside the loop that made them: by the time
+  /// the microtask queue is reached, every key is already pending. A
+  /// preference store announces through a broadcast `StreamController`
+  /// instead, and an asynchronous broadcast controller delivers one event per
+  /// microtask, scheduling the next delivery from inside the previous one — so
+  /// a flush scheduled from the first delivery lands in the queue *ahead* of
+  /// the second key. Measured with `scheduleMicrotask`: a five-hundred-key
+  /// `clear()` produced **five hundred frames, each naming one key**, which is
+  /// the exact failure this method exists to prevent.
+  ///
+  /// A timer callback runs only after the microtask queue has drained
+  /// completely, so every delivery of the burst is pending before the flush
+  /// looks. It coalesces one *turn* of the event loop rather than one
+  /// synchronous block, which is a little wider than the kit's shape and still
+  /// nothing to do with wall time: `Duration.zero` cannot make the count a
+  /// client sees depend on how fast the machine ran, and the frame is on the
+  /// wire in the same tick either way.
+  ///
+  /// `Timer.run` and never a constructed `Timer(...)`: `teardown_test.dart`
+  /// sweeps this package for the second spelling, because a retained timer can
+  /// outlive the turn it was scheduled in and hold a closed session's buffer,
+  /// listeners and socket with it. This one cannot.
+  ///
+  /// ## `UnsupportedError` is caught, and nothing else is
+  ///
+  /// A source with no preference store is legitimate — the contract's
+  /// data-services sub-suite is skipped for such a source, with a reason on
+  /// the record — and refusing to serve it at all would turn a declared
+  /// absence into a startup failure. Nothing else is caught, because nothing
+  /// else here is a shape a correct source can have.
+  void watchPreferences() {
+    try {
+      _preferenceChanges = source.preferences.onPreferencesChanged.listen(
+        (key) {
+          if (_released) return;
+          _pending.add(key);
+          _scheduleFlush();
+        },
+        // A store that errors is not a reason to tear down a session that is
+        // otherwise serving the plant: the values path is a different stream
+        // and a different source. The change is lost, which is the honest
+        // outcome — there is nothing here that could re-derive it.
+        onError: (Object _) {},
+      );
+    } on UnsupportedError {
+      _preferenceChanges = null;
+    }
+  }
+
+  /// Detaches this session's listener and drops anything it had buffered.
+  ///
+  /// Called from `RelaySession._teardown`. Idempotent: [_released] is set
+  /// synchronously, so a flush already scheduled finds nothing to do even
+  /// though the microtask outlives this call.
+  Future<void> releasePreferenceWatch() async {
+    _released = true;
+    _pending.clear();
+    final watch = _preferenceChanges;
+    _preferenceChanges = null;
+    await watch?.cancel();
+  }
+
+  void _scheduleFlush() {
+    if (_flushScheduled || _released) return;
+    _flushScheduled = true;
+    Timer.run(_flush);
+  }
+
+  /// One notification per flush, however many keys moved.
+  ///
+  /// [_pending] is cleared **before** [notify] is consulted rather than after,
+  /// and that ordering matters for the one session state that drops frames: a
+  /// peer that has not said `hello` is told nothing, and buffering the keys it
+  /// was not told about would leave a socket that never authenticates growing
+  /// a set of every preference key on the gateway.
+  void _flush() {
+    _flushScheduled = false;
+    if (_released || _pending.isEmpty) return;
+    final keys = _pending.toList(growable: false);
+    _pending.clear();
+    notify(DataServiceMethods.preferencesChanged, {'keys': keys});
+  }
 
   // ------------------------------------------------------------------ browse
 
@@ -424,6 +582,238 @@ final class DataHandlers {
   Future<Object?> historyRetentionHorizon(rpc.Parameters _) async =>
       (await source.historyViews.getGlobalRetentionHorizon())
           ?.millisecondsSinceEpoch;
+
+  // ------------------------------------------------------------- preferences
+
+  /// Every key the store holds, or every key in the allow list that it holds.
+  ///
+  /// **A list on the wire, not a set**: JSON has no set, and the client builds
+  /// one back on the far side (`client_sub_apis.dart`'s `getKeys`).
+  Future<Object?> prefGetKeys(rpc.Parameters params) async =>
+      (await source.preferences
+              .getKeys(allowList: _allowList(params, DataServiceMethods.prefGetKeys)))
+          .toList();
+
+  /// Every key and value, filtered the same way.
+  Future<Object?> prefGetAll(rpc.Parameters params) => source.preferences
+      .getAll(allowList: _allowList(params, DataServiceMethods.prefGetAll));
+
+  /// A stored bool, or null when the key is absent.
+  ///
+  /// **A wrong-typed stored value is not caught here**, and that is the
+  /// decision the seven typed getters share. `PreferencesApi` promises a
+  /// `TypeError` for a value of another type, the store's own cast is what
+  /// raises it, and `RelaySession._answer` maps it to `typeMismatch` (-32010)
+  /// — which is precisely the code 10-01 taught the client to turn back into a
+  /// `TypeError` (`client_sub_apis.dart`'s `withTypedErrors`). A handler that
+  /// caught it and answered null would render a settings page's *default* over
+  /// a value that is really there, and nothing would say so.
+  Future<Object?> prefGetBool(rpc.Parameters params) =>
+      source.preferences.getBool(_prefKey(params, DataServiceMethods.prefGetBool));
+
+  Future<Object?> prefGetInt(rpc.Parameters params) =>
+      source.preferences.getInt(_prefKey(params, DataServiceMethods.prefGetInt));
+
+  Future<Object?> prefGetDouble(rpc.Parameters params) => source.preferences
+      .getDouble(_prefKey(params, DataServiceMethods.prefGetDouble));
+
+  Future<Object?> prefGetString(rpc.Parameters params) => source.preferences
+      .getString(_prefKey(params, DataServiceMethods.prefGetString));
+
+  Future<Object?> prefGetStringList(rpc.Parameters params) => source.preferences
+      .getStringList(_prefKey(params, DataServiceMethods.prefGetStringList));
+
+  /// Whether the store holds [key] at all.
+  ///
+  /// "Absent" and "set to null" are different answers and a settings page
+  /// renders a default for one and a blank for the other, which is why this
+  /// method exists beside the getters rather than being inferred from a null.
+  Future<Object?> prefContainsKey(rpc.Parameters params) => source.preferences
+      .containsKey(_prefKey(params, DataServiceMethods.prefContainsKey));
+
+  Future<Object?> prefSetBool(rpc.Parameters params) async {
+    const method = DataServiceMethods.prefSetBool;
+    final key = _prefKey(params, method);
+    final raw = params['value'].valueOr(null);
+    if (raw is! bool) {
+      throw _refuse(
+          method,
+          '$method needs a bool "value", not ${raw.runtimeType}. It is refused '
+          'rather than coerced: a store holding the string "true" under this '
+          'key throws a TypeError on every later getBool');
+    }
+    await source.preferences.setBool(key, raw);
+    return null;
+  }
+
+  Future<Object?> prefSetInt(rpc.Parameters params) async {
+    const method = DataServiceMethods.prefSetInt;
+    final key = _prefKey(params, method);
+    final raw = params['value'].valueOr(null);
+    if (raw is! int) {
+      throw _refuse(
+          method,
+          '$method needs an integer "value", not ${raw.runtimeType}. Unlike '
+          'setDouble, this one does **not** widen: a caller that sent 800.5 '
+          'for an int preference meant something the store cannot hold, and '
+          'rounding it here would decide what they meant');
+    }
+    await source.preferences.setInt(key, raw);
+    return null;
+  }
+
+  /// Saves a double, **accepting an integral JSON number**.
+  ///
+  /// The one decode in this family that widens rather than narrows, and it is
+  /// deliberate (`served_state_man.dart:683-692`). Dart's encoder writes an
+  /// integral double as `800.0`, but a hand-written client — a curl, a Python
+  /// script, an integrator's panel — sends `800`, and `jsonDecode` hands that
+  /// back as an `int`. Refusing it would be refusing a value the type admits.
+  ///
+  /// Read through `num` and converted here, never `asDouble`: `asDouble` on an
+  /// `int` raises an `RpcException` with no `data`, which `serialize` then
+  /// fills with the offending request — the shape this whole file exists to
+  /// avoid. Storing the `int` instead would be worse: every later `getDouble`
+  /// would throw a TypeError on a tolerance a settings page had just saved.
+  Future<Object?> prefSetDouble(rpc.Parameters params) async {
+    const method = DataServiceMethods.prefSetDouble;
+    final key = _prefKey(params, method);
+    final raw = params['value'].valueOr(null);
+    if (raw is! num) {
+      throw _refuse(
+          method,
+          '$method needs a numeric "value", not ${raw.runtimeType}. An '
+          'integral number is accepted and stored as a double: JSON has one '
+          'number type, and a client that sent 800 for a tolerance meant 800.0');
+    }
+    await source.preferences.setDouble(key, raw.toDouble());
+    return null;
+  }
+
+  Future<Object?> prefSetString(rpc.Parameters params) async {
+    const method = DataServiceMethods.prefSetString;
+    final key = _prefKey(params, method);
+    final raw = params['value'].valueOr(null);
+    if (raw is! String) {
+      throw _refuse(
+          method,
+          '$method needs a string "value", not ${raw.runtimeType}');
+    }
+    await source.preferences.setString(key, raw);
+    return null;
+  }
+
+  /// Saves a list of strings, **refusing an element that is not one**.
+  ///
+  /// A deliberate departure from the port source, which writes `'$entry'` per
+  /// element and so turns `[1, 2]` into `['1', '2']` in silence. A gateway
+  /// that coerces is a gateway deciding what its caller meant, and the caller
+  /// here is a settings page whose list is read back and compared.
+  Future<Object?> prefSetStringList(rpc.Parameters params) async {
+    const method = DataServiceMethods.prefSetStringList;
+    final key = _prefKey(params, method);
+    final raw = params['value'].valueOr(null);
+    if (raw is! List) {
+      throw _refuse(
+          method,
+          '$method needs a "value" list of strings, not ${raw.runtimeType}. An '
+          'empty list is allowed — a page with no recent entries yet is an '
+          'ordinary state');
+    }
+    final value = <String>[];
+    for (var i = 0; i < raw.length; i++) {
+      final entry = raw[i];
+      if (entry is! String) {
+        throw _refuse(
+            method,
+            '$method\'s "value" carries a ${entry.runtimeType} at index $i. It '
+            'is refused rather than stringified: a stored ["1"] that was sent '
+            'as [1] reads back as a different list than the caller saved');
+      }
+      value.add(entry);
+    }
+    await source.preferences.setStringList(key, value);
+    return null;
+  }
+
+  Future<Object?> prefRemove(rpc.Parameters params) async {
+    await source.preferences
+        .remove(_prefKey(params, DataServiceMethods.prefRemove));
+    return null;
+  }
+
+  /// Clears the store, or the part of it the allow list names.
+  ///
+  /// **The allow list is forwarded, never dropped.** With one, this empties a
+  /// page's own section; without one, it empties every preference this gateway
+  /// holds — `key_mappings`, the plant's routing configuration, included. A
+  /// handler that lost the argument on the way down would turn the first into
+  /// the second.
+  Future<Object?> prefClear(rpc.Parameters params) async {
+    await source.preferences
+        .clear(allowList: _allowList(params, DataServiceMethods.prefClear));
+    return null;
+  }
+
+  /// A preference key out of `"key"`.
+  ///
+  /// Guarded rather than left to `params['key'].asString`, for this file's
+  /// standing reason: that raises an `RpcException` with no `data`. Bounded by
+  /// nothing, like a view's `name` and for the same argument — ingress already
+  /// refuses a frame over `ServerConfig.maxFrameBytes`, and a second bound on
+  /// one hazard is a second number to keep in step.
+  ///
+  /// **Not checked against a namespace.** A preference key is whatever the
+  /// application stores under, `key_mappings` included; deciding here which
+  /// names are legitimate would be inventing configuration policy in the
+  /// plumbing. What decides who may *write* one is `_PolicyPreferences`, one
+  /// layer down.
+  static String _prefKey(rpc.Parameters params, String method) {
+    final raw = params['key'].valueOr(null);
+    if (raw is! String || raw.isEmpty) {
+      throw _refuse(
+          method,
+          '$method needs a non-empty string "key": the preference to read or '
+          'write, not ${raw.runtimeType}');
+    }
+    return raw;
+  }
+
+  /// The `"allowList"` filter, or null for "no filter asked for".
+  ///
+  /// Null is a legitimate value and the client sends the field even when it is
+  /// null, so the two stay distinguishable: no allow list means the whole
+  /// store, which for `clear` is the difference between one page's settings
+  /// and the gateway's.
+  ///
+  /// Shape-checked but deliberately **not bounded**, unlike `keys` and
+  /// `tables`. Those two multiply the work the source does — one row written
+  /// or one query run per entry — while this one only narrows an answer the
+  /// store was going to compute anyway, and its size is already bounded by the
+  /// frame ingress refuses above.
+  static Set<String>? _allowList(rpc.Parameters params, String method) {
+    final raw = params['allowList'].valueOr(null);
+    if (raw == null) return null;
+    if (raw is! List) {
+      throw _refuse(
+          method,
+          '$method needs "allowList" as a list of preference keys, or absent '
+          '— not ${raw.runtimeType}. Absent means the whole store, which is a '
+          'different question and not a safer one');
+    }
+    final keys = <String>{};
+    for (var i = 0; i < raw.length; i++) {
+      final entry = raw[i];
+      if (entry is! String || entry.isEmpty) {
+        throw _refuse(
+            method,
+            '$method\'s "allowList" carries a non-string or empty entry at '
+            'index $i: every entry names a preference key');
+      }
+      keys.add(entry);
+    }
+    return keys;
+  }
 
   // ------------------------------------------------------------------ shared
 

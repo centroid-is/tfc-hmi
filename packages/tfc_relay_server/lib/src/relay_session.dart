@@ -456,6 +456,13 @@ final class RelaySession {
   /// [_start], which is one expression in [serve].
   ValueHandlers? _values;
 
+  /// This session's data-service handlers, held for the same reason [_values]
+  /// is: they own a listener on the gateway's **shared** preference store, and
+  /// a listener that outlives its session goes on building key sets and
+  /// announcing them for a panel that has gone home. Null only between
+  /// construction and [_start].
+  DataHandlers? _data;
+
   /// Puts one already-encoded [frame] on this session's transport.
   ///
   /// The tick engine's write seam, and the only way out of a session that does
@@ -771,7 +778,7 @@ final class RelaySession {
     _lastSeen.gateOn(() => _sessionId != null);
     // Every one of these goes through `_on`, and there is no second path.
     //
-    // The table is thirteen names. Phase 3 registered four; 04-02 added
+    // The table is forty-three names. Phase 3 registered four; 04-02 added
     // `write`, `writeStatus`, `read`, `readFresh` and `readMany`, pulled
     // forward from Phase 5 because 04-RESEARCH Finding 4 ran the method sweep
     // against a live gateway and found all five answering `-32601`, which put
@@ -780,9 +787,10 @@ final class RelaySession {
     // (three-state depth beyond forwarding, idempotency windows, hold-to-run)
     // and Phase 6 owns authorization. 10-02 added the four `browse.*` names in
     // `_registerDataServices` below, which retired six of the thirteen checks
-    // the contract legs had been proving unreachable, and 10-03's timeseries
-    // four, which retired three more; the other sixteen data-service names
-    // land in 10-04 and 10-05. 03-08's rule stands —
+    // the contract legs had been proving unreachable; 10-03's timeseries four,
+    // which retired three more; 10-04's history-view eleven, which retired
+    // two; and 10-05's preferences fifteen, which retired the last two and
+    // closed the table at forty-three callable names. 03-08's rule stands —
     // the set is frozen against a hand-written literal in `surface_test.dart`
     // so each addition is a deliberate edit to a test that explains its cost.
     final handlers = SessionHandlers(
@@ -856,8 +864,39 @@ final class RelaySession {
     // summary line per session, rather than thrown once per frame into the
     // error handler (05-REVIEW WR-03).
     _onNotification(Methods.holdTick, values.holdTick);
-    _registerDataServices(
-        DataHandlers(source: api, config: config, resolver: resolver));
+    // Kept, like `values` and for the same reason: this object owns state with
+    // a lifetime — one listener on the gateway's shared preference store — and
+    // `_teardown` has to be able to take it off again.
+    final data = _data = DataHandlers(
+      source: api,
+      config: config,
+      resolver: resolver,
+      // **The one thing this object may do to the peer**, and it is a closure
+      // rather than the peer itself so that `data_handlers.dart`'s first rule
+      // — nothing in that file registers anything — stays true by
+      // construction.
+      //
+      // Three guards, and the third is the one a reader will not guess.
+      // `sendNotification` on a closed peer is a `StateError`; a session in
+      // teardown has nothing left to send through; and **a session that has
+      // not said `hello` is told nothing at all**. Preference keys are the
+      // gateway's own configuration vocabulary — `key_mappings` names itself —
+      // and announcing them to a socket that has not authenticated is a
+      // disclosure nothing else on this wire makes. The frame is *dropped*
+      // rather than queued, because a peer that never authenticates would
+      // otherwise accumulate the name of every preference on the gateway;
+      // `DataHandlers._flush` clears its buffer before consulting this, which
+      // is what makes the drop free.
+      notify: (method, params) {
+        if (_closed || peer.isClosed || _sessionId == null) return;
+        peer.sendNotification(method, params);
+      },
+    );
+    _registerDataServices(data);
+    // After the registrations, and outside them: registering a method and
+    // attaching a listener are two different acts, and only one of them is the
+    // access-control decision `_registerDataServices` documents.
+    data.watchPreferences();
     // Method-not-found. **This fallback's armor is inert, and the code below
     // is kept anyway** (06-04, 06-RESEARCH §H.2, measured).
     //
@@ -924,9 +963,12 @@ final class RelaySession {
   /// **ungated** method, and `ws_malformed_test.dart:529-593`'s pre-hello
   /// sweep is a sweep rather than a list precisely so it catches one.
   ///
-  /// 10-02 registers four of the thirty-four; 10-03 adds the timeseries four
-  /// and 10-04 the history-view eleven, which is nineteen. 10-05 adds the
-  /// preferences and the one notification they send, and closes the table.
+  /// 10-02 registered four of the thirty-four; 10-03 added the timeseries four
+  /// and 10-04 the history-view eleven, which was nineteen; 10-05 adds the
+  /// preferences fifteen and **closes the table** — all thirty-four
+  /// data-service methods are here, and there is no thirty-fifth to add. The
+  /// one notification they send is attached in [_start] rather than here, next
+  /// to the callback it sends through.
   void _registerDataServices(DataHandlers data) {
     _on(DataServiceMethods.browseFetchRoots, data.browseFetchRoots);
     _on(DataServiceMethods.browseFetchChildren, data.browseFetchChildren);
@@ -951,6 +993,27 @@ final class RelaySession {
     _on(DataServiceMethods.historyListPeriods, data.historyListPeriods);
     _on(DataServiceMethods.historyRetentionHorizon,
         data.historyRetentionHorizon);
+    // The preferences fifteen, which close the table. **Seven of these are
+    // the only names on this wire a `view` station may not call**: the
+    // registration is the access-control decision, and the decision itself —
+    // reads for everyone, writes for `operate` — landed one commit earlier in
+    // `_PolicyPreferences`, because a handler that is ungated for the length
+    // of one commit is a handler that was ungated.
+    _on(DataServiceMethods.prefGetKeys, data.prefGetKeys);
+    _on(DataServiceMethods.prefGetAll, data.prefGetAll);
+    _on(DataServiceMethods.prefGetBool, data.prefGetBool);
+    _on(DataServiceMethods.prefGetInt, data.prefGetInt);
+    _on(DataServiceMethods.prefGetDouble, data.prefGetDouble);
+    _on(DataServiceMethods.prefGetString, data.prefGetString);
+    _on(DataServiceMethods.prefGetStringList, data.prefGetStringList);
+    _on(DataServiceMethods.prefContainsKey, data.prefContainsKey);
+    _on(DataServiceMethods.prefSetBool, data.prefSetBool);
+    _on(DataServiceMethods.prefSetInt, data.prefSetInt);
+    _on(DataServiceMethods.prefSetDouble, data.prefSetDouble);
+    _on(DataServiceMethods.prefSetString, data.prefSetString);
+    _on(DataServiceMethods.prefSetStringList, data.prefSetStringList);
+    _on(DataServiceMethods.prefRemove, data.prefRemove);
+    _on(DataServiceMethods.prefClear, data.prefClear);
   }
 
   /// The client's end vanished — a graceful close, a reset, a yanked cable.
@@ -1355,6 +1418,17 @@ final class RelaySession {
     // jog, since every one of those arrives here (T-05-20, D-P5-J).
     _values?.releaseAllHolds();
     subscriptions.clear();
+    // Beside `subscriptions.clear()` because it is the same debt on a
+    // different stream: this session attached its own listener to the
+    // gateway's **one shared** preference store, and a listener left attached
+    // keeps buffering keys and pushing `preferences.changed` at a panel that
+    // is gone. `teardown_test.dart` measures it as a rate across kill cycles,
+    // the way the value path's 2.50-per-cycle leak was measured in 03-11.
+    //
+    // The awaited half is only the `cancel`; everything that matters
+    // synchronously — the released flag and the buffered keys — is dropped
+    // before this returns, so a flush already scheduled finds nothing to send.
+    await _data?.releasePreferenceWatch();
     await peer.close();
     if (code != null) await _closeChannel?.call(code, reason);
     // Step 6. `drain()` is the only release the buffer offers — it empties
