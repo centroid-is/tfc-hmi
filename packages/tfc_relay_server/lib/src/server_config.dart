@@ -160,6 +160,59 @@ final class ServerConfig {
   /// until the server's memory is gone (T-03-14).
   final int maxSubscriptionsPerSession;
 
+  /// Ceiling on `maxPoints` in one `queryTimeseriesDataDownsampled`.
+  ///
+  /// **Arithmetic, not taste.** The widest panel in this plant is 1920 px, a
+  /// chart is at most that wide, and a downsampled bucket contributes three
+  /// points — min, max and last (`database.dart`: "Each bucket produces 3
+  /// points"). So 3 × 1920 = 5760 points is already more than a full-width
+  /// chart can put on distinct columns, and this rounds that up. Above it the
+  /// caller is not drawing a chart: it is asking for a raw query under the
+  /// bounded method's name, which is exactly what having a separate bounded
+  /// method is for (`state_man_api.dart:277-283` — "a month of one-second
+  /// samples is millions of points and a chart has hundreds of pixels").
+  ///
+  /// The **floor** is [minTimeseriesPoints] and it is not configurable, for
+  /// the reason stated there.
+  final int maxTimeseriesPoints;
+
+  /// Ceiling on `howMany` buckets in one `countTimeseriesDataMultiple`.
+  ///
+  /// **A length bound on generated SQL**, not a convenience limit.
+  /// `countTimeseriesDataMultiple` builds one `SELECT COUNT(*) … WHERE time >=
+  /// … AND time < …` per bucket and joins them with `UNION ALL`
+  /// (`database.dart`), so `howMany` *is* the number of subqueries in one
+  /// statement. The strip it feeds — "is this series still recording?" — is a
+  /// sparkline needing at least two pixels a bucket on a 1920 px panel, which
+  /// is 960; this rounds up.
+  final int maxTimeseriesBuckets;
+
+  /// Ceiling on the bucket width, in milliseconds, of one
+  /// `countTimeseriesDataMultiple`.
+  ///
+  /// One day. [maxTimeseriesBuckets] buckets a day wide is about 2.7 years of
+  /// window, which is past any retention horizon this plant configures — so a
+  /// wider bucket than this can only ever produce empty ones, and an empty
+  /// bucket reads as "the recorder stopped". The floor is 1 ms and lives in
+  /// the handler: `Duration(microseconds: 500)` is positive and truncates to
+  /// `inMilliseconds == 0`, which is a division by zero one bucket later.
+  final int maxTimeseriesIntervalMs;
+
+  /// The smallest `maxPoints` a downsampled query may ask for.
+  ///
+  /// **Three, and it is not a knob**, because it is a property of the code
+  /// being called rather than of this deployment.
+  /// `queryTimeseriesDataDownsampled` computes
+  /// `numBuckets = (maxPoints / 3).floor()` and, when that is zero,
+  /// **silently falls back to the unbounded raw query** (`database.dart`).
+  /// A `maxPoints` of 0, 1 or 2 is therefore a month of one-second samples
+  /// wearing the bounded method's name, and refusing it at the wire is what
+  /// keeps the one bounded method bounded. The other three fallback branches
+  /// in that method — a zero-width range, an unknown column type and a
+  /// non-numeric column — are 10-10's, because none of them is decidable from
+  /// a wire parameter.
+  static const int minTimeseriesPoints = 3;
+
   /// How long the gateway remembers what became of a write, so `writeStatus`
   /// can answer about it after a reconnect.
   ///
@@ -276,6 +329,9 @@ final class ServerConfig {
     this.allowedOrigins = const [],
     this.maxKeysPerSubscribe = 2000,
     this.maxSubscriptionsPerSession = 32,
+    this.maxTimeseriesPoints = 6000,
+    this.maxTimeseriesBuckets = 1000,
+    this.maxTimeseriesIntervalMs = 86_400_000,
     this.maxFrameBytes = 1024 * 1024,
     this.maxPendingBytes = 8 * 1024 * 1024,
     this.writeOutcomeTtl = const Duration(seconds: 60),
