@@ -1,4 +1,8 @@
-/// The fourth contract leg: the same suite, over the gateway's plant side.
+/// The fourth contract leg: the same suite, over the gateway's plant side —
+/// and the database-free one. `contract_db_test.dart` is the fifth, the same
+/// fifty checks over the same class with a real TimescaleDB behind it; the two
+/// share `buildHarnessedLocalStateMan` so they cannot drift into judging
+/// different subjects.
 ///
 /// Three implementations already pass it — the reference fake, the in-memory
 /// channel and the real WebSocket. This is the fourth and the first with a
@@ -52,26 +56,46 @@ void main() {
       // The gateway's own tree, per the parameter's own doc.
       browseFixture: gatewayBrowseFixture,
       // ---------------------------------------------------------------------
-      // FALSE, and the reason belongs at the call site.
+      // STILL FALSE, and what was a reason is now a RESULT.
       //
-      // Phase 10 owns timeseries, history views and preferences: there is no
-      // historian and no preference store behind this package, and
-      // `LocalStateMan`'s three getters throw an `UnimplementedError` naming
-      // `10-01` as the plan that owes them. `freeze_test.dart`'s
-      // `declaredUnimplementedMembers` is 3 for that reason and says so.
+      // 08-11 wrote this `false` because nothing existed behind it: Phase 10
+      // owned timeseries, history views and preferences, and `LocalStateMan`'s
+      // three getters threw an `UnimplementedError` naming `10-01` as the plan
+      // that owed them. All three landed — the reader in 10-07, the view store
+      // in 10-08, the preference store and its change feed in 10-09 — and
+      // `freeze_test.dart`'s `declaredUnimplementedMembers` is **0** because of
+      // it. `contract_db_test.dart` (10-11) runs this same suite with the flag
+      // **true** against a real TimescaleDB, all fifty checks, empty gap list.
       //
-      // `expectUnreachable` is the wrong mechanism here and the kit says why:
-      // it passes a case *only* by failing with exactly JSON-RPC `-32601`.
-      // This implementation is in-process. There is no wire, no envelope and
-      // no error code to produce — `expectUnreachable` would turn seven
-      // honest skips into seven cases failing for a reason that is not true
-      // of this peer. The flag deletes them and the run report says so, which
-      // is the honest description of a gap Phase 10 closes.
+      // So this `false` is no longer a gap. It is a true statement about the
+      // subject *this* leg composes: a gateway with no `collection:` block, no
+      // database object at all, which is the ordinary deployment and the one
+      // `LocalStateMan.timeseries` refuses by name rather than answering with
+      // an empty chart. The rule that decides it is the plan's:
+      // **`dart test --exclude-tags db` must not need a database**, and this
+      // file is that lane's contract coverage.
+      //
+      // **A FLAG, not a LIST, and the difference is the one thing to carry
+      // away** (Trap 4). The socket legs each emptied an `expectUnreachable`
+      // set of thirteen sentences asserting JSON-RPC `-32601`, retired batch by
+      // batch across 10-02..10-05. This leg never had one and could not have:
+      // `expectUnreachable` passes a case *only* by failing with exactly
+      // `-32601`, and an in-process peer has no wire, no envelope and no error
+      // code to produce with. There is no gap list here to find retired; the
+      // flag is the whole record, and looking for the list is looking for
+      // something that never existed.
       //
       // The consequence is arithmetic and is asserted below: this leg
       // registers `allContractChecks.length` minus the seven data-services
       // cases, and the gap is pinned BY NAME so a second capability quietly
       // going false cannot hide inside the same number.
+      //
+      // The fakes in `fake_data_services.dart` are **not** deleted by any of
+      // this. `:11-18` says what must survive their replacement is the
+      // contract and not the code, and they have two live jobs: they are
+      // `parity_test.dart:107`'s reference leg, and they are the sabotage
+      // baseline — an arm that breaks the database implementation has to be
+      // able to show the same check still passing against something.
       supportsDataServices: false,
       // 08-06 task 3 landed `holdToRun`, so the deadman is real here.
       supportsHoldToRun: true,
@@ -131,7 +155,9 @@ void main() {
       print('leg 4 (LocalStateMan): $registered of '
           '${allContractChecks.length} checks registered and $ran ran; the '
           '${gap.length} data-services cases are off behind '
-          'supportsDataServices: false, owned by 10-01');
+          'supportsDataServices: false, because this leg composes no '
+          'database — they are judged over a real one by contract_db_test '
+          'in the db lane');
     });
   });
 }
