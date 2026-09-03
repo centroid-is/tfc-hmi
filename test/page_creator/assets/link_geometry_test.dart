@@ -177,6 +177,22 @@ void main() {
       expect(back.n, closeTo(-0.2, 1e-9));
     });
 
+    test('positive n is screen-down for a left-to-right run', () {
+      // Pins the sign convention, not just its self-consistency. `place` and
+      // `locate` share the basis, so every round-trip test passes just as
+      // happily with `across` flipped -- and a flip mirrors the bend in every
+      // cable already saved. This is the assertion that notices.
+      final f = LinkRunFrame(const Offset(0, 100), const Offset(200, 100));
+      expect(f.across, const Offset(0, 1));
+      expect(f.place(0.5, 0.25).dy, greaterThan(100));
+      expect(f.place(0.5, -0.25).dy, lessThan(100));
+      // And the handedness holds when the run points elsewhere: across is
+      // always along turned a quarter-turn clockwise on screen.
+      final down = LinkRunFrame(const Offset(100, 0), const Offset(100, 200));
+      expect(down.across.dx, closeTo(-1, 1e-9));
+      expect(down.across.dy, closeTo(0, 1e-9));
+    });
+
     test('a zero-length run degrades instead of producing NaN', () {
       final f = LinkRunFrame(const Offset(50, 50), const Offset(50, 50));
       final p = f.place(0.5, 0.5);
