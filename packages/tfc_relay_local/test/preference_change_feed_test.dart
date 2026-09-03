@@ -53,6 +53,10 @@ final String ns = 'relayfeed_${DateTime.now().microsecondsSinceEpoch}_';
 /// `database_drift.dart:470`), which is how a case finds and kills it.
 const String appName = 'relay-feed-test';
 
+/// A second application name, for the one case that has to count connections
+/// opened by its own subscribing and nobody else's.
+const String gateAppName = 'relay-feed-gate';
+
 final List<String> notices = <String>[];
 
 DatabaseConfig dbConfig() => DatabaseConfig(
@@ -69,6 +73,20 @@ DatabaseConfig dbConfig() => DatabaseConfig(
       applicationName: appName,
     );
 
+DatabaseConfig gateConfig() => DatabaseConfig(
+      postgres: pg.Endpoint(
+        host: fx.host,
+        port: fx.port,
+        database: fx.database,
+        username: fx.username,
+        password: fx.password,
+      ),
+      sslMode: pg.SslMode.disable,
+      connectTimeout: const Duration(seconds: 5),
+      queryTimeout: const Duration(seconds: 5),
+      applicationName: gateAppName,
+    );
+
 Future<void> writeBehindTheGateway(String key, String value) async {
   await admin.execute(
     pg.Sql.named('INSERT INTO flutter_preferences (key, value, type) '
@@ -78,11 +96,11 @@ Future<void> writeBehindTheGateway(String key, String value) async {
   );
 }
 
-Future<int> notifyConnections() async {
+Future<int> notifyConnections({String name = appName}) async {
   final result = await admin.execute(
       pg.Sql.named('SELECT count(*) FROM pg_stat_activity '
           'WHERE application_name = @n'),
-      parameters: {'n': '$appName:notify'});
+      parameters: {'n': '$name:notify'});
   return result.first.first! as int;
 }
 
@@ -186,10 +204,23 @@ void main() {
       final sub = store.onPreferencesChanged.listen(seen.add);
       addTearDown(sub.cancel);
       await settle(() => store.feed.channelUp);
+      // Past the window before the external write, and this is the case that
+      // taught the file why. The gateway's own setString above announces its
+      // key, and the announcement lands a millisecond or two AFTER the
+      // listener attaches — so without this wait the external change arrives
+      // 180 ms later, inside the 250 ms de-duplication window, and is
+      // suppressed as a duplicate of the gateway's own write. Clearing `seen`
+      // does not un-ring that bell. The suppression is correct and is the
+      // window's documented cost; measuring the announcement of a DIFFERENT
+      // change means not standing inside it.
+      await pastTheWindow();
       seen.clear();
 
       await writeBehindTheGateway(key, 'the new value');
-      await settle(() => seen.contains(key));
+      expect(await settle(() => seen.contains(key)), isTrue,
+          reason: 'the change has to be announced, not merely absorbed: a '
+              'cache quietly refreshed with nothing told to any panel is a '
+              'settings page that stays wrong until somebody reopens it');
 
       expect(await store.getString(key), 'the new value',
           reason: 'a notification a client acts on by re-reading, that then '
@@ -248,10 +279,28 @@ void main() {
   group('the channel is listener-gated and survives losing its connection',
       () {
     test('no notification connection exists until somebody listens', () async {
-      final store = PreferenceStore(database: () => writer, log: notices.add);
+      // Its OWN Database, and the reason is a finding rather than a
+      // preference: the notification connection belongs to `AppDatabase` and
+      // is SHARED. `listenToChannel`'s onCancel issues UNLISTEN and leaves
+      // the socket open for the next subscriber
+      // (database_drift.dart:1119-1140), so counting connections against the
+      // file's shared writer measures every earlier case as well as this
+      // one — it was 1 before this case had done anything. A fresh Database
+      // with its own application name is the only way to ask "did
+      // subscribing open it" and get an answer about subscribing.
+      final gate = Database(await AppDatabase.create(gateConfig()));
+      await gate.open();
+      addTearDown(() async {
+        try {
+          await gate.close();
+        } catch (_) {
+          // Already closed by a failure path; not this case's subject.
+        }
+      });
+      final store = PreferenceStore(database: () => gate, log: notices.add);
       addTearDown(store.close);
 
-      expect(await notifyConnections(), 0,
+      expect(await notifyConnections(name: gateAppName), 0,
           reason: 'an always-on listener on a shared connection is a cost a '
               'gateway with no sessions has no reason to pay, and 8b\'s timer '
               'allow-list exists because plumbing that runs when nobody is '
@@ -261,7 +310,7 @@ void main() {
       addTearDown(sub.cancel);
 
       expect(await settle(() => store.feed.channelUp), isTrue);
-      expect(await notifyConnections(), 1);
+      expect(await notifyConnections(name: gateAppName), 1);
     });
 
     test('the notification connection dying does not kill the feed',
