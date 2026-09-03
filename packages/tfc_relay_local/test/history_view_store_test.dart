@@ -59,7 +59,7 @@ void main() {
             reason: 'the stringification is what keeps drift\'s silent drop '
                 'unreachable; if it is not total for $index the drop is '
                 'reachable after all');
-        expect(rows.containsKey('$index'), isTrue);
+        expect(rows!.containsKey('$index'), isTrue);
       }
     });
 
