@@ -8,11 +8,13 @@
 ///               stuck until hand-toggled); historian marks the gap; clients
 ///               shown "gateway stalled", not "you disconnected"
 ///
-/// **What this plan delivers, and what it does not.** F22's Expect column is
-/// three clauses. This file gates the announcement (F22a), the operator
-/// sentence (F22b) and staleness-that-clears-unaided (F22c). The "synchronized
-/// false disconnect"/reaper half is 09-08's RED and fix, and the historian
-/// "marks the gap" clause is 09-09's `db`-tagged arm — both left outstanding as
+/// **What this file delivers, and what it does not.** This file gates the
+/// announcement (F22a), the operator sentence (F22b), staleness-that-clears-
+/// unaided (F22c), and — since 09-08 — the reaper clause itself (F22d): the
+/// row's headline "synchronized false disconnect on every client", reproduced
+/// by our own reaper rather than by the freeze if `tickOnce`'s wake-up sweep
+/// blames the panels for the gateway's own silence. The historian "marks the
+/// gap" clause is 09-09's `db`-tagged arm, still outstanding as
 /// `OutstandingKind.partial` in `f_row_registry.dart`.
 ///
 /// **The arm letters are delivery order, not clause order.** The plan named
@@ -123,12 +125,36 @@ final class _WireObserver {
 
   final _pending = <int, Completer<Map<String, Object?>>>{};
 
+  /// The close frame this observer received, if the gateway ever closed it.
+  ///
+  /// F22d's whole verdict rides on these two fields: `RemoteStateMan` cannot
+  /// see a close code (`web_socket_channel` #1698 — its supervisor reports
+  /// only "the transport ended"), so the raw socket is the one place a `4003`
+  /// and its `"no heartbeat for N ms"` sentence are readable at all. Null
+  /// until the socket's stream is done; `dart:io` populates `closeCode` and
+  /// `closeReason` for a close the FAR end initiated, which a reap is.
+  int? closeCode;
+  String? closeReason;
+
+  /// Whether the gateway's stream has ended, whatever the code.
+  bool get closed => _done;
+  var _done = false;
+
+  Timer? _beat;
+
   /// Stands one up over a raw `dart:io` WebSocket — no `web_socket_channel`,
   /// no `json_rpc_2`, because all this instrument does is send two requests and
   /// record every notification the gateway pushes. Dials [port], says hello,
   /// subscribes [keys] under [sub], and returns once the snapshot has landed.
-  static Future<_WireObserver> connect(
-      int port, String sub, Set<String> keys) async {
+  ///
+  /// [beatEvery] makes this observer a *panel* in the reaper's eyes: a `ping`
+  /// notification on that period, so its session's `_lastSeen` keeps moving
+  /// whenever the gateway is actually reading — and its bytes queue in the
+  /// kernel, exactly like every real panel's, whenever it is not. F22d needs
+  /// that: an observer that never beat would be reaped legitimately and its
+  /// close would prove nothing about the freeze.
+  static Future<_WireObserver> connect(int port, String sub, Set<String> keys,
+      {Duration? beatEvery}) async {
     final socket = await WebSocket.connect('ws://127.0.0.1:$port');
     final frames = <String>[];
     final observer = _WireObserver._(socket, frames);
@@ -144,9 +170,18 @@ final class _WireObserver {
         }
       },
       onError: (Object _) {},
+      onDone: () {
+        observer._done = true;
+        observer.closeCode = socket.closeCode;
+        observer.closeReason = socket.closeReason;
+        observer._beat?.cancel();
+      },
       cancelOnError: true,
     );
-    addTearDown(() => socket.close().catchError((Object _) => null));
+    addTearDown(() {
+      observer._beat?.cancel();
+      return socket.close().catchError((Object _) => null);
+    });
 
     await observer._request(1, Methods.hello,
         HelloParams(
@@ -156,6 +191,19 @@ final class _WireObserver {
         ).toJson());
     await observer._request(2, Methods.subscribe,
         SubscribeParams(sub: sub, keys: keys.toList()).toJson());
+    if (beatEvery != null) {
+      // A notification, not a request: the beat is evidence of life on the
+      // READ side (any post-hello frame touches `_lastSeen`), and an answer
+      // would only be response bookkeeping this instrument does not need.
+      observer._beat = Timer.periodic(beatEvery, (_) {
+        if (observer._done) return;
+        socket.add(jsonEncode(<String, Object?>{
+          'jsonrpc': '2.0',
+          'method': Methods.ping,
+          'params': <String, Object?>{},
+        }));
+      });
+    }
     return observer;
   }
 
@@ -531,5 +579,140 @@ void main() {
           reason: 'the value did not advance past where it froze, so the plant '
               'view has not actually recovered');
     }
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
+  // --------------------------------------------------------------- F22d
+  //
+  // The reaper clause — the row's headline, "synchronized false disconnect on
+  // every client", reproduced by our own reaper rather than by the freeze.
+  // `RelaySession.silentForMs()` reads a wall clock and `_lastSeen` advances
+  // only when a frame is PROCESSED, so after a freeze every session looks as
+  // silent as the freeze was long, whether or not its panel kept beating —
+  // its bytes are in the kernel buffer, unread. `tickOnce` announces the
+  // stall (`_tickSession`) and then reaps (`reap`) in the SAME synchronous
+  // callback, so if the overdue timer wins the race against the queued socket
+  // events on resume, the gateway both says "I was frozen" and closes every
+  // panel with 4003 claiming THEY went silent. Whether the timer wins that
+  // race is assumption A1 — unverified, platform-dependent — so this arm
+  // asserts the OBSERVABLE (no close, no reap, no redial), never the
+  // ordering, and prints the measurement whichever way it goes.
+  //
+  // The instrument: five real panels whose pumps beat throughout, plus one
+  // raw beating socket — because a close code is readable only off a raw
+  // socket (`web_socket_channel` #1698; the supervisor reports "the transport
+  // ended" and swallows the code), and the reaper's "no heartbeat for N ms"
+  // sentence is the only place a session's silentForMs ever crosses the wire.
+  test('F22d: a woken gateway does not blame its panels — no 4003, no reap '
+      'and no redial for silence the gateway itself caused', () async {
+    final freeze = _freeze();
+    // The reaper's own row needs the freeze to EXCEED the deadline — the
+    // other arms set 15 s precisely so no reap competed with what they
+    // measure. 3 s is `ServerConfig.defaultMinHeartbeatDeadline`, the
+    // shortest deadline this gateway will accept, and the 5 s lane freeze
+    // (45 s behind RELAY_SOAK) is comfortably past it. The panels learn the
+    // number from hello and beat on a schedule derived from it.
+    const deadline = Duration(seconds: 3);
+    final gw = await StalledGateway.spawn(
+      aliases: _aliases,
+      keysPerAlias: _keysPerAlias,
+      heartbeatDeadline: deadline,
+    );
+
+    // Five panels that beat throughout: the pump is wired by default and
+    // derives its period from the deadline hello advertised. The freshness
+    // deadline outlasts the freeze so no panel tears itself down — a
+    // client-initiated reconnect would be F22c's subject, not the reaper's.
+    final panels = <RemoteStateMan>[];
+    for (var i = 0; i < 5; i++) {
+      final client = RemoteStateMan(
+        uri: Uri.parse('ws://127.0.0.1:${gw.port}'),
+        config: ClientConfig(
+            freshnessDeadline: freeze + const Duration(seconds: 20)),
+        keys: _page(),
+      );
+      panels.add(client);
+      addTearDown(client.dispose);
+    }
+    // The raw beating socket: a quarter of the deadline, the same order as
+    // the pump's own deadline-derived period.
+    final observer = await _WireObserver.connect(gw.port, 'observer', _page(),
+        beatEvery: const Duration(milliseconds: 750));
+
+    await until('all five panels to hold an advancing value',
+        () => panels.every((c) => c.isReady && c.read(_watch)?.value != null));
+    final before = panels.first.read(_watch)!.value as int;
+    await until('the plant to advance before the freeze',
+        () => (panels.first.read(_watch)!.value as int) > before);
+    final sessionsBefore = await gw.ask('sessionCount') as int;
+
+    gw.pause();
+    await Future<void>.delayed(freeze);
+    gw.resume();
+
+    // The first tick after resume runs the announcement and the sweep in one
+    // callback, so either a gateway_stalled resync or a close on the
+    // observer's wire is proof the sweep has already decided.
+    await within(
+        Future(() async {
+          while (observer.gatewayStalls.isEmpty && !observer.closed) {
+            await Future<void>.delayed(const Duration(milliseconds: 50));
+          }
+        }),
+        'the first post-resume tick to reach the observer '
+        '(a gateway_stalled resync, or the close a reap would send)',
+        budget: const Duration(seconds: 10));
+    // One settle window before sampling, so a reap's unawaited closes cannot
+    // hide in the sampling instant — post-event consistency, not a race.
+    await Future<void>.delayed(const Duration(seconds: 1));
+
+    final sessionsAfter = await gw.ask('sessionCount') as int;
+    final downReasons = [for (final p in panels) p.lastDownReason];
+    final reapFired = observer.closeCode != null ||
+        downReasons.any((reason) => reason != null) ||
+        sessionsAfter < sessionsBefore;
+    final announced = observer.gatewayStalls.isNotEmpty
+        ? observer.gatewayStalls.first.stalledMs
+        : panels.first.stalledMs;
+
+    // The measurement, whichever way the race went — the deliverable of this
+    // arm even when it is green. silentForMs crosses the wire only inside a
+    // reap's close reason, so "none" in that column IS the good outcome.
+    print('F22d: freeze ${freeze.inMilliseconds} ms over a '
+        '${deadline.inMilliseconds} ms deadline — reap fired: $reapFired; '
+        'sessions $sessionsBefore -> $sessionsAfter; observer close: '
+        '${observer.closeCode ?? 'none'} '
+        '(${observer.closeReason?.isNotEmpty ?? false ? observer.closeReason : 'no reason'}); '
+        'panel downs: $downReasons; announced stalledMs=$announced');
+
+    expect(observer.closeCode, isNull,
+        reason: 'the gateway closed a panel that beat through its whole '
+            'freeze — code ${observer.closeCode}, reason '
+            '"${observer.closeReason}". Its bytes were in the kernel buffer, '
+            'unread; a reap here is the gateway blaming the panel for '
+            'silence the gateway itself caused, which is the row\'s '
+            '"synchronized false disconnect" reproduced by our own reaper');
+    for (final panel in panels) {
+      // lastDownReason is set by every _down, and a redial exists only after
+      // a _down — so null here is both "never told it disconnected" and
+      // "dial count unchanged across the stall" in one field.
+      expect(panel.lastDownReason, isNull,
+          reason: 'a beating panel went down across the gateway\'s own stall '
+              '("${panel.lastDownReason}") — it was told it disconnected '
+              'when the truth is the gateway froze, and it redialled for it');
+      expect(panel.linkState, LinkState.ready, // window-exempt: the within() above waited for the post-resume tick and the settle window completed — this re-asserts the link never left ready across that completed event
+          reason: 'a panel is not ready after the resume; the reaper (or a '
+              'teardown it caused) took a session the panel never stopped '
+              'earning');
+    }
+    expect(sessionsAfter, sessionsBefore,
+        reason: 'the gateway holds $sessionsAfter sessions where it held '
+            '$sessionsBefore before its own freeze: a session was reaped for '
+            'the gateway\'s silence, and if it has already been re-dialled '
+            'the panel paid a full resync for a freeze it did not cause');
+
+    // And the link is genuinely live afterwards, not merely un-closed.
+    final atResume = panels.first.read(_watch)!.value as int;
+    await until('the plant to advance again after the resume',
+        () => (panels.first.read(_watch)!.value as int) > atResume);
   }, timeout: const Timeout(Duration(minutes: 3)));
 }

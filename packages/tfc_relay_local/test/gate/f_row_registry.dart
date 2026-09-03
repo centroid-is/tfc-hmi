@@ -259,8 +259,8 @@ const Map<String, String> catalogueProse = <String, String>{
 const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
   'F22': Outstanding(
     kind: OutstandingKind.partial,
-    owner: '09-08',
-    clause: 'the announcement (F22a), the operator sentence (F22b) and staleness-that-clears-unaided (F22c) landed in 09-07; still owed: the reaper half ("synchronized false disconnect on every client") is 09-08\'s RED and fix, and the historian half ("historian marks the gap") is 09-09\'s db-tagged arm',
+    owner: '09-09',
+    clause: 'the announcement (F22a), the operator sentence (F22b), staleness-that-clears-unaided (F22c) and the reaper half ("synchronized false disconnect on every client", F22d) have landed; still owed: the historian half ("historian marks the gap") is 09-09\'s db-tagged arm',
   ),
 };
 

@@ -277,8 +277,20 @@ final class TickEngine {
     }
     // And the sweep separately, because a sweep that threw would take down the
     // tick from the other end — every session served, none of them reaped.
+    //
+    // The reaper is handed this tick's own drift verdict: the same one
+    // `_tickSession` announced above. On the wake-up tick after a freeze it is
+    // `LagStalled`, and the reaper credits its `stalledMs` against every
+    // session's silence for this one tick — see [reap]. A `_sweep` override
+    // replaces the reaper wholesale (a test observing the seam), so it takes
+    // no verdict; only the real reaper forgives.
     try {
-      (_sweep ?? reap)(nowMs);
+      final sweep = _sweep;
+      if (sweep != null) {
+        sweep(nowMs);
+      } else {
+        reap(nowMs, drift);
+      }
     } catch (error, stack) {
       onSessionError?.call(error, stack, 'reap');
     }
@@ -319,11 +331,41 @@ final class TickEngine {
   /// is iterating: a session evicted by a backpressure verdict earlier in this
   /// same tick is already gone, and reaping it again would be a second
   /// teardown for a session that has none of its resources left.
-  void reap(int tickNowMs) {
+  ///
+  /// **[drift] is F22's wake-up forgiveness, and it is the whole of it.**
+  /// `RelaySession.silentForMs()` reads a wall clock and `_lastSeen` advances
+  /// only when a frame is *processed*, so after the isolate thaws from a freeze
+  /// every session looks as silent as the freeze was long — the panel's bytes
+  /// were queued in the kernel, unread, whether or not it kept beating. On the
+  /// first tick after the thaw [tickOnce] both announces the stall and lands
+  /// here in one synchronous callback, so without this credit a woken gateway
+  /// would 4003 every panel for silence the gateway itself caused: the
+  /// catalogue's "synchronized false disconnect on every client" (F22),
+  /// produced by our own reaper rather than by the freeze. When [drift] is
+  /// `LagStalled` its `stalledMs` — **the gateway's own measured freeze, never
+  /// a number any client can influence (T-09-36)** — is credited against every
+  /// session's silence for this one tick, and only this one: [LagMonitor.poll]
+  /// returns `LagStalled` exactly once per freeze, so the next ordinary tick
+  /// forgives nothing and a panel that never beats again is reaped normally.
+  /// The **only-dead-sessions property (07-08b) survives**: a session whose
+  /// last frame predates the freeze carries silence *beyond* the freeze, so
+  /// crediting the freeze still leaves it past the deadline. The reported
+  /// figure stays the raw `silentForMs`, so the close reason is byte-for-byte
+  /// the sentence it always was and the 123-byte truncation seam
+  /// (`relay_session.dart`) is untouched.
+  void reap(int tickNowMs, [LagVerdict drift = const LagOk()]) {
     final deadlineMs = config.heartbeatDeadline.inMilliseconds;
+    final forgivenMs = switch (drift) {
+      LagStalled(:final stalledMs) => stalledMs,
+      LagOk() => 0,
+    };
     for (final session in registry.sessions) {
       final silentMs = session.silentForMs();
-      if (silentMs <= deadlineMs) continue;
+      // The freeze this gateway measured is not evidence a panel went quiet:
+      // credit it back before the deadline is applied. A dead session's
+      // pre-freeze silence outlives the credit and it is still reaped.
+      final chargedMs = silentMs - forgivenMs;
+      if (chargedMs <= deadlineMs) continue;
       // `unawaited` is safe precisely because the registry removal is the
       // synchronous half of `close` (Finding 9, step 2): the session is out
       // before this loop reaches the next one, so nothing can be swept twice
