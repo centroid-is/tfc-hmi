@@ -62,6 +62,11 @@ const _keyB = 'ST301.CN21.SEN01.temp';
 /// The preference a change-notification case writes to.
 const _prefKey = 'svn.ui.darkMode';
 
+/// The one key [checkPreferenceClearCarriesItsAllowList] names in its allow
+/// list. Deliberately a key the round-trip case already uses, so no leg's
+/// clean-up list grows.
+const _clearedKey = 'svn.chart.maxPoints';
+
 /// The timeseries side of the test-only control surface.
 ///
 /// Declared here, alongside the cases that need it, for the same reason
@@ -448,6 +453,53 @@ Future<void> checkPreferenceSetGetRoundTrips(StateManApi api) async {
       reason: 'a removed key still has a value behind it');
 }
 
+/// `clear` carries its allow list: the named keys go, the others stay.
+///
+/// **Why this is in scope for a round-trip file.** It is the same question
+/// every other case here asks — does the method exist, does it carry its
+/// argument, does the effect come back — asked of the one method whose argument
+/// is the difference between emptying a page's own section and emptying the
+/// gateway. Nothing about *which* keys a deployment considers clearable is
+/// asserted; that is policy and lives in `policy_state_man.dart`.
+///
+/// **Why it was added** (10-REVIEW CR-02). `preferences.clear` is the phase's
+/// single most destructive method and **no check on any leg called it**. Its
+/// only judge was `preference_store_test.dart`, which is `db`-tagged and
+/// therefore *excluded* from the default lane rather than skipped in it — an
+/// excluded file reports nothing, so the method was unjudged on four legs and
+/// invisible on the fifth. A handler that dropped the allow list on the way
+/// down would have turned every "clear my page's settings" into "clear the
+/// gateway's routing configuration", and five green legs would have said
+/// nothing.
+///
+/// Both keys are already in the file's fixture set, so a leg that cleans up
+/// after itself by name needs no new entry.
+Future<void> checkPreferenceClearCarriesItsAllowList(StateManApi api) async {
+  final prefs = api.preferences;
+
+  await within(prefs.setBool(_prefKey, true), 'saving the key that must stay');
+  await within(prefs.setInt(_clearedKey, 800), 'saving the key to be cleared');
+
+  await within(prefs.clear(allowList: <String>{_clearedKey}),
+      'clearing exactly one named key');
+
+  expect(
+      await within(
+          prefs.containsKey(_clearedKey), 'containsKey on the cleared key'),
+      isFalse,
+      reason: 'the key named in the allow list is still stored, so `clear` '
+          'either ignored its argument or did nothing at all');
+  expect(
+      await within(prefs.getBool(_prefKey), 'reading the key that must stay'),
+      isTrue,
+      reason: 'a key the allow list did NOT name was removed. This is the '
+          'direction that matters: with no allow list `clear` removes every '
+          'preference this gateway holds, `key_mappings` — 518 KiB of routing '
+          'configuration the whole plant is served through — included, and it '
+          'is not restored by reconnecting. A layer that dropped the argument '
+          'on the way down would turn a settings page tidying up into that');
+}
+
 /// A preference change reaches a second listener.
 ///
 /// DB-03's cross-client notification starts as this property. Over a pipe with
@@ -528,11 +580,18 @@ const _periodCase = 'a saved time window survives add, list and delete';
 const _prefRoundTripCase = 'every typed preference round-trips and containsKey '
     'agrees';
 const _prefNotifyCase = 'a preference change reaches a second listener';
+const _prefClearCase = 'clear removes the keys its allow list names and no '
+    'others';
 
 /// Every data-service property, keyed by the sentence it asserts.
 ///
-/// Seven round trips and not one semantic beyond them — see the scope boundary
-/// at the top of this file before adding an eighth.
+/// Eight round trips and not one semantic beyond them — see the scope boundary
+/// at the top of this file before adding a ninth.
+///
+/// **Seven became eight in the 10-REVIEW fix cycle** (CR-02): `clear` had no
+/// judge on any leg, which is how the widest method on this interface reached
+/// the wire ungated by anything but the role that sets a theme. See
+/// [checkPreferenceClearCarriesItsAllowList].
 const dataServicesChecks = <String, Check<StateManApi>>{
   _seriesCase: checkTimeseriesQueryReturnsSeededPointsInOrder,
   _multipleCase: checkTimeseriesMultipleReturnsAnEntryPerTable,
@@ -541,6 +600,7 @@ const dataServicesChecks = <String, Check<StateManApi>>{
   _periodCase: checkHistoryViewPeriodRoundTrips,
   _prefRoundTripCase: checkPreferenceSetGetRoundTrips,
   _prefNotifyCase: checkPreferenceChangeNotifiesASecondListener,
+  _prefClearCase: checkPreferenceClearCarriesItsAllowList,
 };
 
 /// Registers the data-service contract against implementations from [make].

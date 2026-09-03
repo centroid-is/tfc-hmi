@@ -127,10 +127,18 @@ const _benignThrottle = 4 * 1024 * 1024;
 /// whose fifteen `preferences.*` ones make it **50** by taking the last two
 /// entries out of the gap list below in the commit that registered them.
 ///
-/// **50 is the whole registry**, so this leg now passes every check the
-/// in-memory reference leg passes, through two loopback hops and a fault
-/// proxy. There is nothing left for the gap list to name.
-const int reachableThroughTheProxy = 50;
+/// **And 50 until the 10-REVIEW fix cycle, whose CR-02 makes it 51** — by a
+/// mechanism neither leg had seen before. Not a handler landing: a *check*
+/// landing. `preferences.clear` had no judge on any leg, which is how the
+/// widest method on the interface shipped behind the role that sets a theme;
+/// `checkPreferenceClearCarriesItsAllowList` is the eighth data-services check
+/// and it is reachable on the day it is written, because the handler behind it
+/// landed back in 10-05.
+///
+/// **51 is the whole registry**, so this leg passes every check the in-memory
+/// reference leg passes, through two loopback hops and a fault proxy. There is
+/// nothing left for the gap list to name.
+const int reachableThroughTheProxy = 51;
 
 /// Every check this leg does not pass, by name. **It is empty as of 10-05**,
 /// and it is identical to `ws_contract_test.dart`'s for the reason it was

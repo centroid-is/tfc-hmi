@@ -81,6 +81,19 @@ import '../error_codes.dart';
 import 'key_policy.dart';
 import 'series_mapping_tally.dart';
 
+/// Preference keys that are **gateway configuration** rather than a panel's own
+/// settings, and are therefore never removed by an unrestricted clear.
+///
+/// Today that is one row, and it is the one the whole gateway is built from:
+/// `key_mappings` is 518 KiB of routing that every panel on the site is served
+/// through. See `_PolicyPreferences.clear` for what deleting it costs and why
+/// the refusal is the whole answer rather than a filter.
+///
+/// Public and top-level so `policy_test.dart` can read the production constant
+/// rather than restate the string: a second reserved key added later is then
+/// covered by the existing assertions instead of silently outside them.
+const Set<String> reservedPreferenceKeys = <String>{'key_mappings'};
+
 /// The shared source, seen through one session's policy.
 ///
 /// Implements [StateManApi] and **adds no interface members**, which is how
@@ -915,13 +928,62 @@ final class _PolicyPreferences implements PreferencesApi {
     return _source.remove(key);
   }
 
+  /// **An unrestricted clear is refused** (10-REVIEW CR-02).
+  ///
+  /// The gate above this line is [_requireOperate], the same predicate
+  /// `setBool` uses — and that is the whole problem. Under the shipped
+  /// `PermissiveTokenValidator`, which mints `operate` for every station it
+  /// accepts (`token_validator.dart:145`), the permission needed to wipe the
+  /// gateway's routing configuration was the permission needed to set a theme.
+  ///
+  /// Two facts make this worse than the other six mutators, and both are
+  /// reasons to refuse rather than to log:
+  ///
+  ///  * **The damage outlives the call.** `CollectionPlanResolver`'s three maps
+  ///    are built once at construction and do not follow a live
+  ///    `KeyRouter.applyKeyMappings` (`collection_plan_resolver.dart:51-60`).
+  ///    So after a `clear()` the running gateway keeps resolving series against
+  ///    a plan whose source row no longer exists — it looks healthy — and the
+  ///    **next restart** comes up with an empty keymapping, no collection plan
+  ///    and a resolver that refuses everything. Cause and symptom separated by
+  ///    a reboot is the hardest shape there is to diagnose.
+  ///  * **Nothing else restores it.** `key_mappings` is 518 KiB of hand-built
+  ///    routing; reconnecting does not bring it back, and no other surface on
+  ///    this wire can rewrite it in one call.
+  ///
+  /// Refusing is the honest default for a call whose safe form costs the caller
+  /// one parameter, and the message names the parameter. The allow-listed form
+  /// still works and still takes `operate`, so a settings page emptying its own
+  /// section is unaffected — `data_services_contract.dart`'s
+  /// `checkPreferenceClearCarriesItsAllowList` is what holds that open, on all
+  /// five legs, and is the check the review found missing entirely.
+  ///
+  /// The alternative considered and rejected was
+  /// `allowList ?? (await getKeys()).difference(reservedKeys)` plus a log line:
+  /// it keeps an unrestricted clear callable, but it also keeps every *other*
+  /// preference in one un-undoable call, and it makes the reserved set a thing
+  /// a caller cannot see from the interface. A refusal that says which
+  /// parameter to add is the shorter path to the same place.
+  ///
+  /// The refusal is **pre-effect**, like every other one in this class: raised
+  /// before the source is touched, with a pre-substituted `data` so
+  /// `RpcException.serialize` cannot fill it with a request carrying `1e999`
+  /// (the 02-05 hang).
   @override
   Future<void> clear({Set<String>? allowList}) {
-    // Gated like the setters and not more loudly, though it is the widest of
-    // the seven: `clear()` with no allow-list removes every preference this
-    // gateway holds, `key_mappings` among them.
     _requireOperate('preferences.clear', 'nothing was removed');
-    return _source.clear(allowList: allowList);
+    if (allowList != null) return _source.clear(allowList: allowList);
+    throw rpc.RpcException(
+        ServerErrorCodes.forbidden,
+        'preferences.clear with no allowList would remove every preference '
+        'this gateway holds, ${reservedPreferenceKeys.join(', ')} included — '
+        'the routing '
+        'configuration the whole gateway is built from, which is not restored '
+        'by reconnecting and whose loss does not show until the next restart. '
+        'Nothing was removed, so this call definitively had no effect. Do not '
+        'retry it unchanged: name the keys to clear in "allowList", which is '
+        'the same call without the blast radius',
+        data: _substitute('preferences.clear'));
   }
 
   @override

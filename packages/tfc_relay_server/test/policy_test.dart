@@ -1539,7 +1539,14 @@ void main() {
       'setStringList': (prefs) =>
           prefs.setStringList('svn.page.recent', const ['frystir']),
       'remove': (prefs) => prefs.remove('svn.ui.dark'),
-      'clear': (prefs) => prefs.clear(),
+      // **Allow-listed**, because the unrestricted form is refused outright
+      // for every role now (10-REVIEW CR-02) and would make this map's
+      // `operate` arm assert the wrong thing. The role gate on `clear` is
+      // still what these arms measure: it fires before the allow-list check,
+      // so a `view` station is refused for the role and an `operate` station
+      // gets through to the store. The unrestricted form has its own group
+      // below.
+      'clear': (prefs) => prefs.clear(allowList: const {'svn.ui.dark'}),
     };
 
     test('an operate station writes, and the store records it', () async {
@@ -1688,6 +1695,79 @@ void main() {
               'otherwise be remote secret retrieval (SEC-01, T-10-18). '
               '`api_surface_test.dart` sweeps every wire interface for it; '
               'this arm is the one standing next to the gate');
+    });
+
+    // -------------------------------------------------------------------
+    // 10-REVIEW CR-02: `clear()` with no allow list.
+    //
+    // The role gate above is the same predicate `setBool` uses, so before
+    // this the permission needed to wipe `key_mappings` — the gateway's own
+    // 518 KiB routing configuration — was the permission needed to set a
+    // theme, and under the shipped `PermissiveTokenValidator` that is every
+    // accepted station. What makes it worse than a wide delete is the delay:
+    // `CollectionPlanResolver` is a construction-time snapshot, so the
+    // RUNNING gateway keeps serving from a plan whose source row is gone and
+    // the failure lands at the next restart.
+    //
+    // No contract check called `clear` at all when the review was written.
+    // One does now — `checkPreferenceClearCarriesItsAllowList`, on five legs
+    // — and it takes the allow-listed form, which is the form that still
+    // works.
+    // -------------------------------------------------------------------
+    test('an unrestricted clear is refused, for an operate station too',
+        () async {
+      final panel = seenBy(_panel);
+
+      final refusal = await _refused(() => panel.served.preferences.clear(),
+          'a clear with no allow list from a station that may write');
+
+      expect(refusal.code, ServerErrorCodes.forbidden,
+          reason: 'the role is not the problem — this station has `operate` '
+              'and every other mutator goes through. What is refused is the '
+              'unbounded shape of the call');
+      expect(refusal.message, contains('key_mappings'),
+          reason: 'the refusal has to say what would have been destroyed. '
+              '"Forbidden" alone sends an engineer looking for a permission '
+              'to grant, and there is no permission that makes this call safe');
+      expect(refusal.message, contains('allowList'),
+          reason: 'and it has to name the parameter that turns it into a call '
+              'this gateway will make. A refusal whose remedy the caller has '
+              'to guess is one they will retry unchanged');
+      expect(panel.store.writes, isEmpty,
+          reason: 'pre-effect, like every other refusal in this class: the '
+              'store recorded ${panel.store.writes}. A gate that fired after '
+              'the DELETE would be a report that the plant\'s routing '
+              'configuration is already gone');
+    });
+
+    test('the allow-listed clear still works, and clears only what it names',
+        () async {
+      // The anti-vacuity companion for the arm above: a decorator that refused
+      // every clear would satisfy it and would also break every settings page
+      // that tidies up after itself.
+      final panel = seenBy(_panel);
+      await panel.store.setString('svn.site.name', 'Sæból');
+      await panel.store.setString('key_mappings', '{"CN01":"x"}');
+      panel.store.writes.clear();
+
+      await panel.served.preferences
+          .clear(allowList: const {'svn.site.name'});
+
+      expect(panel.store.writes, ['clear'],
+          reason: 'the allow-listed form must reach the store');
+      expect(await panel.store.containsKey('svn.site.name'), isFalse);
+      expect(await panel.store.containsKey('key_mappings'), isTrue,
+          reason: 'and it must clear only what it named. A layer that dropped '
+              'the allow list on the way down would turn every one of these '
+              'into the call refused above');
+    });
+
+    test('the reserved set is one key and it is the one the gateway is built '
+        'from', () {
+      expect(reservedPreferenceKeys, contains('key_mappings'),
+          reason: 'read off the production constant rather than restated, so '
+              'a second reserved key added later is covered by the message '
+              'assertions above without editing them');
     });
   });
 

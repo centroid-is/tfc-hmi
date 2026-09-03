@@ -78,7 +78,7 @@ const _readOnlyKey = 'ST301.CN21.SEN01.temp';
 /// **Which estimate 31 matched.** Three numbers were in circulation before this
 /// leg ran: the phase brief's 36 (8 named missing), 04-RESEARCH's group table
 /// (browse 6 + data services 7 = 13 unreachable, so 31), and 04-PATTERNS' 32.
-/// The registries enumerate as 5 + 3 + 5 + 8 + 11 + 6 + 7 + 5 = 50, and every
+/// The registries enumerate as 5 + 3 + 5 + 8 + 11 + 6 + 8 + 5 = 51, and every
 /// unreachable check falls in the browse and data-services groups, so
 /// **RESEARCH's table is the one that holds** and the other two were estimates
 /// made before the read-only case and the browse group were counted the same
@@ -141,13 +141,22 @@ const _readOnlyKey = 'ST301.CN21.SEN01.temp';
 ///
 /// **This number is proven to bite**, three ways rather than one. Raising it by
 /// one with the gap list unchanged fails the arithmetic case below with
-/// `Expected: <50> Actual: <51>` (run, recorded, reverted — at 43, again at 46
+/// `Expected: <51> Actual: <52>` (run, recorded, reverted — at 43, again at 46
 /// in 10-03, and again at 48 in 10-04). Moving a check into the gap list to
 /// keep the arithmetic while lowering the count fails `expectUnreachable`,
 /// which rejects a named check that passes. And a reachable check that
 /// regresses fails as itself, because the suite is green only when all 48
 /// pass.
-const int reachableChecks = 50;
+/// **And 50 became 51 in the 10-REVIEW fix cycle** (CR-02), by the one
+/// mechanism this file has not seen before: not a handler landing, but a
+/// *check* landing. `preferences.clear` had no judge on any leg —
+/// `dataServicesChecks` had seven entries and `clear` was in none of them —
+/// which is how the widest method on the interface reached the wire behind the
+/// role that sets a theme. `checkPreferenceClearCarriesItsAllowList` is the
+/// eighth data-services check, and it is reachable here on the day it is
+/// written because the `preferences.clear` handler landed back in 10-05. The
+/// gap list stays empty.
+const int reachableChecks = 51;
 
 /// Every check this leg does not pass, by name. **It is empty**, and 10-05 is
 /// the commit that emptied it.

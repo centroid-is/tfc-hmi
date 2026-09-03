@@ -18,10 +18,12 @@
 /// `FakeTimeseries` that raises `ResultTooLarge` on demand, so these cases run
 /// in this package's ordinary lane in a second rather than behind Docker.
 ///
-/// ## Why it is not a fifty-first contract check
+/// ## Why it is not a contract check
 ///
-/// `allContractChecks` is **50** and both leg constants are 50 with empty gap
-/// lists. This is a case *beside* them: the contract is about properties every
+/// `allContractChecks` is **51** and both leg constants are 51 with empty gap
+/// lists — 50 until the 10-REVIEW fix cycle added the eighth data-services
+/// check (CR-02, `preferences.clear`). This is a case *beside* them: the
+/// contract is about properties every
 /// `StateManApi` implementation must have, and "the gateway refuses an
 /// over-large result rather than evicting you" is a property of this gateway's
 /// wire, which `RemoteStateMan` has no way to satisfy on its own. Registering
