@@ -4,7 +4,6 @@ import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'dart:io' as io;
 import 'dart:typed_data';
 
-import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -69,7 +68,6 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
   String _filter = '';
   String _sortColumn = 'name';
   bool _sortAscending = true;
-  bool _isDragging = false;
   int? _editingDocId;
   String? _editingPlcAssetKey;
   late TextEditingController _renameController;
@@ -233,38 +231,23 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
         _buildHeaderRow(context),
         const Divider(height: 1),
 
-        // Scrollable data rows wrapped in DropTarget
+        // Scrollable data rows
         Expanded(
-          child: DropTarget(
-            onDragEntered: (_) => setState(() => _isDragging = true),
-            onDragExited: (_) => setState(() => _isDragging = false),
-            onDragDone: _isWriteEnabled ? _handlePdfDrop : null,
-            child: Container(
-              decoration: BoxDecoration(
-                border: _isDragging
-                    ? Border.all(
-                        color: Theme.of(context).colorScheme.primary,
-                        width: 2,
-                      )
-                    : null,
-              ),
-              child: totalItems == 0
-                  ? const Center(
-                      child: Text('No resources found',
-                          style: TextStyle(color: Colors.grey)),
-                    )
-                  : ListView.builder(
-                      itemCount: totalItems,
-                      itemBuilder: (ctx, i) {
-                        if (i < filtered.length) {
-                          return _buildRow(ctx, filtered[i]);
-                        }
-                        return _buildPlcRow(
-                            ctx, filteredPlc[i - filtered.length]);
-                      },
-                    ),
-            ),
-          ),
+          child: totalItems == 0
+              ? const Center(
+                  child: Text('No resources found',
+                      style: TextStyle(color: Colors.grey)),
+                )
+              : ListView.builder(
+                  itemCount: totalItems,
+                  itemBuilder: (ctx, i) {
+                    if (i < filtered.length) {
+                      return _buildRow(ctx, filtered[i]);
+                    }
+                    return _buildPlcRow(
+                        ctx, filteredPlc[i - filtered.length]);
+                  },
+                ),
         ),
       ],
     );
@@ -536,23 +519,6 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     if (name == null || name.isEmpty) return;
 
     await _performUpload(bytes, name);
-  }
-
-  Future<void> _handlePdfDrop(DropDoneDetails details) async {
-    setState(() => _isDragging = false);
-
-    for (final file in details.files) {
-      if (!file.path.toLowerCase().endsWith('.pdf')) continue;
-
-      final bytes = await io.File(file.path).readAsBytes();
-      final defaultName = file.name.replaceAll('.pdf', '');
-
-      if (!mounted) return;
-      final name = await _showNameDialog(defaultName);
-      if (name == null || name.isEmpty) continue;
-
-      await _performUpload(bytes, name);
-    }
   }
 
   Future<void> _performUpload(List<int> bytes, String name) async {

@@ -70,7 +70,6 @@ dependencies:
   anthropic_sdk_dart: ^1.2.0
   openai_dart: ^1.1.0
   pdfrx: ^2.2.24
-  desktop_drop: ^0.7.0
   pasteboard: ^0.5.0
   media_kit: ^1.2.6
   media_kit_video: ^2.0.1
