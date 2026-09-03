@@ -373,11 +373,29 @@ void main() {
               'differently');
       expect(counts[ordered[2]], 1);
       expect(counts[ordered[3]], 2);
-      expect(ordered.every((t) => t.isUtc), isTrue,
-          reason: 'countTimeseriesDataMultiple interpolates its bucket '
-              'bounds as bare ISO strings with no zone '
-              '(database.dart:1642-1646), so a local-time `since` would be '
-              'read in the session time zone and shift every bucket');
+      expect(ordered.every((t) => t.isUtc), isTrue);
+
+      // The arm that makes the assertion above mean something. `since` is
+      // UTC everywhere it arrives from the wire (`data_handlers.dart` decodes
+      // epoch milliseconds), so a UTC-only case cannot tell whether anything
+      // normalises it — and this machine's own zone decides whether the bug
+      // is even visible. A LOCAL instant is the state a contract leg or an
+      // embedder produces, and it is what the interpolation at
+      // `database.dart:1642-1646` mishandles: the bucket bounds go into the
+      // statement as bare ISO strings with NO zone, so Postgres reads them in
+      // the session's TimeZone and every bucket shifts by the caller's offset
+      // with no error anywhere.
+      final fromLocal = await reader.countTimeseriesDataMultiple(
+          'D.Counted', const Duration(minutes: 1), 4,
+          since: anchor.toLocal());
+
+      expect(fromLocal.keys.every((t) => t.isUtc), isTrue,
+          reason: 'a bucket key that is not an absolute instant puts the '
+              '"is this series still recording?" strip an hour out twice a '
+              'year, silently');
+      expect(fromLocal, counts,
+          reason: 'the same instant asked for two ways is the same four '
+              'buckets holding the same five rows');
     });
   });
 
