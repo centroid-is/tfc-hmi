@@ -1,36 +1,45 @@
 /// Festo VTUG-14 valve terminal with a CTEU-EC bus node — the assembly
-/// bolted to the track stations, drawn front-on.
+/// bolted to the track stations, drawn from above.
 ///
-/// Left to right, which is the order it is built in: the bus node, the
-/// electrical interface, the left end plate carrying the supply, eight valve
-/// positions on a 14 mm grid, and the right end plate. `14` in the part
-/// number is that grid dimension, so the slice pitch is not a drawing
-/// choice — it is the hardware, and the drawing is built out of it.
+/// ## Why the top view
 ///
-/// ## Drawn from photographs, and where that changed things
+/// Because that is where the lamps are. Every LED this asset exists to show
+/// — the coil lamps on each valve and the status column on the bus node —
+/// sits on the upper face of the hardware. An elevation shows the row of
+/// valves end-on with their lamps hidden behind the moulding, which is a
+/// drawing of the right object answering the wrong question.
 ///
-/// Festo blocks their own catalogue, so a first pass of this was built from
-/// dimensions and the CTEU-EC installation instructions. Photographs of the
-/// actual parts corrected three things, and every one of them mattered:
+/// ## Where the geometry comes from
 ///
-///  * **The hardware is white.** VUVG valves, the VAEM interface and the
-///    CTEU housing are all a pale grey-white with a dark solenoid block, not
-///    the anthracite the first pass assumed. A mimic that gets a device's
-///    colour wrong is a mimic nobody matches to the cabinet in front of them.
-///  * **The manual overrides are blue.** They are the one saturated thing on
-///    the valve and the first thing a fitter's eye goes to, so they are the
-///    one saturated thing here.
-///  * **The node has six lamps, in one column, and no `ERROR`.** The
-///    silkscreen reads `PS`, `X1`, `X2`, `Run`, `L/A2`, `L/A1`. The
-///    instructions describe an EtherCAT error indicator, the first pass drew
-///    one in a second column, and it is not on the housing. See [CteuLink]
-///    for why an invented diagnostic lamp is worse than a missing one.
+/// Every dimension below is off the Festo catalogue's dimension drawing for
+/// a size-14 VABM manifold rail with an I-Port interface, cross-checked
+/// against the individual part datasheets. It is not estimated:
 ///
-/// Each valve wears its coils' LEDs where the real one does: small clear
-/// lenses at the top of the coil end, under the `14` and `12` moulded into
-/// the body. A blanked position has no valve and therefore no lamps, and
-/// this draws none — a dark lamp on a position with no coil behind it is a
-/// channel that does not exist.
+/// | | |
+/// |---|---|
+/// | Terminal, 8 positions | 192 x 110 mm (L1 x B1) |
+/// | Valve grid | **16 mm** (L4) |
+/// | Valve body | 14.7 mm wide (VUVG-B14 B1) |
+/// | Electrical section | 60.6 mm (L5) |
+/// | Span, first to last valve centre | 112 mm (L3) |
+/// | CTEU-EC | 40 x 91 x 50 mm |
+///
+/// Two of those corrected a drawing built from guesswork. The grid is
+/// **16 mm and not 14** — 14 is the *valve size*, the VUVG-B14 designation,
+/// and a size-14 manifold rail carries it on a 16 mm pitch. And the bus node
+/// is a little over half the height of the valve block rather than taller
+/// than it, which is the proportion that made the first drawing read wrong
+/// to anyone who has stood in front of one.
+///
+/// ## What is drawn, and what is honest about being approximate
+///
+/// The outer envelope, the grid, the electrical section's width and the
+/// node's footprint are exact. The arrangement of features *within* a valve
+/// strip — where on the top face the coil lamps and the manual overrides
+/// sit — is not dimensioned anywhere I can reach, so it is drawn where the
+/// hardware photographs put it: at the solenoid end, under the `14` and `12`
+/// moulded into the body. A blanked position has no solenoid cap, no lamps
+/// and no overrides, because it has no valve.
 library;
 
 import 'dart:math' as math;
@@ -41,48 +50,51 @@ import 'package:flutter/material.dart';
 /// Valve positions on the manifold — see `vtugPositionCount`.
 const int vtugSliceCount = 8;
 
-/// The grid dimension, in mm. `VTUG-14` is named for it.
-const double vtugSliceWidthMm = 14;
+/// The manifold rail's grid, in mm — catalogue dimension `L4` for a size-14
+/// VABM.
+///
+/// Not 14. `VTUG-14` and `VUVG-B14` name the *valve size*; the rail that
+/// carries them is on a 16 mm pitch, and the 1.3 mm of daylight between one
+/// 14.7 mm valve body and the next is visible on the hardware.
+const double vtugGridMm = 16;
 
-/// End plate width in mm — the same casting either end.
-const double vtugEndPlateWidthMm = 24;
+/// The valve body itself — catalogue dimension `B1` for a `VUVG-B14`.
+const double vtugValveBodyMm = 14.7;
 
-/// The bus node's face, in mm. Taller than the manifold, which is why it
-/// sets the height of the whole drawing.
-const Size cteuFaceMm = Size(54, 80);
+/// The bus node's footprint in mm, from the CTEU-EC datasheet: 40 mm across
+/// the row by 91 mm deep.
+const Size cteuFaceMm = Size(40, 91);
 
-/// The `VAEM-L1-S-8-PT` electrical interface between the node and the
-/// valves — a flat plate with one M12 on it.
-const double vaemWidthMm = 18;
+/// The whole electrical end — node, interface and supply plate — catalogue
+/// dimension `L5`.
+const double vtugElectricalWidthMm = 60.6;
 
-/// The whole assembly's face, in mm: node, interface, end plate, eight
-/// slices, end plate — 54 + 18 + 24 + 8x14 + 24. Spelled out rather than
-/// computed because a `const Size` cannot read a field off another one, and
-/// the arithmetic is asserted in `vtug_test.dart` so the two cannot drift.
-const Size vtugFaceMm = Size(232, 80);
+/// What is left past the last valve, so the parts sum to [vtugFaceMm].
+const double vtugRightEndMm = 3.4;
 
-/// Where the manifold starts down the face. The bus node is the tall part of
-/// the assembly; the valve block sits below its shoulder.
-const double _manifoldTopMm = 16;
+/// The assembly seen from above, in mm: catalogue `L1` x `B1` for eight
+/// positions.
+const Size vtugFaceMm = Size(192, 110);
 
-/// The pale grey-white Festo moulds the VUVG bodies, the VAEM interface and
-/// the CTEU housing in.
+/// Depth at which the body starts and ends, leaving room for the H-rail
+/// mounting feet.
+const double _bodyTop = 5;
+const double _bodyBottom = 96;
+
+/// Festo's pale grey-white — the VUVG bodies, the VAEM plate and the CTEU
+/// housing are all this colour.
 const Color festoWhite = Color(0xFFECECEA);
 
-/// A half-tone of it, for the sub-base the valves sit on — enough to read as
-/// a separate casting without turning the terminal into two colours.
-const Color vtugManifoldColor = Color(0xFFD5D6D4);
+/// A half-tone of it for the manifold rail the valves stand on.
+const Color vtugManifoldColor = Color(0xFFDBDCDA);
 
-/// The dark block over the pilot solenoids, which is the strongest shape on
-/// a VUVG and the thing that makes a row of them read as valves.
+/// The dark cap over the pilot solenoids — the strongest shape on a VUVG,
+/// and what makes a row of them read as valves rather than as a comb.
 const Color vuvgSolenoidColor = Color(0xFF3B3B3D);
 
 /// Festo's blue. On the hardware it is the logo and the manual override
 /// caps, and it is used for exactly those two things here.
 const Color festoBlue = Color(0xFF0091DC);
-
-/// The dark inset the LEDs sit behind on the bus node.
-const Color cteuLedPanelColor = Color(0xFF2B2E30);
 
 /// How a bus-node LED is lit.
 ///
@@ -119,8 +131,7 @@ class CteuLed {
   int get hashCode => Object.hash(label, state);
 }
 
-/// One valve position as the drawing needs it: how many lamps, and whether
-/// each is lit.
+/// One valve position as the drawing needs it.
 ///
 /// [coils] is empty for a blanked position, one long for a monostable and
 /// two for a 5/2 bistable or a 5/3, in coil 14 then coil 12 order. `null` is
@@ -132,7 +143,7 @@ class VtugSliceView {
   final List<bool?> coils;
 
   /// True when an operator is holding this position by hand. Drawn as an
-  /// orange bar under the slice — forced is orange everywhere in this repo,
+  /// orange bar down the slice — forced is orange everywhere in this repo,
   /// and a held valve is the one thing on this drawing somebody has to
   /// remember to give back.
   final bool held;
@@ -156,10 +167,10 @@ class VtugPainter extends CustomPainter {
     this.disconnected = false,
   }) : assert(slices.length == vtugSliceCount);
 
-  /// Position 1 first.
+  /// Position 1 first, which is the position nearest the bus node.
   final List<VtugSliceView> slices;
 
-  /// The bus node's lamps, in face order.
+  /// The bus node's lamps, in the order they are silkscreened down its face.
   final List<CteuLed> leds;
 
   /// What an energised coil is drawn in. Passed rather than baked so the
@@ -167,7 +178,7 @@ class VtugPainter extends CustomPainter {
   /// commanded state — instead of a raw colour the theme cannot reach.
   final Color litColor;
 
-  /// The plant's tag for the terminal, printed on the end plate.
+  /// The plant's tag for the terminal.
   final String name;
 
   /// Draws the "nothing is arriving" mark.
@@ -187,12 +198,40 @@ class VtugPainter extends CustomPainter {
     );
     canvas.scale(scale);
 
+    _paintRail(canvas);
     _paintBusNode(canvas);
     _paintInterface(canvas);
-    _paintManifold(canvas);
-    if (disconnected) _paintDisconnected(canvas, design);
+    for (var i = 0; i < slices.length; i++) {
+      _paintSlice(canvas, vtugElectricalWidthMm + i * vtugGridMm, i + 1);
+    }
+    _paintEndMarkings(canvas);
+    if (disconnected) _paintDisconnected(canvas);
 
     canvas.restore();
+  }
+
+  // -------------------------------------------------------------------------
+  // Rail and feet
+  // -------------------------------------------------------------------------
+
+  void _paintRail(Canvas canvas) {
+    // The H-rail mounting feet, at each end and under the body.
+    for (final x in [12.0, vtugFaceMm.width - 22]) {
+      final foot = RRect.fromRectAndCorners(
+        Rect.fromLTWH(x, _bodyBottom - 2, 10, 12),
+        bottomLeft: const Radius.circular(4),
+        bottomRight: const Radius.circular(4),
+      );
+      canvas.drawRRect(foot, Paint()..color = vtugManifoldColor);
+      canvas.drawRRect(foot, _outline);
+    }
+
+    final body = RRect.fromRectAndRadius(
+      Rect.fromLTWH(0, _bodyTop, vtugFaceMm.width, _bodyBottom - _bodyTop),
+      const Radius.circular(1.2),
+    );
+    canvas.drawRRect(body, Paint()..color = vtugManifoldColor);
+    canvas.drawRRect(body, _outline);
   }
 
   // -------------------------------------------------------------------------
@@ -200,84 +239,64 @@ class VtugPainter extends CustomPainter {
   // -------------------------------------------------------------------------
 
   void _paintBusNode(Canvas canvas) {
-    // Square on the right: the node bolts to the interface plate and there
-    // is no seam between them on the hardware. Two rounded edges meeting
-    // left a sliver of page showing through the middle of one casting.
-    final body = RRect.fromRectAndCorners(
-      Rect.fromLTWH(0, 0, cteuFaceMm.width, cteuFaceMm.height),
-      topLeft: const Radius.circular(2),
-      bottomLeft: const Radius.circular(2),
+    // 40 x 91, sat 5 mm in from the left end — the catalogue's L7.
+    final rect = Rect.fromLTWH(5, _bodyTop + 3, cteuFaceMm.width, 87);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, const Radius.circular(1)),
+      Paint()..color = festoWhite,
     );
-    canvas.drawRRect(body, Paint()..color = festoWhite);
-    canvas.drawRRect(body, _outline);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, const Radius.circular(1)),
+      _outline,
+    );
 
-    // The lamps: one column down the left, labels outboard of the dots,
-    // exactly as the housing is silkscreened. No panel behind them — the
-    // real ones are bare lenses in the white moulding.
-    const ledTop = 8.0;
-    const ledPitch = 7.4;
+    _screw(canvas, Offset(rect.left + 4, rect.top + 4));
+    _screw(canvas, Offset(rect.right - 4, rect.bottom - 4));
+
+    // The lamp column down the left, labels outboard of the dots, exactly as
+    // the housing is silkscreened. No panel behind them — the real ones are
+    // bare lenses in the white moulding.
+    const top = 13.0;
+    const pitch = 6.6;
     for (var i = 0; i < leds.length; i++) {
-      final y = ledTop + i * ledPitch;
+      final y = top + i * pitch;
       _text(
         canvas,
         leds[i].label,
-        Offset(3, y - 1.6),
-        fontSize: 3.2,
+        Offset(rect.left + 1, y - 1.5),
+        fontSize: 3,
         color: const Color(0xFF55585A),
         width: 11,
         align: TextAlign.right,
       );
-      _paintCteuLed(canvas, Offset(17, y), leds[i].state);
+      _paintCteuLed(canvas, Offset(rect.left + 15, y), leds[i].state);
     }
 
-    // The service window — the clear cover over the address switches, and
-    // the most recognisable thing on the face after the lamps.
+    // The M12 bus connector and, below it, the label window.
+    _connector(canvas, Offset(rect.left + 28, 20), male: true);
+
     final window = RRect.fromRectAndRadius(
-      const Rect.fromLTWH(24, 8, 26, 13),
-      const Radius.circular(1),
+      Rect.fromLTWH(rect.left + 6, 48, 28, 36),
+      const Radius.circular(0.8),
     );
-    canvas.drawRRect(window, Paint()..color = cteuLedPanelColor.withValues(alpha: 0.25));
+    canvas.drawRRect(window, Paint()..color = const Color(0xFFF7F7F5));
     canvas.drawRRect(window, _outline);
-
-    // Power in on top, then the two bus sockets. `In 1` and `Out 2` are
-    // moulded beside them, and they are what `L/A1` and `L/A2` report on —
-    // three identical rings say nothing about which one is the bus.
-    _connector(canvas, const Offset(31, 32), male: true);
-    _text(canvas, 'PWR', const Offset(24, 39), fontSize: 3, color: const Color(0xFF55585A), width: 14);
-
-    _connector(canvas, const Offset(24, 52), male: false);
-    _text(canvas, 'In 1', const Offset(17, 59), fontSize: 3, color: const Color(0xFF55585A), width: 14);
-
-    _connector(canvas, const Offset(43, 52), male: false);
-    _text(canvas, 'Out 2', const Offset(36, 59), fontSize: 3, color: const Color(0xFF55585A), width: 14);
-
     _text(
       canvas,
       'CTEU-EC',
-      const Offset(3, 70),
+      Offset(rect.left + 6, 62),
       fontSize: 4,
       color: const Color(0xFF44474A),
-      width: 30,
-      align: TextAlign.left,
+      width: 28,
     );
-  }
-
-  /// An M12. Male shows pins, female shows the socket ring.
-  void _connector(Canvas canvas, Offset centre, {required bool male}) {
-    canvas.drawCircle(centre, 5, Paint()..color = const Color(0xFFB9BCBE));
-    canvas.drawCircle(centre, 5, _outline);
-    canvas.drawCircle(centre, 3.2, Paint()..color = const Color(0xFF3A3D3F));
-    if (male) {
-      canvas.drawCircle(centre, 1.1, Paint()..color = const Color(0xFFD8D9D6));
-    } else {
-      canvas.drawCircle(
-        centre,
-        1.7,
-        Paint()
-          ..color = const Color(0xFF17191A)
-          ..style = PaintingStyle.fill,
-      );
-    }
+    _text(
+      canvas,
+      'FESTO',
+      Offset(rect.left + 6, 70),
+      fontSize: 3.4,
+      color: festoBlue,
+      width: 28,
+    );
   }
 
   void _paintCteuLed(Canvas canvas, Offset centre, CteuLedState state) {
@@ -286,19 +305,19 @@ class VtugPainter extends CustomPainter {
     // nobody can read. The ring says "flashing" and the pane says what the
     // flash means.
     final (fill, ring) = switch (state) {
-      CteuLedState.off => (const Color(0xFFCBCCC9), false),
+      CteuLedState.off => (const Color(0xFFCFD0CD), false),
       CteuLedState.green => (const Color(0xFF43A047), false),
       CteuLedState.greenFlashing => (const Color(0xFF43A047), true),
       CteuLedState.red => (const Color(0xFFE53935), false),
       CteuLedState.redFlashing => (const Color(0xFFE53935), true),
       CteuLedState.unknown => (const Color(0xFFA8ABAD), false),
     };
-    canvas.drawCircle(centre, 1.5, Paint()..color = fill);
-    canvas.drawCircle(centre, 1.5, _outline);
+    canvas.drawCircle(centre, 1.4, Paint()..color = fill);
+    canvas.drawCircle(centre, 1.4, _outline);
     if (ring) {
       canvas.drawCircle(
         centre,
-        2.5,
+        2.4,
         Paint()
           ..color = fill
           ..style = PaintingStyle.stroke
@@ -307,185 +326,125 @@ class VtugPainter extends CustomPainter {
     }
   }
 
+  /// An M12. Male shows pins, female shows the socket bore.
+  void _connector(Canvas canvas, Offset centre, {required bool male}) {
+    canvas.drawCircle(centre, 5, Paint()..color = const Color(0xFFC3C6C8));
+    canvas.drawCircle(centre, 5, _outline);
+    canvas.drawCircle(centre, 3.3, Paint()..color = const Color(0xFF44484A));
+    if (male) {
+      for (var i = 0; i < 4; i++) {
+        final a = i * math.pi / 2 + math.pi / 4;
+        canvas.drawCircle(
+          centre + Offset(math.cos(a), math.sin(a)) * 1.7,
+          0.55,
+          Paint()..color = const Color(0xFFDDDEDB),
+        );
+      }
+    } else {
+      canvas.drawCircle(centre, 1.6, Paint()..color = const Color(0xFF17191A));
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Electrical interface
   // -------------------------------------------------------------------------
 
-  /// `VAEM-L1-S-8-PT` — the flat plate between the node and the valves. One
-  /// M12 on top and a Festo logo, and that is genuinely all there is on it.
+  /// `VAEM-L1-S-8-PT` and the supply plate — the strip between the node and
+  /// the first valve. On the hardware it is a field of small contacts and
+  /// two rows of fixings, and at this scale that is what it reads as.
   void _paintInterface(Canvas canvas) {
+    final left = 5 + cteuFaceMm.width;
     final rect = Rect.fromLTWH(
-      cteuFaceMm.width,
-      _manifoldTopMm - 4,
-      vaemWidthMm,
-      vtugFaceMm.height - (_manifoldTopMm - 4),
+      left,
+      _bodyTop + 3,
+      vtugElectricalWidthMm - left,
+      87,
     );
     canvas.drawRect(rect, Paint()..color = festoWhite);
     canvas.drawRect(rect, _outline);
 
-    _connector(canvas, Offset(rect.center.dx, rect.top + 10), male: true);
-    _text(
-      canvas,
-      'FESTO',
-      Offset(rect.left + 1, rect.top + 22),
-      fontSize: 3.2,
-      color: festoBlue,
-      width: vaemWidthMm - 2,
-    );
+    for (var row = 0; row < 5; row++) {
+      for (var col = 0; col < 2; col++) {
+        canvas.drawCircle(
+          Offset(rect.left + 4.5 + col * 6, 22 + row * 11),
+          2,
+          Paint()..color = const Color(0xFFCACCCE),
+        );
+        canvas.drawCircle(
+          Offset(rect.left + 4.5 + col * 6, 22 + row * 11),
+          2,
+          _outline,
+        );
+      }
+    }
     _text(
       canvas,
       'VAEM',
-      Offset(rect.left + 1, rect.bottom - 6),
-      fontSize: 3,
+      Offset(rect.left, rect.bottom - 5),
+      fontSize: 2.8,
       color: const Color(0xFF6E7274),
-      width: vaemWidthMm - 2,
+      width: rect.width,
     );
   }
 
   // -------------------------------------------------------------------------
-  // Manifold
+  // Valve positions
   // -------------------------------------------------------------------------
 
-  void _paintManifold(Canvas canvas) {
-    const top = _manifoldTopMm;
-    final height = vtugFaceMm.height - top;
-    final left = cteuFaceMm.width + vaemWidthMm;
-    final width = vtugFaceMm.width - left;
+  void _paintSlice(Canvas canvas, double gridLeft, int position) {
+    final slice = slices[position - 1];
+    final blank = slice.coils.isEmpty;
+    final coils = slice.coils.length;
 
-    final block = RRect.fromRectAndCorners(
-      Rect.fromLTWH(left, top, width, height),
-      topRight: const Radius.circular(1.5),
-      bottomRight: const Radius.circular(1.5),
-    );
-    canvas.drawRRect(block, Paint()..color = vtugManifoldColor);
-    canvas.drawRRect(block, _outline);
+    // The body is narrower than the grid — 14.7 in 16 — and the daylight
+    // between one valve and the next is on the hardware, not a drawing
+    // convention.
+    final left = gridLeft + (vtugGridMm - vtugValveBodyMm) / 2;
+    const w = vtugValveBodyMm;
+    final body = Rect.fromLTWH(left, _bodyTop + 3, w, 87);
+    canvas.drawRect(body, Paint()..color = festoWhite);
+    canvas.drawRect(body, _outline);
 
-    _paintEndPlate(canvas, left, top, height, isLeft: true);
-    _paintEndPlate(
-      canvas,
-      vtugFaceMm.width - vtugEndPlateWidthMm,
-      top,
-      height,
-      isLeft: false,
-    );
-
-    final slicesLeft = left + vtugEndPlateWidthMm;
-    for (var i = 0; i < slices.length; i++) {
-      _paintSlice(canvas, slicesLeft + i * vtugSliceWidthMm, top, i + 1);
-    }
-  }
-
-  void _paintEndPlate(
-    Canvas canvas,
-    double left,
-    double top,
-    double height, {
-    required bool isLeft,
-  }) {
-    final plate = Rect.fromLTWH(left, top, vtugEndPlateWidthMm, height);
-    canvas.drawRect(plate, Paint()..color = festoWhite);
-    canvas.drawRect(plate, _outline);
-
-    if (isLeft) {
-      // Supply on a QS-12 fitting, and the exhaust under a `U-1/4`
-      // silencer — the fat white cap in the parts list, drawn as a cap
-      // rather than a fitting because that is what tells them apart on the
-      // hardware.
-      _fitting(canvas, Offset(left + vtugEndPlateWidthMm / 2, top + 16),
-          radius: 5);
-      _text(canvas, '1', Offset(left + 2, top + 14), fontSize: 3.4,
-          color: const Color(0xFF6E7274), width: 5, align: TextAlign.right);
-
-      final silencer = RRect.fromRectAndRadius(
-        Rect.fromCenter(
-          center: Offset(left + vtugEndPlateWidthMm / 2, top + 36),
-          width: 13,
-          height: 9,
-        ),
-        const Radius.circular(1.5),
-      );
-      canvas.drawRRect(silencer, Paint()..color = const Color(0xFFDEDFDC));
-      canvas.drawRRect(silencer, _outline);
-      for (var i = 0; i < 4; i++) {
-        final x = silencer.left + 2.5 + i * 2.6;
+    if (!blank) {
+      // The ribbed cap over the pilot solenoids, at the far end of the
+      // valve. One coil takes half the cap, two take all of it — the
+      // fastest read on the drawing for how many coils a position has,
+      // before anyone counts lamps.
+      final capW = coils == 1 ? w * 0.56 : w;
+      final cap = Rect.fromLTWH(left, _bodyTop + 3, capW, 9);
+      canvas.drawRect(cap, Paint()..color = vuvgSolenoidColor);
+      for (var i = 1; i < 5; i++) {
+        final x = cap.left + cap.width * i / 5;
         canvas.drawLine(
-          Offset(x, silencer.top + 1.6),
-          Offset(x, silencer.bottom - 1.6),
+          Offset(x, cap.top + 1.5),
+          Offset(x, cap.bottom - 1.5),
           Paint()
-            ..color = const Color(0xFF9DA0A2)
+            ..color = const Color(0xFF5C5C5F)
             ..strokeWidth = 0.5,
         );
       }
-      _text(canvas, '3/5', Offset(left + 1, top + 34), fontSize: 3,
-          color: const Color(0xFF6E7274), width: 6, align: TextAlign.right);
-    } else if (name.isNotEmpty) {
-      canvas.save();
-      canvas.translate(left + vtugEndPlateWidthMm - 4, top + height - 3);
-      canvas.rotate(-math.pi / 2);
-      _text(
-        canvas,
-        name,
-        Offset.zero,
-        fontSize: 4,
-        color: const Color(0xFF44474A),
-        width: height - 6,
-        align: TextAlign.left,
-      );
-      canvas.restore();
-    }
-  }
 
-  /// A QS push-in fitting: the collet ring with the tube bore in the middle.
-  void _fitting(Canvas canvas, Offset centre, {required double radius}) {
-    canvas.drawCircle(centre, radius, Paint()..color = const Color(0xFFDEDFDC));
-    canvas.drawCircle(centre, radius, _outline);
-    canvas.drawCircle(
-        centre, radius * 0.62, Paint()..color = const Color(0xFFB6B9BB));
-    canvas.drawCircle(
-        centre, radius * 0.34, Paint()..color = const Color(0xFF4A4D4F));
-  }
-
-  void _paintSlice(Canvas canvas, double left, double top, int position) {
-    const w = vtugSliceWidthMm;
-    final slice = slices[position - 1];
-    final blank = slice.coils.isEmpty;
-
-    // A blanked position carries a plate rather than a valve. Festo makes it
-    // in the same white, so the gap in the row is read off the missing
-    // solenoid block and the missing lamps, not off a colour change.
-    final valve = Rect.fromLTWH(left + 0.5, top + 1, w - 1, 30);
-    canvas.drawRect(valve, Paint()..color = festoWhite);
-    canvas.drawRect(valve, _outline);
-
-    if (blank) {
-      // The plate's one feature: a shallow recess where the valve body
-      // would be.
-      canvas.drawRect(
-        Rect.fromLTWH(left + 2.5, top + 6, w - 5, 18),
-        Paint()..color = const Color(0xFFDCDDDA),
-      );
-    } else {
-      // The dark solenoid block. One coil takes half the width, two take
-      // the lot — which is the fastest read on the whole drawing for how
-      // many coils a position has, before anyone counts lamps.
-      final coils = slice.coils.length;
-      final blockWidth = coils == 1 ? (w - 3) * 0.55 : w - 3;
-      canvas.drawRect(
-        Rect.fromLTWH(left + 1.5, top + 12, blockWidth, 13),
-        Paint()..color = vuvgSolenoidColor,
-      );
-
-      // The lamps, at the top of the coil end where the real lenses are,
-      // with `14` and `12` moulded above them.
+      // The coil lamps and, under them, the blue manual overrides. Not
+      // dimensioned anywhere reachable; drawn at the solenoid end, under
+      // the 14 and 12 moulded into the body, which is where the hardware
+      // photographs put them.
       final xs = coils == 1
           ? [left + w / 2]
-          : [left + w / 2 - 3.2, left + w / 2 + 3.2];
+          : [left + w * 0.3, left + w * 0.7];
       const labels = ['14', '12'];
       for (var i = 0; i < coils; i++) {
+        _text(
+          canvas,
+          labels[i],
+          Offset(xs[i] - 2.5, 16),
+          fontSize: 2.6,
+          color: const Color(0xFF6E7274),
+          width: 5,
+        );
         final lamp = Rect.fromCenter(
-          center: Offset(xs[i], top + 8),
-          width: 3.2,
-          height: 3.2,
+          center: Offset(xs[i], 22.5),
+          width: 3.4,
+          height: 3.4,
         );
         canvas.drawRRect(
           RRect.fromRectAndRadius(lamp, const Radius.circular(0.6)),
@@ -493,52 +452,45 @@ class VtugPainter extends CustomPainter {
             ..color = switch (slice.coils[i]) {
               null => const Color(0xFFA8ABAD),
               true => litColor,
-              false => const Color(0xFFF6F6F2),
+              false => const Color(0xFFF8F8F4),
             },
         );
         canvas.drawRRect(
           RRect.fromRectAndRadius(lamp, const Radius.circular(0.6)),
           _outline,
         );
-        _text(
-          canvas,
-          labels[i],
-          Offset(xs[i] - 2.5, top + 2.6),
-          fontSize: 2.6,
-          color: const Color(0xFF6E7274),
-          width: 5,
-        );
-      }
 
-      // The blue manual overrides, one per coil, on the solenoid block. The
-      // only saturated colour on the hardware and the only one here.
-      for (var i = 0; i < coils; i++) {
-        canvas.drawCircle(Offset(xs[i], top + 18.5), 1.5,
-            Paint()..color = festoBlue);
-        canvas.drawCircle(Offset(xs[i], top + 18.5), 1.5, _outline);
+        canvas.drawCircle(
+            Offset(xs[i], 28.5), 1.3, Paint()..color = festoBlue);
+        canvas.drawCircle(Offset(xs[i], 28.5), 1.3, _outline);
       }
-    }
-
-    // Working ports 2 and 4, stacked on the front of the sub-base — QS-8,
-    // so narrower than the supply fitting on the end plate.
-    const portLabels = ['4', '2'];
-    for (var i = 0; i < 2; i++) {
-      final centre = Offset(left + w / 2, top + 40 + i * 13);
-      _fitting(canvas, centre, radius: 3.6);
+    } else {
       _text(
         canvas,
-        portLabels[i],
-        Offset(left + 0.5, centre.dy - 1.4),
-        fontSize: 2.8,
-        color: const Color(0xFF6E7274),
-        width: 3,
-        align: TextAlign.right,
+        'BLANK',
+        Offset(left, 20),
+        fontSize: 2.4,
+        color: const Color(0xFF9DA0A2),
+        width: w,
       );
     }
 
+    // Working ports 4 and 2 on QS push-in fittings, then the mounting screw
+    // at each end of the body — the arrangement the catalogue's top view
+    // shows for every position, blank ones included.
+    _fitting(canvas, Offset(left + w / 2, 40), radius: 4.4);
+    _text(canvas, '4', Offset(left + 0.4, 38.5), fontSize: 2.6,
+        color: const Color(0xFF6E7274), width: 3, align: TextAlign.right);
+    _fitting(canvas, Offset(left + w / 2, 55), radius: 4.4);
+    _text(canvas, '2', Offset(left + 0.4, 53.5), fontSize: 2.6,
+        color: const Color(0xFF6E7274), width: 3, align: TextAlign.right);
+
+    _screw(canvas, Offset(left + w / 2, 66));
+    _screw(canvas, Offset(left + w / 2, 88));
+
     if (slice.held) {
       canvas.drawRect(
-        Rect.fromLTWH(left + 0.5, top + 32, w - 1, 1.8),
+        Rect.fromLTWH(left, 70, w, 2),
         Paint()..color = Colors.orange,
       );
     }
@@ -546,11 +498,57 @@ class VtugPainter extends CustomPainter {
     _text(
       canvas,
       '$position',
-      Offset(left, vtugFaceMm.height - 5),
-      fontSize: 3.4,
-      color: const Color(0xFF6E7274),
-      width: w,
+      Offset(gridLeft, 78),
+      fontSize: 4,
+      color: const Color(0xFF55585A),
+      width: vtugGridMm,
     );
+  }
+
+  /// A QS push-in fitting: the collet ring with the tube bore in the middle.
+  void _fitting(Canvas canvas, Offset centre, {required double radius}) {
+    canvas.drawCircle(centre, radius, Paint()..color = const Color(0xFFE3E4E1));
+    canvas.drawCircle(centre, radius, _outline);
+    canvas.drawCircle(
+        centre, radius * 0.66, Paint()..color = const Color(0xFFC0C3C5));
+    canvas.drawCircle(
+        centre, radius * 0.34, Paint()..color = const Color(0xFF54585A));
+  }
+
+  void _screw(Canvas canvas, Offset centre) {
+    canvas.drawCircle(centre, 2, Paint()..color = const Color(0xFFD4D6D3));
+    canvas.drawCircle(centre, 2, _outline);
+    canvas.drawLine(
+      centre - const Offset(1.3, 0),
+      centre + const Offset(1.3, 0),
+      Paint()
+        ..color = const Color(0xFF83878A)
+        ..strokeWidth = 0.5,
+    );
+  }
+
+  /// The supply and pilot port markings the end plates carry, and the tag.
+  void _paintEndMarkings(Canvas canvas) {
+    const marks = ['14', '84', '5', '1', '3'];
+    for (var i = 0; i < marks.length; i++) {
+      final y = 16 + i * 14.0;
+      _text(canvas, marks[i], Offset(0.5, y), fontSize: 3.2,
+          color: const Color(0xFF55585A), width: 4.5, align: TextAlign.left);
+      _text(canvas, marks[i], Offset(vtugFaceMm.width - 5, y), fontSize: 3.2,
+          color: const Color(0xFF55585A), width: 4.5, align: TextAlign.right);
+    }
+
+    if (name.isNotEmpty) {
+      _text(
+        canvas,
+        name,
+        const Offset(5, _bodyBottom - 6),
+        fontSize: 4,
+        color: const Color(0xFF44474A),
+        width: cteuFaceMm.width,
+        align: TextAlign.left,
+      );
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -558,38 +556,34 @@ class VtugPainter extends CustomPainter {
   // -------------------------------------------------------------------------
 
   Paint get _outline => Paint()
-    ..color = const Color(0xFF8E9294)
+    ..color = const Color(0xFF8A8E90)
     ..style = PaintingStyle.stroke
     ..strokeWidth = 0.3;
 
   /// The "nothing is arriving" mark.
   ///
-  /// Beside the bus node rather than the middle of the manifold, because
-  /// that is what it is about: the valves are fine, the terminal is not
-  /// talking. A small glyph lost among eight slices — which is where it
-  /// started — read as a smudge on a valve.
-  ///
-  /// In the clear band above the interface plate, not on the node's face.
-  /// Centred on the node it sat across a diagnostic lamp, and a fault badge
-  /// that hides a diagnostic lamp costs more than it tells.
-  void _paintDisconnected(Canvas canvas, Size design) {
-    final centre = Offset(cteuFaceMm.width + vaemWidthMm / 2, 8);
-    canvas.drawCircle(centre, 7, Paint()..color = Colors.white);
+  /// Over the bus node's corner, because that is what it is about: the
+  /// valves are fine, the terminal is not talking. Clear of the lamp column,
+  /// because a fault badge that hides a diagnostic lamp costs more than it
+  /// tells.
+  void _paintDisconnected(Canvas canvas) {
+    const centre = Offset(38, 8);
+    canvas.drawCircle(centre, 6, Paint()..color = Colors.white);
     canvas.drawCircle(
       centre,
-      7,
+      6,
       Paint()
         ..color = Colors.red
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1,
+        ..strokeWidth = 0.9,
     );
     _text(
       canvas,
       '!',
-      Offset(centre.dx - 5, centre.dy - 5),
-      fontSize: 10,
+      centre - const Offset(4.5, 4.5),
+      fontSize: 9,
       color: Colors.red,
-      width: 10,
+      width: 9,
     );
   }
 
@@ -608,9 +602,7 @@ class VtugPainter extends CustomPainter {
         style: TextStyle(
           // Named, not inherited: a painter draws outside any
           // `DefaultTextStyle`, so a null family falls back to the test font
-          // and every caption on this drawing golden-tests as a row of
-          // boxes. The other device painters in this repo name 'Roboto' for
-          // the same reason.
+          // and every caption golden-tests as a row of boxes.
           fontFamily: 'Roboto',
           color: color,
           fontSize: fontSize,

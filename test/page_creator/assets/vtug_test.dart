@@ -8,11 +8,12 @@ import 'package:tfc/painter/festo/vtug.dart'
     show
         CteuLedState,
         cteuFaceMm,
-        vaemWidthMm,
-        vtugEndPlateWidthMm,
+        vtugElectricalWidthMm,
         vtugFaceMm,
+        vtugGridMm,
+        vtugRightEndMm,
         vtugSliceCount,
-        vtugSliceWidthMm;
+        vtugValveBodyMm;
 import 'package:tfc/theme.dart';
 
 /// Contract under test — the Festo VTUG-14 valve terminal.
@@ -826,17 +827,38 @@ void main() {
 
   group('face geometry', () {
     test('the face is the parts it is made of', () {
-      // `vtugFaceMm` is spelled out as a literal because a `const Size`
-      // cannot read a field off another one. This is the guard that keeps
-      // the literal honest when an end plate or a slice pitch changes.
+      // Catalogue L1 = 192 for eight positions, made of the electrical end
+      // (L5 = 60.6), eight positions at the 16 mm grid (L4) and what is
+      // left past the last valve. `vtugFaceMm` is spelled out as a literal
+      // because a `const Size` cannot read a field off another one, and
+      // this is the guard that keeps the literal honest.
       expect(
         vtugFaceMm.width,
-        cteuFaceMm.width +
-            vaemWidthMm +
-            vtugEndPlateWidthMm * 2 +
-            vtugSliceWidthMm * vtugSliceCount,
+        closeTo(
+          vtugElectricalWidthMm +
+              vtugGridMm * vtugSliceCount +
+              vtugRightEndMm,
+          0.001,
+        ),
       );
-      expect(vtugFaceMm.height, cteuFaceMm.height);
+    });
+
+    test('the grid is 16 mm and the valve body is narrower than it', () {
+      // The one dimension a reader is most likely to "correct" back to 14.
+      // `VTUG-14` and `VUVG-B14` name the valve size; the size-14 manifold
+      // rail carries them on a 16 mm pitch, and catalogue L3 — the span
+      // from the first valve centre to the last — is 112 for eight
+      // positions, which is 16 x 7 and not 14 x 7.
+      expect(vtugGridMm, 16);
+      expect(vtugGridMm * (vtugSliceCount - 1), 112);
+      expect(vtugValveBodyMm, lessThan(vtugGridMm));
+    });
+
+    test('the bus node is smaller than the valve block it sits beside', () {
+      // The proportion the first drawing got wrong: it made the node the
+      // tall part of the assembly. It is 40 mm across a 192 mm terminal.
+      expect(cteuFaceMm.width, lessThan(vtugElectricalWidthMm));
+      expect(cteuFaceMm.width * 2, lessThan(vtugGridMm * vtugSliceCount));
     });
 
     test('the painter and the decode agree on how many positions there are',
