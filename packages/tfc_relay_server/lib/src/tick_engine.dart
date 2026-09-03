@@ -322,19 +322,28 @@ final class TickEngine {
   /// cancel and therefore nothing to forget to cancel.
   ///
   /// **[tickNowMs] is the trigger and deliberately not the measurement.** Each
-  /// session reports its own silence through `RelaySession.silentForMs`,
-  /// because this engine's clock is a monotonic uptime `Stopwatch` and a
-  /// session's `lastSeenMs` is wall-clock epoch milliseconds; the two are
-  /// different by about fifty-five years, and a sweep that subtracted one from
-  /// the other would never reap anything while looking entirely implemented.
+  /// session reports its own silence through `RelaySession.silentForMs`, which
+  /// since 09-REVIEW WR-01 is measured on this engine's OWN monotonic clock —
+  /// `relay_server.dart` injects [now] as every session's `monotonicNow` — so
+  /// the `silentMs - forgivenMs` subtraction below lands in ONE clock domain,
+  /// the domain `LagStalled.stalledMs` was measured in. Before that, the
+  /// silence was wall-clock, and the credit only agreed with it for stalls
+  /// both clocks observe: a hypervisor stun on a guest whose monotonic clock
+  /// freezes across it, or an NTP forward step with no event-loop stall,
+  /// inflated every session's wall silence with nothing to forgive — a mass
+  /// 4003 on the exact trigger the forgiveness was built for. The session
+  /// still *reports* `lastSeenMs` wall-clock; only the comparison is
+  /// monotonic. (The VM-snapshot cross-check rides Phase 11's soak rig, per
+  /// the review: "measure the two clocks across a real VM snapshot before
+  /// this is called closed".)
   /// `registry.sessions` is read fresh rather than reusing the copy [tickOnce]
   /// is iterating: a session evicted by a backpressure verdict earlier in this
   /// same tick is already gone, and reaping it again would be a second
   /// teardown for a session that has none of its resources left.
   ///
   /// **[drift] is F22's wake-up forgiveness, and it is the whole of it.**
-  /// `RelaySession.silentForMs()` reads a wall clock and `_lastSeen` advances
-  /// only when a frame is *processed*, so after the isolate thaws from a freeze
+  /// `RelaySession.silentForMs()` moves only when a frame is *processed*
+  /// (`_lastSeen`), so after the isolate thaws from a freeze
   /// every session looks as silent as the freeze was long — the panel's bytes
   /// were queued in the kernel, unread, whether or not it kept beating. On the
   /// first tick after the thaw [tickOnce] both announces the stall and lands

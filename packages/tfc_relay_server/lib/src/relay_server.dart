@@ -665,6 +665,17 @@ final class RelayServer {
         // one session with another (04-REVIEW CR-04).
         mintGeneration: () => ++_generations,
         now: _now,
+        // The liveness clock is the ENGINE's, not the wall's (09-REVIEW
+        // WR-01): `silentForMs` must live in the same clock domain as the
+        // reap forgiveness's `LagStalled.stalledMs`, or a hypervisor stun /
+        // NTP forward step that only the wall clock observes inflates every
+        // session's silence with nothing to credit — the synchronized false
+        // disconnect F22 is about, produced by our own reaper. Deferred
+        // through a closure like `_SessionProbe.engine` above: `_engine` is
+        // assigned in `start()`, before any connection can reach this — the
+        // upgrade handler this closure lives in does not exist until the
+        // bind, so the `!` cannot fire.
+        monotonicNow: () => _engine!.now(),
         closeChannel: connection.closeSocket,
         emitFrame: connection.write,
         // Synchronous, and the asynchronous `_release` below does *not*

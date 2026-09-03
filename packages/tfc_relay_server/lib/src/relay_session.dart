@@ -55,9 +55,18 @@ import 'write_outcome_log.dart';
 /// the session does — and the alternative, a `late` peer assigned after
 /// construction, is how a session comes to exist half-built.
 final class _LastSeen {
-  _LastSeen(this._now) : at = _now();
+  _LastSeen(this._now, this._monotonicNow)
+      : at = _now(),
+        atMono = _monotonicNow();
   final int Function() _now;
+  final int Function() _monotonicNow;
   int at;
+
+  /// The same instant on the LIVENESS clock — the engine's monotonic domain
+  /// when the composition root injected one (09-REVIEW WR-01), this session's
+  /// wall clock otherwise. `silentForMs` subtracts from this field; [at] is
+  /// the *reported* instant and stays wall-clock.
+  int atMono;
 
   /// Whether inbound frames count as evidence of a client worth keeping.
   ///
@@ -75,7 +84,10 @@ final class _LastSeen {
   void gateOn(bool Function() helloed) => _helloed = helloed;
 
   String touch(String frame) {
-    if (_helloed?.call() ?? false) at = _now();
+    if (_helloed?.call() ?? false) {
+      at = _now();
+      atMono = _monotonicNow();
+    }
     return frame;
   }
 
@@ -84,7 +96,10 @@ final class _LastSeen {
   /// The `hello` frame itself arrives before [touch] will move anything, so
   /// without this a panel that took ten seconds to connect would begin its
   /// session already ten seconds silent.
-  void touchNow() => at = _now();
+  void touchNow() {
+    at = _now();
+    atMono = _monotonicNow();
+  }
 }
 
 /// One client session.
@@ -100,6 +115,7 @@ final class RelaySession {
     this._gate,
     this._lastSeen,
     this._now,
+    this._monotonicNow,
     this._closeChannel,
     this._emitFrame,
     this._onClosing,
@@ -129,6 +145,14 @@ final class RelaySession {
   /// still records the code and tears the session down, which is what every
   /// assertion in this phase reads (`web_socket_channel` #1698: a socket's own
   /// `closeCode` is unreliable for a close it initiated).
+  ///
+  /// [monotonicNow] is the LIVENESS clock [silentForMs] measures on. The
+  /// composition root (`relay_server.dart`) hands every session the tick
+  /// engine's own uptime clock, so the reaper's `silentMs - forgivenMs`
+  /// subtraction lands in one clock domain — the domain `LagStalled.stalledMs`
+  /// was measured in (09-REVIEW WR-01). Absent, it falls back to [now]: a
+  /// by-hand session keeps one clock for both jobs, which is single-domain
+  /// too.
   static RelaySession serve({
     required StreamChannel<String> channel,
     required StateManApi api,
@@ -145,10 +169,12 @@ final class RelaySession {
     void Function(RelaySession session)? onClosing,
     RelayErrorHandler? onError,
     int Function()? now,
+    int Function()? monotonicNow,
     SessionHealthStateMan? health,
   }) {
     final clock = now ?? () => DateTime.now().millisecondsSinceEpoch;
-    final lastSeen = _LastSeen(clock);
+    final liveness = monotonicNow ?? clock;
+    final lastSeen = _LastSeen(clock, liveness);
     return RelaySession._(
       rpc.Peer(
           StreamChannel<String>(
@@ -175,6 +201,7 @@ final class RelaySession {
       HelloGate(serverSupported: serverSupported),
       lastSeen,
       clock,
+      liveness,
       closeChannel,
       emitFrame,
       onClosing,
@@ -372,6 +399,10 @@ final class RelaySession {
   final HelloGate _gate;
   final _LastSeen _lastSeen;
   final int Function() _now;
+
+  /// The liveness clock — the engine's own monotonic clock in production
+  /// (09-REVIEW WR-01), [_now] on a session built without one.
+  final int Function() _monotonicNow;
   final Future<void> Function(int code, String reason)? _closeChannel;
   final void Function(String frame)? _emitFrame;
 
@@ -606,18 +637,28 @@ final class RelaySession {
   /// heartbeat's name.
   int get lastSeenMs => _lastSeen.at;
 
-  /// How long this session has been silent, **on its own clock**.
+  /// How long this session has been silent, **on the engine's clock**.
   ///
-  /// The reaper asks the session rather than doing the arithmetic itself, and
-  /// that is not a stylistic preference — it is the only spelling that cannot
-  /// be wrong. `TickEngine`'s clock is an uptime `Stopwatch` (it measures
-  /// callback *arrivals*, so it must not move when NTP steps the machine)
-  /// while this one is wall-clock epoch milliseconds (`HelloResult.serverTime`
-  /// is what a client derives its offset from, so it must be). Subtracting one
-  /// from the other in the sweep would yield a silence of roughly negative
-  /// fifty-five years, no session would ever exceed the deadline, and the
-  /// reaper would look implemented and reap nothing.
-  int silentForMs() => _now() - _lastSeen.at;
+  /// The reaper asks the session rather than doing the arithmetic itself,
+  /// because only the session knows when its last frame arrived — but the
+  /// clock the answer lives on is the one the composition root injected as
+  /// [RelaySession.serve]'s `monotonicNow`, which in production is the tick
+  /// engine's own uptime `Stopwatch` (09-REVIEW WR-01). That puts the reap
+  /// forgiveness's `silentMs - forgivenMs` in ONE clock domain: before this,
+  /// the silence was wall-clock (`_now() - _lastSeen.at`) while
+  /// `LagStalled.stalledMs` is monotonic, and the two agree only for stalls
+  /// both clocks observe — Isolate.pause and SIGSTOP, but not a hypervisor
+  /// stun on a guest whose monotonic clock freezes across it, nor an NTP
+  /// forward step with no event-loop stall. Either shape inflated every
+  /// session's wall silence with no `LagStalled` to credit, and the wake-up
+  /// tick 4003'd every beating panel — the synchronized false disconnect
+  /// F22 exists to prevent, produced by our own reaper.
+  ///
+  /// [lastSeenMs] stays wall-clock: the *reported* instant is for humans and
+  /// for `HelloResult.serverTime`'s offset arithmetic; only the *comparison*
+  /// is monotonic. A session built without a `monotonicNow` falls back to
+  /// its wall clock, which keeps both measurements in one domain either way.
+  int silentForMs() => _monotonicNow() - _lastSeen.atMono;
 
   /// The close code this session sent, recorded by the session itself.
   ///

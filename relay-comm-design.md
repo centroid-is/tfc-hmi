@@ -325,7 +325,14 @@ phase summary:
   stall, and preserving only-dead-sessions — a panel already silent *before*
   the freeze still carries that silence after the credit and is reaped on the
   same tick. The close reason is unchanged (the credit decides, it does not
-  rewrite the sentence).
+  rewrite the sentence). Since 09-REVIEW WR-01 the silence and the credit are
+  measured on the **same monotonic clock** — every session takes the tick
+  engine's own uptime clock as its liveness clock — so a stall only the wall
+  clock observes (a hypervisor stun on a guest whose monotonic clock freezes
+  across it, an NTP forward step) cannot inflate silence with nothing to
+  credit; the wall clock keeps only the *reported* `lastSeenMs`. The
+  VM-snapshot cross-check (do the two clocks diverge across a real Veeam
+  stun on our hosts?) rides Phase 11's soak rig.
 
 The same stall also reaches the historian honestly: collection's interval
 tick declines a wake-up sample (the timer's own missed-window count, past a

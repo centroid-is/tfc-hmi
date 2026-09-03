@@ -34,6 +34,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:test/test.dart';
@@ -361,11 +362,13 @@ void main() {
     // forgiveness a client could influence would be a reaper it could talk out
     // of reaping).
     //
-    // The deadline is the SESSION's wall clock (`silentForMs`) and the stall
-    // is the ENGINE's uptime gap (`lag.poll`): two different clocks by
-    // construction (see `TickEngine.reap`'s doc), so each panel runs on its
-    // own `FakeClock` handed to `connect(now:)` while `plant.tick(advance:)`
-    // cranks the engine's. `advance: N` past the stall threshold makes the
+    // Each panel accrues its silence on its own `FakeClock` handed to
+    // `connect(now:)` — with no separate `monotonicNow` the liveness clock
+    // falls back to it — while `plant.tick(advance:)` cranks the engine's,
+    // so the forgiveness arithmetic is exercised with the two figures
+    // produced independently. In production both figures live on the
+    // engine's own clock (09-REVIEW WR-01; the clock-domain group below is
+    // what pins that). `advance: N` past the stall threshold makes the
     // verdict `LagStalled(N)` — the stall magnitude is exactly `N`.
     const deadlineMs = 3000;
     const stallMs = 5000; // past the 300 ms threshold and past the deadline
@@ -542,6 +545,103 @@ void main() {
       expect(livePanel.session.sentCloseCode, isNull,
           reason: 'and a session inside the deadline is left alone, exactly as '
               'the unmodified reaper did');
+    });
+  });
+
+  group('the reap comparison lives in ONE clock domain (09-REVIEW WR-01)', () {
+    // The forgiveness arms above drive the freeze shapes gate B can lever
+    // (Isolate.pause, SIGSTOP), where the wall clock and the monotonic clock
+    // observe the same stall — so they cannot see the two shapes where the
+    // clocks disagree: a hypervisor stun on a guest whose monotonic clock
+    // freezes across it (the Veeam-snapshot trigger the F22 row was written
+    // for), and an NTP forward step with no event-loop stall at all. In both,
+    // the wall clock jumps while the engine's uptime Stopwatch measures a
+    // normal gap: `lag.poll` answers LagOk, `forgivenMs` is 0, and a reaper
+    // whose silence figure is wall-clock 4003s every beating panel at once —
+    // the synchronized false disconnect, produced by our own reaper, on the
+    // exact trigger the forgiveness was built for.
+    //
+    // The fix measures the silence on the engine's own clock: production
+    // injects `engine.now` as every session's `monotonicNow`, and
+    // `silentForMs()` subtracts in that domain, so `silentMs - forgivenMs`
+    // never crosses clocks. `lastSeenMs` stays wall-clock — the *reported*
+    // instant is for humans, the *comparison* is monotonic.
+    //
+    // A full VM-snapshot stun is not achievable in a unit harness; these are
+    // the clock-domain unit arms, and the reviewer's recommendation stands:
+    // "Phase 11's soak rig should measure the two clocks across a real VM
+    // snapshot before this is called closed" (09-REVIEW WR-01).
+    const deadlineMs = 3000;
+
+    Plant domainPlant() => Plant(
+        config: ServerConfig(
+            tick: ServerConfig.minTick,
+            heartbeatDeadline: const Duration(milliseconds: deadlineMs),
+            stallThreshold: const Duration(milliseconds: 300)));
+
+    test('a wall-clock step the monotonic clock never saw does not reap a '
+        'beating panel', () async {
+      final plant = domainPlant();
+      final keys = plant.seed(1, prefix: 'CN15.MOT');
+      final wall = FakeClock(start: 1_000_000_000);
+      final panel = await plant.connect('page-1', keys,
+          now: wall.now, monotonicNow: plant.clock.now);
+
+      // The stun/NTP shape: the wall clock steps forward well past the
+      // deadline while the engine's clock advances one ordinary tick. The
+      // panel's last frame (subscribe) is monotonically recent; `lag.poll`
+      // sees a normal gap, so the verdict is LagOk and nothing is forgiven.
+      wall.advance(42_000);
+      plant.tick();
+      await pumpEventQueue();
+
+      expect(panel.session.sentCloseCode, isNull,
+          reason: 'a wall-clock step of 42 s with no monotonic stall reaped a '
+              'panel whose last frame is one tick old on the engine\'s clock — '
+              'the silence figure crossed clock domains, and the forgiveness '
+              'had nothing to credit because lag.poll (correctly, on the '
+              'monotonic clock) measured no stall');
+      expect(plant.registry.sessions, hasLength(1),
+          reason: 'the beating session left the registry, which is a reap by '
+              'another name');
+    });
+
+    test('a session monotonically silent past the deadline is reaped even '
+        'while its wall clock stands still', () async {
+      final plant = domainPlant();
+      final keys = plant.seed(1, prefix: 'CN16.MOT');
+      final wall = FakeClock(start: 1_000_000_000);
+      final panel = await plant.connect('page-1', keys,
+          now: wall.now, monotonicNow: plant.clock.now);
+
+      // Ordinary near-time ticks — each gap's excess is inside the 300 ms
+      // stall threshold, so every verdict is LagOk and nothing is ever
+      // forgiven — until the engine's clock has moved a whole deadline past
+      // the session's last frame. The wall clock never moves (a backwards
+      // NTP step's limiting case): a reaper still reading wall silence would
+      // hold this corpse forever, which is the only-dead-sessions property
+      // lost from the other side.
+      for (var advanced = 0; advanced <= deadlineMs; advanced += 300) {
+        plant.tick(advance: 300);
+      }
+      await pumpEventQueue();
+
+      expect(panel.session.sentCloseCode, CloseCodes.heartbeatTimeout,
+          reason: 'a session that sent nothing for a whole deadline on the '
+              'engine\'s clock must be reaped regardless of what the wall '
+              'clock did — a wall clock standing still (or stepping back) '
+              'must not extend a dead panel\'s life');
+    });
+
+    test('production wires the engine\'s clock as every session\'s liveness '
+        'clock', () {
+      final source = File('lib/src/relay_server.dart').readAsStringSync();
+      expect(source, contains('monotonicNow: () => _engine!.now()'),
+          reason: 'the two arms above prove the decision on injected clocks; '
+              'this pin is what says production actually injects the '
+              'engine\'s clock into `RelaySession.serve`. Remove the wiring '
+              'and the reaper is back to subtracting a monotonic credit from '
+              'a wall-clock silence (09-REVIEW WR-01)');
     });
   });
 

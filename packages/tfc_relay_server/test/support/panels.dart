@@ -179,14 +179,18 @@ final class Plant {
 
   /// A connected, helloed, subscribed panel.
   ///
-  /// [now] is the SESSION's wall clock — the one `silentForMs()` reads —
-  /// handed through to `RelaySession.serve`. The engine's clock and a
-  /// session's are different clocks on purpose (uptime vs epoch; see
-  /// `TickEngine.reap`'s doc), so a reaper case needs to crank them
-  /// separately: the engine's to place the tick, the session's to accrue the
-  /// silence. Absent, the session runs on the real wall clock as before.
+  /// [now] is the SESSION's wall clock — the reported `lastSeenMs` instant —
+  /// handed through to `RelaySession.serve`. [monotonicNow] is the session's
+  /// LIVENESS clock, the one `silentForMs()` measures on; in production the
+  /// composition root injects the engine's own uptime clock here (09-REVIEW
+  /// WR-01), and a clock-domain case does the same with `plant.clock.now`.
+  /// Absent, the liveness clock falls back to [now], so the F22 forgiveness
+  /// arms accrue silence on the one FakeClock they crank. Absent both, the
+  /// session runs on the real wall clock as before.
   Future<Panel> connect(String sub, List<String> keys,
-      {ConflatingSendBuffer? buffer, int Function()? now}) async {
+      {ConflatingSendBuffer? buffer,
+      int Function()? now,
+      int Function()? monotonicNow}) async {
     final pair = channelPair();
     final lane = buffer ?? ConflatingSendBuffer(maxPending: config.maxPending);
     final frames = <String>[];
@@ -199,6 +203,7 @@ final class Plant {
       handles: handles,
       buffer: lane,
       now: now,
+      monotonicNow: monotonicNow,
       // What a real socket does with a close code, minus the socket: record
       // the code and reason so a reaper case can read the exact sentence.
       closeChannel: (code, reason) async => closes.add((code: code, reason: reason)),
