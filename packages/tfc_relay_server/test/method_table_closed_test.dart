@@ -286,6 +286,31 @@ Set<String> uncitedExemptions(Map<String, String> exemptions) => {
           entry.key,
     };
 
+/// The strings that must still appear in an exemption's cited file for its
+/// argument to be true.
+///
+/// Kept beside [exemptParameters] rather than inside it because they are a
+/// different kind of claim: the argument is prose for a person, and this is the
+/// one sentence of it a machine can check. Both accepted orderings, spelled
+/// with their quotes so the tokens match the allow-list literal rather than any
+/// mention of the words.
+const _exemptionGuardTokens = <String, List<String>>{
+  'orderBy': ["'time ASC'", "'time DESC'"],
+};
+
+/// The entries of [exemptions] whose cited file no longer contains the guard
+/// the argument claims makes them safe.
+Set<String> unguardedExemptions(Map<String, String> exemptions) => {
+      for (final entry in exemptions.entries)
+        if (_exemptionGuardTokens[entry.key] case final tokens?)
+          if (!_dartPaths(entry.value)
+              .where((path) => File(path).existsSync())
+              .map(File.new)
+              .map((file) => file.readAsStringSync())
+              .any((source) => tokens.every(source.contains)))
+            entry.key,
+    };
+
 /// The `*.dart` paths [argument] mentions, relative to this package root.
 Iterable<String> _dartPaths(String argument) => RegExp(r'[\w./]+\.dart')
     .allMatches(argument)
