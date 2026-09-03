@@ -130,6 +130,20 @@ const Map<String, String> retainedTimerAllowList = <String, String>{
   // (a timer that removes by key and evicts the live entry that replaced it).
   // Defaults to Duration.zero, in which case no timer is created at all.
   'fanin.dart': '08-05 — the fan-in linger, one-shot per key at refcount zero',
+  // 10-09, task 2. ONE-SHOT, and LISTENER-GATED, which is the part that
+  // earned the entry rather than merely justified it: the feed's channel
+  // opens on the first subscriber and closes with the last, and the back-off
+  // is armed only on the path between those two — `_stop` and `close` both
+  // cancel it, so a feed nobody is subscribed to holds no timer at all.
+  // `listenToChannel` ends its stream with onDone and no error when the
+  // connection dies (database_drift.dart:1066-1069), and re-listening with no
+  // delay against a database that is down is a hot loop; upstream's
+  // PreferencesWatcher uses the same five seconds for the same reason
+  // (preferences_watch.dart:41). Project memory is the other half of why this
+  // is an entry and not an oversight: an always-on Timer.periodic in relay
+  // plumbing has already failed unrelated widget tests once.
+  'preference_change_feed.dart':
+      '10-09 — the re-listen back-off, one-shot and listener-gated',
 };
 
 /// Test files permitted to hold a literal port number, each naming why.
@@ -152,9 +166,17 @@ const int declaredPeriodicTimers = 3;
 
 /// Retained one-shot `Timer(` occurrences under `lib/src`.
 ///
-/// **One, landed by 08-05 task 2:** the fan-in linger. It moves when a plan on
+/// **Two.** 08-05 task 2 landed the fan-in linger; **10-09 task 2 landed the
+/// preference feed's re-listen back-off**, in the commit that created it, and
+/// this number moved with it. It moves when a plan on
 /// [retainedTimerAllowList] lands, and only then.
-const int declaredRetainedTimers = 1;
+///
+/// The two are the same shape and both are gated, differently: the linger is
+/// armed at refcount zero and cancelled by the next subscribe, and the
+/// back-off exists only while the feed has a listener. Neither can run when
+/// the thing it was scheduled about is gone, which is the property the number
+/// is here to make somebody argue for.
+const int declaredRetainedTimers = 2;
 
 /// Lines under `lib/` that await an upstream `connect`/`read`/`write`.
 ///
@@ -360,11 +382,24 @@ const String contractKitPackage = 'tfc_stateman_contract';
 /// the same argument, and the same `StateError` naming a composition with no
 /// database rather than an `UnimplementedError` naming a plan.
 ///
-/// **One remains: `preferences`, owed by 10-09 task 3** — the plan that wires
-/// that getter and decrements this number, not 10-05, which shipped the
-/// server-side handlers and left the getter throwing. A ledger that names a
-/// finished plan as the owner is a ledger nobody can act on.
-const int declaredUnimplementedMembers = 1;
+/// **10-09 task 3 took it to ZERO**, in the commit that made
+/// `LocalStateMan.preferences` answer a `PreferenceStore`. Nothing under
+/// `lib/src` throws an `UnimplementedError` any more.
+///
+/// The number stays, and stays at zero, for the reason every other zero in
+/// this file stays: a sweep whose count is zero proves nothing on its own, so
+/// the pin is paired with the offender arm that seeds a temp directory and
+/// checks the sweep can still see one. Deleting the constant would delete the
+/// property along with the debt.
+///
+/// **Reaching zero is not the same as the three data-services members being
+/// unconditional.** `timeseries` and `historyViews` throw a `StateError`, and
+/// `preferences` an `UnsupportedError`, when the gateway was composed without
+/// a database. Those are deployment facts naming a composition, not unwritten
+/// code naming a plan, and this sweep deliberately does not count them — see
+/// `fanin_test.dart`'s three "no longer owed" cases, each of which asserts the
+/// member is composable as well as that it refuses.
+const int declaredUnimplementedMembers = 0;
 
 /// Files under `lib/` allowed to import the database layer — the wrap seam.
 ///
@@ -632,6 +667,28 @@ void main() {
               'decrement it rather than discover it. A member that starts '
               'working without this number moving is a member nobody decided '
               'to ship');
+    });
+
+    test('the unimplemented-member sweep can still see an offender', () {
+      // declaredUnimplementedMembers is ZERO as of 10-09 task 3, so the pin
+      // above proves nothing on its own: a sweep that always returns empty
+      // passes it, and so does one pointed at the wrong directory. The
+      // ledger was the thing that used to keep this sweep honest, and now
+      // that the ledger is empty this arm is.
+      final seeded = Directory.systemTemp.createTempSync('relay-owed-');
+      addTearDown(() => seeded.deleteSync(recursive: true));
+      File('${seeded.path}/owed.dart').writeAsStringSync(
+          "Object get thing => throw UnimplementedError('99-01 owes thing');\n");
+      File('${seeded.path}/prose.dart').writeAsStringSync(
+          '/// This member used to throw UnimplementedError( and no longer does.\n');
+
+      final sites = unimplementedMemberSites(seeded);
+      expect(sites, hasLength(1),
+          reason: 'the throw must be seen and the doc comment must not — a '
+              'sweep that flagged prose would make it impossible to write '
+              'down that a member STOPPED being owed, which is exactly what '
+              'local_state_man.dart now says in three places');
+      expect(sites.single, contains('99-01'));
     });
 
     test('every unimplemented member names an owning plan', () {
