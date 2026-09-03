@@ -187,7 +187,7 @@ final class HistoryViewStore implements HistoryViewApi {
   /// neither moves between calls; a caller that needs a deterministic order
   /// has to sort, and now has this sentence saying so.
   @override
-  Future<List<String>> getHistoryViewKeyNames(int viewId) {
+  Future<List<String>> getHistoryViewKeyNames(int viewId) async {
     return (database() ?? _noHistorian()).db.getHistoryViewKeyNames(viewId);
   }
 
@@ -206,7 +206,7 @@ final class HistoryViewStore implements HistoryViewApi {
   }
 
   @override
-  Future<void> deleteHistoryViewPeriod(int id) {
+  Future<void> deleteHistoryViewPeriod(int id) async {
     return (database() ?? _noHistorian()).db.deleteHistoryViewPeriod(id);
   }
 
