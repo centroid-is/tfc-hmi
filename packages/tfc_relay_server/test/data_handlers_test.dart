@@ -1074,6 +1074,56 @@ void main() {
     });
   });
 
+  // The other half of the same sentence. A refusal that cannot become a
+  // disconnect is worth little if it becomes an infinite retry instead, and
+  // -32011 is documented as "possibly transient: retrying is legitimate".
+  group('a refusal that no retry can fix does not wear a transient code', () {
+    test('a permanent source refusal is INVALID_PARAMS, not handlerFailed',
+        () async {
+      final kit = _kit(timeseries: _RefusingTimeseries(retryable: false));
+
+      final error = await _refusal(
+          () => kit.handlers.timeseriesQuery(
+                  _params(DataServiceMethods.timeseriesQuery, {
+                'table': _series,
+                'to': _ms(_base.add(const Duration(days: 1))),
+                'from': _ms(_base),
+              })),
+          'a series the source will never have');
+
+      expect(error.code, rpc_error.INVALID_PARAMS,
+          reason: '"no series by that name is collected here" cannot become '
+              'true by asking again. Reaching the wire as -32011 — which the '
+              'wire documents as possibly transient — is an invitation to a '
+              'panel to retry forever something no retry can fix. Two waves '
+              'flagged this with no owner (10-07, 10-08, 10-09)');
+      expect(error.message, contains(_RefusingTimeseries.permanentSentence),
+          reason: 'and the source\'s own sentence survives the mapping: the '
+              'reason a permanent refusal is worth a distinct code is that it '
+              'tells the caller what to change, and a mapping that replaced '
+              'the message with "invalid params" would take that back');
+    });
+
+    test('a retryable source refusal is left alone for the catch-all',
+        () async {
+      final kit = _kit(timeseries: _RefusingTimeseries(retryable: true));
+
+      await expectLater(
+          kit.handlers.timeseriesQuery(
+              _params(DataServiceMethods.timeseriesQuery, {
+            'table': _series,
+            'to': _ms(_base.add(const Duration(days: 1))),
+            'from': _ms(_base),
+          })),
+          throwsA(isA<SourceRefusal>()),
+          reason: 'THE ANTI-VACUITY ARM, and the one that matters: "the '
+              'historian is not connected" IS transient and -32011 is the '
+              'right answer for it. A mapping that turned every source '
+              'refusal into a bad request would tell a panel its perfectly '
+              'good query was malformed, every time the database bounced');
+    });
+  });
+
   // ------------------------------------------------------------ preferences
   //
   // The last family, and the one whose *types* are the whole surface: a store
@@ -1467,6 +1517,45 @@ final class _TooLargeTimeseries extends FakeTimeseries {
         measured: limit * 2,
         suggestion: DataServiceMethods.timeseriesQueryDownsampled,
       );
+}
+
+/// A source that refuses every raw window, transiently or permanently.
+///
+/// Stands in for `tfc_relay_local`'s `TimeseriesReadRefusal` family, which this
+/// package cannot name: the dependency edge runs local → server and never the
+/// other way. What crosses the boundary is [SourceRefusal], and this is a
+/// minimal implementation of it — which is also the point, because a mapping
+/// that only worked for the one concrete family would not be a mapping.
+final class _RefusingTimeseries extends FakeTimeseries {
+  _RefusingTimeseries({required this.retryable});
+
+  static const permanentSentence =
+      'no series named "ST101.CN01.MOT01.speed" is collected by this gateway';
+
+  final bool retryable;
+
+  @override
+  Future<List<TimeseriesData>> queryTimeseriesData(
+          String tableName, DateTime to,
+          {String? orderBy = 'time ASC', DateTime? from}) async =>
+      throw _Refusal(
+          retryable,
+          retryable
+              ? 'the historian is not connected; this is worth retrying'
+              : permanentSentence);
+}
+
+final class _Refusal implements SourceRefusal {
+  const _Refusal(this.retryable, this.message);
+
+  @override
+  final bool retryable;
+
+  @override
+  final String message;
+
+  @override
+  String toString() => message;
 }
 
 /// A store whose whole answer is over the byte ceiling.
