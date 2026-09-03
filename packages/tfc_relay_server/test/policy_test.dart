@@ -1147,6 +1147,76 @@ void main() {
               'none');
     });
 
+    // ------------------------------------------------------------------
+    // The read side, against a store that really holds the hidden key.
+    //
+    // **The two cases above cannot prove it and must not be read as if they
+    // did.** A view saved *through this gateway* never stores a hidden key —
+    // the write side drops it on the way in — so the row those cases read back
+    // has one key in it and the read filter has nothing to do. They are
+    // write-side cases wearing read-side clothes, and the sabotage that
+    // removes the read filter leaves both of them green.
+    //
+    // A store that genuinely holds a key this station may not see is not a
+    // contrived state; it is the ordinary one. A view outlives the policy that
+    // was in force when it was saved, another station with a different policy
+    // saved it, or the application wrote it straight into the database. So
+    // these two seed the view on the **unpoliced plant** and then ask over the
+    // wire, which is the only arrangement in which the read filter is the
+    // thing under test.
+    // ------------------------------------------------------------------
+
+    test('a view the store already holds gives up its hidden key on the way '
+        'out', () async {
+      final gateway = await _Gateway.start(policy: const _HidesTags({_hidden}));
+      final id = await gateway.plant.historyViews
+          .createHistoryView('Vaktir', [_key, _hidden]);
+      final station = await gateway.station();
+
+      expect(
+          (await gateway.plant.historyViews.getHistoryViewKeys(id)).keys,
+          containsAll([_key, _hidden]),
+          reason: 'the store really holds both keys, or this case is asking a '
+              'filter to remove something that was never there');
+
+      expect(await keyNames(station, id), [_key],
+          reason: 'the read side drops the hidden key out of a row that '
+              'genuinely contains it');
+      expect(
+          _asMap(await station.request(DataServiceMethods.historyGetKeys,
+                  params: {'viewId': id}, what: 'the keys of view $id'))
+              .keys,
+          [_key],
+          reason: 'and the record accessor agrees');
+    });
+
+    test('a stored view whose every key is hidden is still a view, with an '
+        'empty key list', () async {
+      // **The boundary case, in the only place it can bite.** This is where
+      // "drop the key" and "drop the view" give different answers: under the
+      // first the picker still offers the view, under the second the operator
+      // watches a view they saved disappear.
+      final gateway = await _Gateway.start(policy: const _HidesTags({_hidden}));
+      final id = await gateway.plant.historyViews
+          .createHistoryView('Vaktir', [_hidden]);
+      final station = await gateway.station();
+
+      final listed = (await station.request(
+          DataServiceMethods.historySelectViews,
+          params: const <String, Object?>{},
+          what: 'the view picker'))! as List<Object?>;
+
+      expect(listed, hasLength(1),
+          reason: 'a view that vanished would say a view exists. The operator '
+              'saved it, the picker offered it a moment ago, and its '
+              'disappearance is a louder statement about the key it held than '
+              'the key\'s own absence is (T-10-13)');
+      expect((listed.single! as Map)['id'], id);
+      expect(await keyNames(station, id), isEmpty,
+          reason: 'and it comes back with no keys, which is honest: the chart '
+              'draws no lines and the operator can see that it draws none');
+    });
+
     test('graphs are untouched by the filter', () async {
       final gateway = await _Gateway.start(policy: const _HidesTags({_hidden}));
       final station = await gateway.station();
