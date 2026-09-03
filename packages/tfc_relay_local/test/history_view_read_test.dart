@@ -529,5 +529,38 @@ void main() {
       expect(await countRows('history_view', 'id', id), 1,
           reason: 'deleting a saved window deleted the view it was saved on');
     });
+
+    test('a window the application itself saved, in local time, comes back UTC',
+        () async {
+      // **This is why the read side converts and not only the write side.**
+      // Measured, not assumed: these four columns are `text` in Postgres, not
+      // `timestamptz` — drift writes `DateTime.toIso8601String()` into them
+      // and the flag travels in the string. A UTC instant is stored as
+      // "2026-03-29T01:00:00.123456Z" and parses back UTC; a LOCAL one is
+      // stored as "2026-09-04T04:54:10.368039 +12:00" and parses back
+      // local-flagged.
+      //
+      // The application's own HMI has always written these rows and writes
+      // local instants, so rows like the one below are already on disk at SVN.
+      // Written through drift DIRECTLY, bypassing this store's own write-side
+      // normalisation, because that is exactly what "a row the desktop app
+      // saved" means.
+      final id = await newView('Frá HMI', ['k']);
+      final local = DateTime(2026, 3, 29, 1, 0, 0, 123, 456);
+      await writer.db
+          .addHistoryViewPeriod(id, 'Vakt HMI', local, local.add(
+              const Duration(hours: 8)));
+
+      final saved = (await store.listHistoryViewPeriods(id)).single;
+      expect(saved.startAt.isUtc, isTrue,
+          reason: 'a window saved by the desktop app comes off disk carrying '
+              'a local flag, and every DateTime on this wire is UTC');
+      expect(saved.startAt, local.toUtc(),
+          reason: 'the same instant, said in UTC — not a different one. The '
+              'conversion must not move the moment, only the flag');
+      expect(saved.startAt.microsecond, 456,
+          reason: 'the text column carries microseconds and the conversion '
+              'must not round them away');
+    });
   });
 }
