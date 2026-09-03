@@ -184,7 +184,15 @@ int _ms(DateTime at) => at.millisecondsSinceEpoch;
 
 /// Both real tags have history, so no timeseries case can pass by asking about
 /// a series that was never recorded in the first place.
-FakeTimeseries _seededHistory() => FakeTimeseries()
+///
+/// **The member addresses are seeded as their own series**, which is how a
+/// string-keyed fake models a projection: it has no columns to select from, so
+/// `CN01.MOT01.speed:speed` is simply another name it holds rows under. That
+/// the *real* reader turns the same address into a one-column SELECT is
+/// `tfc_relay_local/test/composed_seam_test.dart`'s subject, and it has to be —
+/// a fake accepts whatever it is handed, which is exactly why nothing here
+/// could see CR-01 (10-REVIEW, answer to question 1).
+_RecordingTimeseries _seededHistory() => _RecordingTimeseries()
   ..seed(_key, [
     for (var i = 0; i < 5; i++)
       TimeseriesData<num>(1200 + i, _tsBase.add(Duration(minutes: i))),
@@ -192,33 +200,115 @@ FakeTimeseries _seededHistory() => FakeTimeseries()
   ..seed(_hidden, [
     for (var i = 0; i < 5; i++)
       TimeseriesData<num>(900 + i, _tsBase.add(Duration(minutes: i))),
+  ])
+  ..seed('$_key:speed', [
+    for (var i = 0; i < 5; i++)
+      TimeseriesData<num>(1200 + i, _tsBase.add(Duration(minutes: i))),
+  ])
+  ..seed('$_hidden:speed', [
+    for (var i = 0; i < 5; i++)
+      TimeseriesData<num>(900 + i, _tsBase.add(Duration(minutes: i))),
   ]);
 
-/// A resolver that maps the two real tags and refuses everything else.
+/// A [FakeTimeseries] that writes down **the series name it was handed**.
+///
+/// The lever 10-REVIEW CR-01 says the suite was missing. "The chart got rows"
+/// is satisfied by a decorator that rewrites the name into anything the fake
+/// happens to hold; what a real reader needs is that the string the caller
+/// spelled is the string the layer below receives, member and all. That is a
+/// claim about the *argument*, and only a recorder can make it.
+final class _RecordingTimeseries extends FakeTimeseries {
+  /// Every series name the source was asked about, in call order, across all
+  /// four methods.
+  final asked = <String>[];
+
+  @override
+  Future<List<TimeseriesData>> queryTimeseriesData(String tableName, DateTime to,
+      {String? orderBy = 'time ASC', DateTime? from}) {
+    asked.add(tableName);
+    return super
+        .queryTimeseriesData(tableName, to, orderBy: orderBy, from: from);
+  }
+
+  @override
+  Future<Map<String, List<TimeseriesData>>> queryTimeseriesDataMultiple(
+      List<String> tableNames, DateTime to,
+      {String? orderBy = 'time ASC', DateTime? from}) {
+    asked.addAll(tableNames);
+    return super.queryTimeseriesDataMultiple(tableNames, to,
+        orderBy: orderBy, from: from);
+  }
+
+  @override
+  Future<List<TimeseriesData>> queryTimeseriesDataDownsampled(
+      String tableName, DateTime from, DateTime to,
+      {int maxPoints = 1000}) {
+    asked.add(tableName);
+    return super.queryTimeseriesDataDownsampled(tableName, from, to,
+        maxPoints: maxPoints);
+  }
+
+  @override
+  Future<Map<DateTime, int>> countTimeseriesDataMultiple(
+      String tableName, Duration interval, int howMany,
+      {DateTime? since}) {
+    asked.add(tableName);
+    return super.countTimeseriesDataMultiple(tableName, interval, howMany,
+        since: since);
+  }
+}
+
+/// A resolver that maps the two real tags and refuses everything else — **to a
+/// table that is not the series**.
 ///
 /// `PermissiveSeriesResolver` maps every name to itself, which is honest for
 /// this file's browse tree but cannot express "no mapping" — and "no mapping"
-/// is the whole of what the unmappable cases are about. Everything it does map
-/// it maps to itself, so the hiding comparison is unchanged for the names that
-/// resolve.
+/// is the whole of what the unmappable cases are about.
+///
+/// ## The prefix is load-bearing (10-REVIEW CR-01)
+///
+/// This class used to answer `table: address.series`, and so did every other
+/// resolver in the suite. That is what hid CR-01 for a whole phase: with
+/// `table == series` a *double* resolution is idempotent, so a decorator
+/// resolving the name and handing the **table** down looked identical to one
+/// handing the **name** down, and the fake reader underneath never looked at
+/// the member either way. Against the deployed resolver, whose table is
+/// `tablePrefix + name` with `'gw_'` as the default
+/// (`collection_config.dart:148`), the second lookup missed and every
+/// timeseries request answered `UnknownSeries`.
+///
+/// So the fixture prefixes. Nothing below depends on the table string — the
+/// seeded [FakeTimeseries] is keyed by the wire name, which is what the
+/// decorator now hands it — and that independence is the property: a decorator
+/// that rewrote the name would ask for `gw_CN01.MOT01.speed`, find no seed, and
+/// fail the "and the visible series is still answered" arm.
+///
+/// The composed-stack judgement, against the *real* reader rather than a fake
+/// one, is `tfc_relay_local/test/composed_seam_test.dart`.
 final class _MapsTheRealTags implements SeriesResolver {
   const _MapsTheRealTags();
 
   static const _mapped = {_key, _hidden, _ghost};
+
+  /// 8b's convention for "the gateway collected this", and the default.
+  static const _prefix = 'gw_';
 
   @override
   ResolvedSeries? resolve(String wireName) {
     final address = SeriesAddress.parse(wireName);
     if (!_mapped.contains(address.series)) return null;
     return ResolvedSeries(
-        table: address.series,
+        table: '$_prefix${address.series}',
         member: address.member,
         plantKey: address.series);
   }
 
   @override
-  String? keyForTable(String table) =>
-      _mapped.contains(table) ? table : null;
+  String? keyForTable(String table) {
+    if (!table.startsWith(_prefix)) return null;
+    final key = table.substring(_prefix.length);
+    return _mapped.contains(key) ? key : null;
+  }
 
   @override
   String? keyForNode(String nodeId) => nodeId;
@@ -337,11 +427,15 @@ final class _AlwaysStation implements TokenValidator {
 /// gateway so that "closing one leaves the other reading" is a property rather
 /// than a single-session tautology.
 final class _Gateway {
-  _Gateway._(this.plant, this.server);
+  _Gateway._(this.plant, this.server, this.history);
 
   /// The reference implementation the gateway serves, driveable directly.
   final FakeStateMan plant;
   final RelayServer server;
+
+  /// The seeded history, as the recorder that also remembers what the policy
+  /// handed it. See [_RecordingTimeseries].
+  final _RecordingTimeseries history;
 
   /// The sessions this gateway is holding, in connection order.
   List<RelaySession> get sessions => server.sessions.sessions;
@@ -358,8 +452,8 @@ final class _Gateway {
     Identity identity = _panel,
     SeriesResolver resolver = const PermissiveSeriesResolver(),
   }) async {
-    final plant =
-        FakeStateMan(browse: _browseTree(), timeseries: _seededHistory());
+    final history = _seededHistory();
+    final plant = FakeStateMan(browse: _browseTree(), timeseries: history);
     final server = RelayServer(
       // Identity mapping by default: this file's tree names its leaves after
       // the plant keys they are, so `keyForNode` returning its argument is the
@@ -383,7 +477,7 @@ final class _Gateway {
       await server.close();
       await plant.dispose();
     });
-    return _Gateway._(plant, server);
+    return _Gateway._(plant, server, history);
   }
 
   /// A station on this gateway, connected and past the handshake.
@@ -1079,10 +1173,18 @@ void main() {
 
       expect(visible, isNotEmpty,
           reason: '`<series>:<member>` is the addressing 10-CONTEXT ruling 2 '
-              'settled on. The member is stripped before the table is '
-              'resolved, so a member address reaches the same table the bare '
-              'name does — otherwise every struct chart in the plant reads as '
-              'a series that does not exist');
+              'settled on, and the decorator has to let one through — '
+              'otherwise every struct chart in the plant reads as a series '
+              'that does not exist. **This sentence used to say "the member '
+              'is stripped before the table is resolved, so a member address '
+              'reaches the same table the bare name does", which was the '
+              'CR-01 defect written down as intent.** It was true of the '
+              'subject underneath — a fake reader that never looks at a '
+              'member — and false of every real one: against `TimescaleReader` '
+              'a bare name for a struct table is `StructSeriesUnaddressed`. '
+              'The address travels down whole now, and '
+              '`tfc_relay_local/test/composed_seam_test.dart` is what judges '
+              'that against the real reader');
       expect(hidden, isEmpty,
           reason: 'and canSee is asked about the *series* key, not about the '
               'member. A policy is written about tags; "CN02.MOT01.speed" is '
@@ -1093,6 +1195,24 @@ void main() {
           reason: 'a member of a series that maps is not an unmappable '
               'series; counting it would fill the diagnostic with names that '
               'are fine');
+
+      // **The assertion that would have caught CR-01**, and the one the rest
+      // of this file structurally could not make: what the layer below was
+      // HANDED, rather than what came back. Every other resolver in the suite
+      // answers `table == series`, which makes "the name" and "the table"
+      // indistinguishable; `_MapsTheRealTags` prefixes, so they are two
+      // different strings and only one of them is right.
+      expect(gateway.history.asked, equals(<String>['$_key:speed']),
+          reason: 'the source must be handed the address the caller spelled — '
+              'the wire name, with its member — and must be handed it once. '
+              'Before the fix it was handed "gw_$_key", the PHYSICAL table '
+              'with the member discarded, which a fake accepts and a real '
+              'reader refuses twice over: it resolves its argument as a wire '
+              'name (a miss on the prefix, so UnknownSeries) and, where the '
+              'prefix is empty, it finds a struct with no member selected. '
+              'The hidden series must not appear here at all — a hidden '
+              'series may not cost a round trip, because the round trip is '
+              'itself a side channel');
     });
   });
 

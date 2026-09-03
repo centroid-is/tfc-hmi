@@ -382,12 +382,15 @@ final class _PolicyBrowse implements BrowseApi {
 /// by a **series name**, not by a plant key and not by a node id, so the
 /// question `canSee` needs — which tag do these samples belong to — has to be
 /// asked of [SeriesResolver] first. `resolve` is what is consulted rather than
-/// `keyForTable`, and that is deliberate: it strips a `<series>:<member>`
-/// address and looks the table up in one call, so the member-stripping and the
-/// lookup cannot drift apart across two call sites, and the plant key travels
-/// out attached to the table it belongs to
-/// (`series_address.dart`'s `ResolvedSeries` — "travelling together is what
-/// makes forgetting the check a compile error rather than a policy hole").
+/// `keyForTable`, and that is deliberate: it understands the
+/// `<series>:<member>` grammar, so the policy is asked about the tag rather
+/// than about a chart's way of selecting a column out of one.
+///
+/// **What comes back is used for the answer and never for the argument.**
+/// [_visible] reads `plantKey` and discards the rest; every method below hands
+/// the source **the caller's own name**, unrewritten. That is 10-REVIEW CR-01's
+/// rule and the reason it is stated twice in this file — see [_visible] for
+/// what happened when the table travelled down instead.
 ///
 /// Three rules.
 ///
@@ -451,10 +454,33 @@ final class _PolicyTimeseries implements TimeseriesApi {
 
   final SeriesMappingTally _tally;
 
-  /// The physical table behind [wireName], or null when this station gets the
-  /// answer a series that does not exist gets.
+  /// Whether this station may read [wireName]. **The name is not rewritten.**
   ///
-  /// The two null paths are different facts and only one of them is recorded:
+  /// ## The decorator authorizes; it does not translate (10-REVIEW CR-01)
+  ///
+  /// This used to answer `resolved.table` and every method below handed that
+  /// table down as the source's `tableName` argument. That was a **second**
+  /// resolution across one seam: [TimescaleReader] treats its argument as a
+  /// wire series name and resolves it itself
+  /// (`timescale_reader.dart:585-589`), against a map keyed by plant key. With
+  /// the deployed `gw_` prefix — `CollectionEntry.table` is `tablePrefix +
+  /// name` and the default prefix is `'gw_'` (`collection_config.dart:148`) —
+  /// the second lookup missed and *every* timeseries request over the pipe
+  /// answered `UnknownSeries`, refused as INVALID_PARAMS naming a table the
+  /// caller never sent. And the member was dropped in the same hand-off, so
+  /// `<series>:<member>` — 10-CONTEXT ruling 2's whole feature, ninety of the
+  /// live plant's 140 collected keys — could not work even with an empty
+  /// prefix: the reader saw a bare name for a struct table and answered "Ask
+  /// for one member" to a caller that had.
+  ///
+  /// The rule that replaces it, and the one to keep: **each layer hands the
+  /// next the vocabulary it was given.** The wire speaks series names, the
+  /// resolver is the only translator, and it is consulted once per layer for
+  /// the question that layer owns — here, "may this station see the tag these
+  /// samples belong to", which is a question about `plantKey` and never about
+  /// the table.
+  ///
+  /// The two false paths are different facts and only one of them is recorded:
   /// an unmappable series is counted, a hidden one is not. Hiding is a
   /// deliberate configuration and needs no diagnostic; a missing mapping is a
   /// gap somebody has to close.
@@ -464,59 +490,62 @@ final class _PolicyTimeseries implements TimeseriesApi {
   /// grammar belt — but it is caught rather than thrown, because an embedder
   /// holding this decorator directly is a caller too and a policy layer that
   /// threw on a bad name would turn a typo into a handler failure.
-  String? _table(String wireName) {
+  bool _visible(String wireName) {
     final ResolvedSeries? resolved;
     try {
       resolved = _resolver.resolve(wireName);
     } on FormatException {
       _tally.record(wireName);
-      return null;
+      return false;
     }
     if (resolved == null) {
       _tally.record(wireName);
-      return null;
+      return false;
     }
     // The key, not the member: a policy is written about tags, and
     // `CN02.MOT01.speed:speed` is a chart selecting a column out of one.
-    return _canSee(resolved.plantKey) ? resolved.table : null;
+    return _canSee(resolved.plantKey);
   }
 
   @override
   Future<List<TimeseriesData>> queryTimeseriesData(
       String tableName, DateTime to,
       {String? orderBy = 'time ASC', DateTime? from}) async {
-    final table = _table(tableName);
-    if (table == null) return const [];
-    return _source.queryTimeseriesData(table, to,
+    if (!_visible(tableName)) return const [];
+    return _source.queryTimeseriesData(tableName, to,
         orderBy: orderBy, from: from);
   }
 
   /// Rule 3: one entry per requested name, keyed by **the name the caller
-  /// used** rather than by the table it resolved to.
+  /// used**.
   ///
   /// The source is asked only about the series that survive the filter, and
   /// only once each — a hidden series must not cost a round trip either, for
   /// `readFresh`'s reason (§E.2 item 2): the round trip is itself a side
   /// channel.
+  ///
+  /// **De-duplicated by the address, never by the table** (10-REVIEW CR-01).
+  /// The previous spelling passed `visible.values.toSet()` — the resolved
+  /// tables — which silently collapsed two different member addresses of one
+  /// struct into a single query and then answered both with the same rows. Two
+  /// members of one table are two different series on this wire; a `Set` of
+  /// the *names* keeps them apart while still refusing to ask twice for a name
+  /// a caller repeated.
   @override
   Future<Map<String, List<TimeseriesData>>> queryTimeseriesDataMultiple(
       List<String> tableNames, DateTime to,
       {String? orderBy = 'time ASC', DateTime? from}) async {
-    final visible = <String, String>{};
-    for (final name in tableNames) {
-      final table = _table(name);
-      if (table != null) visible[name] = table;
-    }
+    final visible = <String>{
+      for (final name in tableNames)
+        if (_visible(name)) name,
+    };
     final answers = visible.isEmpty
         ? const <String, List<TimeseriesData>>{}
-        : await _source.queryTimeseriesDataMultiple(
-            visible.values.toSet().toList(), to,
+        : await _source.queryTimeseriesDataMultiple(visible.toList(), to,
             orderBy: orderBy, from: from);
     return {
       for (final name in tableNames)
-        name: visible[name] == null
-            ? const []
-            : answers[visible[name]] ?? const [],
+        name: visible.contains(name) ? answers[name] ?? const [] : const [],
     };
   }
 
@@ -524,9 +553,8 @@ final class _PolicyTimeseries implements TimeseriesApi {
   Future<List<TimeseriesData>> queryTimeseriesDataDownsampled(
       String tableName, DateTime from, DateTime to,
       {int maxPoints = 1000}) async {
-    final table = _table(tableName);
-    if (table == null) return const [];
-    return _source.queryTimeseriesDataDownsampled(table, from, to,
+    if (!_visible(tableName)) return const [];
+    return _source.queryTimeseriesDataDownsampled(tableName, from, to,
         maxPoints: maxPoints);
   }
 
@@ -534,9 +562,8 @@ final class _PolicyTimeseries implements TimeseriesApi {
   Future<Map<DateTime, int>> countTimeseriesDataMultiple(
       String tableName, Duration interval, int howMany,
       {DateTime? since}) async {
-    final table = _table(tableName);
-    if (table == null) return const {};
-    return _source.countTimeseriesDataMultiple(table, interval, howMany,
+    if (!_visible(tableName)) return const {};
+    return _source.countTimeseriesDataMultiple(tableName, interval, howMany,
         since: since);
   }
 }
