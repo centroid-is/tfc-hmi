@@ -10,6 +10,7 @@ library;
 import 'dart:async';
 
 import 'package:test/test.dart';
+import 'package:tfc_dart/core/state_man.dart' show KeyMappingEntry, KeyMappings;
 import 'package:tfc_relay_local/tfc_relay_local.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
@@ -245,18 +246,42 @@ void main() {
     }
 
     // 08-06's three entries — `write`, `writeStatus`, `holdToRun` — came off
-    // this ledger in the commits that closed them, and 08-11's `browse` came
-    // off in the commit that landed `local_browse.dart`. That is the ledger
-    // being self-deleting rather than merely honest. Three left, and their
-    // owner is a LATER PHASE: `supportsDataServices: false` on the contract
-    // leg deletes the seven cases behind them, which is not the same as
+    // this ledger in the commits that closed them, 08-11's `browse` came off
+    // in the commit that landed `local_browse.dart`, and 10-07's
+    // `timeseries` came off in the commit that landed `TimescaleReader`. That
+    // is the ledger being self-deleting rather than merely honest. Two left,
+    // and their owner is a LATER PHASE: `supportsDataServices: false` on the
+    // contract leg deletes the cases behind them, which is not the same as
     // implementing them, so the ledger says 10-01 rather than saying zero.
-    owes('timeseries', '10-01', () => man.timeseries);
     owes('historyViews', '10-01', () => man.historyViews);
     owes('preferences', '10-01', () => man.preferences);
 
     test('browse is no longer owed — it answers a BrowseApi', () {
       expect(man.browse, isA<LocalBrowse>());
+    });
+
+    test('timeseries is no longer owed — this one is composed, not unwritten',
+        () {
+      // The member is implemented; what this fixture lacks is a HISTORIAN.
+      // 8b-01 made historising a deliberate two-field act, so a gateway with
+      // no `collection:` block has no database object at all — a deployment
+      // fact, which is a StateError naming the composition and NOT an
+      // UnimplementedError naming a plan. The distinction is the whole reason
+      // `declaredUnimplementedMembers` could honestly drop to two: a ledger
+      // that counted this would be claiming somebody still owes code.
+      expect(() => man.timeseries, throwsA(isA<StateError>()));
+      expect(() => man.timeseries, isNot(throwsUnimplementedError));
+
+      final composed = LocalStateMan(
+        links: const <UpstreamLink>[],
+        router: KeyRouter.overLinks(const <UpstreamLink>[],
+            mappings: KeyMappings(nodes: <String, KeyMappingEntry>{})),
+        timeseries: _AbsentHistory(),
+      );
+      addTearDown(composed.dispose);
+      expect(composed.timeseries, isA<TimeseriesApi>(),
+          reason: 'the anti-vacuity arm: a getter that always threw would '
+              'pass the two assertions above');
     });
   });
 
@@ -502,3 +527,34 @@ void _faninGroup() {
 /// wall-clock wait would be a measurement of the machine rather than of the
 /// code (08-03 kept this package port-free and this file spends none of it).
 Future<void> pumpUpstream() => Future<void>.delayed(Duration.zero);
+
+
+/// A `TimeseriesApi` that answers nothing, for the one arm that only needs
+/// the getter to hand back what it was given. The real one is
+/// `TimescaleReader`, and it is exercised in `timescale_reader_test.dart`
+/// and `timeseries_read_test.dart`.
+final class _AbsentHistory implements TimeseriesApi {
+  @override
+  Future<List<TimeseriesData>> queryTimeseriesData(
+          String tableName, DateTime to,
+          {String? orderBy = 'time ASC', DateTime? from}) async =>
+      const [];
+
+  @override
+  Future<Map<String, List<TimeseriesData>>> queryTimeseriesDataMultiple(
+          List<String> tableNames, DateTime to,
+          {String? orderBy = 'time ASC', DateTime? from}) async =>
+      const {};
+
+  @override
+  Future<List<TimeseriesData>> queryTimeseriesDataDownsampled(
+          String tableName, DateTime from, DateTime to,
+          {int maxPoints = 1000}) async =>
+      const [];
+
+  @override
+  Future<Map<DateTime, int>> countTimeseriesDataMultiple(
+          String tableName, Duration interval, int howMany,
+          {DateTime? since}) async =>
+      const {};
+}
