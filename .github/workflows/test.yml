@@ -517,6 +517,23 @@ jobs:
 
   # RES-03's evidence, and the job that keeps producing it.
   #
+  # ⚠ **THIS JOB IS EXPECTED TO BE RED ON MAIN UNTIL A NAMED FINDING IS
+  # FIXED, AND THAT IS FLAGGED FOR THE USER RATHER THAN HIDDEN.** The
+  # 35-minute arm at seed 11 records four `terminalStateWrites` violations:
+  # writes #103, #108, #110 and #400 reached a socket and ended in neither the
+  # terminal map nor the client's unresolved set. All four are on keys whose
+  # upstream link was down when the write was issued (ST301 at +03:24–+03:48,
+  # BAADER at +13:16–+13:28). That is a write silently lost — the failure
+  # CLAUDE.md's Core Value names first — and it is a product finding, not an
+  # instrument fault, so it rides its own RED in its own plan rather than
+  # being tuned away here (T-11-33).
+  #
+  # The job ships anyway, per 11-CONTEXT ruling 1, because the alternative is
+  # a soak nobody runs. **If a standing red on main is not acceptable while
+  # that fix is pending, the change is to delete `push` from the `if:` below
+  # and leave `workflow_dispatch` — one line, and no other part of this job
+  # moves.** That is the user's call and is on the morning-flag list.
+  #
   # **Cadence: on every push to main, plus on demand.** 11-CONTEXT ruling 1,
   # resolved by the user on 2026-09-02 — the repository is public, so runner
   # minutes are free and there is no reason to ration the arm to a nightly.
