@@ -495,9 +495,46 @@ final class TimescaleReader implements TimeseriesApi {
     // and `_shapeFor` refuses it first. `shape.column` is `value` for a scalar
     // table and the member for a projection, which is the only difference the
     // two ever had.
-    final bucketMs = (rangeMs / numBuckets).ceil();
+    // **The width, and the one millisecond that keeps the bound** (10-REVIEW
+    // WR-01b). `ceil` alone leaves a hole when the range divides evenly:
+    // `numBuckets * bucketMs == rangeMs` exactly, so the window's own right
+    // edge is a bucket START, and a sample sitting on `to` — which the filter
+    // below includes — opens bucket index `numBuckets`, the
+    // `numBuckets + 1`-th. That is 3 × (n + 1) points for a bound of 3 × n:
+    // the same shape 10-11 measured as "51 where 50 was asked for", surviving
+    // in a narrower window that no leg exercised because no seeded sample
+    // landed exactly on `to`.
+    //
+    // One extra millisecond makes `numBuckets` buckets strictly cover the
+    // range, so `to` always falls inside the last of them. It costs the last
+    // bucket at most `numBuckets` ms of extra width and cannot cost a point.
+    var bucketMs = (rangeMs / numBuckets).ceil();
+    if (bucketMs * numBuckets == rangeMs) bucketMs += 1;
     final column = _quoted(shape.column);
     final table = _quoted(series.table);
+    // **Three distinct instants per bucket** (10-REVIEW WR-01a). The previous
+    // spelling emitted `LEAST(bucket + interval * 0.5, $3)` and
+    // `LEAST(bucket + interval, $3)`, and on the final bucket — which almost
+    // always starts before `to` and ends after it — both evaluate to `to`.
+    // The query therefore emitted `max_val` and `last_val` at the **identical
+    // instant** with different values, and `ORDER BY 1` cannot separate them:
+    // a chart draws a vertical spike at its right edge, or silently keeps
+    // whichever its own de-duplication happens to keep. The newest point is
+    // 10-11's own "the one an operator reads as the current value".
+    //
+    // `bend` is the bucket's last representable instant, clamped into the
+    // window: `bucket + interval - 1µs` is strictly inside the bucket, so it
+    // also cannot collide with the NEXT bucket's start — which the old
+    // `bucket + interval` did, systematically, for every bucket rather than
+    // only the last. The midpoint is then placed inside `[bucket, bend]`
+    // rather than computed from the nominal width, so it is inside the window
+    // by construction and the clamp it used to need is gone.
+    //
+    // The two `WHERE`s are the degenerate case, made explicit: a bucket whose
+    // whole extent is one instant (its start is exactly `to`) has one instant
+    // to report, and emitting three rows stamped identically would be the
+    // defect above in miniature. Such a bucket contributes one point, so the
+    // 3 × numBuckets ceiling still holds.
     final sql = '''
         WITH agg AS (
           SELECT
@@ -508,14 +545,19 @@ final class TimescaleReader implements TimeseriesApi {
           FROM $table
           WHERE time >= \$2::timestamptz AND time <= \$3::timestamptz
           GROUP BY bucket
+        ), edges AS (
+          SELECT bucket,
+                 LEAST(bucket + \$1::interval - interval '1 microsecond',
+                       \$3::timestamptz) AS bend,
+                 min_val, max_val, last_val
+          FROM agg
         )
-        SELECT bucket AS time, min_val AS value FROM agg
+        SELECT bucket AS time, min_val AS value FROM edges
         UNION ALL
-        SELECT LEAST(bucket + \$1::interval * 0.5, \$3::timestamptz),
-               max_val  AS value FROM agg
+        SELECT bucket + (bend - bucket) / 2, max_val AS value FROM edges
+          WHERE bend >= bucket + interval '2 microseconds'
         UNION ALL
-        SELECT LEAST(bucket + \$1::interval, \$3::timestamptz),
-               last_val AS value FROM agg
+        SELECT bend, last_val AS value FROM edges WHERE bend > bucket
         ORDER BY 1
       ''';
     final rows = await db.db.customSelect(sql, variables: [

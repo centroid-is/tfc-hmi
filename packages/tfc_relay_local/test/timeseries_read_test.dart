@@ -292,6 +292,78 @@ void main() {
               'above without reaching either end of the data');
       expect(values.reduce(max), 499);
     });
+
+    /// **The two residuals of 10-11's fix** (10-REVIEW WR-01), in the one
+    /// window that shows both.
+    ///
+    /// 480 seconds at `maxPoints: 48` is sixteen buckets of exactly
+    /// 30 000 ms — `rangeMs % numBuckets == 0`, so `numBuckets * bucketMs ==
+    /// rangeMs` and the window's own right edge is a bucket **start**. The
+    /// filter is `time <= to` inclusive, so a sample sitting on `to` opened
+    /// bucket index sixteen, the seventeenth, and the answer was 3 × 17 = 51
+    /// points for a bound of 48. No leg exercised it, because no leg seeded a
+    /// sample at exactly `to` on a divisible window.
+    ///
+    /// And the terminal-timestamp collision is routine rather than exotic: the
+    /// final bucket almost always starts before `to` and ends after it, so
+    /// `LEAST(bucket + interval * 0.5, to)` and `LEAST(bucket + interval, to)`
+    /// both evaluated to `to`, and the query emitted `max_val` and `last_val`
+    /// at the identical instant with different values.
+    test('a sample sitting exactly on a divisible window\'s edge keeps the '
+        'bound, and no two points share an instant', () async {
+      final divisible = freshTable('speed_divisible');
+      final base = anchor.subtract(const Duration(hours: 2));
+      // 481 samples one second apart: 0 s through 480 s inclusive, so the
+      // last one is exactly on `to`.
+      await seed(db, divisible, [
+        for (var i = 0; i <= 480; i++) (base.add(Duration(seconds: i)), i),
+      ]);
+      final over = TimescaleReader(
+        database: () => db,
+        resolver: FixtureResolver({'Line1.Divisible': divisible}),
+      );
+      final to = base.add(const Duration(seconds: 480));
+
+      final samples = await over.queryTimeseriesDataDownsampled(
+          'Line1.Divisible', base, to,
+          maxPoints: 48);
+
+      expect(samples.length, lessThanOrEqualTo(48),
+          reason: '480 000 ms over (48 / 3).floor() = 16 buckets is 30 000 ms '
+              'exactly, so `to` is a bucket START and the sample on it opens '
+              'a seventeenth bucket: 51 points for a bound of 48. The width '
+              'is bumped by one millisecond when it divides evenly, which '
+              'costs the last bucket 16 ms of extra span and cannot cost a '
+              'point');
+
+      final instants = samples.map((s) => s.time).toList();
+      expect(instants.toSet(), hasLength(instants.length),
+          reason: 'no two points may share an instant. The final bucket used '
+              'to emit max_val and last_val both clamped to `to` — two '
+              'different values stamped identically, which ORDER BY cannot '
+              'separate and a chart draws as a vertical spike at its right '
+              'edge. Every non-final bucket had the same collision with its '
+              'NEIGHBOUR, because `bucket + interval` IS the next bucket\'s '
+              'start');
+      expect(instants, orderedEquals(List.of(instants)..sort()),
+          reason: 'and they still come back oldest first');
+
+      expect(samples.first.time, base,
+          reason: 'the left edge is still the window\'s own start');
+      expect(samples.last.time, to,
+          reason: 'and the right edge is still exactly `to` — the clamp is '
+              'gone but the last bucket overruns the window, so its last '
+              'representable instant inside the window is `to` itself. A fix '
+              'that moved the newest point a microsecond early would move the '
+              'value an operator reads as now');
+
+      final values = samples.map((s) => s.value as num).toList();
+      expect(values.reduce(min), 0);
+      expect(values.reduce(max), 480,
+          reason: 'the anti-vacuity arm: the sample ON the edge is the one '
+              'this case is about, and a downsampler that dropped it would '
+              'satisfy the bound by losing the point');
+    });
   });
 
   group('a struct series', () {
