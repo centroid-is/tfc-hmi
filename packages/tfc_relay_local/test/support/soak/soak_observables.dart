@@ -238,3 +238,129 @@ abstract interface class SoakWriteSource {
   /// What the plant actually applied.
   AppliedWriteLedger get appliedWrites;
 }
+
+// ------------------------------------------------ what a checkpoint measured
+
+/// Every structure invariant 4 watches, read at one instant.
+///
+/// **A whole reading rather than a getter per structure**, and the reason is the
+/// one thing a slope detector cannot survive without: the readings in a
+/// checkpoint row have to be simultaneous. A checker that pulled ten getters
+/// would take ten readings across however long the pulls took, and under a
+/// storm that window contains a gateway restart — which is how a row ends up
+/// with a session count from before it and a subscription count from after.
+///
+/// [skips] is what makes a platform skip **visible**. `openSocketCount()` cannot
+/// answer on Windows (`fd_count.dart:46`), and the difference between "this
+/// structure read zero" and "this structure could not be read here" is the whole
+/// of `gate_manifest_test.dart`'s skip audit at one structure's scale. A skipped
+/// structure is absent from [plantWide] and present here with the reason the
+/// platform gave, in its own words.
+final class SoakStructureReading {
+  const SoakStructureReading({
+    required this.perPanel,
+    required this.plantWide,
+    this.skips = const <String, String>{},
+  });
+
+  /// Panel index -> structure name -> size. The client-side half.
+  final Map<int, Map<String, int>> perPanel;
+
+  /// Structure name -> size, for the server and the process. The half that has
+  /// no panel to attribute it to.
+  final Map<String, int> plantWide;
+
+  /// Structure name -> why it could not be read on this platform.
+  final Map<String, String> skips;
+}
+
+/// What invariant 4 reads.
+abstract interface class SoakStructureSource {
+  /// The run's seed, so a violation can be reproduced from its own text.
+  int get seed;
+
+  /// What the run was declared to be. Floors scale off this.
+  Duration get declaredDuration;
+
+  /// The play clock.
+  Duration get scheduleOffset;
+
+  /// The panel the storm may never aim at.
+  int get controlPanelIndex;
+
+  /// How many plant-wide arms the storm has applied so far.
+  ///
+  /// The same counter invariant 1 reads, for the same reason: the control's
+  /// property is *"the storm never AIMS at it"* and never *"it is never
+  /// disturbed"*, so the control's flat-structures arm is written against the
+  /// panel-targeted half of the storm only (11-03's correction).
+  int get plantWideArmsApplied;
+
+  /// One simultaneous reading of every watched structure.
+  SoakStructureReading readStructures();
+}
+
+/// One panel's complaint surface, as invariant 5 reads it.
+abstract interface class SoakPanelLogView {
+  /// Its position in the herd. Zero is the control.
+  int get index;
+
+  /// `panel-N`.
+  String get name;
+
+  /// Whether this panel currently holds an established session.
+  ///
+  /// **`RemoteStateMan.isReady`, and it is the closest public predicate to
+  /// "has an established subscription".** A panel that never connected produced
+  /// no complaints for a reason that is not the invariant's, so its windows are
+  /// not judged — but the client exposes readiness rather than
+  /// per-subscription establishment (`lastSeq != null` lives inside
+  /// `ConnectionSupervisor`), and reaching for the private one would mean
+  /// editing `tfc_relay_client/lib`, which this plan measures and does not
+  /// change. The substitution is conservative in the right direction: a ready
+  /// panel whose page is not established still gets judged, which is precisely
+  /// the state `connection_supervisor.dart:692-702` warns the flood comes from.
+  bool get established;
+
+  /// `RemoteStateMan.complaints.length` — the uncapped list itself.
+  int get complaints;
+}
+
+/// What invariant 5 reads.
+abstract interface class SoakLogSource {
+  /// The run's seed, so a violation can be reproduced from its own text.
+  int get seed;
+
+  /// What the run was declared to be. Floors scale off this.
+  Duration get declaredDuration;
+
+  /// The play clock.
+  Duration get scheduleOffset;
+
+  /// The panel the storm may never aim at.
+  int get controlPanelIndex;
+
+  /// Every panel's complaint surface, control first.
+  List<SoakPanelLogView> get panelLogs;
+
+  /// How many lines the **gateway** has produced.
+  ///
+  /// **This is a real log-line count and not a stand-in.** `buildGateway`'s
+  /// default error sink is `_logServerError(log)` —
+  /// `(error, stack, where) => log.e('[server] $where: $error')`,
+  /// `gateway_config.dart:492-497`, installed at `:643` — so one entry here is
+  /// exactly one line the deployed gateway would write. The soak occupies the
+  /// same injectable seam with a collector instead of a logger
+  /// (`gate_b_fixture.dart:656`), which is why the server half of this
+  /// invariant is countable in process and needed no subprocess harness.
+  int get gatewayLogLines;
+
+  /// How many ingest refusals actually reached a log sink.
+  ///
+  /// `IngestLog.logged`, not `IngestLog.refusals`: the class damps to **once
+  /// per key per process** precisely because *"a struct that fails at 10 Hz
+  /// writes 864,000 identical lines a day"* (`ingest.dart:96-101`). It is the
+  /// server-side twin of the client damping this invariant's control removes,
+  /// and watching the damped number is what makes a broken damper visible.
+  int get plantIngestLogLines;
+}

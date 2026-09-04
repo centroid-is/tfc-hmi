@@ -35,11 +35,14 @@ import 'package:tfc_relay_server/src/write_outcome_log.dart';
 import 'package:tfc_relay_server/tfc_relay_server.dart';
 
 import '../support/soak/applied_write_ledger.dart';
+import '../support/soak/checkers/bounded_logs.dart';
+import '../support/soak/checkers/bounded_memory.dart';
 import '../support/soak/checkers/freshness_honesty.dart';
 import '../support/soak/checkers/terminal_state.dart';
 import '../support/soak/invariant.dart';
 import '../support/soak/soak_driver.dart';
 import '../support/soak/soak_observables.dart';
+import 'soak_registry.dart';
 
 void main() {
   group('invariant 1: freshness honesty', () {
@@ -868,7 +871,653 @@ void main() {
           280);
     });
   });
+
+  // ------------------------------------------------------------ invariant 4
+
+  group('invariant 4: bounded memory', () {
+    test('a structure that only ever grows is a violation naming it', () {
+      final source = _StructureSource();
+      final checker = BoundedMemoryChecker(source);
+
+      // Nine readings, each one larger than the last. The first two are the
+      // settle window; the rule needs `boundedMemoryMonotoneRun` strictly
+      // increasing readings after that.
+      for (var i = 0; i < 9; i++) {
+        source.plantWide[sessionsStructure] = 5 + i;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+
+      expect(checker.violations, hasLength(1),
+          reason: 'nine consecutive strictly increasing readings of '
+              '$sessionsStructure went unrecorded — the monotone rule is what '
+              'catches the leak that never spikes');
+      final rendered = checker.violations.single.toString();
+      for (final fragment in <String>[sessionsStructure, 'consecutive']) {
+        expect(rendered, contains(fragment),
+            reason: 'a slope violation that does not name the structure sends '
+                'the reader to ten structures instead of one: $rendered');
+      }
+    });
+
+    test('a structure that ends far above its own median is a violation', () {
+      final source = _StructureSource();
+      final checker = BoundedMemoryChecker(source);
+
+      // A long flat stretch sets the median, then one reading far above it —
+      // reached in a single step, so the monotone rule cannot be what fires.
+      for (var i = 0; i < 10; i++) {
+        source.plantWide[subscriptionsStructure] = 40;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      source.plantWide[subscriptionsStructure] = 40 * boundedMemoryRatio + 1;
+      checker.sample(_at(const Duration(seconds: 55)));
+
+      expect(checker.violations, hasLength(1),
+          reason: 'a structure finished at more than K x its own median and '
+              'nothing recorded it');
+      expect(checker.violations.single.toString(), contains('median'),
+          reason: 'the ratio rule must say what it compared against, or the '
+              'number in the message cannot be checked');
+    });
+
+    test('the ratio rule says nothing below the pedestal', () {
+      final source = _StructureSource();
+      final checker = BoundedMemoryChecker(source);
+
+      for (var i = 0; i < 10; i++) {
+        source.plantWide[sessionsStructure] = 1;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      // Twenty times the median, and still a number no leak could hide in.
+      source.plantWide[sessionsStructure] = 20;
+      checker.sample(_at(const Duration(seconds: 55)));
+
+      expect(checker.violations, isEmpty,
+          reason: 'a median of one against a reading of twenty is a ratio of '
+              'twenty and not a leak. Every structure here counts whole '
+              'objects, so the small numbers are the ordinary ones and a rule '
+              'that fires on them fires constantly');
+    });
+
+    test('a structure filling from zero is not judged before it settles', () {
+      final source = _StructureSource();
+      final checker = BoundedMemoryChecker(source);
+
+      // Exactly the shape of a healthy start: nothing, then the herd arrives.
+      for (final value in <int>[0, 2, 5, 5, 5, 5]) {
+        source.plantWide[sessionsStructure] = value;
+        checker.sample(_at(const Duration(seconds: 5)));
+      }
+
+      expect(checker.violations, isEmpty,
+          reason: 'sessions climbing 0 -> 2 -> 5 at start() is the pipe coming '
+              'up. A rule that judged the fill would fire on every healthy run, '
+              'and a rule that has to be relaxed to be usable is the worst kind');
+    });
+
+    test('recordedOutcomes gets the longer settle the write-outcome TTL '
+        'implies', () {
+      final source = _StructureSource();
+      final checker = BoundedMemoryChecker(source);
+
+      // Twelve checkpoints of legitimate fill — one whole 60 s TTL at the 5 s
+      // cadence — then the horizon starts pruning.
+      for (var i = 0; i < 12; i++) {
+        source.plantWide[recordedOutcomesStructure] = i + 1;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+
+      expect(checker.violations, isEmpty,
+          reason: 'the outcome log accumulates every settled write until the '
+              'oldest crosses ServerConfig.writeOutcomeTtl, so twelve '
+              'checkpoints of monotone growth is the prune working rather than '
+              'a leak. boundedMemorySettleOverrides carries the number and '
+              'derives it from the gateway\'s own constant');
+      expect(boundedMemorySettleOverrides[recordedOutcomesStructure], 13,
+          reason: '60 s of TTL at a 5 s cadence is twelve checkpoints of fill '
+              'plus the one the horizon is first crossed on');
+    });
+
+    test('judgedSamples counts checkpoints with a non-zero structure, never '
+        'checkpoints taken', () {
+      final source = _StructureSource();
+      final checker = BoundedMemoryChecker(source);
+
+      for (var i = 0; i < 4; i++) {
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      expect(checker.judgedSamples, 0,
+          reason: 'four checkpoints in which every structure read zero judged '
+              'nothing: an _unresolved set empty for the whole run means no '
+              'write was ever in flight during a fault. 11-01\'s third '
+              'sabotage is this distinction — a counter counting CALLS let a '
+              'checker that threw on every call clear the vacuity gate');
+      expect(checker.checkpoints, 4);
+
+      source.plantWide[sessionsStructure] = 5;
+      checker.sample(_at(const Duration(seconds: 20)));
+      expect(checker.judgedSamples, 1);
+      expect(checker.checkpoints, 5);
+    });
+
+    test('every declared structure appears in the checkpoint row, by key set',
+        () {
+      final source = _StructureSource();
+      final checker = BoundedMemoryChecker(source);
+      source.plantWide[sessionsStructure] = 5;
+      checker.sample(_at(Duration.zero));
+
+      final watched = <String>{
+        for (final key in checker.series.keys) key.split('/').last,
+      };
+      expect(watched, containsAll(boundedMemoryStructures),
+          reason: 'a structure silently dropped from the reading is a '
+              'structure nobody is watching, and it looks exactly like one '
+              'that stayed flat. Missing: '
+              '${boundedMemoryStructures.toSet().difference(watched)}');
+      expect(boundedMemoryStructures.toSet(),
+          boundedMemoryPanelStructures.toSet()
+            ..addAll(boundedMemoryPlantWideStructures),
+          reason: 'the two halves must add up to the whole list, or a '
+              'structure can be declared and never read');
+    });
+
+    test('a platform that cannot read a structure skips it BY NAME', () {
+      final source = _StructureSource()
+        ..skips[openSocketsStructure] = 'no /proc/self/fd on this platform';
+      final checker = BoundedMemoryChecker(source);
+      source.plantWide.remove(openSocketsStructure);
+      source.plantWide[sessionsStructure] = 5;
+      checker.sample(_at(Duration.zero));
+
+      expect(checker.skipped[openSocketsStructure], isNotEmpty,
+          reason: 'a descriptor clause that quietly evaporates on one platform '
+              'is exactly the failure gate_manifest_test.dart\'s skip audit '
+              'exists to catch');
+      expect(checker.toString(), contains(openSocketsStructure),
+          reason: 'the skip has to print, or the run report shows a green '
+              'invariant that judged one structure fewer than it says');
+    });
+
+    test('the control panel\'s structures are asserted flat before any '
+        'plant-wide arm', () {
+      final source = _StructureSource(panels: 3);
+      final checker = BoundedMemoryChecker(source);
+
+      // Held at a constant, deliberately: a CLIMBING control would also trip
+      // the monotone rule, and then this case could not tell which arm caught
+      // it. Six complaints that never move are invisible to both slope rules
+      // and are exactly what the control arm is for.
+      source.panel(0)[complaintsStructure] = 6;
+      source.panel(1)[complaintsStructure] = 40;
+      for (var i = 0; i < 6; i++) {
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      checker.finish();
+
+      final control = <SoakViolation>[
+        for (final one in checker.violations)
+          if (one.panel == 'panel-0') one,
+      ];
+      expect(control, isNotEmpty,
+          reason: 'the control panel accumulated complaints while the storm '
+              'had played NO plant-wide arm, so every fault in play was '
+              'panel-targeted and the control is not a target. This is the '
+              'pre-07-08b bug class: a gateway punishing healthy panels');
+    });
+
+    test('a plant-wide arm excuses the control, because the storm did not aim '
+        'at it', () {
+      final source = _StructureSource(panels: 3)..plantWideArmsApplied = 1;
+      final checker = BoundedMemoryChecker(source);
+      // The same six complaints as the case above, and the only difference is
+      // that the storm has played one plant-wide arm.
+      source.panel(0)[complaintsStructure] = 6;
+      for (var i = 0; i < 6; i++) {
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      checker.finish();
+
+      expect(<SoakViolation>[
+        for (final one in checker.violations)
+          if (one.panel == 'panel-0') one,
+      ], isEmpty,
+          reason: 'GatewayRestart, KeymappingReload and every upstream arm '
+              'reach the control like everybody else — 11-03\'s correction. An '
+              'arm written against "it is never disturbed" would make the '
+              'strongest instrument in the soak flaky rather than strong');
+    });
+
+    test('the violation names the structure, the panel, the offset and the '
+        'seed', () {
+      final source = _StructureSource(seed: 4242, panels: 3)
+        ..offset = const Duration(minutes: 3, seconds: 20);
+      final checker = BoundedMemoryChecker(source);
+      for (var i = 0; i < 9; i++) {
+        source.panel(2)[unresolvedCmdsStructure] = i;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+
+      final rendered = checker.violations.first.toString();
+      for (final fragment in <String>[
+        'panel-2',
+        unresolvedCmdsStructure,
+        'seed=4242',
+        '+03:20',
+      ]) {
+        expect(rendered, contains(fragment),
+            reason: 'a trip record has to be quotable into an issue without '
+                'the run that produced it: $rendered');
+      }
+    });
+
+    test('the floor scales with the declared duration', () {
+      expect(
+          BoundedMemoryChecker(_StructureSource(),
+                  declared: const Duration(seconds: 90))
+              .minimumSamplesForAVerdict,
+          9);
+      expect(
+          BoundedMemoryChecker(_StructureSource(),
+                  declared: const Duration(minutes: 35))
+              .minimumSamplesForAVerdict,
+          210);
+    });
+
+    test('a source that throws becomes a recorded violation, never a dead run',
+        () {
+      final checker = BoundedMemoryChecker(_ThrowingStructureSource());
+      checker.sample(_at(Duration.zero));
+
+      expect(checker.violations, hasLength(1));
+      expect(checker.violations.single.detail, contains('the checker itself threw'));
+      expect(checker.judgedSamples, 0,
+          reason: 'a checker that threw judged nothing, so its counter must '
+              'not advance — 11-01\'s third sabotage in one assertion');
+    });
+
+    test('the POSITIVE CONTROL: a held unresolved command trips the monotone '
+        'rule and names the structure', () {
+      // The plan asked for a held `ResyncEngine._inFlight` entry. That map is
+      // private and has no debug getter (`resync_engine.dart:235`), and
+      // reaching it would mean editing tfc_relay_client/lib, which this plan
+      // measures and does not change. The unresolved-write set is the same
+      // shape of leak on the same client and is the structure
+      // `long_outage_gate_test.dart` itself watches as a slope — and, unlike
+      // `complaints`, it is NOT invariant 5's observable, so the control's
+      // result is unambiguous about which rule fired and which checker fired
+      // it.
+      final source = _StructureSource(panels: 3);
+      final checker = BoundedMemoryChecker(source);
+      final held = _LeakingStructureSource(source,
+          panel: 1, structure: unresolvedCmdsStructure);
+      final leaking = BoundedMemoryChecker(held);
+
+      for (var i = 0; i < 12; i++) {
+        source.plantWide[sessionsStructure] = 5;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+        leaking.sample(_at(Duration(seconds: 5 * i)));
+      }
+
+      expect(checker.violations, isEmpty,
+          reason: 'the undecorated source is the negative half of the control: '
+              'if it also trips, the control proves nothing about the leak');
+      expect(leaking.violations, isNotEmpty,
+          reason: 'a command held unresolved for ever is the leak this '
+              'invariant exists to catch, and it must show as a SLOPE rather '
+              'than against a ceiling');
+      final first = leaking.violations.first.toString();
+      expect(first, contains(unresolvedCmdsStructure));
+      expect(first, contains('consecutive'),
+          reason: 'the monotone rule and not the ratio rule: a held entry '
+              'climbs by one a checkpoint and never spikes, so a maximum '
+              'never sees it');
+    });
+  });
+
+  // ------------------------------------------------------------ invariant 5
+
+  group('invariant 5: bounded logs', () {
+    test('a panel over the ceiling in one window is a violation naming the '
+        'panel and the window', () {
+      final source = _LogSource(panels: 3);
+      final checker = BoundedLogsChecker(source, ceilingPerMinute: 30);
+
+      // Thirty seconds of window, thirty complaints — sixty a minute against a
+      // ceiling of thirty.
+      for (var i = 0; i <= 6; i++) {
+        source.panel(1).complaints = i * 5;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+
+      expect(checker.violations, isNotEmpty,
+          reason: 'sixty complaints a minute against a ceiling of thirty went '
+              'unrecorded');
+      final rendered = checker.violations.first.toString();
+      for (final fragment in <String>['panel-1', 'per minute']) {
+        expect(rendered, contains(fragment), reason: rendered);
+      }
+    });
+
+    test('a panel under the ceiling is not a violation', () {
+      final source = _LogSource(panels: 3);
+      final checker = BoundedLogsChecker(source, ceilingPerMinute: 60);
+      for (var i = 0; i <= 12; i++) {
+        source.panel(1).complaints = i;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      expect(checker.violations, isEmpty,
+          reason: 'twelve complaints a minute against a ceiling of sixty is a '
+              'noisy storm and not a flood');
+    });
+
+    test('a window narrower than the minimum span is not judged', () {
+      final source = _LogSource(panels: 3);
+      final checker = BoundedLogsChecker(source, ceilingPerMinute: 1);
+      source.panel(1).complaints = 0;
+      checker.sample(_at(Duration.zero));
+      source.panel(1).complaints = 100;
+      checker.sample(_at(const Duration(seconds: 5)));
+
+      expect(checker.violations, isEmpty,
+          reason: 'a rate extrapolated from a five-second span multiplies '
+              'whatever noise is in it by twelve');
+      expect(checker.judgedSamples, 0,
+          reason: 'and it must be SUBTRACTED from the judged count rather '
+              'than silently passed, or a run of nothing but thin windows '
+              'reads as a run that measured something');
+    });
+
+    test('a panel that never established is not judged', () {
+      final source = _LogSource(panels: 3);
+      for (final panel in source.panelLogs) {
+        panel.established = false;
+      }
+      final checker = BoundedLogsChecker(source);
+      for (var i = 0; i <= 12; i++) {
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      expect(checker.judgedSamples, 0,
+          reason: 'a panel that never connected produced no complaints for a '
+              'reason that is not this invariant\'s');
+    });
+
+    test('zero complaints across the whole run is a recorded violation', () {
+      final source = _LogSource(panels: 3);
+      final checker = BoundedLogsChecker(source);
+      for (var i = 0; i <= 12; i++) {
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      checker.finish();
+
+      expect(
+          checker.violations.map((one) => one.detail).join('\n'),
+          contains('no complaint at all'),
+          reason: 'a storm that produced no complaints anywhere means the '
+              'panels never lost a subscription, which for a flap storm means '
+              'the faults did not reach them. That is a broken soak wearing a '
+              'green tick');
+    });
+
+    test('the control panel\'s complaint list stays near-empty', () {
+      final source = _LogSource(panels: 3);
+      final checker = BoundedLogsChecker(source, controlTotal: 12);
+      source.panel(0).complaints = 40;
+      source.panel(1).complaints = 3;
+      for (var i = 0; i <= 12; i++) {
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      checker.finish();
+
+      final control = <SoakViolation>[
+        for (final one in checker.violations)
+          if (one.panel == 'panel-0') one,
+      ];
+      expect(control, isNotEmpty,
+          reason: 'forty complaints on the panel the storm may never aim at, '
+              'against a threshold of twelve. This is the arm that would have '
+              'caught the pre-07-08b heartbeat bug');
+      expect(control.first.toString(), contains('12'));
+    });
+
+    test('the backstop catches slow steady growth the rate never sees', () {
+      final source = _LogSource(panels: 3);
+      final checker = BoundedLogsChecker(source,
+          declared: const Duration(minutes: 1),
+          ceilingPerMinute: 1000,
+          totalBackstopPerMinute: 30);
+      for (var i = 0; i <= 12; i++) {
+        source.panel(1).complaints = i * 5;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      checker.finish();
+
+      expect(
+          checker.violations.map((one) => one.detail).join('\n'),
+          contains('backstop'),
+          reason: 'sixty complaints against a backstop of thirty, at a rate '
+              'the ceiling of a thousand never notices — the one failure a '
+              'rate cannot see');
+    });
+
+    test('the server-side line count is read and reported', () {
+      final source = _LogSource(panels: 3)
+        ..gatewayLogLines = 7
+        ..plantIngestLogLines = 2;
+      final checker = BoundedLogsChecker(source);
+      checker.sample(_at(Duration.zero));
+
+      expect(checker.gatewayLogLines, 7,
+          reason: 'buildGateway\'s default error sink is log.e '
+              '(gateway_config.dart:492-497), so one collected entry is one '
+              'line the deployed gateway would write — the server half of '
+              'this invariant needed no subprocess harness');
+      expect(checker.plantIngestLogLines, 2);
+      expect(checker.toString(), contains('gateway 7'));
+    });
+
+    test('the floor and the backstop both scale with the declared duration',
+        () {
+      expect(
+          BoundedLogsChecker(_LogSource(),
+                  declared: const Duration(seconds: 90))
+              .minimumSamplesForAVerdict,
+          15);
+      expect(
+          BoundedLogsChecker(_LogSource(), declared: const Duration(minutes: 35))
+              .minimumSamplesForAVerdict,
+          350);
+      expect(
+          BoundedLogsChecker(_LogSource(),
+                  declared: const Duration(seconds: 90))
+              .totalBackstop,
+          360);
+    });
+
+    test('the violation names the seed and the schedule offset', () {
+      final source = _LogSource(seed: 4242, panels: 3)
+        ..offset = const Duration(minutes: 3, seconds: 20);
+      final checker = BoundedLogsChecker(source, ceilingPerMinute: 10);
+      for (var i = 0; i <= 6; i++) {
+        source.panel(1).complaints = i * 5;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      final rendered = checker.violations.first.toString();
+      expect(rendered, contains('seed=4242'));
+      expect(rendered, contains('+03:20'));
+    });
+
+    test('the POSITIVE CONTROL: removing Phase 7\'s _tickResyncComplained '
+        'damping trips the ceiling', () {
+      // A live regression test on the damping, and it stays one after this
+      // phase closes. The damping is `if (_tickResyncComplained.add(entry.key))`
+      // at `connection_supervisor.dart:771`: once per subscription per
+      // connection, so a page that keeps mismatching costs ONE complaint no
+      // matter how many ticks it mismatches for. Removing the guard costs one
+      // complaint per suppressed tick.
+      //
+      // The counterfactual is computed from the same run rather than by editing
+      // the client: `suppressedTicks` is how many ticks WOULD have complained,
+      // and the case asserts the damped number is under the ceiling while the
+      // undamped number is over it. If somebody deletes the guard, the two
+      // numbers become one number and this case fails.
+      const ticksPerMinute = 40; // a 1500 ms tick, the shipping default
+      final damped = _LogSource(panels: 3);
+      final undamped = _LogSource(panels: 3);
+      final dampedChecker = BoundedLogsChecker(damped, ceilingPerMinute: 30);
+      final undampedChecker = BoundedLogsChecker(undamped, ceilingPerMinute: 30);
+
+      for (var i = 0; i <= 12; i++) {
+        // Damped: one complaint for the whole mismatching stretch.
+        damped.panel(1).complaints = 1;
+        // Undamped: one per tick, which is what the guard is holding back.
+        undamped.panel(1).complaints = (ticksPerMinute * 5 * i) ~/ 60;
+        dampedChecker.sample(_at(Duration(seconds: 5 * i)));
+        undampedChecker.sample(_at(Duration(seconds: 5 * i)));
+      }
+
+      expect(dampedChecker.violations, isEmpty,
+          reason: 'with Phase 7\'s damping in place a permanently mismatching '
+              'subscription costs one complaint per connection, which no '
+              'ceiling should ever see');
+      expect(undampedChecker.violations, isNotEmpty,
+          reason: 'without it the same subscription costs one complaint per '
+              'tick — $ticksPerMinute a minute against a ceiling of 30. This '
+              'arm is a live regression test on connection_supervisor.dart:771 '
+              'and it keeps earning its keep after this phase closes');
+      expect(undampedChecker.violations.first.toString(), contains('panel-1'));
+    });
+  });
+
+  // -------------------------------------------------- the doctrine, swept
+
+  group('the memory doctrine is enforced structurally', () {
+    test('no line in the soak tree asserts on ProcessInfo.currentRss', () {
+      final hits = _sweepSoakTreeFor(_rssNeedle);
+
+      // The needle is real: the sweep must be able to find something, or a
+      // typo in the pattern would make this case pass on an empty result.
+      expect(hits, isNotEmpty,
+          reason: 'the sweep found no occurrence of $_rssNeedle anywhere, '
+              'which means it is looking in the wrong place rather than that '
+              'the doctrine is held');
+
+      final code = <String>[
+        for (final hit in hits)
+          if (_readsIt(hit.text)) '${hit.file}:${hit.line}: ${hit.text.trim()}',
+      ];
+      expect(code, hasLength(1),
+          reason: 'RSS may appear in exactly one line of code in the whole '
+              'soak tree — the journal write — and in doc comments otherwise. '
+              'What was found instead:\n${code.join('\n')}');
+      expect(code.single, contains('soak_driver.dart'));
+      expect(code.single, contains("'rss'"),
+          reason: 'the one permitted occurrence is a WRITE into the checkpoint '
+              'map, and nothing else: ${code.single}');
+
+      final asserted = <String>[
+        for (final hit in hits)
+          if (hit.text.contains('expect(')) '${hit.file}:${hit.line}',
+      ];
+      expect(asserted, isEmpty,
+          reason: 'an expect() on the same line as $_rssNeedle is the ceiling '
+              'long_outage_gate_test.dart:71-83 refuses, arriving by the back '
+              'door: $asserted');
+      expect(_expectNear(hits), isEmpty,
+          reason: 'an expect() within three lines of $_rssNeedle is the same '
+              'ceiling with a line break in it: ${_expectNear(hits)}');
+    });
+
+    test('the deviation that authorises this is declared and quotes the '
+        'clause', () {
+      final entry = soakDeviations.firstWhere(
+          (one) => one.id.contains('invariant 4'),
+          orElse: () => throw StateError('no deviation declares invariant 4\'s '
+              'departure from §7.8, so the checker below is an undeclared '
+              'one'));
+      expect(entry.clause, contains('heap high-water marks bounded'),
+          reason: 'paraphrase it and nobody can check the deviation against '
+              'the catalogue, which is the only thing the entry is for');
+      expect(entry.instead, contains('currentRss'));
+      expect(entry.reasoning, contains('long_outage_gate_test.dart:71-83'));
+    });
+  });
 }
+
+// ------------------------------------------------------- the structural sweep
+
+/// The name no assertion may be written against.
+const String _rssNeedle = 'currentRss';
+
+/// One occurrence, with enough around it to judge.
+typedef _Hit = ({String file, int line, String text, List<String> neighbours});
+
+/// Every occurrence of [needle] under the soak trees.
+///
+/// **This file excludes itself, by name and for one reason**: the case above
+/// carries the needle as a literal, so a sweep that read its own source would
+/// find its own pattern and report the doctrine broken by the test that
+/// enforces it. The needle-is-real arm is what stops that exclusion hiding a
+/// broken sweep — the same shape `soak_manifest_test.dart` uses for its own.
+List<_Hit> _sweepSoakTreeFor(String needle) {
+  const roots = <String>['test/support/soak', 'test/soak'];
+  const excluded = 'soak_meta_test.dart';
+  final hits = <_Hit>[];
+  for (final root in roots) {
+    final dir = Directory(root);
+    if (!dir.existsSync()) continue;
+    for (final entity in dir.listSync(recursive: true)) {
+      if (entity is! File || !entity.path.endsWith('.dart')) continue;
+      if (entity.path.endsWith(excluded)) continue;
+      final lines = entity.readAsLinesSync();
+      for (var i = 0; i < lines.length; i++) {
+        if (!lines[i].contains(needle)) continue;
+        hits.add((
+          file: entity.path,
+          line: i + 1,
+          text: lines[i],
+          neighbours: lines.sublist(
+              i - 3 < 0 ? 0 : i - 3, i + 4 > lines.length ? lines.length : i + 4),
+        ));
+      }
+    }
+  }
+  return hits;
+}
+
+/// Whether a line actually READS the getter, as opposed to naming it.
+///
+/// Three ways a line can carry the name and not be a memory assertion: a doc
+/// comment, an ordinary comment, and a string literal. The third is not a
+/// technicality — `soak_registry.dart`'s deviation 2 quotes
+/// `long_outage_gate_test.dart`'s doctrine **verbatim**, and that paragraph
+/// contains the getter's name twice by design, because *"paraphrase it and
+/// nobody can check the deviation against the catalogue"*. A sweep that read
+/// the quotation as code would force the one entry that declares this departure
+/// to stop quoting the text it departs from.
+bool _readsIt(String line) {
+  final trimmed = line.trimLeft();
+  if (trimmed.startsWith('///') || trimmed.startsWith('//')) return false;
+  var quote = '';
+  for (var i = 0; i < line.length; i++) {
+    final ch = line[i];
+    if (quote.isEmpty && (ch == "'" || ch == '"')) {
+      quote = ch;
+    } else if (quote == ch && (i == 0 || line[i - 1] != r'\')) {
+      quote = '';
+    } else if (quote.isEmpty && line.startsWith(_rssNeedle, i)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Hits with an `expect(` within three lines either side.
+List<String> _expectNear(List<_Hit> hits) => <String>[
+      for (final hit in hits)
+        if (hit.neighbours.any((line) => line.contains('expect(')))
+          '${hit.file}:${hit.line}',
+    ];
 
 // ------------------------------------------------------------- the fixtures
 
@@ -1108,4 +1757,184 @@ final class _WriteSource implements SoakWriteSource {
       probe: true,
     ));
   }
+}
+
+// ----------------------------------------------- invariant 4's and 5's fakes
+
+/// A structure source driven by hand, for the arms that need a specific series
+/// rather than a storm.
+///
+/// It holds the reading rather than computing one, which is the property the
+/// slope arms need: a series is a sequence of numbers somebody chose, so the
+/// case can state the shape it is testing in the loop that drives it.
+final class _StructureSource implements SoakStructureSource {
+  _StructureSource({this.seed = 11, int panels = 1})
+      : _panels = <int, Map<String, int>>{
+          for (var i = 0; i < panels; i++)
+            i: <String, int>{
+              for (final structure in boundedMemoryPanelStructures)
+                structure: 0,
+            },
+        };
+
+  @override
+  final int seed;
+
+  @override
+  Duration declaredDuration = const Duration(minutes: 1);
+
+  @override
+  Duration scheduleOffset = Duration.zero;
+
+  Duration get offset => scheduleOffset;
+  set offset(Duration value) => scheduleOffset = value;
+
+  @override
+  int controlPanelIndex = 0;
+
+  @override
+  int plantWideArmsApplied = 0;
+
+  final Map<int, Map<String, int>> _panels;
+
+  /// The plant-wide half, mutable so a case can drive one structure.
+  final Map<String, int> plantWide = <String, int>{
+    for (final structure in boundedMemoryPlantWideStructures) structure: 0,
+  };
+
+  /// Structures this "platform" cannot read, with the reason.
+  final Map<String, String> skips = <String, String>{};
+
+  Map<String, int> panel(int index) => _panels[index]!;
+
+  @override
+  SoakStructureReading readStructures() => SoakStructureReading(
+        perPanel: <int, Map<String, int>>{
+          for (final entry in _panels.entries)
+            entry.key: Map<String, int>.of(entry.value),
+        },
+        plantWide: <String, int>{
+          for (final entry in plantWide.entries)
+            if (!skips.containsKey(entry.key)) entry.key: entry.value,
+        },
+        skips: Map<String, String>.of(skips),
+      );
+}
+
+/// A structure source that throws, for the [GuardedSampling] arm.
+final class _ThrowingStructureSource implements SoakStructureSource {
+  @override
+  int get seed => 11;
+
+  @override
+  Duration get declaredDuration => const Duration(minutes: 1);
+
+  @override
+  Duration get scheduleOffset => Duration.zero;
+
+  @override
+  int get controlPanelIndex => 0;
+
+  @override
+  int get plantWideArmsApplied => 0;
+
+  @override
+  SoakStructureReading readStructures() =>
+      throw StateError('the composed pipe went away mid-reading');
+}
+
+/// The positive control: one panel's structure grows by one at every reading
+/// and never comes back down.
+///
+/// A decorator over a real answer rather than a second source — the shape
+/// `soak_observables.dart` argues for. Everything but the one structure on the
+/// one panel is whatever the source said.
+final class _LeakingStructureSource implements SoakStructureSource {
+  _LeakingStructureSource(this._real,
+      {required this.panel, required this.structure});
+
+  final SoakStructureSource _real;
+  final int panel;
+  final String structure;
+  int _held = 0;
+
+  @override
+  int get seed => _real.seed;
+
+  @override
+  Duration get declaredDuration => _real.declaredDuration;
+
+  @override
+  Duration get scheduleOffset => _real.scheduleOffset;
+
+  @override
+  int get controlPanelIndex => _real.controlPanelIndex;
+
+  @override
+  int get plantWideArmsApplied => _real.plantWideArmsApplied;
+
+  @override
+  SoakStructureReading readStructures() {
+    final real = _real.readStructures();
+    final perPanel = <int, Map<String, int>>{
+      for (final entry in real.perPanel.entries)
+        entry.key: Map<String, int>.of(entry.value),
+    };
+    perPanel[panel]?[structure] = ++_held;
+    return SoakStructureReading(
+      perPanel: perPanel,
+      plantWide: real.plantWide,
+      skips: real.skips,
+    );
+  }
+}
+
+/// A log source driven by hand.
+final class _LogSource implements SoakLogSource {
+  _LogSource({this.seed = 11, int panels = 1})
+      : panelLogs = <_PanelLog>[
+          for (var i = 0; i < panels; i++) _PanelLog(i),
+        ];
+
+  @override
+  final int seed;
+
+  @override
+  Duration declaredDuration = const Duration(minutes: 1);
+
+  @override
+  Duration scheduleOffset = Duration.zero;
+
+  Duration get offset => scheduleOffset;
+  set offset(Duration value) => scheduleOffset = value;
+
+  @override
+  int controlPanelIndex = 0;
+
+  @override
+  final List<_PanelLog> panelLogs;
+
+  @override
+  int gatewayLogLines = 0;
+
+  @override
+  int plantIngestLogLines = 0;
+
+  _PanelLog panel(int index) => panelLogs[index];
+}
+
+final class _PanelLog implements SoakPanelLogView {
+  _PanelLog(this.index);
+
+  @override
+  final int index;
+
+  @override
+  String get name => 'panel-$index';
+
+  @override
+  bool established = true;
+
+  @override
+  int complaints = 0;
 }
