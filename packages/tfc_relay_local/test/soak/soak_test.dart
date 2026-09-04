@@ -43,7 +43,9 @@ import 'dart:math';
 
 import 'package:test/test.dart';
 
+import '../support/soak/applied_write_ledger.dart';
 import '../support/soak/checkers/freshness_honesty.dart';
+import '../support/soak/checkers/terminal_state.dart';
 import '../support/soak/invariant.dart';
 import '../support/soak/soak_driver.dart';
 import '../support/soak/soak_journal.dart';
@@ -137,6 +139,12 @@ int chosenSeed(Map<String, String> environment) {
 List<SoakCheckerRegistration> soakCheckers(SoakDriver Function() driver) =>
     <SoakCheckerRegistration>[
       SoakCheckerRegistration.fast(FreshnessHonestyChecker(_LateSource(driver))),
+      // At the checkpoint cadence rather than the fast one: invariant 2 reads
+      // an append-only list by index and a set's length, so five seconds loses
+      // nothing — every record carries the schedule offset the DRIVER stamped
+      // at the instant, not the one the checker read it at.
+      SoakCheckerRegistration.checkpoint(
+          TerminalStateChecker(_LateSource(driver))),
     ];
 
 /// A [SoakFreshnessSource] that resolves its driver on every call.
@@ -145,7 +153,7 @@ List<SoakCheckerRegistration> soakCheckers(SoakDriver Function() driver) =>
 /// reads the live one, and the alternative — handing the checker a setter the
 /// driver calls at `start()` — is a second lifecycle to get wrong on the day
 /// somebody adds a third registration.
-final class _LateSource implements SoakFreshnessSource {
+final class _LateSource implements SoakFreshnessSource, SoakWriteSource {
   const _LateSource(this._driver);
 
   final SoakDriver Function() _driver;
@@ -173,6 +181,15 @@ final class _LateSource implements SoakFreshnessSource {
 
   @override
   Duration get freshnessBudget => _driver().freshnessBudget;
+
+  @override
+  List<SoakWriteRecord> get writeRecords => _driver().writeRecords;
+
+  @override
+  List<String> get unresolvedCmds => _driver().unresolvedCmds;
+
+  @override
+  AppliedWriteLedger get appliedWrites => _driver().appliedWrites;
 }
 
 /// One run. The only difference between the lane and RES-03 is [duration].
@@ -338,9 +355,10 @@ void main() {
       for (final one in registrations) one.checker,
     ];
 
-    expect(checkers.map((one) => one.name), contains(freshnessHonesty),
-        reason: '11-04 registers invariant 1; 11-05 and 11-06 append theirs to '
-            'the same list');
+    expect(checkers.map((one) => one.name),
+        containsAll(<String>[freshnessHonesty, terminalStateWrites]),
+        reason: '11-04 registers invariants 1 and 2; 11-05 and 11-06 append '
+            'theirs to the same list');
     expect(
         () => assertEveryCheckerIsDeclared(checkers, declaredCheckers),
         returnsNormally);
@@ -358,8 +376,8 @@ void main() {
       () {
     late final SoakDriver lane;
     late final SoakDriver full;
-    final short = soakCheckers(() => lane).single.checker;
-    final long = soakCheckers(() => full).single.checker;
+    final short = soakCheckers(() => lane).first.checker;
+    final long = soakCheckers(() => full).first.checker;
     lane = SoakDriver(seed: 1, duration: shortArm, herdSize: 3);
     full = SoakDriver(seed: 1, duration: fullArm, herdSize: 3);
 

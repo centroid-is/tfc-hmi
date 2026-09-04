@@ -36,6 +36,7 @@ import 'package:tfc_relay_server/tfc_relay_server.dart';
 
 import '../support/soak/applied_write_ledger.dart';
 import '../support/soak/checkers/freshness_honesty.dart';
+import '../support/soak/checkers/terminal_state.dart';
 import '../support/soak/invariant.dart';
 import '../support/soak/soak_driver.dart';
 import '../support/soak/soak_observables.dart';
@@ -535,6 +536,338 @@ void main() {
               '"applied once" about a write it had forgotten');
     });
   });
+
+  group('invariant 2: one terminal state per write', () {
+    test('POSITIVE CONTROL (a): a command resolved twice is a violation '
+        'recorded at the instant it happened, carrying both states', () {
+      final source = _WriteSource()
+        ..issue('cmd-a', panel: 'panel-2', key: 'ST101.CN01.MOT01.setpoint',
+            value: 7)
+        ..resolve('cmd-a', 'applied', at: const Duration(seconds: 30))
+        // The failure: the same operator action reaching a second terminal
+        // state. One id is one action (04-REVIEW CR-05), so a second settled
+        // answer means one of the two is being reported about the wrong write.
+        ..resolve('cmd-a', 'rejected', at: const Duration(minutes: 4));
+      final checker = TerminalStateChecker(source);
+      checker.sample(_at(const Duration(minutes: 4)));
+
+      expect(checker.violations, hasLength(1));
+      final rendered = checker.violations.single.toString();
+      for (final fragment in <String>[
+        'applied',
+        'rejected',
+        '+04:00.000',
+        '11',
+      ]) {
+        expect(rendered, contains(fragment),
+            reason: 'the schedule offset at the instant is what makes a double '
+                'resolution diagnosable — thirty minutes later the gateway\'s '
+                'own log has forgotten. Missing "$fragment":\n$rendered');
+      }
+    });
+
+    test('POSITIVE CONTROL (b): a write that reached a socket and is in '
+        'neither map is a violation at run end', () {
+      // PROJECT.md's named failure: a write silently lost. It is not in the
+      // terminal map, so nothing ever settled it, and it is not in
+      // debugUnresolvedCmds, so the client is not going to ask about it either.
+      final source = _WriteSource()
+        ..issue('cmd-lost', panel: 'panel-1', key: 'ST201.CN01.MOT01.setpoint',
+            value: 3)
+        ..direct('cmd-lost', 'unknown', reachedASocket: true);
+      final checker = TerminalStateChecker(source);
+      checker.sample(_at(Duration.zero));
+      checker.finish();
+
+      final lost = checker.violations
+          .where((one) => one.toString().contains('in NEITHER'))
+          .toList();
+      expect(lost, hasLength(1),
+          reason: 'a write nobody is tracking and nobody settled is exactly '
+              'the "never silently lost" half of the Core Value');
+      expect(lost.single.toString(), contains('cmd-lost'));
+    });
+
+    test('the SAME terminal state re-reported through the recovery path is '
+        'counted, not a violation', () {
+      // Measured in the lane, in roughly half of ninety-second runs, always on
+      // a probe write to the flapping panel. The sequence is the pipe working:
+      //
+      //   1. write() sends; the cmd is in `_unresolved` from before it left.
+      //   2. the gateway records the outcome and answers.
+      //   3. the link flaps; on the next entry to `ready` the client re-queries
+      //      writeStatus for everything still unresolved, and the gateway
+      //      answers from its own log — `_settle` fires `onWriteResolved`.
+      //   4. the original write() future ALSO returns, with the same outcome.
+      //
+      // One operator action, ONE terminal state, reported through two channels
+      // that agree. The invariant forbids a write reaching two terminal states,
+      // not an outcome being reported twice — and treating agreement as a
+      // breach would make the strongest arm in invariant 2 fire on a healthy
+      // pipe about half the time. What stays a violation is DISAGREEMENT, and
+      // the "never duplicated server-side" half is answered by the plant-side
+      // ledger, which is a different arm entirely.
+      final source = _WriteSource()
+        ..issue('cmd-a', panel: 'panel-1', key: 'PIPE.connected', value: 1)
+        ..resolve('cmd-a', 'rejected', at: const Duration(seconds: 34))
+        ..direct('cmd-a', 'rejected', reachedASocket: true,
+            at: const Duration(seconds: 34))
+        ..settled('cmd-b', 'applied')
+        ..issue('cmd-c', panel: 'panel-1', key: 'k', value: 1)
+        ..direct('cmd-c', 'unknown', reachedASocket: true)
+        ..stillUnresolved('cmd-c');
+      final checker = TerminalStateChecker(source);
+      checker.sample(_at(const Duration(seconds: 34)));
+      checker.finish();
+
+      expect(checker.violations, isEmpty);
+      expect(checker.reResolvedInAgreement, 1,
+          reason: 'counted rather than swallowed: a run where the recovery '
+              'path re-reports half the writes is telling you something about '
+              'the storm, and a number nobody prints is a number nobody reads');
+    });
+
+    test('a write that never reached a socket is NOT demanded to be terminal',
+        () {
+      // The client removes an undispatched cmd from `_unresolved` on purpose
+      // (remote_state_man.dart:832-836): re-querying it every reconnect for the
+      // rest of the shift is how a panel with a dead link grows the unresolved
+      // set until writeStatus is refused for being over maxKeysPerSubscribe,
+      // taking the recovery path for the GENUINE unknowns down with it. A
+      // checker that demanded terminality here would be asserting against that
+      // protection.
+      final source = _WriteSource()
+        ..issue('cmd-stillborn', panel: 'panel-4',
+            key: 'ST301.CN01.MOT01.setpoint', value: 1)
+        ..direct('cmd-stillborn', 'unknown', reachedASocket: false)
+        // One healthy write so the distribution arms have something to pass on.
+        ..issue('cmd-ok', panel: 'panel-1', key: 'ST101.CN01.MOT01.setpoint',
+            value: 2)
+        ..direct('cmd-ok', 'applied', reachedASocket: true)
+        ..issue('cmd-no', panel: 'panel-1', key: 'PIPE.connected', value: 2)
+        ..direct('cmd-no', 'rejected', reachedASocket: true);
+      final checker = TerminalStateChecker(source);
+      checker.sample(_at(Duration.zero));
+      checker.finish();
+
+      expect(
+          checker.violations
+              .where((one) => one.toString().contains('cmd-stillborn')),
+          isEmpty);
+      expect(checker.neverReachedASocket, 1,
+          reason: 'counted rather than ignored: a run where every write died '
+              'in the process is a run that measured nothing, and the number '
+              'has to be readable next to judgedSamples');
+    });
+
+    test('a command in BOTH the terminal map and the unresolved set is a '
+        'violation', () {
+      final source = _WriteSource()
+        ..issue('cmd-a', panel: 'panel-1', key: 'k', value: 1)
+        ..direct('cmd-a', 'applied', reachedASocket: true)
+        ..stillUnresolved('cmd-a');
+      final checker = TerminalStateChecker(source);
+      checker.sample(_at(Duration.zero));
+      checker.finish();
+
+      expect(
+          checker.violations.where((one) => one.toString().contains('in BOTH')),
+          hasLength(1),
+          reason: 'a settled command the client is still going to re-query is '
+              'one the operator will be told about twice, and the second '
+              'answer may disagree with the first');
+    });
+
+    test('judgedSamples counts resolved writes and never sample calls', () {
+      final source = _WriteSource()
+        ..issue('cmd-a', panel: 'panel-1', key: 'k', value: 1)
+        ..direct('cmd-a', 'applied', reachedASocket: true);
+      final checker = TerminalStateChecker(source);
+      for (var i = 0; i < 40; i++) {
+        checker.sample(_at(Duration(milliseconds: 25 * i)));
+      }
+
+      expect(checker.judgedSamples, 1,
+          reason: 'forty sample calls and one resolved write. 11-01\'s third '
+              'sabotage: a counter that counted calls let a permanently broken '
+              'checker clear the very gate built to catch it');
+    });
+
+    group('the run-end distribution', () {
+      test('fails a run that produced no unknown', () {
+        final source = _WriteSource()
+          ..settled('cmd-a', 'applied')
+          ..settled('cmd-b', 'rejected');
+        final checker = TerminalStateChecker(source);
+        checker.sample(_at(Duration.zero));
+        checker.finish();
+
+        expect(
+            checker.violations.where((one) => one.toString().contains('unknown')),
+            hasLength(1),
+            reason: 'a storm that produced no unknown never broke a link '
+                'during a write\'s round trip, so the invariant\'s hard case '
+                'was never tested at all');
+      });
+
+      test('fails a run that produced no rejected', () {
+        final source = _WriteSource()
+          ..settled('cmd-a', 'applied')
+          ..issue('cmd-b', panel: 'panel-1', key: 'k', value: 1)
+          ..direct('cmd-b', 'unknown', reachedASocket: true)
+          ..stillUnresolved('cmd-b');
+        final checker = TerminalStateChecker(source);
+        checker.sample(_at(Duration.zero));
+        checker.finish();
+
+        expect(
+            checker.violations
+                .where((one) => one.toString().contains('rejected')),
+            hasLength(1));
+      });
+
+      test('is not asked of a run too short to have produced one', () {
+        // Measured: `soak_test.dart`'s auxiliary cases declare eight and twelve
+        // seconds to prove the seed reaches stdout and that two runs of one
+        // seed play the same storm. Eight seconds is three probe writes, and an
+        // `unknown` needs a link to break DURING a write's round trip — a
+        // coincidence three writes cannot be relied on to produce. Asserting
+        // the distribution there would make a smoke test of the machinery fail
+        // for a property it was never running long enough to have.
+        //
+        // Invariant 1's distribution is deliberately NOT gated the same way,
+        // and the asymmetry is real rather than an oversight: freshness is
+        // sampled forty times a second from the first tick, so both a fresh and
+        // a stale reading appear in any run of any length that has a fault in
+        // it. Writes are two seconds apart.
+        final source = _WriteSource()
+          ..declaredDuration = const Duration(seconds: 8)
+          ..settled('cmd-a', 'applied');
+        final checker = TerminalStateChecker(source);
+        checker.sample(_at(Duration.zero));
+        checker.finish();
+
+        expect(checker.violations, isEmpty);
+        expect(checker.distributionWasAsked, isFalse,
+            reason: 'and the run has to SAY it was not asked, or a green '
+                'eight-second run reads as a distribution that held');
+      });
+
+      test('is asked of any run at or past the floor', () {
+        final source = _WriteSource()
+          ..declaredDuration = distributionArmFloor
+          ..settled('cmd-a', 'applied');
+        final checker = TerminalStateChecker(source);
+        checker.sample(_at(Duration.zero));
+        checker.finish();
+
+        expect(checker.distributionWasAsked, isTrue);
+        expect(checker.violations, hasLength(2),
+            reason: 'no rejected and no unknown, each failing by name');
+      });
+
+      test('passes a run that produced all three', () {
+        final source = _WriteSource()
+          ..settled('cmd-a', 'applied')
+          ..settled('cmd-b', 'rejected')
+          ..issue('cmd-c', panel: 'panel-1', key: 'k', value: 1)
+          ..direct('cmd-c', 'unknown', reachedASocket: true)
+          ..stillUnresolved('cmd-c');
+        final checker = TerminalStateChecker(source);
+        checker.sample(_at(Duration.zero));
+        checker.finish();
+
+        expect(checker.violations, isEmpty);
+        expect(checker.applied, 1);
+        expect(checker.rejected, 1);
+        expect(checker.unknown, 1);
+      });
+    });
+
+    test('the plant applying one command twice is a violation', () {
+      final source = _WriteSource()
+        ..settled('cmd-a', 'applied')
+        ..settled('cmd-b', 'rejected')
+        ..issue('cmd-c', panel: 'panel-1', key: 'k', value: 1)
+        ..direct('cmd-c', 'unknown', reachedASocket: true)
+        ..stillUnresolved('cmd-c');
+      // Two applications under one command id: the question the ledger exists
+      // to answer and the gateway's sixty-second log cannot.
+      source.appliedWrites
+        ..attribute('cmd-a', 'panel-1')
+        ..recordApplied(key: 'ST101.CN01.MOT01.setpoint', value: 5, cmd: 'cmd-a')
+        ..recordApplied(key: 'ST101.CN01.MOT01.setpoint', value: 5, cmd: 'cmd-a');
+      final checker = TerminalStateChecker(source);
+      checker.sample(_at(Duration.zero));
+      checker.finish();
+
+      expect(
+          checker.violations
+              .where((one) => one.toString().contains('the plant applied')),
+          hasLength(1));
+    });
+
+    test('a truncated ledger is reported rather than read as an answer', () {
+      final source = _WriteSource(ledgerCapacity: 1)
+        ..settled('cmd-a', 'applied')
+        ..settled('cmd-b', 'rejected')
+        ..issue('cmd-c', panel: 'panel-1', key: 'k', value: 1)
+        ..direct('cmd-c', 'unknown', reachedASocket: true)
+        ..stillUnresolved('cmd-c');
+      source.appliedWrites
+        ..recordApplied(key: 'k', value: 1, cmd: 'cmd-a')
+        ..recordApplied(key: 'k', value: 2, cmd: 'cmd-b');
+      final checker = TerminalStateChecker(source);
+      checker.finish();
+
+      expect(
+          checker.violations
+              .where((one) => one.toString().contains('truncated')),
+          hasLength(1),
+          reason: 'past the cap appearances() is a floor, and a reconciliation '
+              'that reported "no duplicates" off a floor would be answering a '
+              'question it could no longer ask');
+    });
+
+    test('the unresolved set is bounded across the run, and the worst is '
+        'recorded', () {
+      final source = _WriteSource()
+        ..settled('cmd-a', 'applied')
+        ..settled('cmd-b', 'rejected');
+      for (var i = 0; i < 9; i++) {
+        source
+          ..issue('cmd-p$i', panel: 'panel-1', key: 'k', value: i)
+          ..direct('cmd-p$i', 'unknown', reachedASocket: true)
+          ..stillUnresolved('cmd-p$i');
+      }
+      final checker = TerminalStateChecker(source, unresolvedCeiling: 4);
+      checker.sample(_at(Duration.zero));
+      checker.finish();
+
+      expect(checker.worstUnresolved, 9);
+      expect(
+          checker.violations
+              .where((one) => one.toString().contains('against a ceiling of')),
+          hasLength(1),
+          reason: 'the same counter invariant 4 watches as a slope (11-05 '
+              'task 1). Here the question is whether it is bounded at all: an '
+              'unresolved set that only grows is a writeStatus re-query that '
+              'will eventually be refused for being over maxKeysPerSubscribe');
+    });
+
+    test('the floor scales with the declared duration', () {
+      expect(
+          TerminalStateChecker(_WriteSource(),
+                  declared: const Duration(seconds: 90))
+              .minimumSamplesForAVerdict,
+          12);
+      expect(
+          TerminalStateChecker(_WriteSource(),
+                  declared: const Duration(minutes: 35))
+              .minimumSamplesForAVerdict,
+          280);
+    });
+  });
 }
 
 // ------------------------------------------------------------- the fixtures
@@ -691,5 +1024,88 @@ final class _LyingPanelView implements SoakPanelView {
     // `badStale` on the value would be caught by the quality arm rather than by
     // the age arm and would prove the wrong thing.
     return value?.copyWith(quality: Quality.good);
+  }
+}
+
+/// A write source driven by hand, for the arms that need a specific sequence
+/// rather than a storm.
+final class _WriteSource implements SoakWriteSource {
+  _WriteSource({int ledgerCapacity = appliedWriteLedgerCapacity})
+      : appliedWrites = AppliedWriteLedger(capacity: ledgerCapacity);
+
+  @override
+  final int seed = 11;
+
+  @override
+  Duration declaredDuration = const Duration(minutes: 1);
+
+  @override
+  Duration scheduleOffset = Duration.zero;
+
+  @override
+  final AppliedWriteLedger appliedWrites;
+
+  final List<SoakWriteRecord> _records = <SoakWriteRecord>[];
+  final List<String> _unresolved = <String>[];
+  final Map<String, SoakWriteRecord> _issued = <String, SoakWriteRecord>{};
+  int _nth = 0;
+
+  @override
+  List<SoakWriteRecord> get writeRecords =>
+      List<SoakWriteRecord>.unmodifiable(_records);
+
+  @override
+  List<String> get unresolvedCmds => List<String>.unmodifiable(_unresolved);
+
+  void issue(String cmd,
+      {required String panel, required String key, required Object? value}) {
+    final record = SoakWriteRecord(
+      nth: ++_nth,
+      cmd: cmd,
+      panel: panel,
+      key: key,
+      value: value,
+      stage: SoakWriteStage.issued,
+      at: scheduleOffset,
+      probe: true,
+    );
+    _issued[cmd] = record;
+    _records.add(record);
+  }
+
+  void direct(String cmd, String outcome,
+      {required bool reachedASocket, Duration? at}) {
+    _append(cmd, outcome, SoakWriteStage.direct, at,
+        reachedASocket: reachedASocket);
+  }
+
+  void resolve(String cmd, String outcome, {Duration? at}) {
+    _append(cmd, outcome, SoakWriteStage.lateResolution, at,
+        reachedASocket: true);
+  }
+
+  /// Issue and settle in one call, for the arms that only need the outcome.
+  void settled(String cmd, String outcome) {
+    issue(cmd, panel: 'panel-1', key: 'ST101.CN01.MOT01.setpoint', value: 1);
+    direct(cmd, outcome, reachedASocket: true);
+  }
+
+  void stillUnresolved(String cmd) => _unresolved.add(cmd);
+
+  void _append(String cmd, String outcome, SoakWriteStage stage, Duration? at,
+      {required bool reachedASocket}) {
+    final issued = _issued[cmd];
+    _records.add(SoakWriteRecord(
+      nth: issued?.nth ?? -1,
+      cmd: cmd,
+      panel: issued?.panel ?? 'panel-1',
+      key: issued?.key ?? '(unknown)',
+      value: issued?.value,
+      stage: stage,
+      outcome: outcome,
+      reachedASocket: reachedASocket,
+      at: at ?? scheduleOffset,
+      probe: true,
+    ));
   }
 }

@@ -81,6 +81,7 @@ import 'package:tfc_stateman_contract/faults.dart';
 
 import '../gate_b_fixture.dart';
 import '../keymap_fixtures.dart' show opcUaEntry;
+import 'applied_write_ledger.dart';
 import 'invariant.dart';
 import 'soak_event.dart';
 import 'soak_journal.dart';
@@ -197,6 +198,59 @@ const Duration checkpointCadence = Duration(seconds: 5);
 
 /// The rate-window cadence — 11-05's log-ceiling checker.
 const Duration rateWindowCadence = Duration(minutes: 1);
+
+/// How often the driver's write probe performs one operator action.
+///
+/// **Two seconds, and the probe exists because the storm does not write often
+/// enough to judge.** 11-03 measured the ninety-second lane arm at seed 11:
+/// **zero** events play, all eighteen applied entries are link mutations, and
+/// twenty seeds put the median at one or two events by ninety seconds. A soak
+/// whose write invariant judged only `PanelWrite` entries would therefore take
+/// **no** judgeable reading on every push — a checker at zero against a floor
+/// of one, failing the vacuity gate, in the one arm that runs on every commit.
+///
+/// So the driver supplies operator actions at a fixed cadence and the storm
+/// supplies the weather. That division is the point: the probe decides nothing
+/// about *what happens to* a write — it writes into whatever the timeline has
+/// armed, so a blackholed panel's probe times out into `unknown` and a
+/// flapping one's may or may not land, which is exactly the distribution
+/// invariant 2 needs and cannot manufacture honestly by staging outcomes on the
+/// fake.
+///
+/// **It is not the driver authoring the storm.** Nothing here is drawn: the
+/// panel, the key and the value are functions of a counter, so two runs of one
+/// seed issue the same probe writes in the same order. The precedent is in this
+/// file already — `GateBPlantDriver` moves every key every 250 ms and is not a
+/// storm event either. What the timeline owns is the faults; what the harness
+/// owns is a plant that moves and an operator who acts.
+///
+/// Two seconds gives forty-five writes in the lane arm and about a thousand at
+/// thirty-five minutes, which is a floor with room and a per-tick cost of one
+/// RPC.
+const Duration writeProbeCadence = Duration(seconds: 2);
+
+/// One probe in every [writeProbeReadOnlyEvery] goes to a key that cannot be
+/// written, so `rejected` is in the distribution by construction.
+///
+/// **Four.** `rejected` is the one outcome a healthy pipe under a storm will
+/// otherwise never produce — the fake plant takes every write it is given — and
+/// invariant 2's distribution asserts all three states appeared. Without a
+/// deliberate lever the assertion would fail every green run, which is the
+/// worst kind of arm: one that has to be relaxed to be usable.
+const int writeProbeReadOnlyEvery = 4;
+
+/// The key the probe writes to when it wants a refusal.
+///
+/// **A `PIPE.` key, and the refusal is the shipping gateway's own.**
+/// `LocalStateMan._settle` answers a `PipeKeyRoute` with
+/// `WriteRejected('unroutable_key', status: 'Bad_NotWritable')` and the message
+/// *"the key is in the gateway's own namespace, which is produced here and
+/// never written into from a session"* — a permanent, real, read-only path,
+/// not a lever bolted onto a fake for the occasion. 08-11's `readOnlyKey` is
+/// the same idea one layer down, on `FakeStateMan`; this composition's
+/// equivalent is the health namespace, and it has the advantage of being a key
+/// every panel already subscribes.
+final String soakReadOnlyKey = PipeKeys.connected;
 
 /// How often the driver reads each panel's connectivity.
 ///
@@ -419,7 +473,7 @@ final class SoakPanelHealth {
 /// population and proves all of that at 90 seconds — real evidence on its own,
 /// and the thing that must not bit-rot. 11-04, 11-05 and 11-06 then register
 /// against a driver that already works.
-final class SoakDriver implements SoakFreshnessSource {
+final class SoakDriver implements SoakFreshnessSource, SoakWriteSource {
   SoakDriver({
     required this.seed,
     required this.duration,
@@ -596,6 +650,32 @@ final class SoakDriver implements SoakFreshnessSource {
 
   int _plantWideArms = 0;
 
+  /// What the plant applied, for the whole run — the record §7.8 asked for and
+  /// `WriteOutcomeLog` cannot be. See [AppliedWriteLedger] for deviation 3.
+  @override
+  final AppliedWriteLedger appliedWrites = AppliedWriteLedger();
+
+  final List<SoakWriteRecord> _writeRecords = <SoakWriteRecord>[];
+
+  @override
+  List<SoakWriteRecord> get writeRecords =>
+      List<SoakWriteRecord>.unmodifiable(_writeRecords);
+
+  /// Every command every panel still considers in flight.
+  ///
+  /// Union across the herd, and read live rather than mirrored: a mirror can
+  /// disagree with the client, and the one thing worse than not knowing whether
+  /// a write is outstanding is being told the wrong answer.
+  @override
+  List<String> get unresolvedCmds => <String>[
+        if (_fixture != null)
+          for (final panel in fixture.panels) ...panel.client.debugUnresolvedCmds,
+      ];
+
+  /// How many writes the probe has issued. A denominator for the verdict block.
+  int get probeWrites => _probeWrites;
+  int _probeWrites = 0;
+
   /// How many panels are ready right now.
   int get connectedPanels => _fixture == null
       ? 0
@@ -671,6 +751,9 @@ final class SoakDriver implements SoakFreshnessSource {
         }
       }
     }
+    lines.add('  writes      : $_writesIssued issued ($_probeWrites by the '
+        'probe every ${writeProbeCadence.inSeconds}s, one in '
+        '$writeProbeReadOnlyEvery to $soakReadOnlyKey), $appliedWrites');
     lines.add('  violations  : ${violationLog.total} recorded '
         '(${violationLog.entries.length} retained, ${violationLog.overflow} '
         'overflowed)');
@@ -756,7 +839,14 @@ final class SoakDriver implements SoakFreshnessSource {
     for (var i = 0; i < herdSize; i++) {
       _health[i] = SoakPanelHealth(i);
     }
+    // The plant-side record, hung off the TEST fake and nowhere near lib/ —
+    // see AppliedWriteLedger's doc for deviation 3, and freeze 10 for the pin.
+    for (final link in fixture.links) {
+      link.inner.onWriteApplied = (key, value, cmd) =>
+          appliedWrites.recordApplied(key: key, value: value, cmd: cmd);
+    }
     _clock = SoakClock(declaredDuration: duration);
+    _ensureWriteWatch();
     _startTickers();
   }
 
@@ -862,6 +952,11 @@ final class SoakDriver implements SoakFreshnessSource {
       await held.cancel();
     }
     _subscriptions.clear();
+    for (final watch in _writeWatches) {
+      await watch.cancel();
+    }
+    _writeWatches.clear();
+    _watchedClients.clear();
     await _fixture?.dispose();
     final dir = _tokenDir;
     if (dir != null && dir.existsSync()) dir.deleteSync(recursive: true);
@@ -999,15 +1094,177 @@ final class SoakDriver implements SoakFreshnessSource {
   void _startTickers() {
     _tickers.add(Timer.periodic(panelSampleCadence, (_) => _samplePanels()));
     _tickers.add(Timer.periodic(checkpointCadence, (_) => _checkpoint()));
+    _tickers.add(Timer.periodic(writeProbeCadence, (_) => _probeWrite()));
     for (final registration in checkers) {
       _tickers.add(Timer.periodic(registration.cadence,
           (_) => registration.checker.sample(clock)));
     }
   }
 
+  // ------------------------------------------------------------ the writes
+
+  /// One synthetic operator action. See [writeProbeCadence] for why it exists.
+  ///
+  /// Everything about it is a function of the counter — which panel, which key,
+  /// which value — so two runs of one seed issue the same probe writes in the
+  /// same order. Nothing here is drawn and nothing reads a clock.
+  void _probeWrite() {
+    if (_stopped || _disposed || _fixture == null) return;
+    final n = _probeWrites++;
+    final readOnly = n % writeProbeReadOnlyEvery == 0;
+    final keys = plantKeys;
+    _track(
+      issueWrite(
+        panelIndex: n % herdSize,
+        key: readOnly ? soakReadOnlyKey : keys[n % keys.length],
+        // Unique per write, which is what makes
+        // `AppliedWriteLedger.appearances(key, value)` a clean duplicate test:
+        // two applications of one pair can then only be one write applied
+        // twice.
+        value: _probeValueBase + n,
+        probe: true,
+      ),
+      'the write probe\'s action $n',
+    );
+  }
+
+  /// Writes are numbered from here so a probe value cannot collide with the
+  /// plant sweep's own counter, which starts at 1000 and climbs by one per
+  /// sweep (`GateBPlantDriver.from`).
+  static const int _probeValueBase = 900000;
+
+  /// Issues one write, records what it did, and never throws.
+  ///
+  /// **The cmd is minted here rather than by the client, and there are two
+  /// reasons that are not "convenience".**
+  ///
+  ///  1. The plant-side ledger has to be told which panel acted **before** the
+  ///     write crosses. An `UpstreamLink.write` arrives with a key, a value and
+  ///     a cmd and no station id, so attribution after the fact would race the
+  ///     application on a fast link.
+  ///  2. `writeStatus` decodes the id as a ULID (`value_handlers.dart:752`) and
+  ///     answers `unrecognized_cmd` to anything else — so an invented id would
+  ///     leave every re-queried write permanently unresolved and invariant 2's
+  ///     late-resolution half would never fire once. [newUlid] is the same
+  ///     generator the client would have used, called one layer out.
+  ///
+  /// `cmd:` is a documented parameter of `StateManApi.write` for exactly this
+  /// case — a caller relaying an action already minted upstream of it — so this
+  /// is a production path rather than a seam invented for the soak. The storm's
+  /// own `PanelWrite` entries go through here too, so the run has one write
+  /// path and not two.
+  Future<void> issueWrite({
+    required int panelIndex,
+    required String key,
+    required Object? value,
+    required bool probe,
+  }) async {
+    final panel = soakPanelName(panelIndex);
+    final client = fixture.panels[panelIndex].client;
+    final cmd = newUlid();
+    final nth = ++_writesIssued;
+    appliedWrites.attribute(cmd, panel);
+    _writeRecords.add(SoakWriteRecord(
+      nth: nth,
+      cmd: cmd,
+      panel: panel,
+      key: key,
+      value: value,
+      stage: SoakWriteStage.issued,
+      at: _playClock.elapsed,
+      probe: probe,
+    ));
+
+    WriteResult result;
+    try {
+      result = await client.write(key, value, cmd: cmd);
+    } catch (error) {
+      // `write` promises never to throw to report an outcome, so anything here
+      // is a defect in the process rather than a condition of the plant —
+      // recorded as a violation and not swallowed into a fourth outcome.
+      _record(SoakViolation(
+        checker: 'population',
+        monotonic: clock.elapsed,
+        scheduleOffset: _playClock.elapsed,
+        panel: panel,
+        key: key,
+        detail: 'write threw instead of reporting an outcome, which the API '
+            'promises it never does (no queue, no retry, three states): '
+            '$error',
+      ));
+      return;
+    }
+
+    // **The reached-a-socket question, asked the only way it can be from
+    // outside.** An established outcome is proof the far side answered. An
+    // `unknown` is ambiguous, and the client itself has already resolved the
+    // ambiguity: it keeps a dispatched command in `_unresolved` and drops an
+    // undispatched one immediately (`remote_state_man.dart:832-836`).
+    final reached = result is! WriteUnknown ||
+        client.debugUnresolvedCmds.contains(cmd);
+    _writeRecords.add(SoakWriteRecord(
+      nth: nth,
+      cmd: cmd,
+      panel: panel,
+      key: key,
+      value: value,
+      stage: SoakWriteStage.direct,
+      outcome: soakOutcomeName(result),
+      reachedASocket: reached,
+      at: _playClock.elapsed,
+      probe: probe,
+    ));
+  }
+
+  int _writesIssued = 0;
+
+  /// Subscribes to any panel client that is not being watched yet.
+  ///
+  /// Called from the 250 ms panel sampler rather than once at `start()`,
+  /// because [GateBFixture.redial] replaces a panel's client outright when a
+  /// revoked station is restored — Phase 6 ends a refused panel's reconnect
+  /// loop for good, so a restore is an application restart. A subscription
+  /// taken once at start would go on listening to a disposed client and the
+  /// new one's late resolutions would be invisible.
+  void _ensureWriteWatch() {
+    for (final panel in fixture.panels) {
+      final client = panel.client;
+      if (!_watchedClients.add(client)) continue;
+      _writeWatches.add(client.onWriteResolved.listen((outcome) {
+        final issued = _issuedByCmd(outcome.cmd);
+        _writeRecords.add(SoakWriteRecord(
+          nth: issued?.nth ?? -1,
+          cmd: outcome.cmd,
+          panel: issued?.panel ?? soakPanelName(panel.index),
+          key: issued?.key ?? '(unknown)',
+          value: issued?.value,
+          stage: SoakWriteStage.lateResolution,
+          outcome: soakOutcomeName(outcome),
+          reachedASocket: true,
+          at: _playClock.elapsed,
+          probe: issued?.probe ?? false,
+        ));
+      }));
+    }
+  }
+
+  SoakWriteRecord? _issuedByCmd(String cmd) {
+    for (final record in _writeRecords) {
+      if (record.cmd == cmd && record.stage == SoakWriteStage.issued) {
+        return record;
+      }
+    }
+    return null;
+  }
+
+  final Set<RemoteStateMan> _watchedClients = <RemoteStateMan>{};
+  final List<StreamSubscription<WriteResult>> _writeWatches =
+      <StreamSubscription<WriteResult>>[];
+
   /// One connectivity reading per panel, and the floor evaluated against it.
   void _samplePanels() {
     if (_stopped || _disposed) return;
+    _ensureWriteWatch();
     final panels = fixture.panels;
     for (var i = 0; i < panels.length; i++) {
       final client = panels[i].client;
@@ -1455,11 +1712,11 @@ final class SoakDriver implements SoakFreshnessSource {
         }
         // Not awaited: a write's three-state outcome can take the whole write
         // deadline, and a storm that waited for it would drift its own
-        // timeline. The future carries its own catchError into the violation
-        // log; a refusal is an ordinary outcome and lands on `onWriteResolved`,
-        // which is 11-05's to judge.
-        _track(client.write(key, value).then((_) {}),
-            'the write $panel $key=$value');
+        // timeline. `issueWrite` records the issue, the direct outcome and
+        // whether it reached a socket, and carries its own failures into the
+        // violation log — invariant 2 judges what it records.
+        _track(issueWrite(panelIndex: index, key: key, value: value,
+            probe: false), 'the write $panel $key=$value');
         return SoakApplyOutcome.fired(event.kind, 'RemoteStateMan.write',
             note: '$panel $key=$value');
 
@@ -1561,3 +1818,15 @@ final class _LivePanelView implements SoakPanelView {
   @override
   DynamicValue? read(String key) => _client.read(key);
 }
+
+/// The wire word for one outcome.
+///
+/// A `switch` over the sealed type rather than a `runtimeType` string, so a
+/// fifth `WriteResult` arm fails to compile here instead of arriving in the
+/// distribution counters as a name nobody expects.
+String soakOutcomeName(WriteResult result) => switch (result) {
+      WriteApplied() => 'applied',
+      WriteRejected() => 'rejected',
+      WriteUnknown() => 'unknown',
+      WriteNotReceived() => 'not_received',
+    };
