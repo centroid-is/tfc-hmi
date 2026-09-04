@@ -429,7 +429,43 @@ final class BoundedMemoryChecker with GuardedSampling implements SoakRunEndCheck
       ..add(value);
     if (!line.settled) return;
 
+    // ------------------------------------------------------------- the cap
+    //
+    // A structure the product caps is asked a different question. Below the
+    // cap the slope says nothing — the container is filling — and above it the
+    // code enforcing the cap stopped running, which is a stronger finding than
+    // any slope and does not need one. See `boundedMemoryConstructionCaps`.
+    final cap = boundedMemoryConstructionCaps[structure];
+    if (cap != null) {
+      if (value > cap) {
+        _record(
+          clock,
+          panel: panel,
+          structure: structure,
+          observed: value,
+          expected: 'at most its construction cap of $cap',
+          detail: '$structure is at $value against a cap of $cap that the '
+              'product enforces on every append. This is not a slope and does '
+              'not need to be: the cap breaking means the code trimming the '
+              'list stopped running. Its readings so far: $line',
+        );
+      }
+      // The ratio rule still applies, and it is what would notice a capped
+      // structure sitting far above where it normally sits without ever
+      // breaching. The monotone rule does not — a ring filling to the size it
+      // was built to hold climbed for a legitimate reason, measured at
+      // worstRun=5 on both thirty-five-minute arms.
+      _ratio(line, clock, structure, value, panel);
+      return;
+    }
+
     // ------------------------------------------------------- the monotone rule
+    //
+    // Per-structure where a structure is sampled on its own cadence, so the
+    // rule stays "N checkpoints of uninterrupted growth" in the units that
+    // structure is actually read in. See `boundedMemoryMonotoneOverrides`.
+    final monotoneRun =
+        boundedMemoryMonotoneOverrides[structure] ?? this.monotoneRun;
     if (line.monotoneRun >= monotoneRun) {
       _record(
         clock,
@@ -452,7 +488,17 @@ final class BoundedMemoryChecker with GuardedSampling implements SoakRunEndCheck
       line.monotoneRun = 0;
     }
 
-    // ---------------------------------------------------------- the ratio rule
+    _ratio(line, clock, structure, value, panel);
+  }
+
+  /// The ratio rule, shared by the capped and uncapped paths.
+  void _ratio(
+    BoundedMemorySeries line,
+    SoakClock clock,
+    String structure,
+    int value,
+    String? panel,
+  ) {
     final median = line.median;
     final overPedestal = value > ratioPedestal;
     final overRatio = value > ratio * median;
