@@ -1157,6 +1157,84 @@ void main() {
               'plus the one the horizon is first crossed on');
     });
 
+    test('and it needs the same allowance in the MIDDLE of a run, where the '
+        'settle override cannot reach', () {
+      // **The two surviving boundedMemory violations, identified.** 11-05b
+      // dropped the count from 5 to 2 and could not say what the last two
+      // were, because the violation printer's 25 slots were entirely consumed
+      // by one freshness episode; 11-06 named the per-episode latch as the
+      // prerequisite for reading them and, reasoning from the END-OF-RUN
+      // spread (`worstRun=11` under the override of 13, `last` below
+      // `median`), EXONERATED `recordedOutcomes`. With the latch in, the
+      // 35-minute arm printed them: both are `recordedOutcomes`, at +18:10.003
+      // and +18:35.050, each "after 5 consecutive increases from 28 (median)".
+      //
+      // The exoneration reasoned about a mid-run rule from end-of-run
+      // statistics. `worstRun` is the longest climb ANYWHERE; the override it
+      // was compared against governs only the run's first thirteen
+      // checkpoints.
+      //
+      // And the derivation was already right — it just landed on the wrong
+      // parameter. `boundedMemorySettleOverrides`' own comment argues that the
+      // outcome log "accumulates every settled write until the oldest crosses
+      // the horizon", which is twelve checkpoints of legitimate monotone
+      // growth at the 5 s cadence. **That is a property of the structure, not
+      // of the start of the run**: every time the write rate rises, the log
+      // accumulates for a whole TTL before the horizon prunes again, at minute
+      // 18 exactly as at minute 0. So the number belongs in
+      // `boundedMemoryMonotoneOverrides` as well, for the same reason
+      // `openSockets` is there — a translation of M into the units the series
+      // is actually bounded in, not a loosening of it.
+      //
+      // The shape it is protecting is flat: 420 readings of
+      // `recordedOutcomes: last=27 median=28 peak=32` across thirty-five
+      // minutes. Nothing is leaking.
+      final source = _StructureSource();
+      final checker = BoundedMemoryChecker(source);
+
+      // Past the settle window first, on a structure at rest.
+      for (var i = 0; i < 20; i++) {
+        source.plantWide[recordedOutcomesStructure] = 28;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      // Then one whole TTL of accumulation, mid-run.
+      for (var i = 20; i < 32; i++) {
+        source.plantWide[recordedOutcomesStructure] = 28 + (i - 19);
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+
+      expect(checker.violations, isEmpty,
+          reason: 'twelve checkpoints of fill is the prune working whenever it '
+              'happens, and a rule that says so only for the first sixty '
+              'seconds of a run reports the same healthy behaviour as a leak '
+              'from minute two onwards');
+      expect(boundedMemoryMonotoneOverrides[recordedOutcomesStructure], 13,
+          reason: 'the same number as the settle override and from the same '
+              'constant — ServerConfig.writeOutcomeTtl over the checkpoint '
+              'cadence — because it is the same fact about the structure');
+    });
+
+    test('and thirteen consecutive increases still bites', () {
+      // Or the override is an exemption wearing a number, which is the
+      // objection `openSockets`' own case answers and this one has to answer
+      // too. Past one whole TTL of accumulation the horizon must have started
+      // pruning, so growth beyond it is growth the prune is not keeping up
+      // with — which is the leak.
+      final source = _StructureSource();
+      final checker = BoundedMemoryChecker(source);
+      for (var i = 0; i < 20; i++) {
+        source.plantWide[recordedOutcomesStructure] = 28;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      for (var i = 20; i < 40; i++) {
+        source.plantWide[recordedOutcomesStructure] = 28 + (i - 19);
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      expect(checker.violations, isNotEmpty,
+          reason: 'an outcome log that only ever grew for longer than its own '
+              'TTL is a horizon that stopped pruning');
+    });
+
     test('judgedSamples counts checkpoints with a non-zero structure, never '
         'checkpoints taken', () {
       final source = _StructureSource();
