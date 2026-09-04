@@ -9,6 +9,7 @@ library;
 
 import 'methods.dart';
 import 'quality.dart';
+import 'result_too_large.dart';
 import 'wire_value.dart';
 
 sealed class BufferVerdict {
@@ -170,9 +171,47 @@ final class ConflatingSendBuffer {
   /// RPC responses, write acks, status, ticks: appended verbatim, flushed
   /// ahead of telemetry, never conflated — a degraded link must still
   /// deliver the news that it is degraded.
+  ///
+  /// ## One entry may not exceed the whole lane (10-REVIEW WR-05)
+  ///
+  /// Until this check, `putPriority` accepted anything and only [poll]
+  /// measured — one tick later, by which time the entry is already held. That
+  /// is a gap rather than a delay, because the entry does not have to survive
+  /// until the next tick to do harm: `closeSocket` calls `flushPriority`,
+  /// which drains and **writes the whole lane out before the close code**, so
+  /// an entry too big for the lane is written to the socket on the way to the
+  /// eviction it caused.
+  ///
+  /// The condition is deliberately `cost > ceiling` and not
+  /// `_priorityBytes + cost > ceiling`. This is an invariant about a single
+  /// entry — one that can never be held no matter how empty the lane is — and
+  /// not a second backpressure policy. Accumulation stays [poll]'s question,
+  /// which is where the grace window and the disconnect verdict live; a door
+  /// that refused on accumulation would evict a well-behaved client for
+  /// arriving second.
+  ///
+  /// **Throwing is the honest answer here and it has a cost.** The caller is
+  /// `SessionSink.add`, which is json_rpc_2's write half, so there is no
+  /// request id in scope to refuse *to* — see `SessionSink.add` for what it
+  /// does with this and what the caller sees. That is why every handler that
+  /// can build a large answer is bounded by `data_handlers.dart`'s `_sized`
+  /// first, where the refusal can name the request: this is the backstop
+  /// behind those, not a substitute for them.
   void putPriority(Object? message) {
+    final cost = _cost(message);
+    final ceiling = maxPendingBytes;
+    if (ceiling != null && cost > ceiling) {
+      throw ResultTooLarge.bytes(
+        limit: ceiling,
+        measured: cost,
+        detail: 'one response cannot exceed the whole priority lane, however '
+            'empty the lane is. Nothing was queued, so the session is not '
+            'evicted for it',
+        suggestion: 'a narrower request, or the bounded form of this method',
+      );
+    }
     _priority.add(message);
-    _priorityBytes += _cost(message);
+    _priorityBytes += cost;
   }
 
   /// Disconnect policy. Call once per tick with a monotonic timestamp,

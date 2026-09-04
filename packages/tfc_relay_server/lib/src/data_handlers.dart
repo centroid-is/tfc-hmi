@@ -479,10 +479,17 @@ final class DataHandlers {
   ///
   /// Takes no parameters, and answers a list — empty when nothing has been
   /// saved, never null, for `browse.fetchRoots`' reason.
-  Future<Object?> historySelectViews(rpc.Parameters _) async => [
-        for (final view in await source.historyViews.selectHistoryViews())
-          view.toJson(),
-      ];
+  ///
+  /// **[_sized]** (10-REVIEW WR-05). The picker's row count is chosen by
+  /// whoever has been saving charts, the answer goes into the un-conflated
+  /// priority lane, and `flushPriority` writes the whole lane out before a
+  /// 4004 — so an unbounded answer here evicts the panel and reports it as
+  /// backpressure. The ceiling is `ReadLimits.maxHistoryViewRows`.
+  Future<Object?> historySelectViews(rpc.Parameters _) =>
+      _sized(DataServiceMethods.historySelectViews, () async => [
+            for (final view in await source.historyViews.selectHistoryViews())
+              view.toJson(),
+          ]);
 
   /// The plotted keys of a view, keyed by key name.
   ///
@@ -493,11 +500,13 @@ final class DataHandlers {
   /// view exists.
   Future<Object?> historyGetKeys(rpc.Parameters params) async {
     const method = DataServiceMethods.historyGetKeys;
-    final keys = await source.historyViews
-        .getHistoryViewKeys(_viewId(params, 'viewId', method));
-    return {
-      for (final entry in keys.entries) entry.key: entry.value.toJson(),
-    };
+    final viewId = _viewId(params, 'viewId', method);
+    return _sized(method, () async {
+      final keys = await source.historyViews.getHistoryViewKeys(viewId);
+      return {
+        for (final entry in keys.entries) entry.key: entry.value.toJson(),
+      };
+    });
   }
 
   /// The per-graph configuration of a view, keyed by graph index.
@@ -508,15 +517,19 @@ final class DataHandlers {
   /// unit.
   Future<Object?> historyGetGraphs(rpc.Parameters params) async {
     const method = DataServiceMethods.historyGetGraphs;
-    return historyViewGraphsToJson(await source.historyViews
-        .getHistoryViewGraphs(_viewId(params, 'viewId', method)));
+    final viewId = _viewId(params, 'viewId', method);
+    return _sized(
+        method,
+        () async => historyViewGraphsToJson(
+            await source.historyViews.getHistoryViewGraphs(viewId)));
   }
 
   /// Just the key names of a view, for callers that need no aliases.
   Future<Object?> historyGetKeyNames(rpc.Parameters params) async {
     const method = DataServiceMethods.historyGetKeyNames;
-    return source.historyViews
-        .getHistoryViewKeyNames(_viewId(params, 'viewId', method));
+    final viewId = _viewId(params, 'viewId', method);
+    return _sized(
+        method, () => source.historyViews.getHistoryViewKeyNames(viewId));
   }
 
   /// Saves a time window on a view and answers its id.
@@ -550,11 +563,12 @@ final class DataHandlers {
   /// Every saved window on a view, oldest first.
   Future<Object?> historyListPeriods(rpc.Parameters params) async {
     const method = DataServiceMethods.historyListPeriods;
-    return [
-      for (final period in await source.historyViews
-          .listHistoryViewPeriods(_viewId(params, 'viewId', method)))
-        period.toJson(),
-    ];
+    final viewId = _viewId(params, 'viewId', method);
+    return _sized(method, () async => [
+          for (final period
+              in await source.historyViews.listHistoryViewPeriods(viewId))
+            period.toJson(),
+        ]);
   }
 
   /// The oldest instant any series is still retained for, or null.

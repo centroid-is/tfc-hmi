@@ -101,9 +101,11 @@ final class ReadLimits {
   ReadLimits({
     this.maxTimeseriesRows = defaultMaxTimeseriesRows,
     this.maxPreferenceBytes = defaultMaxPreferenceBytes,
+    this.maxHistoryViewRows = defaultMaxHistoryViewRows,
   }) {
     _positive('maxTimeseriesRows', maxTimeseriesRows);
     _positive('maxPreferenceBytes', maxPreferenceBytes);
+    _positive('maxHistoryViewRows', maxHistoryViewRows);
   }
 
   /// Bytes one encoded sample costs, worst case, on this plant's data.
@@ -126,6 +128,28 @@ final class ReadLimits {
   /// to 754 707 B, which is 72 % of it.
   static const int defaultMaxPreferenceBytes = 1024 * 1024;
 
+  /// Rows one history-view read may answer with.
+  ///
+  /// A `HistoryViewRecord` encodes to roughly [measuredBytesPerViewRow], so
+  /// 5 000 of them is about 600 000 B — **7 % of the 8 MiB priority lane**, an
+  /// order of magnitude below the timeseries budget because these rows are
+  /// small and there is no legitimate reason for there to be many. SVN has
+  /// dozens of saved charts; five thousand is far past any plant and still far
+  /// short of the ~70 000 that makes `history.selectViews` an 8 MiB single
+  /// entry, which is the number 10-REVIEW WR-05 measured.
+  ///
+  /// The same ceiling covers a view's keys, its graphs and its saved windows.
+  /// One number rather than four, because they are the same hazard from the
+  /// same door and four ceilings would be four things to keep in step for a
+  /// distinction nobody can act on.
+  static const int defaultMaxHistoryViewRows = 5000;
+
+  /// Bytes one encoded `HistoryViewRecord` costs, near enough.
+  ///
+  /// An id, a name and two ISO timestamps. Used only to derive
+  /// [defaultMaxHistoryViewRows] and stated so the division can be redone.
+  static const int measuredBytesPerViewRow = 120;
+
   /// The row ceiling for one `queryTimeseriesData`, and for the **sum** across
   /// a `queryTimeseriesDataMultiple`.
   ///
@@ -141,6 +165,18 @@ final class ReadLimits {
   /// lane and JSON escaping of a 518 KiB `key_mappings` string is not free.
   final int maxPreferenceBytes;
 
+  /// The row ceiling for one history-view read — the picker, a view's keys, a
+  /// view's graphs, a view's saved windows.
+  ///
+  /// **Caller-grown, unlike the other two** (10-REVIEW WR-05). A timeseries
+  /// answer is bounded by how long the plant has been running; these four are
+  /// bounded by how many rows a client has created, and until CR-03 the create
+  /// side took no role at all. It still takes no *quota*: `historyCreateView`
+  /// and `historyAddPeriod` are row factories in a table shared with the
+  /// plant's own HMI, and an `operate` station in a loop is the whole
+  /// amplification.
+  final int maxHistoryViewRows;
+
   static void _positive(String name, int value) {
     if (value <= 0) {
       throw ArgumentError('$name ($value) must be positive: a non-positive '
@@ -151,5 +187,6 @@ final class ReadLimits {
 
   @override
   String toString() => 'ReadLimits(maxTimeseriesRows: $maxTimeseriesRows, '
-      'maxPreferenceBytes: $maxPreferenceBytes)';
+      'maxPreferenceBytes: $maxPreferenceBytes, '
+      'maxHistoryViewRows: $maxHistoryViewRows)';
 }

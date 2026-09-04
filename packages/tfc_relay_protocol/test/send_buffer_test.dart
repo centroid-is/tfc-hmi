@@ -239,4 +239,86 @@ void main() {
               'ServerConfig is where the gateway\'s numbers live');
     });
   });
+
+  // 10-REVIEW WR-05. `poll` measures one tick late, and one tick is enough:
+  // `closeSocket` calls `flushPriority`, which drains and writes the WHOLE
+  // lane to the socket before the 4004. So an entry too big for the lane is
+  // written out on the way to the eviction it caused.
+  group('an entry too big for the whole lane is refused at the door', () {
+    test('putPriority throws rather than queueing it', () {
+      final buf = ConflatingSendBuffer(maxPending: 4096, maxPendingBytes: 1000);
+
+      expect(() => buf.putPriority('x' * 1001), throwsA(isA<ResultTooLarge>()),
+          reason: 'this entry can never be held, however empty the lane is. '
+              'Discovering that one tick later is discovering it after '
+              'flushPriority has already put it on the wire');
+      expect(buf.pendingBytes, 0,
+          reason: 'and nothing was charged for it either — a refusal that '
+              'still counted the bytes would evict the session for a frame it '
+              'declined to hold');
+      expect(buf.drain().priority, isEmpty,
+          reason: 'nothing was queued, so nothing is drained. This is the '
+              'whole difference: the panel does not pay for the bytes and is '
+              'not disconnected for them');
+    });
+
+    test('the refusal names both numbers and says nothing was queued', () {
+      final buf = ConflatingSendBuffer(maxPending: 4096, maxPendingBytes: 1000);
+
+      ResultTooLarge? caught;
+      try {
+        buf.putPriority('x' * 4096);
+      } on ResultTooLarge catch (error) {
+        caught = error;
+      }
+
+      expect(caught, isNotNull);
+      expect(caught!.unit, ResultSizeUnit.bytes);
+      expect(caught.limit, 1000);
+      expect(caught.measured, 4096,
+          reason: 'exact, not a floor: the entry is in hand and its length is '
+              'known, unlike a LIMIT n+1 row detection');
+      expect(caught.atLeast, isFalse);
+      expect(caught.message, contains('priority lane'));
+      expect(caught.message, contains('not evicted'),
+          reason: 'whoever reads this has to know the session survived, or '
+              'they will go looking for a disconnect that did not happen');
+    });
+
+    test('an entry exactly at the ceiling is still accepted', () {
+      // The boundary, in the direction that matters: a check written `>=`
+      // would refuse the largest legitimate frame there is, and the failure
+      // would look like an intermittently broken method.
+      final buf = ConflatingSendBuffer(maxPending: 4096, maxPendingBytes: 1000);
+      buf.putPriority('x' * 1000);
+      expect(buf.pendingBytes, 1000);
+      expect(buf.poll(0), isA<BufferOk>());
+    });
+
+    test('accumulation is still poll\'s question, not the door\'s', () {
+      // Deliberate: the door refuses an entry that can NEVER fit. Two entries
+      // that only overflow together are backpressure, and backpressure has a
+      // grace window, a verdict and a close code — none of which belong on a
+      // synchronous put.
+      final buf = ConflatingSendBuffer(maxPending: 4096, maxPendingBytes: 1000);
+      buf.putPriority('x' * 600);
+      buf.putPriority('x' * 600);
+
+      expect(buf.pendingBytes, 1200,
+          reason: 'both were accepted; neither is individually impossible');
+      expect(buf.poll(0), isA<BufferDisconnect>(),
+          reason: 'and the lane overran, which is the verdict poll exists to '
+              'reach. A door that refused on accumulation would evict a '
+              'well-behaved client for arriving second');
+    });
+
+    test('with no byte ceiling nothing is refused at the door', () {
+      final buf = ConflatingSendBuffer(maxPending: 4096);
+      buf.putPriority('x' * 10_000_000);
+      expect(buf.pendingBytes, 10_000_000,
+          reason: 'the anti-vacuity arm: null means no ceiling, and a check '
+              'that fired without one would break every embedder that takes '
+              'the package default');
+    });
+  });
 }

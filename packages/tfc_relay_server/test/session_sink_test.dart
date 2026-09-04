@@ -166,6 +166,57 @@ void main() {
         reason: 'an unhandled async error here fails the *next* test, which '
             'is the flake class a 200-cycle kill test manufactures');
   });
+
+  // 10-REVIEW WR-05. The buffer refuses a single entry larger than the whole
+  // lane; this sink is json_rpc_2's write half, so the throw has nowhere to go
+  // and must stop here.
+  group('a frame too big for the whole lane is dropped, not thrown', () {
+    test('add() does not throw, and the frame never reaches the lane', () {
+      final buffer =
+          ConflatingSendBuffer(maxPending: 4096, maxPendingBytes: 1000);
+      final sink = SessionSink(buffer);
+
+      expect(() => sink.add('x' * 5000), returnsNormally,
+          reason: 'this is called from inside the Peer\'s own request '
+              'handling. A throw out of here takes the session down, which is '
+              'the eviction the refusal exists to prevent arriving by a '
+              'shorter route');
+
+      final drained = buffer.drain();
+      expect(drained.priority, isEmpty,
+          reason: 'the whole point: the entry is refused AT THE DOOR rather '
+              'than queued and evicted a tick later. Queued, closeSocket\'s '
+              'flushPriority would write all 5000 bytes to the socket before '
+              'the 4004 — the panel pays for the frame and is then told it '
+              'was backpressure');
+      expect(buffer.pendingBytes, 0);
+    });
+
+    test('and it is written down, because a silent drop is a caller waiting '
+        'on a deadline', () {
+      final buffer =
+          ConflatingSendBuffer(maxPending: 4096, maxPendingBytes: 1000);
+      final sink = SessionSink(buffer)..add('x' * 5000);
+
+      expect(sink.errors, hasLength(1));
+      expect(sink.errors.single, isA<ResultTooLarge>(),
+          reason: 'there is no request id in scope here, so the caller cannot '
+              'be answered — what it sees is its own deadline. Reaching this '
+              'line means a handler was added without a `_sized` bound, and '
+              'this list is the only place that says so');
+    });
+
+    test('an ordinary frame is unaffected', () {
+      // The anti-vacuity arm: a sink that dropped everything would satisfy
+      // both cases above and would also be a gateway that answers nothing.
+      final buffer =
+          ConflatingSendBuffer(maxPending: 4096, maxPendingBytes: 1000);
+      final sink = SessionSink(buffer)..add('{"id":1,"result":true}');
+
+      expect(sink.errors, isEmpty);
+      expect(buffer.drain().priority, ['{"id":1,"result":true}']);
+    });
+  });
 }
 
 /// Stands in for `ws.sink`: a `StreamSink<dynamic>`, because that is what

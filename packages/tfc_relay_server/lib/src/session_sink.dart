@@ -53,8 +53,45 @@ final class SessionSink implements StreamSink<String> {
 
   final _done = Completer<void>();
 
+  /// Puts one frame in the lane, or records why it could not be.
+  ///
+  /// ## Why this catches (10-REVIEW WR-05)
+  ///
+  /// `ConflatingSendBuffer.putPriority` refuses a single entry larger than the
+  /// whole lane, and the throw has to stop here. This is json_rpc_2's write
+  /// half: there is no request id in scope to answer with, and letting the
+  /// throw out would surface inside the peer's own request handling and take
+  /// the session down — which is the eviction the refusal exists to prevent,
+  /// arriving by a shorter route.
+  ///
+  /// So the frame is **dropped at the door and written down**, and the two
+  /// halves of that sentence are both deliberate:
+  ///
+  ///  * *Dropped* rather than queued, because the alternative is what WR-05
+  ///    found: the entry sits in the lane, `poll` evicts a tick later, and
+  ///    `flushPriority` writes the whole thing to the socket on the way out.
+  ///    The panel then pays for the bytes **and** gets a 4004 that says
+  ///    backpressure when what happened is that it asked for too much.
+  ///  * *Written down* in [errors], because a silently dropped response is a
+  ///    caller waiting on a deadline with nothing anywhere saying why. This
+  ///    list is what a teardown reads and what a test asserts.
+  ///
+  /// **What the caller sees is a deadline, not a refusal, and that is the
+  /// residual.** It is acceptable only because it is a backstop: every handler
+  /// that can build a large answer is bounded first by `data_handlers.dart`'s
+  /// `_sized` — the timeseries family, `preferences.getAll` and, since WR-05,
+  /// the five history-view reads — where the refusal still carries the request
+  /// id and reaches the panel as a sentence. Reaching this line at all means a
+  /// handler was added without a bound, and the entry in [errors] is how that
+  /// is found.
   @override
-  void add(String event) => buffer.putPriority(event);
+  void add(String event) {
+    try {
+      buffer.putPriority(event);
+    } on ResultTooLarge catch (tooLarge) {
+      _errors.add(tooLarge);
+    }
+  }
 
   /// Records rather than rethrows.
   ///

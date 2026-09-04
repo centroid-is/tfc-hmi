@@ -61,20 +61,27 @@ library;
 
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart'
     show
+        DataServiceMethods,
         HistoryViewApi,
         HistoryViewGraphRecord,
         HistoryViewKeyRecord,
         HistoryViewPeriodRecord,
-        HistoryViewRecord;
+        HistoryViewRecord,
+        ResultTooLarge;
 
+import 'read_limits.dart';
 import 'timescale_reader.dart' show DatabaseSupplier, HistorianUnavailable;
 
 /// `HistoryViewApi` over the four history tables.
 final class HistoryViewStore implements HistoryViewApi {
-  HistoryViewStore({required this.database, this.log});
+  HistoryViewStore({required this.database, this.log, ReadLimits? limits})
+      : limits = limits ?? ReadLimits();
 
   /// The shared instance, borrowed per call. See the library doc.
   final DatabaseSupplier database;
+
+  /// The outbound ceilings. See `read_limits.dart` for the arithmetic.
+  final ReadLimits limits;
 
   /// Where a swallowed failure goes. Optional and injected, following
   /// `IngestLog`'s shape: a store constructed in a test asserts what it was
@@ -138,6 +145,8 @@ final class HistoryViewStore implements HistoryViewApi {
   @override
   Future<List<HistoryViewRecord>> selectHistoryViews() async {
     final rows = await (database() ?? _noHistorian()).db.selectHistoryViews();
+    _bound(rows.length, 'history.selectViews',
+        'the view picker lists every saved chart on this gateway');
     return [
       for (final row in rows)
         HistoryViewRecord(
@@ -159,6 +168,7 @@ final class HistoryViewStore implements HistoryViewApi {
   @override
   Future<Map<String, HistoryViewKeyRecord>> getHistoryViewKeys(int viewId) async {
     final rows = await (database() ?? _noHistorian()).db.getHistoryViewKeys(viewId);
+    _bound(rows.length, 'history.getKeys', 'view $viewId plots that many keys');
     return {
       for (final entry in rows.entries)
         entry.key: keyRecordFrom(entry.key, entry.value),
@@ -169,6 +179,8 @@ final class HistoryViewStore implements HistoryViewApi {
   Future<Map<int, HistoryViewGraphRecord>> getHistoryViewGraphs(
       int viewId) async {
     final rows = await (database() ?? _noHistorian()).db.getHistoryViewGraphs(viewId);
+    _bound(rows.length, 'history.getGraphs',
+        'view $viewId carries that many graphs');
     return {
       for (final entry in rows.entries)
         entry.key: graphRecordFrom(entry.key, entry.value),
@@ -188,7 +200,11 @@ final class HistoryViewStore implements HistoryViewApi {
   /// has to sort, and now has this sentence saying so.
   @override
   Future<List<String>> getHistoryViewKeyNames(int viewId) async {
-    return (database() ?? _noHistorian()).db.getHistoryViewKeyNames(viewId);
+    final names =
+        await (database() ?? _noHistorian()).db.getHistoryViewKeyNames(viewId);
+    _bound(names.length, 'history.getKeyNames',
+        'view $viewId plots that many keys');
+    return names;
   }
 
   @override
@@ -232,6 +248,8 @@ final class HistoryViewStore implements HistoryViewApi {
       int viewId) async {
     final rows =
         await (database() ?? _noHistorian()).db.listHistoryViewPeriods(viewId);
+    _bound(rows.length, 'history.listPeriods',
+        'view $viewId has that many saved windows');
     final periods = [
       for (final row in rows)
         HistoryViewPeriodRecord(
@@ -343,6 +361,58 @@ final class HistoryViewStore implements HistoryViewApi {
   /// thrown the checking away, which is the trade this avoids rather than
   /// makes.
   Never _noHistorian() => throw HistorianUnavailable();
+
+  /// Refuses an answer of [rows] rows, naming what they are.
+  ///
+  /// ## Why these reads need a ceiling at all (10-REVIEW WR-05)
+  ///
+  /// The five history reads answer into the session's **priority lane**, which
+  /// is un-conflated: `SessionSink.add` appends whatever it is handed, and
+  /// `_Connection.flushPriority` writes the whole lane out *before* the 4004
+  /// on the way to a close. So an over-large answer here is not a slow chart,
+  /// it is an eviction — and the panel is told it disconnected when what
+  /// happened is that it asked for too much. That is exactly the misreport
+  /// [ResultTooLarge] exists to prevent, and until this landed these five had
+  /// no ceiling anywhere.
+  ///
+  /// What made it reachable rather than theoretical is that the row counts are
+  /// **caller-grown**: `historyCreateView` and `historyAddPeriod` create rows,
+  /// and until 10-REVIEW CR-03 they took no role and they still take no quota.
+  ///
+  /// ## The honest residual: measured after the fetch, not before
+  ///
+  /// `TimescaleReader._read` detects with `LIMIT budget + 1`, so nothing over
+  /// the cap is ever materialised. **This cannot.** The five upstream methods
+  /// (`database_drift.dart`'s `selectHistoryViews`, `getHistoryViewKeys`,
+  /// `getHistoryViewGraphs`, `getHistoryViewKeyNames`,
+  /// `listHistoryViewPeriods`) take no `LIMIT` parameter, and adding one is a
+  /// `tfc_dart` change this cycle does not make. So the rows are in this
+  /// process's memory by the time they are counted.
+  ///
+  /// That is a real weakening and it is written here rather than left for
+  /// somebody to discover: what this closes is the **wire** half — an eviction
+  /// reported as backpressure becomes a named refusal a panel can act on — and
+  /// not the heap half. The heap half is bounded by the same thing that bounded
+  /// it before, which is that these rows are small; 5 000 of them is 600 KB.
+  /// A `LIMIT` parameter upstream is the complete fix and is the follow-up.
+  ///
+  /// [measured] is therefore **exact**, so [ResultTooLarge.atLeast] is not set
+  /// — the opposite of the reader's row refusals, and for this reason.
+  void _bound(int rows, String method, String what) {
+    if (rows <= limits.maxHistoryViewRows) return;
+    throw ResultTooLarge.rows(
+      limit: limits.maxHistoryViewRows,
+      measured: rows,
+      detail: '$what. History-view rows are created by clients, so this is a '
+          'count somebody grew rather than one the plant produced — the fix '
+          'is usually to delete saved charts nobody opens, not to widen a '
+          'window',
+      // There is no narrower method to name: unlike a timeseries window, a
+      // picker has no downsampled form. The honest suggestion is the delete
+      // that makes the answer small again.
+      suggestion: DataServiceMethods.historyDeleteView,
+    );
+  }
 }
 
 /// The key configurations, as the untyped bag drift's writers take.
