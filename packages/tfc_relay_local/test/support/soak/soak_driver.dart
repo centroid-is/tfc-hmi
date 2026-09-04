@@ -70,13 +70,15 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:tfc_relay_client/tfc_relay_client.dart';
-import 'package:tfc_relay_local/tfc_relay_local.dart';
+import 'package:tfc_dart/core/state_man.dart'
+    show KeyMappingEntry, KeyMappings;
+import 'package:tfc_relay_local/tfc_relay_local.dart' show UpstreamLinkState;
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_relay_server/tfc_relay_server.dart';
 import 'package:tfc_stateman_contract/faults.dart';
 
 import '../gate_b_fixture.dart';
+import '../keymap_fixtures.dart' show opcUaEntry;
 import 'invariant.dart';
 import 'soak_event.dart';
 import 'soak_journal.dart';
@@ -157,6 +159,16 @@ const Duration checkpointCadence = Duration(seconds: 5);
 
 /// The rate-window cadence — 11-05's log-ceiling checker.
 const Duration rateWindowCadence = Duration(minutes: 1);
+
+/// How often the driver reads each panel's connectivity.
+///
+/// **Finer than [checkpointCadence], and the plan says "every checkpoint".**
+/// Five seconds cannot see a panel that flapped down and back inside one
+/// second, and a control-panel arm that misses the dip it exists to catch is
+/// worse than no arm. The *floor* is evaluated on these samples and the numbers
+/// are *journalled* at the checkpoint, so the artifact still reads at the
+/// cadence everything else in it does.
+const Duration panelSampleCadence = Duration(milliseconds: 250);
 
 // -------------------------------------------------------- the population floor
 
@@ -505,7 +517,20 @@ final class SoakDriver {
   /// happened is the failure a soak cannot otherwise see, because both halves
   /// look fine on their own.
   String get divergenceReport {
-    throw UnimplementedError('divergenceReport');
+    final missed = neverReached;
+    return <String>[
+      timeline.reproLog,
+      '--- applied ${_applied.length} of ${timeline.merged.length} ---',
+      for (final entry in _applied) entry.toString(),
+      if (missed.isNotEmpty) ...<String>[
+        '--- planned and NEVER REACHED (${missed.length}) ---',
+        for (final entry in missed) entry.toString(),
+      ],
+      if (_fizzled.isNotEmpty) ...<String>[
+        '--- applied and FIRED INTO NOTHING (${_fizzled.length}) ---',
+        ..._fizzled,
+      ],
+    ].join('\n');
   }
 
   /// One line per checker, plus the driver's own population and control lines.
@@ -514,7 +539,40 @@ final class SoakDriver {
   /// next red run is read against, and a block that only appears on failure is
   /// a block nobody has ever seen working.
   String get verdictBlock {
-    throw UnimplementedError('verdictBlock');
+    final lines = <String>[
+      'soak verdict — seed=$seed duration=$duration endpoint=$endpoint',
+      '  timeline    : ${timeline.merged.length} planned, '
+          '${_applied.length} applied, ${neverReached.length} never reached, '
+          '${_fizzled.length} fired into nothing',
+      '  levers      : ${_leversByKind.entries.map((e) => '${e.key}:${e.value}').join(', ')}',
+      '  population  : floor $populationFloor of $herdSize, connected now '
+          '$connectedPanels, worst stretch below floor '
+          '${formatSoakOffset(worstBelowFloor)} (grace '
+          '${formatSoakOffset(floorGrace)})',
+      for (var i = 0; i < herdSize; i++)
+        '  ${i == soakControlPanelIndex ? 'CONTROL     ' : 'panel $i     '}: '
+            '${_health[i]}',
+    ];
+    if (checkers.isEmpty) {
+      lines.add('  checkers    : none registered — 11-04, 11-05 and 11-06 '
+          'each add theirs against a driver that already works');
+    } else {
+      for (final registration in checkers) {
+        final checker = registration.checker;
+        lines.add('  ${checker.name.padRight(12)}: '
+            '${checker.judgedSamples} judged readings against a floor of '
+            '${checker.minimumSamplesForAVerdict}, ticked every '
+            '${registration.cadence.inMilliseconds} ms, '
+            '${checker.violations.length} violations');
+      }
+    }
+    lines.add('  violations  : ${violationLog.total} recorded '
+        '(${violationLog.entries.length} retained, ${violationLog.overflow} '
+        'overflowed)');
+    if (violationLog.entries.isNotEmpty) {
+      lines.add('  first       : ${violationLog.entries.first}');
+    }
+    return lines.join('\n');
   }
 
   // ------------------------------------------------------------------ the run
@@ -528,13 +586,104 @@ final class SoakDriver {
   /// could have caught a gateway punishing healthy panels has quietly stopped
   /// being able to.
   Future<void> start() async {
-    throw UnimplementedError('start');
+    if (!endpoint.isInProcess) {
+      throw UnsupportedError('this driver composes its own gateway; dialling '
+          '${endpoint.deployedGateway} is the on-site arm, which 11-CONTEXT '
+          'ruling 6 records as a post-milestone follow-up. The seam is here '
+          'so that arm is a change to this method rather than a rewrite of '
+          'everything that composes — it is deliberately not built');
+    }
+
+    final storm = _given ??
+        buildTimeline(
+          seed: seed,
+          duration: duration,
+          // The control's name is NOT in this list, and that is the whole
+          // mechanism: `soak_event.dart`'s contract puts the exclusion on the
+          // caller because the generator cannot tell one panel from another.
+          panels: stormPanels,
+          aliases: soakAliases,
+          keys: stormKeys,
+        );
+    _refuseIfTheStormCanReachTheControl(storm);
+    _timeline = storm;
+
+    // Before anything is composed: a run killed on the way up still leaves its
+    // seed and its timeline behind.
+    final journal = _journal = SoakJournal.open(seed: seed, path: journalPath);
+    journal.writeReproLog(storm.reproLog);
+    journal.writeConfig(<String, Object?>{
+      'declaredDurationMs': duration.inMilliseconds,
+      'herdSize': herdSize,
+      'controlPanel': controlPanel,
+      'stormPanels': stormPanels,
+      'aliases': soakAliases,
+      'keysPerAlias': soakKeysPerAlias,
+      'sweepPeriodMs': soakSweepPeriod.inMilliseconds,
+      'populationFloor': populationFloor,
+      'populationFloorGraceMs': floorGrace.inMilliseconds,
+      'panelSampleCadenceMs': panelSampleCadence.inMilliseconds,
+      'checkpointCadenceMs': checkpointCadence.inMilliseconds,
+      'endpoint': endpoint.toString(),
+      'checkers': <String>[for (final one in checkers) one.checker.name],
+      'mergedEntries': storm.merged.length,
+      'stableWindows': storm.stableWindows.length,
+    });
+
+    _tokenDir = Directory.systemTemp.createTempSync('relay-soak-tokens-');
+    _tokenFilePath = '${_tokenDir!.path}/tokens.json';
+    _writeTokenFile();
+
+    _fixture = await gateBFixture(
+      panels: herdSize,
+      aliases: soakAliases,
+      keysPerAlias: soakKeysPerAlias,
+      proxyPerPanel: true,
+      sweepPeriod: soakSweepPeriod,
+      serverConfig: ServerConfig(
+        tick: ServerConfig.minTick,
+        auth: AuthConfig(tokenFilePath: _tokenFilePath!),
+      ),
+      tokenFor: _tokenForPanel,
+    );
+
+    for (var i = 0; i < herdSize; i++) {
+      _health[i] = SoakPanelHealth(i);
+    }
+    _clock = SoakClock(declaredDuration: duration);
+    _startTickers();
   }
 
   /// Walks [SoakTimeline.merged] on one chained timer and returns when the run
   /// has played out or [stop] has been called.
+  ///
+  /// One timer, chained off one [Stopwatch], for `ScenarioPlayback`'s two
+  /// reasons held whole: a lever that takes a moment to apply does not push
+  /// every later offset out, and there is only ever one pending timer, so "no
+  /// timer fires after [stop]" is a property of the shape rather than a
+  /// bookkeeping claim.
+  ///
+  /// The run does not end at the last entry — it ends at [duration]. A storm
+  /// whose last draw lands at minute 31 still has four minutes of plant, of
+  /// checkers and of the population floor to answer for.
   Future<void> play() async {
-    throw UnimplementedError('play');
+    if (_stopped) {
+      throw StateError('this driver has been stopped; build a new one rather '
+          'than restarting it — a stopped driver schedules nothing, so play() '
+          'would return a future that never completes and the failure would '
+          'name the test file instead of this object');
+    }
+    final existing = _finished;
+    if (existing != null) return existing.future;
+    final finished = _finished = Completer<void>();
+    _playClock.start();
+    _schedule();
+    await finished.future;
+    // Whatever is still in flight — a write, a query, a redial — is given the
+    // chance to land and to record itself before the verdict is read. `.wait`
+    // rather than a loop of awaits: every one of these already carries its own
+    // catchError into the violation log, so none of them can throw here.
+    await Future.wait(_inFlight);
   }
 
   /// [start], then [play]. The whole run, minus the verdict, which the caller
@@ -546,7 +695,21 @@ final class SoakDriver {
 
   /// Stops the storm and every ticker. Idempotent, and no timer fires after it.
   void stop() {
-    throw UnimplementedError('stop');
+    if (_stopped) return;
+    _stopped = true;
+    _pending?.cancel();
+    _pending = null;
+    _playClock.stop();
+    for (final ticker in _tickers) {
+      ticker.cancel();
+    }
+    _tickers.clear();
+    for (final recovery in _recoveries) {
+      recovery.cancel();
+    }
+    _recoveries.clear();
+    final finished = _finished;
+    if (finished != null && !finished.isCompleted) finished.complete();
   }
 
   /// Backwards, no `.timeout`, journal last.
@@ -557,7 +720,362 @@ final class SoakDriver {
   /// failed run leaves behind, and a `.timeout` on a dispose path is a sink
   /// half-written (project memory: no `.timeout` in dispose paths).
   Future<void> dispose() async {
-    throw UnimplementedError('dispose');
+    if (_disposed) return;
+    _disposed = true;
+    stop();
+    for (final held in _subscriptions.values) {
+      await held.cancel();
+    }
+    _subscriptions.clear();
+    await _fixture?.dispose();
+    final dir = _tokenDir;
+    if (dir != null && dir.existsSync()) dir.deleteSync(recursive: true);
+    // Last, and with no timeout: the artifact is the only thing a failed run
+    // leaves behind.
+    await _journal?.close();
+  }
+
+  // ---------------------------------------------------------------- internals
+
+  final Stopwatch _playClock = Stopwatch();
+  final List<Timer> _tickers = <Timer>[];
+  final List<Timer> _recoveries = <Timer>[];
+  final List<Future<void>> _inFlight = <Future<void>>[];
+  final Map<String, StreamSubscription<DynamicValue>> _subscriptions =
+      <String, StreamSubscription<DynamicValue>>{};
+  final Set<int> _revoked = <int>{};
+  Completer<void>? _finished;
+  Timer? _pending;
+  int _index = 0;
+  int _reloads = 0;
+  bool _stopped = false;
+  bool _disposed = false;
+
+  /// Plant keys only — the `PIPE.*` health keys the fixture also subscribes are
+  /// deliberately not here.
+  ///
+  /// `[MT-6]`'s instruction is that the driver must not make 11-04's job
+  /// harder: its freshness checker excludes the health keys by prefix, because
+  /// a `PIPE.` value is the pipe reporting on itself and is not a plant reading
+  /// that can be stale. Rather than only avoiding the problem, this getter
+  /// hands the next plan the exact set it wants.
+  List<String> get plantKeys => <String>[
+        for (final alias in soakAliases) ...gateBPage(alias, soakKeysPerAlias),
+      ];
+
+  /// The key pool the storm draws its writes and mutations from.
+  ///
+  /// A slice of [plantKeys] rather than all of it, matching
+  /// `SoakEventSchedule.keysPerAlias`: a storm that spread its mutations over
+  /// forty keys would touch each one about twice in thirty-five minutes, and
+  /// invariant 3's comparison wants keys that actually move.
+  List<String> get stormKeys => <String>[
+        for (final alias in soakAliases)
+          ...gateBPage(alias, soakKeysPerAlias)
+              .take(SoakEventSchedule.keysPerAlias),
+      ];
+
+  /// Panel *i*'s credential. Deterministic, long enough for
+  /// `FileTokenValidator.minTokenLength`, and visibly a fixture rather than
+  /// something anybody would mistake for a plant secret.
+  String _tokenForPanel(int index) =>
+      'soak-${soakPanelName(index)}-000000000000000';
+
+  /// Writes the credential set as it now stands, owner-only.
+  ///
+  /// **A file rewrite, not an in-memory call, and that is the shape of the real
+  /// mechanism.** `AuthConfig` holds a path and never a secret, so revocation
+  /// at SVN is an operator editing the mounted file and the gateway re-reading
+  /// it. `RelayServer.reloadTokens` is the re-read; this is the edit.
+  void _writeTokenFile() {
+    final path = _tokenFilePath!;
+    File(path).writeAsStringSync(jsonEncode(<String, Object?>{
+      'tokens': <String, Object?>{
+        for (var i = 0; i < herdSize; i++)
+          if (!_revoked.contains(i))
+            _tokenForPanel(i): <String, Object?>{
+              'stationId': soakPanelName(i),
+              'role': 'operate',
+            },
+      },
+    }));
+    if (!Platform.isWindows) {
+      // `FileTokenValidator.load` refuses a credential file any other account
+      // can read, which is the right rule and one a temp file does not meet by
+      // default.
+      Process.runSync('chmod', <String>['600', path]);
+    }
+  }
+
+  /// Throws unless every entry of [storm] leaves the control alone.
+  void _refuseIfTheStormCanReachTheControl(SoakTimeline storm) {
+    if (storm.panels.contains(controlPanel)) {
+      throw StateError('this timeline was generated with $controlPanel in its '
+          'panel list, so the storm may aim at the control. The exclusion is '
+          'the CALLER\'s — soak_event.dart cannot tell a control panel from an '
+          'ordinary one — and a control the storm can reach is not a control: '
+          'every invariant still passes and the one arm that could catch a '
+          'gateway punishing healthy panels has quietly stopped being able to');
+    }
+    for (final entry in storm.merged) {
+      final payload = entry.payload;
+      if (payload is! SoakEvent) continue;
+      final aimed = _panelNamedBy(payload);
+      if (aimed == controlPanel) {
+        throw StateError('timeline entry $entry aims at $controlPanel, which '
+            'is the control panel this run\'s strongest assertion rests on. '
+            'A control the storm can reach is not a control, and the failure '
+            'would be silent — every invariant would still pass');
+      }
+    }
+  }
+
+  /// Which panel an event is aimed at, or null for the plant-wide arms.
+  String? _panelNamedBy(SoakEvent event) => switch (event) {
+        PanelSubscribe(:final panel) => panel,
+        PanelUnsubscribe(:final panel) => panel,
+        PanelWrite(:final panel) => panel,
+        PanelQuery(:final panel) => panel,
+        TokenRevocation(:final stationId) => stationId,
+        TokenRestore(:final stationId) => stationId,
+        // Plant-wide by nature: an upstream link, an epoch, the routing table
+        // and the gateway process itself belong to everybody. The control is
+        // not exempt from a gateway restart — nothing could make it so — which
+        // is why the control's property is "the storm never AIMS at it" rather
+        // than "it is never disturbed".
+        UpstreamLinkDown() ||
+        UpstreamLinkUp() ||
+        UpstreamEpochBump() ||
+        UpstreamMassDegrade() ||
+        UpstreamSlowResolve() ||
+        GatewayRestart() ||
+        KeymappingReload() ||
+        PlantMutate() =>
+          null,
+      };
+
+  int _indexOfPanel(String name) {
+    for (var i = 0; i < herdSize; i++) {
+      if (soakPanelName(i) == name) return i;
+    }
+    throw StateError('no panel named "$name" in a herd of $herdSize');
+  }
+
+  void _startTickers() {
+    _tickers.add(Timer.periodic(panelSampleCadence, (_) => _samplePanels()));
+    _tickers.add(Timer.periodic(checkpointCadence, (_) => _checkpoint()));
+    for (final registration in checkers) {
+      _tickers.add(Timer.periodic(registration.cadence,
+          (_) => registration.checker.sample(clock)));
+    }
+  }
+
+  /// One connectivity reading per panel, and the floor evaluated against it.
+  void _samplePanels() {
+    if (_stopped || _disposed) return;
+    final panels = fixture.panels;
+    for (var i = 0; i < panels.length; i++) {
+      final client = panels[i].client;
+      _health[i]!.observe(
+        ready: client.isReady,
+        staleView: client.viewIsStale,
+      );
+    }
+    _evaluatePopulationFloor();
+  }
+
+  /// The floor: at most one panel missing, and never for longer than
+  /// [floorGrace].
+  ///
+  /// A breach is a **violation with its offset**, never an abort. A soak that
+  /// stopped at the first breach would report one finding and leave the other
+  /// four invariants' thirty minutes unmeasured, which is the whole argument
+  /// for a driver that ticks checkers rather than a `test()` body that asserts.
+  void _evaluatePopulationFloor() {
+    final connected = connectedPanels;
+    final now = clock.elapsed;
+    if (connected >= populationFloor) {
+      _belowFloorSince = null;
+      return;
+    }
+    final since = _belowFloorSince ??= now;
+    final stretch = now - since;
+    if (stretch > worstBelowFloor) worstBelowFloor = stretch;
+    if (stretch <= floorGrace) return;
+    // One violation per breach, not one per sample: the log is capped at two
+    // hundred and a permanently culled herd would otherwise fill it with the
+    // same finding four times a second and push every other checker's first
+    // occurrence out.
+    if (_floorBreachReported) return;
+    _floorBreachReported = true;
+    _record(SoakViolation(
+      checker: 'population',
+      monotonic: now,
+      scheduleOffset: _playClock.elapsed,
+      detail: 'only $connected of $herdSize panels have been connected for '
+          '${formatSoakOffset(stretch)}, under a floor of $populationFloor and '
+          'past a grace of ${formatSoakOffset(floorGrace)}. Every per-panel '
+          'invariant is now passing on a fraction of the population with '
+          'nothing else saying so',
+      observed: connected,
+      expected: populationFloor,
+    ));
+  }
+
+  bool _floorBreachReported = false;
+
+  void _record(SoakViolation violation) {
+    violationLog.add(violation);
+    _journal?.writeTrip(violation, armedModes: _armedModesAt(violation));
+  }
+
+  /// Which link modes the *timeline* had armed at a violation's offset.
+  ///
+  /// A lookup into the artifact everybody else reads, never a running mirror of
+  /// proxy state — `soak_journal.dart`'s rule, and its reason: a mirror can
+  /// disagree with the proxy, and the one thing worse than not recording the
+  /// armed modes is recording the wrong ones.
+  List<String> _armedModesAt(SoakViolation violation) {
+    final at = violation.scheduleOffset;
+    if (at == null || _timeline == null) return const <String>[];
+    final armed = <String>{};
+    for (final entry in timeline.merged) {
+      if (entry.offset > at) break;
+      final payload = entry.payload;
+      if (payload is! FaultMutation) continue;
+      if (payload.arms) {
+        armed.add(payload.mode);
+      } else {
+        armed.remove(payload.mode);
+      }
+    }
+    return armed.toList(growable: false);
+  }
+
+  void _checkpoint() {
+    if (_stopped || _disposed) return;
+    journal.checkpoint(clock, <String, Object?>{
+      'connectedPanels': connectedPanels,
+      'populationFloor': populationFloor,
+      'worstBelowFloorMs': worstBelowFloor.inMilliseconds,
+      'appliedEntries': _applied.length,
+      'fizzled': _fizzled.length,
+      'violations': violationLog.total,
+      'panels': <Object?>[for (final one in _health.values) one.toJson()],
+      'rss': ProcessInfo.currentRss,
+      'checkers': <String, Object?>{
+        for (final one in checkers)
+          one.checker.name: <String, Object?>{
+            'judgedSamples': one.checker.judgedSamples,
+            'floor': one.checker.minimumSamplesForAVerdict,
+            'violations': one.checker.violations.length,
+          },
+      },
+    });
+  }
+
+  void _schedule() {
+    if (_stopped) return;
+    final finished = _finished;
+    if (_index >= timeline.merged.length) {
+      // The storm is spent but the run is not: hold to the declared duration so
+      // the tail of a run is measured rather than skipped.
+      final remaining = duration - _playClock.elapsed;
+      if (remaining <= Duration.zero) {
+        _playClock.stop();
+        if (finished != null && !finished.isCompleted) finished.complete();
+        return;
+      }
+      _pending = Timer(remaining, () {
+        _pending = null;
+        if (_stopped) return;
+        _playClock.stop();
+        if (finished != null && !finished.isCompleted) finished.complete();
+      });
+      return;
+    }
+    final due = timeline.merged[_index].offset - _playClock.elapsed;
+    _pending = Timer(due < Duration.zero ? Duration.zero : due, _fire);
+  }
+
+  Future<void> _fire() async {
+    _pending = null;
+    if (_stopped) return;
+    final entry = timeline.merged[_index];
+    SoakApplyOutcome outcome;
+    try {
+      outcome = await _applyEntry(entry);
+    } catch (error, stack) {
+      // A lever that threw is a violation and not the end of the run: the other
+      // four hundred entries still have something to say.
+      outcome = SoakApplyOutcome.fizzled(
+          _kindOf(entry), 'threw', '$error\n${stack.toString().split('\n').take(3).join('\n')}');
+      _record(SoakViolation(
+        checker: 'population',
+        monotonic: clock.elapsed,
+        scheduleOffset: entry.offset,
+        detail: 'the lever for $entry threw: $error',
+      ));
+    }
+    // Checked after the await, for `ScenarioPlayback._fire`'s reason: stop()
+    // may have run while a lever that awaits its own teardown was in flight,
+    // and appending here would leave an applied log with an entry after the
+    // stop that ended the run.
+    if (_stopped) return;
+    _applied.add(entry);
+    _outcomes.add(outcome);
+    _leversByKind.update(outcome.kind, (n) => n + 1, ifAbsent: () => 1);
+    if (!outcome.fired) _noteFizzle(entry.offset, outcome);
+    journal.event(clock, <String, Object?>{
+      'offsetMs': entry.offset.inMilliseconds,
+      'stream': SoakStreams.labelOf(entry.streamIndex),
+      'payload': entry.payload.toString(),
+      ...outcome.toJson(),
+    });
+    _index++;
+    _schedule();
+  }
+
+  String _kindOf(SoakTimelineEntry entry) {
+    final payload = entry.payload;
+    if (payload is SoakEvent) return payload.kind;
+    if (payload is FaultMutation) return 'link:${payload.mode}';
+    return 'unknown';
+  }
+
+  /// Link and quiet-clear entries go to a proxy; event entries go to [apply].
+  Future<SoakApplyOutcome> _applyEntry(SoakTimelineEntry entry) async {
+    final payload = entry.payload;
+    // `_applyEvent` and not `apply`: the public entry point records a fizzle
+    // itself, so that a lever pulled from anywhere is reported, and `_fire`
+    // below records for every stream. Going through `apply` here would count
+    // an event's fizzle twice.
+    if (payload is SoakEvent) return _applyEvent(payload);
+    if (payload is FaultMutation) {
+      final index = panelForMode(payload.mode);
+      final panel = fixture.panels[index];
+      // `ScenarioPlayback.apply` and not a second switch: it is the existing
+      // exhaustive switch over the sealed FaultMutation, and a ninth proxy
+      // lever must fail to compile in one place, not two.
+      await ScenarioPlayback.apply(panel.proxy, payload);
+      _health[index]!.mutationsApplied++;
+      return SoakApplyOutcome.fired(
+          'link:${payload.mode}', 'FaultProxy.${payload.mode}',
+          note: 'panel $index');
+    }
+    throw StateError('a merged timeline entry carried a ${payload.runtimeType}, '
+        'which is neither a SoakEvent nor a FaultMutation: $entry');
+  }
+
+  void _track(Future<void> work, String what) {
+    _inFlight.add(work.catchError((Object error) {
+      _record(SoakViolation(
+        checker: 'population',
+        monotonic: _clock == null ? Duration.zero : clock.elapsed,
+        scheduleOffset: _playClock.elapsed,
+        detail: '$what failed after the lever returned: $error',
+      ));
+    }));
   }
 
   // ------------------------------------------------------------- the levers
@@ -575,7 +1093,13 @@ final class SoakDriver {
   /// panel 1 flaps, panel 2 is slow, panel 3 is throttled, panel 4 is
   /// blackholed. The control gets none of it, which is the whole point.
   int panelForMode(String mode) {
-    throw UnimplementedError('panelForMode');
+    final declared = faultModes.indexOf(mode);
+    if (declared < 0) {
+      throw ArgumentError.value(mode, 'mode', 'not in faultModes, so no proxy '
+          'lever answers to it and the storm would arm nothing');
+    }
+    final stormed = herdSize - 1;
+    return 1 + declared % stormed;
   }
 
   /// Pulls the lever one [SoakEvent] names.
@@ -585,6 +1109,276 @@ final class SoakDriver {
   /// here rather than a storm entry that logs itself and does nothing — which
   /// is the entire reason 11-02 made the type sealed.
   Future<SoakApplyOutcome> apply(SoakEvent event) async {
-    throw UnimplementedError('apply');
+    final outcome = await _applyEvent(event);
+    // Recorded here rather than only on the playback path, so that a lever
+    // pulled by anything — a case, a later plan's own harness — cannot fire
+    // into nothing without the driver saying so. `_applyEntry` deliberately
+    // calls `_applyEvent` instead, or a played event would be counted twice.
+    if (!outcome.fired) _noteFizzle(_playClock.elapsed, outcome);
+    return outcome;
+  }
+
+  void _noteFizzle(Duration at, SoakApplyOutcome outcome) =>
+      _fizzled.add('[${formatSoakOffset(at)}] $outcome');
+
+  Future<SoakApplyOutcome> _applyEvent(SoakEvent event) async {
+    switch (event) {
+      case UpstreamLinkDown(:final alias):
+        final link = fixture.linkFor(alias);
+        if (link.inner.state == UpstreamLinkState.disconnected) {
+          return SoakApplyOutcome.fizzled(event.kind,
+              'FakeUpstreamLink.disconnectUpstream',
+              '$alias was already down; disconnectUpstream returns early '
+                  '(fake_upstream_link.dart:397), so this entry narrowed the '
+                  'storm instead of widening it');
+        }
+        link.inner.disconnectUpstream();
+        return SoakApplyOutcome.fired(
+            event.kind, 'FakeUpstreamLink.disconnectUpstream');
+
+      case UpstreamLinkUp(:final alias):
+        final link = fixture.linkFor(alias);
+        if (link.inner.state != UpstreamLinkState.disconnected) {
+          return SoakApplyOutcome.fizzled(
+              event.kind,
+              'FakeUpstreamLink.reconnectUpstream',
+              '$alias was already up, so its paired recovery restored nothing');
+        }
+        link.inner.reconnectUpstream();
+        return SoakApplyOutcome.fired(
+            event.kind, 'FakeUpstreamLink.reconnectUpstream');
+
+      case UpstreamEpochBump(:final alias):
+        // The plain fake's bump, not `GateBLink.bumpEpoch`'s four-step
+        // choreography. The choreographed one raises a latch that only
+        // `completeReBrowse` lowers, and nothing in the timeline carries a
+        // re-browse-complete arm — closing it on a driver-invented timer would
+        // be the driver authoring an event, which is the one thing this class
+        // must not do. `soak_event.dart`'s own doc names `FakeUpstreamLink
+        // .bumpEpoch()` as this arm's lever.
+        final link = fixture.linkFor(alias);
+        final before = link.inner.epoch;
+        link.inner.bumpEpoch();
+        return SoakApplyOutcome.fired(
+            event.kind, 'FakeUpstreamLink.bumpEpoch',
+            note: '$alias $before -> ${link.inner.epoch}');
+
+      case UpstreamMassDegrade(:final alias):
+        // 08-09's pair, kept separate on the fake precisely so this reads as
+        // one announcement for however many keys.
+        final link = fixture.linkFor(alias);
+        final before = link.inner.statusNotifications;
+        link.inner.applyLinkLoss();
+        link.inner.announceLinkState();
+        return SoakApplyOutcome.fired(
+            event.kind, 'FakeUpstreamLink.applyLinkLoss+announceLinkState',
+            note: '$alias, announcements $before -> '
+                '${link.inner.statusNotifications}');
+
+      case UpstreamSlowResolve(:final alias, :final latency):
+        final link = fixture.linkFor(alias);
+        link.inner.readLatency = latency;
+        link.inner.writeLatency = latency;
+        // Cleared after the span the GENERATOR declares for this kind, not
+        // after one this file invented: `recoverySpanOf` is what the generator
+        // uses to keep the storm out of a quiet window, so honouring it is the
+        // driver agreeing with the timeline rather than authoring against it.
+        // Without a clear the alias stays slow for the rest of the run, and no
+        // arm emits a reset.
+        _scheduleRecovery(
+            SoakEventSchedule.recoverySpanOf(event.kind), () {
+          link.inner.readLatency = Duration.zero;
+          link.inner.writeLatency = Duration.zero;
+        });
+        return SoakApplyOutcome.fired(
+            event.kind, 'FakeUpstreamLink.readLatency+writeLatency',
+            note: '$alias ${latency.inMilliseconds}ms for '
+                '${SoakEventSchedule.recoverySpanOf(event.kind).inSeconds}s');
+
+      case GatewayRestart():
+        final before = fixture.server.port;
+        await fixture.restartGateway();
+        return SoakApplyOutcome.fired(
+            event.kind, 'GateBFixture.restartGateway',
+            note: 'rebound port $before; every panel redials');
+
+      case TokenRevocation(:final stationId):
+        final index = _indexOfPanel(stationId);
+        if (_revoked.contains(index)) {
+          return SoakApplyOutcome.fizzled(event.kind,
+              'RelayServer.reloadTokens',
+              '$stationId was already revoked, so the rewrite changed nothing '
+                  'and no session was swept');
+        }
+        _revoked.add(index);
+        _writeTokenFile();
+        await fixture.server.reloadTokens();
+        return SoakApplyOutcome.fired(
+            event.kind, 'RelayServer.reloadTokens',
+            note: '$stationId dropped from the token file and swept (4001)');
+
+      case TokenRestore(:final stationId):
+        final index = _indexOfPanel(stationId);
+        if (!_revoked.remove(index)) {
+          return SoakApplyOutcome.fizzled(
+              event.kind,
+              'GateBFixture.redial',
+              '$stationId was not revoked, so there was nothing to restore');
+        }
+        _writeTokenFile();
+        await fixture.server.reloadTokens();
+        // The rewrite alone does not bring the panel back. Phase 6 ends the
+        // reconnect loop for good on a refused credential — by design — so a
+        // restore is an application restart, and that is what `redial` is.
+        // Not awaited: a panel coming back must not hold the storm's clock.
+        _track(fixture.redial(index), 'the redial of $stationId after restore');
+        return SoakApplyOutcome.fired(event.kind, 'GateBFixture.redial',
+            note: '$stationId back in the token file; a new client dialled');
+
+      case KeymappingReload():
+        // Alternating between the shipped table and the same table plus one
+        // spare key nobody subscribes. Deterministic — a function of how many
+        // reloads the timeline has already asked for — so it stays replayable,
+        // and not a no-op: re-ingesting a byte-identical table would classify
+        // nothing, add nothing and re-point nothing, which is a lever firing
+        // into its own reflection.
+        final spare = _reloads.isEven;
+        final next = spare
+            ? KeyMappings(nodes: <String, KeyMappingEntry>{
+                ...fixture.mappings.nodes,
+                _spareKey: opcUaEntry(
+                    alias: soakAliases.first, identifier: _spareKey),
+              })
+            : fixture.mappings;
+        _reloads++;
+        final result = fixture.plant.router.applyKeyMappings(next);
+        final moved = result.added.length +
+            result.removed.length +
+            result.changed.length;
+        if (moved == 0) {
+          return SoakApplyOutcome.fizzled(event.kind,
+              'KeyRouter.applyKeyMappings',
+              're-ingesting the routing table added, removed and changed '
+                  'nothing, so nothing was re-pointed');
+        }
+        return SoakApplyOutcome.fired(
+            event.kind, 'KeyRouter.applyKeyMappings',
+            note: '${result.added.length} added, ${result.removed.length} '
+                'removed, ${result.changed.length} changed, '
+                '${result.rejected.length} rejected');
+
+      case PanelSubscribe(:final panel, :final keys):
+        final client = fixture.panels[_indexOfPanel(panel)].client;
+        final opened = <String>[];
+        for (final key in keys) {
+          final handle = '$panel|$key';
+          if (_subscriptions.containsKey(handle)) continue;
+          _subscriptions[handle] = client.subscribe(key).listen((_) {});
+          opened.add(key);
+        }
+        if (opened.isEmpty) {
+          return SoakApplyOutcome.fizzled(
+              event.kind,
+              'RemoteStateMan.subscribe',
+              '$panel already held every one of ${keys.join('+')}');
+        }
+        return SoakApplyOutcome.fired(event.kind, 'RemoteStateMan.subscribe',
+            note: '$panel opened ${opened.join('+')}');
+
+      case PanelUnsubscribe(:final panel, :final keys):
+        final dropped = <String>[];
+        for (final key in keys) {
+          final held = _subscriptions.remove('$panel|$key');
+          if (held == null) continue;
+          await held.cancel();
+          dropped.add(key);
+        }
+        if (dropped.isEmpty) {
+          return SoakApplyOutcome.fizzled(
+              event.kind,
+              'StreamSubscription.cancel',
+              '$panel held no subscription to ${keys.join('+')}, so this '
+                  'unsubscribe cancelled nothing');
+        }
+        return SoakApplyOutcome.fired(
+            event.kind, 'StreamSubscription.cancel',
+            note: '$panel dropped ${dropped.join('+')}');
+
+      case PanelWrite(:final panel, :final key, :final value):
+        final index = _indexOfPanel(panel);
+        final client = fixture.panels[index].client;
+        if (!client.isReady) {
+          return SoakApplyOutcome.fizzled(event.kind, 'RemoteStateMan.write',
+              '$panel is not connected, so the operator action never reached '
+                  'a socket');
+        }
+        // Not awaited: a write's three-state outcome can take the whole write
+        // deadline, and a storm that waited for it would drift its own
+        // timeline. The future carries its own catchError into the violation
+        // log; a refusal is an ordinary outcome and lands on `onWriteResolved`,
+        // which is 11-05's to judge.
+        _track(client.write(key, value).then((_) {}),
+            'the write $panel $key=$value');
+        return SoakApplyOutcome.fired(event.kind, 'RemoteStateMan.write',
+            note: '$panel $key=$value');
+
+      case PanelQuery(:final panel, :final series, :final window):
+        final client = fixture.panels[_indexOfPanel(panel)].client;
+        if (!client.isReady) {
+          return SoakApplyOutcome.fizzled(
+              event.kind,
+              'ClientTimeseriesApi.queryTimeseriesData',
+              '$panel is not connected, so the query never reached a socket');
+        }
+        // Anchored on a fixed instant rather than on the wall clock: freeze 9
+        // keeps `DateTime.now()` out of the soak trees, and a query window is
+        // not a measurement of anything here. There is no database in this
+        // lane, so a refusal is entirely ordinary — what the soak asserts is
+        // that a query answers or refuses and never drops the session.
+        _track(
+            client.timeseries
+                .queryTimeseriesData(series, _queryAnchor,
+                    from: _queryAnchor.subtract(window))
+                .then((_) {}, onError: (Object _) {}),
+            'the query $panel $series');
+        return SoakApplyOutcome.fired(
+            event.kind, 'ClientTimeseriesApi.queryTimeseriesData',
+            note: '$panel $series over ${window.inMinutes}m');
+
+      case PlantMutate(:final key, :final value):
+        final alias = key.split('.').first;
+        if (!soakAliases.contains(alias)) {
+          return SoakApplyOutcome.fizzled(event.kind,
+              'GateBPlantDriver.overrideRaw',
+              'no link carries "$key", so the plant did not move');
+        }
+        // `overrideRaw` rather than one `setValue`: the plant driver sweeps
+        // every key every 250 ms, so a single write is overwritten before any
+        // panel could see it. An override is what a real device does — it
+        // keeps reporting the new number until something changes it — and it
+        // is what makes "plant truth" a thing invariant 3 can compare against.
+        fixture.driver.overrideRaw(fixture.linkFor(alias), key, value);
+        return SoakApplyOutcome.fired(
+            event.kind, 'GateBPlantDriver.overrideRaw',
+            note: '$key=$value from the next poll cycle on');
+    }
+  }
+
+  /// A key no panel subscribes, so [KeymappingReload] can move the routing
+  /// table without moving anything a checker is watching.
+  static const String _spareKey = 'ST101.CN99.SPARE01.setpoint';
+
+  /// A fixed instant for [PanelQuery]'s window. Not a clock: freeze 9 keeps the
+  /// wall out of the soak trees, and this decides nothing.
+  static final DateTime _queryAnchor = DateTime.utc(2026, 1, 1);
+
+  void _scheduleRecovery(Duration after, void Function() recover) {
+    late final Timer timer;
+    timer = Timer(after, () {
+      _recoveries.remove(timer);
+      if (_stopped || _disposed) return;
+      recover();
+    });
+    _recoveries.add(timer);
   }
 }
