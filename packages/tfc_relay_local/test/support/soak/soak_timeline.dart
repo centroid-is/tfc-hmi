@@ -110,6 +110,25 @@ const Duration maxWindowCadence = Duration(minutes: 4);
 /// its formula says otherwise.
 const int quietFractionDenominator = 3;
 
+/// The shortest arm that can generate a stable window at all.
+///
+/// **Thirty seconds, and it falls straight out of the arithmetic below**:
+/// [computeStableWindows] caps the quiet at
+/// `duration / quietFractionDenominator` and a window is at least
+/// [minStableWindow], so a run shorter than the two multiplied together
+/// produces none.
+///
+/// It lives here, beside the two constants it is derived from, rather than in
+/// 11-06's checker — a number computed from two constants in one file and
+/// written down in another is a number that goes stale the day either of them
+/// moves. `soak_test.dart` runs 8- and 12-second auxiliary arms that fall below
+/// it, and invariant 3 and the divergence ledger both decline to set a floor
+/// they cannot reach on such a run: an arm too short to generate a window is an
+/// arm that never asked invariant 3 a question. A run at or above this that
+/// generated no windows is a different thing entirely and fails loudly.
+final Duration minDurationForAStableWindow =
+    minStableWindow * quietFractionDenominator;
+
 /// Where the storm is required to be silent, computed from the duration alone.
 ///
 /// Pure, and that is the whole point: because the schedule exists before the

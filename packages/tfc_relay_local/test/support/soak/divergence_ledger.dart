@@ -41,6 +41,7 @@ import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import 'invariant.dart';
 import 'soak_observables.dart';
+import 'soak_timeline.dart';
 
 // ------------------------------------------------------------- the taxonomy
 
@@ -470,13 +471,22 @@ final class DivergenceLedger with GuardedSampling implements SoakRunEndCheck {
   @override
   int get judgedSamples => _total + _controls.length;
 
-  /// One. The control's event.
+  /// One — the control's event — and **zero** on an arm too short to generate
+  /// a stable window.
   ///
   /// Not scaled with the duration, unlike every checker floor: the control
   /// fires once per run by construction, so a floor that scaled would be one
   /// the 35-minute arm could never reach.
+  ///
+  /// The zero is the same concession invariant 3 makes at
+  /// [minDurationForAStableWindow] and for the same reason: the control fires
+  /// inside a stable window, `soak_test.dart`'s 8- and 12-second auxiliary arms
+  /// generate none, and a floor they cannot reach would fail them for a reason
+  /// that has nothing to do with what they assert. Every arm that can judge
+  /// invariant 3 at all still carries the floor of one.
   @override
-  int get minimumSamplesForAVerdict => 1;
+  int get minimumSamplesForAVerdict =>
+      _source.declaredDuration < minDurationForAStableWindow ? 0 : 1;
 
   // ------------------------------------------------------- the run-end pass
 

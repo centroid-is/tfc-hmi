@@ -1816,29 +1816,62 @@ void main() {
               'prevent');
     });
 
-    test('two sweeps behind is a divergence, and it is handed to the ledger '
-        'with a cause rather than counted', () {
+    test('two sweeps behind AT THE WINDOW\'S END is a divergence, and it is '
+        'handed to the ledger with a cause rather than counted', () {
       final source = _ResyncSource();
       final checker = _resync(source);
       source.plantSweep = 100;
       source.panel(1).say(_resyncKey, 97);
 
-      source.scheduleOffset = source.insideWindow(0);
-      checker.takeReading(_at(source.insideWindow(0)));
-      source.scheduleOffset = source.afterWindow(0);
-      checker.takeReading(_at(source.afterWindow(0)));
+      _judgeWindow(checker, source);
+      checker.finish();
 
       expect(checker.ledger.total, 1);
       final event = checker.ledger.entries.single;
       expect(event.key, _resyncKey);
       expect(event.panelId, 'panel-1');
-      expect(event.clientValue, 97);
+      expect(event.clientValue, 97,
+          reason: 'the record carries what the JUDGEMENT INSTANT saw. A healed '
+              'divergence whose record showed the healed values would say the '
+              'panel and the plant agreed, which is the one thing it did not '
+              'do — and the first lane run recorded exactly that before this '
+              'arm existed');
       expect(event.plantValue, 100);
-      expect(event.cause, isA<DivergenceCause>());
       expect(event.windowIndex, 0,
-          reason: 'the window it was seen in is on the record, because a '
+          reason: 'the window it was judged in is on the record, because a '
               'divergence inside a window the timeline guaranteed was quiet '
               'means something different from one outside it');
+    });
+
+    test('a key that is behind at a window\'s START and catches up before its '
+        'END is MEASURED, not recorded', () {
+      final source = _ResyncSource();
+      final checker = _resync(source);
+      source.plantSweep = 100;
+      source.panel(1).say(_resyncKey, 60);
+
+      source.scheduleOffset = source.insideWindow(0);
+      checker.takeReading(_at(source.insideWindow(0)));
+      source.panel(1).say(_resyncKey, 100);
+      source.scheduleOffset = source.insideWindow(0, plus: const Duration(seconds: 3));
+      checker.takeReading(
+          _at(source.insideWindow(0, plus: const Duration(seconds: 3))));
+      source.scheduleOffset = source.afterWindow(0);
+      checker.takeReading(_at(source.afterWindow(0)));
+      checker.finish();
+
+      expect(checker.ledger.total, 0,
+          reason: 'a panel still catching up from a fault armed BEFORE the '
+              'window is the pipe recovering, and the window exists to give it '
+              'room. Counting it would make this artifact a record of the '
+              'storm rather than of what survived it — the first lane run '
+              'produced 124 such events, 119 of them mis-attributed');
+      expect(checker.convergenceReport, contains('in-window convergence (ms)'));
+      expect(checker.convergenceReport, contains('n=1'),
+          reason: 'it is not an event, but it IS the measurement '
+              'minStableWindow is judged against, so it has to be counted '
+              'somewhere');
+      expect(checker.marginNote, contains('window margin'));
     });
 
     test('the right value under the wrong quality is a divergence — this is '
@@ -1848,10 +1881,8 @@ void main() {
       source.plantSweep = 100;
       source.panel(1).sayWithQuality(_resyncKey, 100, Quality.badStale);
 
-      source.scheduleOffset = source.insideWindow(0);
-      checker.takeReading(_at(source.insideWindow(0)));
-      source.scheduleOffset = source.afterWindow(0);
-      checker.takeReading(_at(source.afterWindow(0)));
+      _judgeWindow(checker, source);
+      checker.finish();
 
       expect(checker.ledger.total, 1,
           reason: 'a panel rendering the right number under a quality the '
@@ -1870,42 +1901,43 @@ void main() {
       source.panel(1).say(_resyncKey, 100);
       source.panel(1).say('PIPE.connected', false);
 
-      source.scheduleOffset = source.insideWindow(0);
-      checker.takeReading(_at(source.insideWindow(0)));
-      source.scheduleOffset = source.afterWindow(0);
-      checker.takeReading(_at(source.afterWindow(0)));
+      _judgeWindow(checker, source);
+      checker.finish();
 
       expect(checker.ledger.total, 0,
           reason: 'there is no plant truth for a health key, so comparing one '
               'would be comparing against nothing');
     });
 
-    test('a divergence that heals inside its window carries healedWithinMs; '
-        'one that survives to the end carries null', () {
+    test('a divergence that heals after its window carries healedWithinMs; one '
+        'that never heals carries null', () {
       final source = _ResyncSource();
       final checker = _resync(source);
       source.plantSweep = 100;
-      source.panel(1).say(_resyncKey, 90);
-      source.panel(2).say(_resyncKey, 90);
+      source.panel(1).say(_resyncKey, 60);
+      source.panel(2).say(_resyncKey, 60);
 
-      source.scheduleOffset = source.insideWindow(0);
-      checker.takeReading(_at(source.insideWindow(0)));
-      // panel-1 catches up inside the window; panel-2 never does.
+      _judgeWindow(checker, source);
+      // panel-1 catches up two seconds past the window's end; panel-2 never
+      // does.
       source.panel(1).say(_resyncKey, 100);
-      source.scheduleOffset = source.insideWindow(0, plus: const Duration(seconds: 2));
-      checker.takeReading(_at(source.insideWindow(0, plus: const Duration(seconds: 2))));
-      source.scheduleOffset = source.afterWindow(0);
-      checker.takeReading(_at(source.afterWindow(0)));
+      source.scheduleOffset =
+          source.afterWindow(0) + const Duration(seconds: 2);
+      checker.takeReading(
+          _at(source.afterWindow(0) + const Duration(seconds: 2)));
+      checker.finish();
 
       final byPanel = <String, DivergenceEvent>{
         for (final one in checker.ledger.entries) one.panelId: one,
       };
       expect(byPanel['panel-1']!.healedWithinMs, 2000,
-          reason: 'it converged two seconds after it was first seen behind');
+          reason: 'measured from the window\'s end, which is the instant the '
+              'invariant is about');
       expect(byPanel['panel-1']!.isResidue, isFalse);
       expect(byPanel['panel-2']!.healedWithinMs, isNull,
           reason: 'null is the residue discriminator: it survived the interval '
-              'in which the timeline guaranteed nothing was armed');
+              'in which the timeline guaranteed nothing was armed, and then '
+              'survived everything after it');
       expect(byPanel['panel-2']!.isResidue, isTrue);
       expect(checker.ledger.residue, 1);
       expect(checker.ledger.healed, 1);
@@ -2020,15 +2052,13 @@ void main() {
       final source = _ResyncSource();
       final checker = _resync(source);
       source.plantSweep = 100;
-      source.panel(1).say(_resyncKey, 80);
+      source.panel(1).say(_resyncKey, 60);
 
-      source.scheduleOffset = source.insideWindow(0);
-      checker.takeReading(_at(source.insideWindow(0)));
+      _judgeWindow(checker, source);
       source.panel(1).complaints.add('"$defaultPageSubscription" '
           '$unestablishedComplaint: Bad state. Its values are gone from the '
           'cache rather than left on screen under good quality');
-      source.scheduleOffset = source.afterWindow(0);
-      checker.takeReading(_at(source.afterWindow(0)));
+      checker.finish();
 
       expect(checker.ledger.entries.single.cause,
           DivergenceCause.resyncFailure);
@@ -2043,15 +2073,13 @@ void main() {
       final source = _ResyncSource();
       final checker = _resync(source);
       source.plantSweep = 100;
-      source.panel(1).say(_resyncKey, 80);
+      source.panel(1).say(_resyncKey, 60);
 
-      source.scheduleOffset = source.insideWindow(0);
-      checker.takeReading(_at(source.insideWindow(0)));
+      _judgeWindow(checker, source);
       source.panel(1).complaints.add('update for '
           '"$defaultPageSubscription" named handle 9999, '
           '$unknownHandleComplaint');
-      source.scheduleOffset = source.afterWindow(0);
-      checker.takeReading(_at(source.afterWindow(0)));
+      checker.finish();
 
       expect(checker.ledger.entries.single.cause,
           DivergenceCause.unknownHandle);
@@ -2064,10 +2092,8 @@ void main() {
       source.epochBumpedAliases.add('ST101');
       source.panel(1).sayWithQuality(_resyncKey, 100, Quality.badCommFault);
 
-      source.scheduleOffset = source.insideWindow(0);
-      checker.takeReading(_at(source.insideWindow(0)));
-      source.scheduleOffset = source.afterWindow(0);
-      checker.takeReading(_at(source.afterWindow(0)));
+      _judgeWindow(checker, source);
+      checker.finish();
 
       expect(checker.ledger.entries.single.cause, DivergenceCause.epochChange,
           reason: 'an epoch bump legitimately marks the link\'s keys bad '
@@ -2078,52 +2104,59 @@ void main() {
               'streamed to the journal like every other');
       expect(checker.ledger.residueOf(DivergenceCause.epochChange), 1);
       expect(checker.ledger.residue, 0,
-              reason: 'counted into residue it would dominate — the storm '
-                  'bumps epochs on purpose — and a residue dominated by the '
-                  'expected case hides whatever real finding sits under it');
+          reason: 'counted into residue it would dominate — the storm bumps '
+              'epochs on purpose — and a residue dominated by the expected '
+              'case hides whatever real finding sits under it');
       expect(checker.ledger.keyframesNotNeeded, isTrue);
     });
 
-    test('generationChange: a reading that straddled a rebuild, and it stays '
-        'in residue because it is a DETECTOR bug', () {
+    test('generationChange: the judgement instant straddled a rebuild, and it '
+        'stays in residue because it is a DETECTOR bug', () {
       final source = _ResyncSource();
       final checker = _resync(source);
       source.plantSweep = 100;
-      source.panel(1).say(_resyncKey, 80);
+      source.panel(1).say(_resyncKey, 60);
 
       source.scheduleOffset = source.insideWindow(0);
       checker.takeReading(_at(source.insideWindow(0)));
+      // The gateway rebuilt the page between the sample before the window's
+      // last one and the window's last one.
       source.panel(1).pageRebuilds = 4;
+      source.scheduleOffset =
+          source.insideWindow(0, plus: const Duration(seconds: 3));
+      checker.takeReading(
+          _at(source.insideWindow(0, plus: const Duration(seconds: 3))));
       source.scheduleOffset = source.afterWindow(0);
       checker.takeReading(_at(source.afterWindow(0)));
+      checker.finish();
 
       expect(checker.ledger.entries.single.cause,
           DivergenceCause.generationChange);
       expect(checker.ledger.residue, 1,
           reason: 'discarding a replayed batch is correct, so a divergence '
-              'attributed here means this checker read across a snapshot '
-              'boundary — a detector that cannot be trusted makes the verdict '
-              'untrustworthy, and the verdict should say so rather than '
-              'quietly subtract it');
+              'attributed here means this checker compared a pre-snapshot '
+              'cache with post-snapshot plant truth — a detector that cannot '
+              'be trusted makes the verdict untrustworthy, and the verdict '
+              'should say so rather than quietly subtract it');
     });
 
     test('lostPush: an established page holding a superseded value under GOOD '
-        'quality on a page the gateway rebuilt', () {
+        'quality, on a page the gateway then rebuilt', () {
       final source = _ResyncSource();
       final checker = _resync(source);
       source.plantSweep = 100;
       source.panel(1).pageRebuilds = 3;
-      source.panel(1).say(_resyncKey, 80);
+      source.panel(1).say(_resyncKey, 60);
 
-      source.scheduleOffset = source.insideWindow(0);
-      checker.takeReading(_at(source.insideWindow(0)));
-      // The tick-sequence detector fired and rebuilt the page. That rebuild is
+      _judgeWindow(checker, source);
+      // The tick-sequence detector fires and rebuilds the page. That rebuild is
       // the only public trace it leaves when it works.
       source.panel(1).pageRebuilds = 4;
-      source.scheduleOffset = source.insideWindow(0, plus: const Duration(seconds: 2));
-      checker.takeReading(_at(source.insideWindow(0, plus: const Duration(seconds: 2))));
-      source.scheduleOffset = source.afterWindow(0);
-      checker.takeReading(_at(source.afterWindow(0)));
+      source.scheduleOffset =
+          source.afterWindow(0) + const Duration(seconds: 1);
+      checker.takeReading(
+          _at(source.afterWindow(0) + const Duration(seconds: 1)));
+      checker.finish();
 
       expect(checker.ledger.entries.single.cause, DivergenceCause.lostPush,
           reason: 'this is the case a periodic snapshot exists for — '
@@ -2139,18 +2172,41 @@ void main() {
       final source = _ResyncSource();
       final checker = _resync(source);
       source.plantSweep = 100;
-      source.panel(1).sayWithQuality(_resyncKey, 80, Quality.uncertainNotYetKnown);
+      source.panel(1)
+          .sayWithQuality(_resyncKey, 60, Quality.uncertainNotYetKnown);
 
-      source.scheduleOffset = source.insideWindow(0);
-      checker.takeReading(_at(source.insideWindow(0)));
-      source.scheduleOffset = source.afterWindow(0);
-      checker.takeReading(_at(source.afterWindow(0)));
+      _judgeWindow(checker, source);
+      checker.finish();
 
       expect(checker.ledger.entries.single.cause,
           DivergenceCause.unattributed);
       expect(checker.ledger.unattributed, 1);
       expect(checker.ledger.keyframesNotNeeded, isFalse,
           reason: 'unattributed IS the verdict number — 11-CONTEXT ruling 5');
+    });
+
+    test('a widened lostPush detector cannot be told from a clean verdict, '
+        'which is why every cause reads a surface the CLIENT publishes', () {
+      // The taxonomy's six detectors read: two complaint strings quoted from
+      // the client verbatim, the epoch bumps the DRIVER applied, the gateway's
+      // own generation counter, and the quality on the value. Not one of them
+      // reads a flag this harness planted — which is the property that makes
+      // "widen it until unattributed reaches zero" a change somebody has to
+      // argue for rather than one that hides in a boolean.
+      final ledgerSource = File(
+              'test/support/soak/checkers/eventual_resync.dart')
+          .readAsStringSync();
+      for (final surface in <String>[
+        'unestablishedComplaint',
+        'unknownHandleComplaint',
+        'lostPushSurvivedRebuild',
+        'epochBumpedAliases',
+        'pageRebuilds',
+      ]) {
+        expect(ledgerSource, contains(surface),
+            reason: 'the detector for one of the six stopped reading the '
+                'shipped surface it was built from: $surface');
+      }
     });
 
     test('the ledger is bounded and the overflow is counted', () {
@@ -2327,6 +2383,22 @@ void main() {
 
 /// The one key the resync arms compare, on an alias the soak really carries.
 const String _resyncKey = 'ST101.CN01.MOT01.setpoint';
+
+/// Takes a reading inside window [index] and then the first one past its end,
+/// which is the judgement instant.
+///
+/// **Two readings and not one**, because the window's end is judged on what
+/// the LAST sample inside it saw: by the time the checker knows a window has
+/// ended, the storm has been free to resume for a tick, and a divergence
+/// recorded from a reading taken after the quiet is over is a divergence
+/// attributed to the wrong conditions.
+void _judgeWindow(EventualResyncChecker checker, _ResyncSource source,
+    {int index = 0}) {
+  source.scheduleOffset = source.insideWindow(index);
+  checker.takeReading(_at(source.insideWindow(index)));
+  source.scheduleOffset = source.afterWindow(index);
+  checker.takeReading(_at(source.afterWindow(index)));
+}
 
 EventualResyncChecker _resync(_ResyncSource source) =>
     EventualResyncChecker(source, DivergenceLedger(source));

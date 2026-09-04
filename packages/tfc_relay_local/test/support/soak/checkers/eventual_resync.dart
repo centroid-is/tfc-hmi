@@ -92,29 +92,61 @@ const Duration resyncCheckerCadence = Duration(milliseconds: 250);
 /// exclusion untestable.
 const String pipeKeyPrefix = 'PIPE.';
 
-/// One key on one panel, seen to disagree with the plant.
-final class _OpenDivergence {
-  _OpenDivergence({
+
+
+/// One key on one panel as the last sample inside a window saw it.
+///
+/// **The window's END is the judgement instant**, so the reading that is
+/// judged has to be kept rather than re-taken: by the time the checker knows a
+/// window has ended, the storm has been free to resume for a tick, and a
+/// divergence recorded from a reading taken after the quiet is over is a
+/// divergence attributed to the wrong conditions.
+final class _Reading {
+  const _Reading({
     required this.panelIndex,
     required this.key,
-    required this.openedAt,
-    required this.openedAtSchedule,
-    required this.windowIndex,
-    required this.generationAtOpen,
-    required this.complaintsAtOpen,
+    required this.client,
+    required this.plant,
+    required this.converged,
+    required this.generation,
+    required this.previousGeneration,
+    required this.complaints,
   });
 
   final int panelIndex;
   final String key;
-  final Duration openedAt;
-  final Duration openedAtSchedule;
-  final int windowIndex;
-  final int generationAtOpen;
-  final int complaintsAtOpen;
+  final DynamicValue? client;
+  final SoakPlantTruth plant;
+  final bool converged;
+  final int generation;
 
-  /// The generation seen at the previous sample, so a reading that straddles a
-  /// rebuild can be told from one taken after it settled.
-  int generationAtLastSample = -1;
+  /// The generation at the sample before this one, so a judgement instant that
+  /// straddled a rebuild can be told from one taken after it settled.
+  final int previousGeneration;
+
+  final int complaints;
+}
+
+/// One key on one panel that disagreed with the plant at a window's end.
+final class _OpenDivergence {
+  _OpenDivergence({required this.reading, required this.windowIndex,
+      required this.judgedAt, required this.judgedAtSchedule});
+
+  /// What the last sample inside the window saw. **This is what goes on the
+  /// record**, not what the reading at healing time saw — a healed divergence
+  /// whose record showed the healed values would say the panel and the plant
+  /// agreed, which is the one thing it did not do.
+  final _Reading reading;
+
+  final int windowIndex;
+  final Duration judgedAt;
+  final Duration judgedAtSchedule;
+
+  /// The generation at the last sample taken while it was still open.
+  int generationWhileOpen = -1;
+
+  /// How many complaints the panel held at the last sample while it was open.
+  int complaintsWhileOpen = 0;
 }
 
 /// Invariant 3.
@@ -135,67 +167,80 @@ final class EventualResyncChecker
   @override
   final ViolationLog violationLog = ViolationLog();
 
+  /// What the most recent sample inside the current window saw, keyed
+  /// `panel|key`. Cleared when a window opens.
+  final Map<String, _Reading> _lastInWindow = <String, _Reading>{};
+
+  /// The generation seen at the previous sample, per panel.
+  final Map<int, int> _generationLastSample = <int, int>{};
+
+  /// Divergences judged at a window's end and not yet healed.
   final Map<String, _OpenDivergence> _open = <String, _OpenDivergence>{};
 
-  /// How many divergences this checker has emitted, for the ledger's `nth`.
-  int _emitted = 0;
+  /// When each key on each panel was first seen out of step **inside** a
+  /// window. The input to the convergence distribution, and not itself an
+  /// event: a panel still catching up from a fault armed before the window is
+  /// the pipe recovering, which is what the window exists to give it room for.
+  final Map<String, Duration> _behindSince = <String, Duration>{};
 
+  int _emitted = 0;
   int _windowsJudged = 0;
   int _keysComparedThisWindow = 0;
   int _keysComparedTotal = 0;
   int _currentWindow = -1;
   int _plantWideArmsAtWindowStart = 0;
-  bool _windowDisturbed = false;
+  final Set<int> _disturbedWindows = <int>{};
 
-  /// Every lag reading taken at a window's last sample, in sweeps.
-  final List<int> _lagAtWindowEnd = <int>[];
+  /// Every lag reading taken inside a window, in sweeps.
+  final List<int> _lagInWindow = <int>[];
 
-  /// How long each divergence took to heal, in milliseconds. The distribution
-  /// [minStableWindow] is measured against.
+  /// How long a key took to come back into step **inside** a window, measured
+  /// from the first sample that saw it behind. The distribution
+  /// [minStableWindow] is judged against.
   final List<int> _convergenceMs = <int>[];
 
-  /// Divergences the never-faulted control panel produced, by window.
+  /// How long a divergence judged at a window's end then took to heal.
+  final List<int> _postWindowHealMs = <int>[];
+
+  /// Divergences the never-faulted control panel produced.
   final List<String> _controlDivergences = <String>[];
 
-  /// Whether the ledger's positive control has fired.
   bool _controlFired = false;
-
-  /// One panel-and-key the control lies about, chosen at the first window's
-  /// end. Null until then.
   String? _controlTarget;
 
   // ------------------------------------------------------------- the counters
 
   /// **Windows measured, not readings taken.** A window in which nothing was
-  /// compared is not a window — every panel could have been down — so
-  /// [_windowsJudged] advances only when [_keysComparedThisWindow] is non-zero,
-  /// and that is asserted rather than assumed at [finish].
+  /// compared is not a window — every panel could have been down — so it does
+  /// not advance this counter, and that is recorded rather than assumed.
   @override
   int get judgedSamples => _windowsJudged;
 
-  /// One fewer than the timeline will generate, floored at one.
+  /// One fewer than the timeline will generate, floored at one — and **zero**
+  /// for an arm too short to generate any.
   ///
-  /// **The numbers, from 11-02's own arithmetic and re-derived here so a
-  /// printed count can be checked:** `computeStableWindows` puts **3** windows
-  /// of 10 s in the 90-second lane (the quiet-fraction cap binds) and **8**
-  /// windows of 20 s in the 35-minute arm (the cadence term binds). So the
-  /// floors are **2** and **7**.
+  /// **The numbers, from 11-02's arithmetic and re-derived here so a printed
+  /// count can be checked:** `computeStableWindows` puts **3** windows of 10 s
+  /// in the 90-second lane (the quiet-fraction cap binds) and **8** windows of
+  /// 20 s in the 35-minute arm (the cadence term binds). So the floors are
+  /// **2** and **7**.
   ///
   /// **Why one is subtracted rather than none.** A window in which every panel
   /// is down compares nothing and is honestly not a window; the storm is
   /// entitled to take panels down, and 11-05 measured a 35-minute run in which
-  /// panel-1 was absent for the last fifteen minutes. Demanding every window
-  /// would make this floor a statement about the population rather than about
-  /// the instrument. One is the whole of the slack, and a run that loses two
-  /// windows has something worth failing over.
+  /// panel-1 was absent for the last fifteen minutes. One is the whole of the
+  /// slack, and a run that loses two windows has something worth failing over.
   ///
-  /// **The zero-window case is the sharp one** and it is handled separately at
-  /// [finish], not by this floor: `max(1, ...)` means a timeline that generated
-  /// no windows at all fails against a floor of one, naming both numbers.
+  /// **Why zero below [minDurationForAStableWindow].** `soak_test.dart` runs
+  /// 8- and 12-second arms to prove the seed reaches stdout and that one seed
+  /// replays; neither can generate a window, and a floor they cannot reach
+  /// would fail them for a reason that has nothing to do with what they assert.
+  /// The zero-window failure that MATTERS — a real arm whose timeline produced
+  /// none — is at [finish] and is not weakened by this.
   @override
   int get minimumSamplesForAVerdict {
-    final generated = computeStableWindows(_source.declaredDuration).length;
-    final floor = generated - 1;
+    if (_source.declaredDuration < minDurationForAStableWindow) return 0;
+    final floor = computeStableWindows(_source.declaredDuration).length - 1;
     return floor < 1 ? 1 : floor;
   }
 
@@ -208,17 +253,18 @@ final class EventualResyncChecker
     final index = _windowContaining(windows, at);
 
     if (index != _currentWindow) {
-      if (_currentWindow >= 0) _closeWindow(clock, _currentWindow);
+      if (_currentWindow >= 0) _judgeWindowEnd(clock, _currentWindow);
       _currentWindow = index;
       if (index >= 0) {
+        _lastInWindow.clear();
+        _behindSince.clear();
         _keysComparedThisWindow = 0;
         _plantWideArmsAtWindowStart = _source.plantWideArmsApplied;
-        _windowDisturbed = false;
       }
     }
-    if (index < 0) return;
-    if (_source.plantWideArmsApplied != _plantWideArmsAtWindowStart) {
-      _windowDisturbed = true;
+    if (index >= 0 &&
+        _source.plantWideArmsApplied != _plantWideArmsAtWindowStart) {
+      _disturbedWindows.add(index);
     }
 
     final keys = <String>[
@@ -227,26 +273,68 @@ final class EventualResyncChecker
     ];
 
     for (final panel in _source.panelResyncViews) {
+      final previousGeneration =
+          _generationLastSample[panel.index] ?? panel.pageRebuilds;
+      _generationLastSample[panel.index] = panel.pageRebuilds;
+
       for (final key in keys) {
         final plant = _source.plantTruthFor(key);
         if (plant == null) continue;
         final client = panel.read(key);
         if (client == null) continue;
+        final id = '${panel.name}|$key';
+        final converged = _converged(client, plant);
+
+        // An open divergence is watched wherever the clock is: the window that
+        // judged it is over, and what is being measured now is whether the pipe
+        // ever caught up at all.
+        final open = _open[id];
+        if (open != null) {
+          if (converged) {
+            final healedIn = (clock.elapsed - open.judgedAt).inMilliseconds;
+            _postWindowHealMs.add(healedIn);
+            _open.remove(id);
+            _emit(open: open, panel: panel, healedWithinMs: healedIn);
+          } else {
+            open.generationWhileOpen = panel.pageRebuilds;
+            open.complaintsWhileOpen = panel.complaints.length;
+          }
+        }
+
+        if (index < 0) continue;
+
         _keysComparedThisWindow++;
         _keysComparedTotal++;
-
         final lag = _lagOf(client, plant);
-        if (_converged(client, plant)) {
-          if (lag != null) _lagAtWindowEnd.add(lag);
-          _heal(clock, panel, key, client, plant, index);
-          continue;
+        if (lag != null) _lagInWindow.add(lag);
+
+        // The in-window convergence measurement. NOT an event: a panel still
+        // catching up from a fault armed before the window is the pipe
+        // recovering, and the window exists to give it room. How long that
+        // takes is the number `minStableWindow` is judged against.
+        if (converged) {
+          final since = _behindSince.remove(id);
+          if (since != null) {
+            _convergenceMs.add((clock.elapsed - since).inMilliseconds);
+          }
+        } else {
+          _behindSince.putIfAbsent(id, () => clock.elapsed);
         }
-        if (lag != null) _lagAtWindowEnd.add(lag);
-        _openOrTrack(panel, key, at, clock, index);
+
+        _lastInWindow[id] = _Reading(
+          panelIndex: panel.index,
+          key: key,
+          client: client,
+          plant: plant,
+          converged: converged,
+          generation: panel.pageRebuilds,
+          previousGeneration: previousGeneration,
+          complaints: panel.complaints.length,
+        );
       }
     }
 
-    _maybeFireControl(clock, at, index);
+    if (index >= 0) _maybeFireControl(clock, at, index);
   }
 
   /// Whether the panel's reading agrees with the plant on value and quality.
@@ -268,79 +356,83 @@ final class EventualResyncChecker
     return sweep - held;
   }
 
-  void _openOrTrack(SoakPanelResyncView panel, String key, Duration at,
-      SoakClock clock, int windowIndex) {
-    final id = '${panel.name}|$key';
-    final open = _open[id];
-    if (open == null) {
-      _open[id] = _OpenDivergence(
-        panelIndex: panel.index,
-        key: key,
-        openedAt: clock.elapsed,
-        openedAtSchedule: at,
-        windowIndex: windowIndex,
-        generationAtOpen: panel.pageRebuilds,
-        complaintsAtOpen: panel.complaints.length,
-      )..generationAtLastSample = panel.pageRebuilds;
-      return;
+  // ------------------------------------------------------------ the windows
+
+  int _windowContaining(List<StableWindow> windows, Duration at) {
+    for (var i = 0; i < windows.length; i++) {
+      if (windows[i].contains(at)) return i;
     }
-    open.generationAtLastSample = panel.pageRebuilds;
+    return -1;
   }
 
-  void _heal(SoakClock clock, SoakPanelResyncView panel, String key,
-      DynamicValue client, SoakPlantTruth plant, int windowIndex) {
-    final id = '${panel.name}|$key';
-    final open = _open.remove(id);
-    if (open == null) return;
-    final healedIn = (clock.elapsed - open.openedAt).inMilliseconds;
-    _convergenceMs.add(healedIn);
-    _emit(
-      open: open,
-      panel: panel,
-      client: client,
-      plant: plant,
-      healedWithinMs: healedIn,
-      clock: clock,
-    );
+  /// The judgement instant: what the last sample inside the window saw.
+  ///
+  /// **This is invariant 3, in one method.** *After each stable window of at
+  /// least [minStableWindow], every subscribed key equals plant truth.* The
+  /// assertion is about the state at the window's END and not about the state
+  /// throughout it — a panel that spent the first nine seconds of a quiet
+  /// window catching up from a fault armed before it is the pipe doing exactly
+  /// what the window is for, and counting it as a divergence would make this
+  /// artifact a record of the storm rather than of what survived it.
+  void _judgeWindowEnd(SoakClock clock, int index) {
+    if (_keysComparedThisWindow == 0) {
+      violationLog.add(SoakViolation(
+        checker: name,
+        monotonic: clock.elapsed,
+        scheduleOffset: _source.scheduleOffset,
+        detail: 'stable window $index compared ZERO keys, so it is not a '
+            'window and this run has one fewer than its floor believes. Either '
+            'every panel was down across it or the key list was empty — read '
+            'the population line in metrics.jsonl to see which',
+      ));
+      return;
+    }
+    _windowsJudged++;
+
+    for (final entry in _lastInWindow.entries) {
+      final reading = entry.value;
+      if (reading.converged) continue;
+      _open[entry.key] = _OpenDivergence(
+        reading: reading,
+        windowIndex: index,
+        judgedAt: clock.elapsed,
+        judgedAtSchedule: _source.scheduleOffset,
+      )
+        ..generationWhileOpen = reading.generation
+        ..complaintsWhileOpen = reading.complaints;
+    }
+    _lastInWindow.clear();
   }
+
+  // ------------------------------------------------------- the attribution
 
   void _emit({
     required _OpenDivergence open,
     required SoakPanelResyncView panel,
-    required DynamicValue? client,
-    required SoakPlantTruth plant,
     required int? healedWithinMs,
-    required SoakClock clock,
   }) {
-    final cause = attribute(
-      panel: panel,
-      client: client,
-      plant: plant,
-      key: open.key,
-      generationAtOpen: open.generationAtOpen,
-      generationAtLastSample: open.generationAtLastSample,
-      complaintsAtOpen: open.complaintsAtOpen,
-    );
-    if (panel.index == _source.controlPanelIndex &&
-        !_windowDisturbed &&
+    final cause = _attribute(open: open, panel: panel);
+    if (open.reading.panelIndex == _source.controlPanelIndex &&
+        !_disturbedWindows.contains(open.windowIndex) &&
         cause != DivergenceCause.epochChange) {
-      _controlDivergences.add('${open.key} in window ${open.windowIndex} '
-          '(${cause.name})');
+      _controlDivergences
+          .add('${open.reading.key} in window ${open.windowIndex} '
+              '(${cause.name})');
     }
     ledger.record(DivergenceEvent(
       nth: ++_emitted,
       panelId: panel.name,
       subId: defaultPageSubscription,
-      key: open.key,
-      scheduleOffset: open.openedAtSchedule,
-      wallOffsetMs: open.openedAt.inMilliseconds,
+      key: open.reading.key,
+      scheduleOffset: open.judgedAtSchedule,
+      wallOffsetMs: open.judgedAt.inMilliseconds,
       cause: cause,
       healedWithinMs: healedWithinMs,
-      clientValue: client?.value,
-      plantValue: plant.value,
-      clientQuality: client?.quality,
-      plantQuality: plant.quality,
-      generation: panel.pageRebuilds,
+      clientValue: open.reading.client?.value,
+      plantValue: open.reading.plant.value,
+      clientQuality: open.reading.client?.quality,
+      plantQuality: open.reading.plant.quality,
+      generation: open.generationWhileOpen,
       windowIndex: open.windowIndex,
     ));
   }
@@ -351,21 +443,24 @@ final class EventualResyncChecker
   /// by the order of the ifs below.** Several causes can be true of one
   /// reading — an unestablished page also has bad quality, and an epoch bump
   /// also rebuilds the page — so the taxonomy has to say which claim is the
-  /// explanation. It runs from *most specific mechanism the client itself named
-  /// in words* down to *nobody can say*:
+  /// explanation. It runs from *the mechanism the client itself named in
+  /// words* down to *nobody can say*:
   ///
   ///  1. [DivergenceCause.resyncFailure] — the client wrote it down.
   ///  2. [DivergenceCause.unknownHandle] — the client wrote it down.
   ///  3. [DivergenceCause.epochChange] — the storm bumped this link's epoch and
   ///     the panel is refusing to vouch for the value. Expected, and the only
   ///     one excluded from residue.
-  ///  4. [DivergenceCause.generationChange] — the reading straddled a rebuild.
-  ///     A detector artifact, and it stays in residue for that reason.
+  ///  4. [DivergenceCause.generationChange] — the JUDGEMENT INSTANT straddled a
+  ///     rebuild: the gateway's generation moved between the sample before the
+  ///     window's last one and the window's last one, so the reading compared a
+  ///     pre-snapshot cache with post-snapshot plant truth. A detector artifact,
+  ///     and it stays in residue for that reason.
   ///  5. [DivergenceCause.lostPush] — an established page holding a superseded
-  ///     value under **good** quality, on a page the gateway rebuilt while this
-  ///     divergence was open. That rebuild is the tick-sequence detector firing
-  ///     (`connection_supervisor.dart:761-784`); it is the only public trace it
-  ///     leaves when it works.
+  ///     value under **good** quality, on a page the gateway then rebuilt while
+  ///     the divergence was open. That rebuild is the tick-sequence detector
+  ///     firing (`connection_supervisor.dart:761-784`); it is the only public
+  ///     trace it leaves when it works.
   ///  6. [DivergenceCause.unattributed] — everything else, and the number the
   ///     verdict turns on.
   ///
@@ -373,16 +468,12 @@ final class EventualResyncChecker
   /// surface the shipping client publishes for its own reasons, which is what
   /// stops the taxonomy being tunable: widening any of these means claiming a
   /// mechanism fired that the client never said fired.
-  DivergenceCause attribute({
+  DivergenceCause _attribute({
+    required _OpenDivergence open,
     required SoakPanelResyncView panel,
-    required DynamicValue? client,
-    required SoakPlantTruth plant,
-    required String key,
-    required int generationAtOpen,
-    required int generationAtLastSample,
-    required int complaintsAtOpen,
   }) {
-    final fresh = panel.complaints.skip(complaintsAtOpen);
+    final reading = open.reading;
+    final fresh = panel.complaints.skip(reading.complaints);
     if (fresh.any((one) => one.contains(unestablishedComplaint)) ||
         !panel.established) {
       return DivergenceCause.resyncFailure;
@@ -390,17 +481,17 @@ final class EventualResyncChecker
     if (fresh.any((one) => one.contains(unknownHandleComplaint))) {
       return DivergenceCause.unknownHandle;
     }
-    if (_source.epochBumpedAliases.contains(key.split('.').first) &&
-        client != null &&
-        client.quality != Quality.good) {
+    if (_source.epochBumpedAliases.contains(reading.key.split('.').first) &&
+        reading.client != null &&
+        reading.client!.quality != Quality.good) {
       return DivergenceCause.epochChange;
     }
-    if (panel.pageRebuilds != generationAtLastSample) {
+    if (reading.generation != reading.previousGeneration) {
       return DivergenceCause.generationChange;
     }
-    if (client != null &&
-        client.quality == Quality.good &&
-        (panel.pageRebuilds != generationAtOpen ||
+    if (reading.client != null &&
+        reading.client!.quality == Quality.good &&
+        (open.generationWhileOpen != reading.generation ||
             fresh.any((one) => one.contains(lostPushSurvivedRebuild)))) {
       return DivergenceCause.lostPush;
     }
@@ -416,47 +507,48 @@ final class EventualResyncChecker
   /// frame on a quiet plant — the last frame the plant will ever send for that
   /// key — because corrupting a value-change frame lets the following staleness
   /// frame heal it 350 ms later through the ordinary gap path, and the row then
-  /// passes against a client with the bug still in it. It took two red rounds to
-  /// find, and a control that misses it proves nothing.
+  /// passes against a client with the bug still in it. It took two red rounds
+  /// to find, and a control that misses it proves nothing.
   ///
   /// **What that translates to here, and where it is a substitution.** The soak
-  /// has no message-corruption seam: its panels dial through `FaultProxy`, whose
-  /// eight levers are all connection-shaped, and adding one would be a change to
-  /// a shipping package this plan does not make. So the control substitutes the
-  /// *answer* and never the stack that produced it — 11-04's lying-decorator
-  /// shape, and `soak_observables.dart`'s standing rule. What it substitutes is
-  /// arm A's exact outcome: a value the plant has already superseded, held under
-  /// **good** quality, on an established page. And it copies the subtlety by
-  /// substituting a reading that **cannot heal** — the lie is held, not injected
-  /// once — so the event the ledger records is residue-shaped rather than one
-  /// the next frame repairs.
+  /// has no message-corruption seam: its panels dial through `FaultProxy`,
+  /// whose eight levers are all connection-shaped, and adding one would be a
+  /// change to a shipping package this plan does not make. So the control
+  /// substitutes the *answer* and never the stack that produced it — 11-04's
+  /// lying-decorator shape, and `soak_observables.dart`'s standing rule. What
+  /// it substitutes is arm A's exact outcome: a value the plant has already
+  /// superseded, held under **good** quality, on an established page. And it
+  /// copies the subtlety by substituting a reading that **cannot heal** — the
+  /// lie is a value twenty sweeps back that nothing in the run will supply
+  /// again — so the event is residue-shaped rather than one the next frame
+  /// repairs.
   ///
-  /// **It never touches a panel any other checker reads.** The substitution
-  /// lives inside this method, one reading wide; invariant 1 and invariant 5 see
-  /// the real panel. What that costs is stated plainly: this control proves the
-  /// recorder and the **attribution** work end to end, and it does not prove the
-  /// checker would have seen a real lost push on the wire. That claim belongs to
-  /// `divergence_gate_test.dart` G1a, which makes it against a real frame.
+  /// **It never touches a panel any other checker reads**, and it never enters
+  /// the ordinary open/heal path: it is recorded straight into the ledger's
+  /// control list. What that costs is stated plainly — this control proves the
+  /// recorder and the **attribution** work end to end, and it does not prove
+  /// the checker would have seen a real lost push on the wire. That claim
+  /// belongs to `divergence_gate_test.dart` G1a, which makes it against a real
+  /// frame.
   ///
-  /// **It is excluded from the verdict's totals**, or a control that fired every
-  /// run would print *needed* every run and the verdict would mean nothing.
+  /// **It is excluded from the verdict's totals**, or a control that fired
+  /// every run would print *needed* every run and the verdict would mean
+  /// nothing.
   void _maybeFireControl(SoakClock clock, Duration at, int windowIndex) {
-    if (_controlFired || windowIndex < 0) return;
-    // Never the control panel: its own arm requires zero divergences, and a
-    // positive control that fired on it would be two arms fighting.
+    if (_controlFired) return;
     SoakPanelResyncView? target;
     for (final panel in _source.panelResyncViews) {
+      // Never the control panel: its own arm requires zero divergences, and a
+      // positive control that fired on it would be two arms fighting.
       if (panel.index == _source.controlPanelIndex) continue;
       if (!panel.established) continue;
       target = panel;
       break;
     }
     if (target == null) return;
-    final keys = <String>[
-      for (final key in _source.freshnessKeys)
-        if (!key.startsWith(pipeKeyPrefix)) key,
-    ];
-    for (final key in keys) {
+
+    for (final key in _source.freshnessKeys) {
+      if (key.startsWith(pipeKeyPrefix)) continue;
       final plant = _source.plantTruthFor(key);
       final live = target.read(key);
       if (plant == null || live == null) continue;
@@ -465,36 +557,36 @@ final class EventualResyncChecker
 
       // Arm A's outcome, exactly: the number the panel held before the frame it
       // never received, under the good quality it was carrying at the time.
-      // Twenty sweeps back is five seconds of plant — far enough that no
-      // allowance could call it converged, and a real number this panel really
-      // did render.
+      // Twenty sweeps back is five seconds of plant — past every allowance by a
+      // factor of twenty, so the control cannot be mistaken for a timing
+      // artifact.
       final superseded = DynamicValue(
           value: plant.sweepIndex! - _controlLagSweeps,
           quality: Quality.good);
       _controlFired = true;
       _controlTarget = '${target.name}|$key';
-      final open = _OpenDivergence(
+      final reading = _Reading(
         panelIndex: target.index,
         key: key,
-        openedAt: clock.elapsed,
-        openedAtSchedule: at,
+        client: superseded,
+        plant: plant,
+        converged: false,
+        generation: target.pageRebuilds,
+        previousGeneration: target.pageRebuilds,
+        complaints: target.complaints.length,
+      );
+      final open = _OpenDivergence(
+        reading: reading,
         windowIndex: windowIndex,
+        judgedAt: clock.elapsed,
+        judgedAtSchedule: at,
+      )
         // The rebuild the tick-sequence detector performs, which is what makes
         // this a `lostPush` rather than an `unattributed`: the control asserts
         // the ATTRIBUTION as well as the recording, so a taxonomy that stopped
         // attributing would fail here rather than print a clean verdict.
-        generationAtOpen: target.pageRebuilds - 1,
-        complaintsAtOpen: target.complaints.length,
-      )..generationAtLastSample = target.pageRebuilds;
-      final cause = attribute(
-        panel: target,
-        client: superseded,
-        plant: plant,
-        key: key,
-        generationAtOpen: open.generationAtOpen,
-        generationAtLastSample: open.generationAtLastSample,
-        complaintsAtOpen: open.complaintsAtOpen,
-      );
+        ..generationWhileOpen = target.pageRebuilds + 1
+        ..complaintsWhileOpen = target.complaints.length;
       ledger.record(DivergenceEvent(
         nth: ++_emitted,
         panelId: target.name,
@@ -502,13 +594,13 @@ final class EventualResyncChecker
         key: key,
         scheduleOffset: at,
         wallOffsetMs: clock.elapsed.inMilliseconds,
-        cause: cause,
+        cause: _attribute(open: open, panel: target),
         healedWithinMs: null,
         clientValue: superseded.value,
         plantValue: plant.value,
         clientQuality: superseded.quality,
         plantQuality: plant.quality,
-        generation: target.pageRebuilds,
+        generation: open.generationWhileOpen,
         windowIndex: windowIndex,
         isControl: true,
       ));
@@ -516,11 +608,7 @@ final class EventualResyncChecker
     }
   }
 
-  /// How far behind the control's substituted reading sits.
-  ///
-  /// Twenty sweeps is five seconds of plant at `soakSweepPeriod`: past every
-  /// allowance by a factor of twenty, so the control cannot be mistaken for a
-  /// timing artifact.
+  /// How far behind the control's substituted reading sits, in sweeps.
   static const int _controlLagSweeps = 20;
 
   /// Which panel-and-key the control lied about, for a case to assert against.
@@ -529,62 +617,31 @@ final class EventualResyncChecker
   /// Whether the control fired.
   bool get controlFired => _controlFired;
 
-  // ------------------------------------------------------------ the windows
-
-  int _windowContaining(List<StableWindow> windows, Duration at) {
-    for (var i = 0; i < windows.length; i++) {
-      if (windows[i].contains(at)) return i;
-    }
-    return -1;
-  }
-
-  void _closeWindow(SoakClock clock, int index) {
-    if (_keysComparedThisWindow == 0) {
-      violationLog.add(SoakViolation(
-        checker: name,
-        monotonic: clock.elapsed,
-        scheduleOffset: _source.scheduleOffset,
-        detail: 'stable window $index compared ZERO keys, so it is not a '
-            'window and this run has one fewer than its floor believes. Either '
-            'every panel was down across it or the key list was empty — read '
-            'the population line in metrics.jsonl to see which',
-      ));
-      return;
-    }
-    _windowsJudged++;
-    // Everything still open at the window's end is RESIDUE: it survived the
-    // interval in which the timeline guaranteed nothing was armed, which is
-    // the whole of what invariant 3 asserts.
-    for (final id in _open.keys.toList()) {
-      final open = _open[id]!;
-      if (open.windowIndex != index) continue;
-      SoakPanelResyncView? panel;
-      for (final one in _source.panelResyncViews) {
-        if (one.index == open.panelIndex) panel = one;
-      }
-      final plant = _source.plantTruthFor(open.key);
-      _open.remove(id);
-      if (plant == null || panel == null) continue;
-      _emit(
-        open: open,
-        panel: panel,
-        client: panel.read(open.key),
-        plant: plant,
-        healedWithinMs: null,
-        clock: clock,
-      );
-    }
-  }
-
   // ------------------------------------------------------- the run-end pass
 
   @override
   void finish() {
     try {
-      if (_currentWindow >= 0) _closeWindow(_clockAtFinish(), _currentWindow);
+      if (_currentWindow >= 0) {
+        _judgeWindowEnd(_clockAtFinish(), _currentWindow);
+        _currentWindow = -1;
+      }
 
-      final generated = _source.stableWindows.length;
-      if (generated == 0) {
+      // Everything still open at the end of the run never healed: it survived
+      // the window in which the timeline guaranteed nothing was armed, and
+      // then survived everything after it. That is residue.
+      for (final id in _open.keys.toList()) {
+        final open = _open.remove(id)!;
+        SoakPanelResyncView? panel;
+        for (final one in _source.panelResyncViews) {
+          if (one.index == open.reading.panelIndex) panel = one;
+        }
+        if (panel == null) continue;
+        _emit(open: open, panel: panel, healedWithinMs: null);
+      }
+
+      if (_source.declaredDuration >= minDurationForAStableWindow &&
+          _source.stableWindows.isEmpty) {
         violationLog.add(SoakViolation(
           checker: name,
           monotonic: _source.scheduleOffset,
@@ -594,10 +651,13 @@ final class EventualResyncChecker
           detail: 'this run generated ZERO stable windows against a floor of '
               '$minimumSamplesForAVerdict, so invariant 3 judged nothing and '
               'its green is not evidence. The windows are computed from the '
-              'duration alone by computeStableWindows, so this is a TIMELINE '
-              'problem and not a checker one: the fix is the quiet-window '
-              'cadence in soak_timeline.dart, and it carries its own '
-              'reproducibility proof to re-run',
+              'duration alone by computeStableWindows, and a '
+              '${_source.declaredDuration.inSeconds}-second arm is above the '
+              '${minDurationForAStableWindow.inSeconds}-second floor at which '
+              'they start being generated — so this is a TIMELINE problem and '
+              'not a checker one: the fix is the quiet-window cadence in '
+              'soak_timeline.dart, and it carries its own reproducibility '
+              'proof to re-run',
         ));
       }
 
@@ -609,13 +669,13 @@ final class EventualResyncChecker
           panel: 'panel-${_source.controlPanelIndex}',
           observed: _controlDivergences.length,
           expected: 0,
-          detail: 'the never-faulted control panel diverged from plant truth '
-              'in ${_controlDivergences.length} instance(s) inside windows the '
-              'storm never disturbed: ${_controlDivergences.take(5).join('; ')}'
-              '. The storm cannot aim at this panel — buildTimeline is given '
-              'the other four names — so a divergence here in an undisturbed '
-              'window is the gateway punishing a healthy panel, which is the '
-              'pre-07-08b bug class',
+          detail: 'the never-faulted control panel was still out of step with '
+              'plant truth at the END of ${_controlDivergences.length} '
+              'window(s) the storm never disturbed: '
+              '${_controlDivergences.take(5).join('; ')}. The storm cannot aim '
+              'at this panel — buildTimeline is given the other four names — '
+              'so a divergence here in an undisturbed window is the gateway '
+              'punishing a healthy panel, which is the pre-07-08b bug class',
         ));
       }
     } catch (error) {
@@ -623,7 +683,7 @@ final class EventualResyncChecker
         checker: name,
         monotonic: _source.scheduleOffset,
         scheduleOffset: null,
-        detail: 'the run-end pass threw, so the last window was not closed and '
+        detail: 'the run-end pass threw, so the last window was not judged and '
             'its residue is unrecorded: $error',
       ));
     }
@@ -643,26 +703,61 @@ final class EventualResyncChecker
   /// resync round trip on a recovered link is sub-second, leaving better than
   /// 3x margin at ten seconds.
   ///
-  /// What this report prints is the **observed** convergence time — how long
-  /// each divergence took to heal — as p50, p95 and max. If p95 approaches N
-  /// then N is too short and the checker is reporting divergences that were
-  /// simply not finished converging, which is the worst possible failure for an
-  /// artifact whose whole purpose is separating real residue from noise.
+  /// **That derivation left out the reconnect backoff, and the backoff
+  /// dominates.** What is printed here is the observed in-window convergence
+  /// time — how long a key that was out of step at a window's start took to
+  /// come back into step — and the lane run that first produced it measured
+  /// **p50 9251 ms, p95 9498 ms against a 10,000 ms window**. A panel whose
+  /// link the storm cut does not resync as soon as the fault clears: it waits
+  /// out an exponential backoff with full jitter capped at thirty seconds
+  /// (`ClientConfig`), and only then hellos, subscribes and takes a snapshot.
+  /// So the quantity the window has to cover is *backoff plus resync*, not
+  /// resync alone.
+  ///
+  /// **[marginNote] says what that means for this arm**, on every run, green
+  /// or red, because the margin is the number that decides whether residue is
+  /// evidence or noise.
   String get convergenceReport {
-    final lags = <int>[..._lagAtWindowEnd]..sort();
-    final healed = <int>[..._convergenceMs]..sort();
+    final lags = <int>[..._lagInWindow]..sort();
+    final converged = <int>[..._convergenceMs]..sort();
+    final healed = <int>[..._postWindowHealMs]..sort();
     return <String>[
-      '  eventualResync:  windows judged against a floor of '
+      '  eventualResync: $_windowsJudged windows judged against a floor of '
           '$minimumSamplesForAVerdict '
           '(${_source.stableWindows.length} generated), '
           '$_keysComparedTotal key comparisons',
-      '    convergence time (ms) : ${_quantiles(healed)} '
-          'against minStableWindow=${minStableWindow.inMilliseconds}ms',
-      '    lag at sample (sweeps): ${_quantiles(lags)} '
+      '    in-window convergence (ms): ${_quantiles(converged)}',
+      '    $marginNote',
+      '    lag while judging (sweeps): ${_quantiles(lags)} '
           'against an allowance of $convergedLagSweeps',
+      '    healed after the window (ms): ${_quantiles(healed)}',
       '    control panel (panel-${_source.controlPanelIndex}): '
-          '${_controlDivergences.length} divergences in undisturbed windows',
+          '${_controlDivergences.length} divergences at the end of undisturbed '
+          'windows',
     ].join('\n');
+  }
+
+  /// How much of the window the slowest legitimate recovery used.
+  ///
+  /// Printed rather than asserted, deliberately. A margin that had to stay
+  /// above a number would be a second invariant nobody declared, and the
+  /// honest thing to do with a measurement that is uncomfortable is to keep
+  /// printing it — 11-05's spread reports are the precedent.
+  String get marginNote {
+    final window = _source.stableWindows.isEmpty
+        ? minStableWindow
+        : _source.stableWindows.first.length;
+    if (_convergenceMs.isEmpty) {
+      return 'window margin: nothing needed to converge inside a window, so '
+          'this run says nothing about whether '
+          '${window.inMilliseconds}ms is enough';
+    }
+    final slowest = _convergenceMs.reduce((a, b) => a > b ? a : b);
+    final used = (slowest * 100 / window.inMilliseconds).round();
+    return 'window margin: the slowest recovery used $used% of this arm\'s '
+        '${window.inMilliseconds}ms window. Above about 90% the window is too '
+        'short to tell residue from a panel that had not finished its '
+        'reconnect backoff, and the residue count stops being evidence';
   }
 
   String _quantiles(List<int> sorted) {
