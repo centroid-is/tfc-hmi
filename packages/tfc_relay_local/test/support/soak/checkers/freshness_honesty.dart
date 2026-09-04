@@ -173,6 +173,26 @@ final class FreshnessHonestyChecker
   /// The longest continuous stretch in which the control's view was stale.
   Duration controlWorstStaleStretch = Duration.zero;
 
+  /// Distinct breaches — one per `(panel, key)` stretch over the budget.
+  int freshnessEpisodes = 0;
+
+  /// Ticks that re-observed an episode already recorded.
+  int repeatsSuppressed = 0;
+
+  /// Readings past the budget whose anchor was re-established by agreement
+  /// with a pinned key's published value.
+  ///
+  /// Reported, never asserted. It is the honest measure of how often the
+  /// arrival proxy could not answer and plant truth had to: a run where it
+  /// dominates is a run whose freshness verdict rests more on the comparison
+  /// than on the render surface, and the ledger should say so.
+  int pinnedAnchorRefreshed = 0;
+
+  /// `(panel, key)` pairs currently over the budget and already recorded.
+  final Set<String> _episodes = <String>{};
+
+  static String _episodeId(int panel, String key) => '$panel/$key';
+
   @override
   int get minimumSamplesForAVerdict => minimumSamplesForDuration(
         perMinute: floorPerMinute,
@@ -257,7 +277,65 @@ final class FreshnessHonestyChecker
         if (!renderedFresh) continue;
 
         final age = now - (seenHere[key]?.arrivedAt ?? now);
-        if (age <= budget) continue;
+        if (age <= budget) {
+          _episodes.remove(_episodeId(view.index, key));
+          continue;
+        }
+
+        // **A key the storm has PINNED is not judged on the arrival proxy, and
+        // this is the narrowest form of that rule rather than an exclusion.**
+        //
+        // `PlantMutate` installs a raw override and `GateBPlantDriver._sweep`
+        // then re-emits that one value every 250 ms for the rest of the run —
+        // deliberately, because "a real device keeps reporting the new number
+        // until something changes it" is what makes plant truth comparable at
+        // all. The arrivals never stop; what stops is the render surface's
+        // ability to SEE them, because an unchanged triple carries no evidence
+        // of a re-emission. The premise stated at the top of this file — every
+        // key changes on every sweep — is exactly what the override suspends.
+        //
+        // So the question is asked directly instead of through the proxy: is
+        // the panel rendering the value the plant is publishing right now? If
+        // it is, no operator is reading an old number, which is the property.
+        // If it is not, the age still stands and the violation is still
+        // recorded — a panel frozen on the pre-pin sweep counter while the
+        // plant has moved on is precisely what this checker is for.
+        //
+        // Gated on `overridden`, which is the distinction `SoakPlantTruth`
+        // already draws for invariant 3 ("overridden keys are judged on
+        // equality"). Equality with a SWEPT key would prove nothing — the
+        // counter is shared by every key on every link — and a rule that
+        // accepted it would let a frozen plant silence this checker across the
+        // board.
+        //
+        // **The anchor is REFRESHED rather than the reading skipped**, and the
+        // difference is the size of the hole. Skipping would retire this key
+        // from the arithmetic for the rest of the run — at seed 11 roughly ten
+        // of the twelve storm keys end up pinned, so a fifth of the judged
+        // surface would quietly stop being judged while the counters still
+        // said it was. Refreshing keeps the reading in `judgedSamples` and in
+        // `freshSamples` where it belongs, and it re-arms the arm: the moment
+        // the plant is pinned to a NEW value the panel does not hold, the age
+        // starts accumulating again from the last instant the two agreed.
+        final plant = source.plantTruthFor(key);
+        if (plant != null && plant.overridden && rendered.value == plant.value) {
+          pinnedAnchorRefreshed++;
+          seenHere[key]?.arrivedAt = now;
+          _episodes.remove(_episodeId(view.index, key));
+          continue;
+        }
+
+        // One breach observed on many ticks is one finding. Invariants 4 and 5
+        // both latch (`ratioReported`, `overReported`); this was the one that
+        // did not, and 11-06 measured what that cost: a single episode fanned
+        // out over four panels and re-counted every 25 ms filled the violation
+        // log's capacity of 200 and consumed all 25 printed slots on both
+        // 35-minute runs, leaving two `boundedMemory` violations unidentified.
+        if (!_episodes.add(_episodeId(view.index, key))) {
+          repeatsSuppressed++;
+          continue;
+        }
+        freshnessEpisodes++;
         violationLog.add(SoakViolation(
           checker: name,
           monotonic: now,
@@ -381,5 +459,8 @@ final class FreshnessHonestyChecker
       '($freshSamples fresh, $staleSamples stale) against a floor of '
       '$minimumSamplesForAVerdict; control $controlStaleSamples stale '
       '($controlStaleSamplesBeforeAnyPlantWideArm before any plant-wide arm), '
-      'worst control stretch ${formatSoakOffset(controlWorstStaleStretch)}';
+      'worst control stretch ${formatSoakOffset(controlWorstStaleStretch)}; '
+      '$freshnessEpisodes episodes ($repeatsSuppressed repeat ticks '
+      'suppressed), $pinnedAnchorRefreshed anchors re-established by '
+      'agreement with a pinned key';
 }

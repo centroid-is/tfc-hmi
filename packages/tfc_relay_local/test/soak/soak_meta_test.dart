@@ -112,6 +112,180 @@ void main() {
       expect(checker.staleSamples, greaterThan(0));
     });
 
+    group('a key the storm has pinned to one value', () {
+      // **The RES-03 red, and it was the instrument rather than the pipe.**
+      //
+      // `PlantMutate` does not write once — it installs a raw override, and
+      // `GateBPlantDriver._sweep` then re-emits that ONE value on every 250 ms
+      // poll cycle for the rest of the run, deliberately, because "a real
+      // device keeps reporting the new number until something changes it" is
+      // what makes plant truth a thing invariant 3 can compare against.
+      //
+      // This checker's arrival proxy is *a change in the rendered triple*, and
+      // its own doc states the premise that makes the proxy sound: "the soak's
+      // plant moves every key of every link every 250 ms with a monotonically
+      // increasing number, so every key genuinely changes on every sweep".
+      // **A pinned key is the one lever in the storm that breaks that
+      // premise.** The re-emission is a genuine arrival the render surface
+      // cannot see, so `arrivedAt` freezes while the gateway — which sees the
+      // arrivals — correctly keeps the quality good.
+      //
+      // Measured, at seed 11 over thirty-five minutes: `[05:01.059] plant
+      // BAADER.CN01.MOT03.setpoint=680` pins the key, and the first violation
+      // is +05:12.377 at an age of 11275 ms — a last arrival of +05:01.102,
+      // 43 ms after the pin. Four panels then re-counted the same frozen
+      // arrival every 25 ms until the violation log's capacity of 200 was
+      // full. Two whole 35-minute runs, twice each, reported that as the
+      // headline failure of the phase's headline deliverable.
+      test('is not a violation while the panel renders exactly what the plant '
+          'is publishing', () {
+        const key = 'ST101.CN01.MOT01.setpoint';
+        final source = _Source(keys: <String>[key])
+          ..plantTruth[key] =
+              const SoakPlantTruth(value: 680, overridden: true);
+        final checker = FreshnessHonestyChecker(source);
+
+        source.panel(1).say(key, 680);
+        checker.sample(_at(Duration.zero));
+        source.offset = const Duration(seconds: 40);
+        checker.sample(_at(const Duration(seconds: 40)));
+
+        expect(checker.violations, isEmpty,
+            reason: 'the plant is publishing 680 every poll cycle and the '
+                'panel is rendering 680, so 680 IS the current state of the '
+                'plant. There is no old number on the screen and no operator '
+                'is being misled — which is the property, and the age of the '
+                'last CHANGE is only ever a proxy for it');
+      });
+
+      test('is still judged when the panel renders something else', () {
+        // The exclusion above must not become "pinned keys are not judged".
+        // A panel still showing the pre-pin sweep counter while the plant has
+        // moved on to 680 is exactly the failure invariant 1 is for, and it is
+        // the failure a blanket exclusion would hide.
+        const key = 'ST101.CN01.MOT01.setpoint';
+        final source = _Source(keys: <String>[key])
+          ..plantTruth[key] =
+              const SoakPlantTruth(value: 680, overridden: true);
+        final checker = FreshnessHonestyChecker(source);
+
+        source.panel(1).say(key, 5123);
+        checker.sample(_at(Duration.zero));
+        source.offset = const Duration(seconds: 40);
+        checker.sample(_at(const Duration(seconds: 40)));
+
+        expect(checker.violations, hasLength(1),
+            reason: 'the plant has been publishing 680 for forty seconds and '
+                'this panel is rendering 5123 as CURRENT. Pinning a key must '
+                'narrow the arithmetic, never retire the arm');
+      });
+
+      test('is still counted as a judged, fresh reading', () {
+        // The rule refreshes the anchor; it does not retire the key. At seed 11
+        // roughly ten of the twelve storm keys are pinned by the end of a
+        // 35-minute run, so a rule that skipped the reading would stop judging
+        // about a fifth of the surface while `judgedSamples` still claimed
+        // otherwise — a vacuity gate cleared by readings nobody looked at.
+        const key = 'ST101.CN01.MOT01.setpoint';
+        final source = _Source(keys: <String>[key])
+          ..plantTruth[key] =
+              const SoakPlantTruth(value: 680, overridden: true);
+        final checker = FreshnessHonestyChecker(source);
+
+        source.panel(1).say(key, 680);
+        checker.sample(_at(Duration.zero));
+        source.offset = const Duration(seconds: 40);
+        checker.sample(_at(const Duration(seconds: 40)));
+
+        expect(checker.freshSamples, greaterThan(0));
+        expect(checker.pinnedAnchorRefreshed, greaterThan(0),
+            reason: 'the counter is how the verdict block says how often the '
+                'arrival proxy could not answer and plant truth had to');
+      });
+
+      test('a key the plant sweeps is unaffected by the equality rule', () {
+        // `overridden: false` is the sweep counter, which never repeats, so a
+        // stale reading can never equal plant truth by accident. The rule is
+        // gated on `overridden` anyway — the same distinction invariant 3
+        // already draws ("overridden keys are judged on equality") — so that a
+        // frozen PLANT cannot silence this checker across the board.
+        const key = 'ST101.CN01.MOT01.setpoint';
+        final source = _Source(keys: <String>[key])
+          ..plantTruth[key] = const SoakPlantTruth(
+              value: 5123, overridden: false, sweepIndex: 5123);
+        final checker = FreshnessHonestyChecker(source);
+
+        source.panel(1).say(key, 5123);
+        checker.sample(_at(Duration.zero));
+        source.offset = const Duration(seconds: 40);
+        checker.sample(_at(const Duration(seconds: 40)));
+
+        expect(checker.violations, hasLength(1),
+            reason: 'equality with a swept key proves nothing: the counter is '
+                'shared by every key on every link, so a panel frozen at the '
+                'value the plant happens to be publishing is a coincidence '
+                'and not evidence of an arrival');
+      });
+    });
+
+    group('the per-episode latch', () {
+      // **One episode is one finding, and 11-06 made this a prerequisite
+      // rather than a nicety.** The violation printer truncates at 25 entries;
+      // one freshness episode fanned out over four panels and re-counted every
+      // 25 ms consumed all 25 slots on both 35-minute runs, which is why the
+      // two surviving `boundedMemory` violations could not be identified at
+      // all. Invariants 4 and 5 both latch already (`ratioReported`,
+      // `overReported`); this was the one that did not.
+      test('records one violation per panel and key, not one per tick', () {
+        const key = 'ST101.CN01.MOT01.setpoint';
+        final source = _Source(keys: <String>[key]);
+        final checker = FreshnessHonestyChecker(source);
+
+        source.panel(1).say(key, 7);
+        checker.sample(_at(Duration.zero));
+        for (var ms = 40000; ms <= 40200; ms += 25) {
+          source.offset = Duration(milliseconds: ms);
+          checker.sample(_at(Duration(milliseconds: ms)));
+        }
+
+        expect(checker.violations, hasLength(1),
+            reason: 'nine consecutive ticks over the budget on one key of one '
+                'panel is ONE breach observed nine times, and a log that '
+                'records it nine times crowds out every other checker');
+        expect(checker.repeatsSuppressed, greaterThan(0),
+            reason: 'the suppressed repeats have to be counted, or the latch '
+                'is a way of under-reporting rather than of grouping');
+        expect(checker.freshnessEpisodes, 1);
+      });
+
+      test('a second episode after a recovery is recorded again', () {
+        const key = 'ST101.CN01.MOT01.setpoint';
+        final source = _Source(keys: <String>[key]);
+        final checker = FreshnessHonestyChecker(source);
+
+        source.panel(1).say(key, 7);
+        checker.sample(_at(Duration.zero));
+        source.offset = const Duration(seconds: 40);
+        checker.sample(_at(const Duration(seconds: 40)));
+
+        // A value arrives: the breach is over.
+        source.panel(1).say(key, 8);
+        source.offset = const Duration(seconds: 41);
+        checker.sample(_at(const Duration(seconds: 41)));
+
+        // And it goes over the budget a second time.
+        source.offset = const Duration(seconds: 81);
+        checker.sample(_at(const Duration(seconds: 81)));
+
+        expect(checker.freshnessEpisodes, 2,
+            reason: 'a latch that never released would report a pipe that '
+                'breached, recovered and breached again as a single finding — '
+                'which is the failure mode of latching, and the reason the '
+                'release is asserted rather than assumed');
+        expect(checker.violations, hasLength(2));
+      });
+    });
+
     test('a key with no value yet is not judged', () {
       final source = _Source();
       final checker = FreshnessHonestyChecker(source);
@@ -2706,6 +2880,16 @@ final class _Source implements SoakFreshnessSource {
   @override
   Duration freshnessBudget = const Duration(seconds: 12);
 
+  /// What the soak's plant is publishing, for the keys a case has scripted.
+  ///
+  /// Empty by default, so every case written before the pinned-key rule
+  /// existed keeps answering `null` — "no link carries this key" — and is
+  /// judged on the arrival proxy alone.
+  final Map<String, SoakPlantTruth> plantTruth = <String, SoakPlantTruth>{};
+
+  @override
+  SoakPlantTruth? plantTruthFor(String key) => plantTruth[key];
+
   _Panel panel(int index) => panelViews[index];
 }
 
@@ -2772,6 +2956,9 @@ final class _LyingSource implements SoakFreshnessSource {
 
   @override
   Duration get freshnessBudget => _real.freshnessBudget;
+
+  @override
+  SoakPlantTruth? plantTruthFor(String key) => _real.plantTruthFor(key);
 
   @override
   List<SoakPanelView> get panelViews => <SoakPanelView>[
