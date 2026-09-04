@@ -404,6 +404,47 @@ void main() {
               'settled on, and a guard that refused it would refuse every '
               'struct chart in the plant');
     });
+
+    // 10-REVIEW WR-04. Nothing bounded a series name's LENGTH: the frame cap
+    // is 1 MiB, maxKeysPerSubscribe is 2000, and SeriesMappingTally bounded
+    // how many novel names it remembered but not how long each was.
+    test('a name longer than the bound is refused, and is not echoed',
+        () async {
+      final kit = _kit();
+      final long = 'A' * (DataHandlers.maxSeriesNameChars + 1);
+
+      final error = await kit.refusedPreEffect(
+          () => kit.handlers.timeseriesQuery(
+                  _params(DataServiceMethods.timeseriesQuery, {
+                'table': long,
+                'to': _ms(_base),
+              })),
+          'a series name of ${long.length} characters',
+          reason: 'unbounded, each of the tally\'s 64 retained names could be '
+              'most of a megabyte and none of them is ever pruned — memory '
+              'pinned for the life of the process by one authenticated '
+              'station, plus 64 error-reporter lines of the same size');
+
+      expect(error.message, contains('${long.length}'),
+          reason: 'the length is the actionable fact');
+      expect(error.message, isNot(contains(long)),
+          reason: 'and the name itself must NOT be echoed. Echoing it is the '
+              'thing being prevented, one layer up: a refusal carrying the '
+              'megabyte is the megabyte, in the log and in the frame');
+    });
+
+    test('a name at exactly the bound is accepted', () async {
+      // The boundary in the direction that matters: `>=` here would refuse a
+      // legitimate name and the failure would look like a broken chart.
+      final kit = _kit();
+      final atBound = 'A' * DataHandlers.maxSeriesNameChars;
+
+      await kit.handlers.timeseriesQuery(_params(
+          DataServiceMethods.timeseriesQuery,
+          {'table': atBound, 'to': _ms(_base)}));
+
+      expect(kit.source.calls.single, contains(atBound));
+    });
   });
 
   group('tables is bounded the same three ways readMany is', () {

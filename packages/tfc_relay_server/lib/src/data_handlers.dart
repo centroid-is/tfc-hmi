@@ -1064,6 +1064,19 @@ final class DataHandlers {
   /// as a series that does not exist, one layer down, in `_PolicyTimeseries`,
   /// which also counts it so the gap is diagnosable (T-10-12, 10-CONTEXT
   /// amendment 6).
+  /// The longest series name this gateway will accept on the wire.
+  ///
+  /// **A length bound as well as a shape one** (10-REVIEW WR-04). Nothing else
+  /// bounded a series name: the frame cap is 1 MiB, `maxKeysPerSubscribe` is
+  /// 2000, and `SeriesMappingTally` bounds how *many* novel names it remembers
+  /// but not how long each is — so one authenticated station could pin tens of
+  /// megabytes in the gateway for the life of the process, and log a line of
+  /// up to a megabyte per name while doing it. The tally now truncates what it
+  /// keeps; this is the belt on the other side, and it is free: the plant's
+  /// convention is `AREAnn.DEVnn.SUBnn` plus at most one member, and the
+  /// longest real key at SVN is under fifty characters.
+  static const int maxSeriesNameChars = 200;
+
   String _series(rpc.Parameters params, String name, String method) {
     final raw = params[name].valueOr(null);
     if (raw is! String || raw.isEmpty) {
@@ -1071,6 +1084,16 @@ final class DataHandlers {
           method,
           '$method needs a non-empty string "$name": the series to read, '
           'named as `<series>` or `<series>:<member>`');
+    }
+    if (raw.length > maxSeriesNameChars) {
+      // The refusal does NOT echo the name — that is the whole point of
+      // bounding it — and says how long it was instead.
+      throw _refuse(
+          method,
+          '$method refused "$name": a series name may be at most '
+          '$maxSeriesNameChars characters and this one is ${raw.length}. No '
+          'plant key is anywhere near that; a name this long is either a '
+          'mistake or memory somebody is trying to make this gateway hold');
     }
     try {
       resolver.resolve(raw);

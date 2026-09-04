@@ -65,6 +65,25 @@ final class SeriesMappingTally {
   /// grow one novel string at a time (T-04-06's shape, applied here).
   final int _keepNames;
 
+  /// The longest fragment of a name kept **or logged**.
+  ///
+  /// **[_keepNames] bounds cardinality; this bounds size, and T-04-06's shape
+  /// is the second one** (10-REVIEW WR-04). Citing T-04-06 for a count was the
+  /// mistake: that threat bounds *bytes*, and sixty-four strings of
+  /// unspecified length is not a bound on bytes. Nothing else stood in the way
+  /// — `DataHandlers._series` checked only the grammar, `maxKeysPerSubscribe`
+  /// is 2000, and a frame may be 1 MiB — so one authenticated station sending
+  /// sixty-four novel long names pinned tens of megabytes here **for the life
+  /// of the process** ([_names] is never pruned), and fired [_report] with the
+  /// whole string interpolated into the message each time: sixty-four log
+  /// lines of up to a megabyte.
+  ///
+  /// 200 characters is generous against the plant's own convention
+  /// (`AREAnn.DEVnn.SUBnn` plus at most one member), and `DataHandlers`
+  /// refuses a longer name at ingress anyway. This is the belt behind that
+  /// belt, for a caller reaching the tally without passing a handler.
+  static const int maxNameChars = 200;
+
   final _names = <String>{};
 
   var _queries = 0;
@@ -90,11 +109,21 @@ final class SeriesMappingTally {
   bool get namesTruncated => _names.length >= _keepNames;
 
   /// Records one query that named a series with no mapping.
+  ///
+  /// The name is truncated to [maxNameChars] **before** it is remembered or
+  /// logged: the name is chosen by a caller and the memory it costs must not
+  /// be. A truncated entry says how long the original was, so the sentence
+  /// stays actionable — "the collection plan does not name this" reads
+  /// differently when the thing is 40 000 characters long.
   void record(String wireName) {
     _queries++;
-    if (_names.length >= _keepNames || !_names.add(wireName)) return;
+    final short = wireName.length <= maxNameChars
+        ? wireName
+        : '${wireName.substring(0, maxNameChars)}…'
+            '(${wireName.length} chars)';
+    if (_names.length >= _keepNames || !_names.add(short)) return;
     _report?.call(
-        'a chart asked for the series "$wireName", which this gateway has no '
+        'a chart asked for the series "$short", which this gateway has no '
         'mapping for; it is answered as a series that does not exist. Either '
         'the collection plan does not name it, or it is a pre-cutover table '
         'the application collector wrote and no read-side alias has been '
