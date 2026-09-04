@@ -76,9 +76,12 @@ import 'package:tfc_relay_client/tfc_relay_client.dart'
     show RemoteStateMan, defaultPageSubscription;
 import 'package:tfc_relay_local/tfc_relay_local.dart' show UpstreamLinkState;
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
+import 'package:tfc_relay_server/src/subscription_registry.dart'
+    show SessionSubscriptionCounts;
 import 'package:tfc_relay_server/tfc_relay_server.dart';
 import 'package:tfc_stateman_contract/faults.dart';
 
+import '../../soak/soak_registry.dart' show declaredCheckers;
 import '../gate_b_fixture.dart';
 import '../keymap_fixtures.dart' show opcUaEntry;
 import 'applied_write_ledger.dart';
@@ -473,7 +476,12 @@ final class SoakPanelHealth {
 /// population and proves all of that at 90 seconds — real evidence on its own,
 /// and the thing that must not bit-rot. 11-04, 11-05 and 11-06 then register
 /// against a driver that already works.
-final class SoakDriver implements SoakFreshnessSource, SoakWriteSource {
+final class SoakDriver
+    implements
+        SoakFreshnessSource,
+        SoakWriteSource,
+        SoakStructureSource,
+        SoakLogSource {
   SoakDriver({
     required this.seed,
     required this.duration,
@@ -676,6 +684,116 @@ final class SoakDriver implements SoakFreshnessSource, SoakWriteSource {
   int get probeWrites => _probeWrites;
   int _probeWrites = 0;
 
+  // ------------------------------------------- what invariant 4 is given
+  //
+  // One method rather than ten getters, because the readings in a checkpoint
+  // row have to be SIMULTANEOUS. Ten pulls under a storm can straddle a gateway
+  // restart, and a row with a session count from before it and a subscription
+  // count from after is a row that reads as a leak.
+
+  /// Every watched structure, read at one instant.
+  ///
+  /// **RSS is not here.** The allocator's number is written by [_checkpoint]
+  /// into `metrics.jsonl` at this same cadence and is read by no assertion
+  /// anywhere — `bounded_memory.dart` quotes the doctrine in full and
+  /// `soak_meta_test.dart` sweeps the tree for the spelling.
+  @override
+  SoakStructureReading readStructures() {
+    if (_fixture == null) {
+      return const SoakStructureReading(
+        perPanel: <int, Map<String, int>>{},
+        plantWide: <String, int>{},
+      );
+    }
+    final panels = fixture.panels;
+    final perPanel = <int, Map<String, int>>{
+      for (var i = 0; i < panels.length; i++)
+        i: <String, int>{
+          unresolvedCmdsStructure: panels[i].client.debugUnresolvedCmds.length,
+          complaintsStructure: panels[i].client.complaints.length,
+          staleSubscriptionsStructure:
+              panels[i].client.debugStaleSubscriptionsAtLastTick.length,
+          writeStatusQueriesStructure:
+              panels[i].client.debugWriteStatusQueries.length,
+        },
+    };
+
+    // The send-buffer clause, through the shipping health verdict. The raw
+    // depth lives on a private `_Connection` and nothing public hands it out;
+    // `PIPE.link_degraded` is `pendingCount > ceiling || pendingBytes >
+    // byteCeiling` composed by the gateway itself. See
+    // `degradedPanelsStructure` for the whole argument, including the fact that
+    // `pendingBytes` is the priority lane only.
+    var degraded = 0;
+    for (final panel in panels) {
+      final verdict = panel.client.read(PipeKeys.linkDegraded);
+      if (verdict?.value == true) degraded++;
+    }
+
+    final server = fixture.server;
+    final plantWide = <String, int>{
+      recordedOutcomesStructure: server.writeOutcomes.recordedOutcomes,
+      sessionsStructure: server.sessions.sessionCount,
+      subscriptionsStructure: server.sessions.subscriptionCount,
+      listenersStructure: server.sessions.listenerCount,
+      degradedPanelsStructure: degraded,
+    };
+    final skips = <String, String>{};
+    final carried = <String>{};
+    if (!canCountOpenSockets) {
+      // By name, in the platform's own words, never by silence.
+      skips[openSocketsStructure] = openSocketCountSkipReason;
+    } else {
+      // On its own cadence: the macOS branch of `openSocketCount()` is a
+      // SYNCHRONOUS `lsof` subprocess, measured at ~50 ms with the isolate
+      // stopped, and a soak about behaviour under stress must not spend 1 % of
+      // itself frozen inside its own instrument. See
+      // `openSocketCheckpointCadence`.
+      if (_structureReadings % openSocketCheckpointCadence == 0) {
+        _lastOpenSockets = openSocketCount();
+      } else {
+        carried.add(openSocketsStructure);
+      }
+      plantWide[openSocketsStructure] = _lastOpenSockets;
+    }
+    _structureReadings++;
+    return SoakStructureReading(
+      perPanel: perPanel,
+      plantWide: plantWide,
+      skips: skips,
+      carriedForward: carried,
+    );
+  }
+
+  int _structureReadings = 0;
+  int _lastOpenSockets = 0;
+
+  // ------------------------------------------- what invariant 5 is given
+
+  @override
+  List<SoakPanelLogView> get panelLogs => <SoakPanelLogView>[
+        if (_fixture != null)
+          for (var i = 0; i < fixture.panels.length; i++)
+            _LivePanelLogView(i, fixture.panels[i].client,
+                _health[i]?.readyDips ?? 0),
+      ];
+
+  /// Lines the gateway has produced, through the seam a deployed gateway logs
+  /// through.
+  ///
+  /// `buildGateway`'s default is `_logServerError(log)` —
+  /// `gateway_config.dart:492-497`, installed at `:643` — so the fixture's
+  /// collector holds exactly the lines the plant's gateway would have written.
+  @override
+  int get gatewayLogLines =>
+      _fixture == null ? 0 : fixture.gatewayComplaints.length;
+
+  /// Ingest refusals that actually reached a sink — `IngestLog.logged`, damped
+  /// to once per key per process.
+  @override
+  int get plantIngestLogLines =>
+      _fixture == null ? 0 : fixture.plant.ingestLog.logged;
+
   /// How many panels are ready right now.
   int get connectedPanels => _fixture == null
       ? 0
@@ -751,6 +869,28 @@ final class SoakDriver implements SoakFreshnessSource, SoakWriteSource {
         }
       }
     }
+    // Declared names with nothing registered against them, so the audit reads
+    // as INCOMPLETE rather than as complete-and-passing. A missing checker is
+    // otherwise invisible: the block prints one row per registration, so an
+    // invariant nobody wrote simply has no row, which looks exactly like an
+    // invariant that had nothing to say.
+    final registered = <String>{for (final one in checkers) one.checker.name};
+    final pending = <String>[
+      for (final name in declaredCheckers)
+        if (!registered.contains(name)) name,
+    ];
+    if (pending.isNotEmpty) {
+      lines.add('  PENDING     : ${pending.join(', ')} — declared in '
+          'soak_registry.dart and not registered, so this audit is incomplete '
+          'rather than complete and passing');
+    }
+    // The shared observable, said once. Invariants 4 and 5 both watch
+    // `complaints.length`, so a genuine flood trips both — and a report in
+    // which they appear as two independent findings corroborating each other
+    // is pitfall 8 exactly. The sentence is the deliverable.
+    final shared = sharedObservableFindings(
+        <InvariantChecker>[for (final one in checkers) one.checker]);
+    if (shared != null) lines.add(shared);
     lines.add('  writes      : $_writesIssued issued ($_probeWrites by the '
         'probe every ${writeProbeCadence.inSeconds}s, one in '
         '$writeProbeReadOnlyEvery to $soakReadOnlyKey), $appliedWrites');
@@ -1817,6 +1957,35 @@ final class _LivePanelView implements SoakPanelView {
 
   @override
   DynamicValue? read(String key) => _client.read(key);
+}
+
+/// One live panel's complaint surface, as invariant 5 reads it.
+///
+/// Built per call for the same reason [SoakDriver.panelViews] is:
+/// [GateBFixture.redial] replaces a panel's `RemoteStateMan` outright, and a
+/// view cached at `start()` would go on counting a disposed client's
+/// complaints — which, for an invariant about a list that never shrinks, would
+/// read as a panel that stopped complaining rather than as a panel that was
+/// replaced.
+final class _LivePanelLogView implements SoakPanelLogView {
+  _LivePanelLogView(this.index, this._client, this.reestablishments);
+
+  @override
+  final int index;
+
+  final RemoteStateMan _client;
+
+  @override
+  String get name => soakPanelName(index);
+
+  @override
+  bool get established => _client.isReady;
+
+  @override
+  int get complaints => _client.complaints.length;
+
+  @override
+  final int reestablishments;
 }
 
 /// The wire word for one outcome.

@@ -44,6 +44,8 @@ import 'dart:math';
 import 'package:test/test.dart';
 
 import '../support/soak/applied_write_ledger.dart';
+import '../support/soak/checkers/bounded_logs.dart';
+import '../support/soak/checkers/bounded_memory.dart';
 import '../support/soak/checkers/freshness_honesty.dart';
 import '../support/soak/checkers/terminal_state.dart';
 import '../support/soak/invariant.dart';
@@ -145,6 +147,20 @@ List<SoakCheckerRegistration> soakCheckers(SoakDriver Function() driver) =>
       // at the instant, not the one the checker read it at.
       SoakCheckerRegistration.checkpoint(
           TerminalStateChecker(_LateSource(driver))),
+      // Invariant 4 IS the checkpoint: a slope is a series of readings at a
+      // fixed cadence, and this is the cadence `soak_driver.dart` writes the
+      // journal at — so a row in `metrics.jsonl` and a reading in this
+      // checker's series are the same instant, and RSS sits beside the
+      // structures without anything asserting on it.
+      SoakCheckerRegistration.checkpoint(
+          BoundedMemoryChecker(_LateSource(driver))),
+      // Also the checkpoint cadence, and NOT `.perMinute`, which would tick
+      // once in the ninety-second arm and give the vacuity gate a single
+      // reading to judge a whole run on. The window is a minute wide; the
+      // sampling of it is every five seconds, so a flood that starts at +20 s
+      // is caught at +40 s rather than at +60 s.
+      SoakCheckerRegistration.checkpoint(
+          BoundedLogsChecker(_LateSource(driver))),
     ];
 
 /// A [SoakFreshnessSource] that resolves its driver on every call.
@@ -153,7 +169,12 @@ List<SoakCheckerRegistration> soakCheckers(SoakDriver Function() driver) =>
 /// reads the live one, and the alternative — handing the checker a setter the
 /// driver calls at `start()` — is a second lifecycle to get wrong on the day
 /// somebody adds a third registration.
-final class _LateSource implements SoakFreshnessSource, SoakWriteSource {
+final class _LateSource
+    implements
+        SoakFreshnessSource,
+        SoakWriteSource,
+        SoakStructureSource,
+        SoakLogSource {
   const _LateSource(this._driver);
 
   final SoakDriver Function() _driver;
@@ -190,6 +211,18 @@ final class _LateSource implements SoakFreshnessSource, SoakWriteSource {
 
   @override
   AppliedWriteLedger get appliedWrites => _driver().appliedWrites;
+
+  @override
+  SoakStructureReading readStructures() => _driver().readStructures();
+
+  @override
+  List<SoakPanelLogView> get panelLogs => _driver().panelLogs;
+
+  @override
+  int get gatewayLogLines => _driver().gatewayLogLines;
+
+  @override
+  int get plantIngestLogLines => _driver().plantIngestLogLines;
 }
 
 /// One run. The only difference between the lane and RES-03 is [duration].
@@ -220,6 +253,16 @@ Future<SoakDriver> _runSoak(
   // are the baseline the next red run is read against, and a block that only
   // appears on failure is a block nobody has ever seen working.
   print(driver.verdictBlock);
+
+  // The spread the two derived constants came from, printed on a green run for
+  // the same reason. K, M and the complaint ceiling are numbers somebody
+  // measured, and the measurement has to keep arriving or the next person to
+  // touch them is choosing again rather than checking.
+  for (final one in checkers) {
+    final checker = one.checker;
+    if (checker is BoundedMemoryChecker) print(checker.spreadReport);
+    if (checker is BoundedLogsChecker) print(checker.spreadReport);
+  }
 
   final registered = <InvariantChecker>[
     for (final one in checkers) one.checker,
@@ -355,10 +398,26 @@ void main() {
       for (final one in registrations) one.checker,
     ];
 
-    expect(checkers.map((one) => one.name),
-        containsAll(<String>[freshnessHonesty, terminalStateWrites]),
-        reason: '11-04 registers invariants 1 and 2; 11-05 and 11-06 append '
-            'theirs to the same list');
+    expect(
+        checkers.map((one) => one.name),
+        containsAll(<String>[
+          freshnessHonesty,
+          terminalStateWrites,
+          boundedMemory,
+          boundedLogs,
+        ]),
+        reason: '11-04 registers invariants 1 and 2, 11-05 registers 4 and 5, '
+            'and 11-06 appends the last two to the same list');
+    expect(checkers, hasLength(4));
+    expect(
+        <String>[
+          for (final name in declaredCheckers)
+            if (!checkers.map((one) => one.name).contains(name)) name,
+        ],
+        <String>[eventualResync, divergenceLedger],
+        reason: 'the two that are still pending must be exactly these, and the '
+            'verdict block names them so the audit reads as INCOMPLETE rather '
+            'than as complete and passing');
     expect(
         () => assertEveryCheckerIsDeclared(checkers, declaredCheckers),
         returnsNormally);
