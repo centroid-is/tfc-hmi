@@ -895,6 +895,71 @@ void main() {
           reason: 'the log is a header and then every merged entry');
     });
 
+    test('ROADMAP criterion 3, on the merged timeline: one seed, two '
+        'generations, one storm', () {
+      // The hard half of this was delivered in Phase 2 and is not rebuilt
+      // here: `schedule_test.dart:42` and `:233` prove same-seed-identical
+      // timeline for the link half, across generation and playback. This case
+      // proves the merge did not break it.
+      final first = _timeline(seed: 2026, duration: _fullSoak);
+      final second = _timeline(seed: 2026, duration: _fullSoak);
+
+      // ignore: avoid_print
+      print('criterion 3: compared ${first.merged.length} merged entries '
+          '(${first.link.length} link generated, ${first.events.length} '
+          'events, ${first.quietClears.length} injected clears, '
+          '${first.linkEntriesWithheld} link entries withheld)');
+
+      expect(second.merged, equals(first.merged),
+          reason: 'two generations of seed 2026 produced different merged '
+              'timelines, so a soak failure cannot be reproduced from its '
+              'seed. Element-wise rather than by length: a generator that '
+              'drifted in its payloads while keeping its cadence would '
+              'produce two lists of one length describing two different runs');
+      expect(first.merged, isNotEmpty,
+          reason: 'two empty lists are equal');
+    });
+
+    test('the link half is bit-identical to ScenarioSchedule.generate alone',
+        () {
+      // **This is the half that proves the salt did its job.** If the two
+      // streams shared a generator, adding or removing an event kind would
+      // shift the link timeline for this seed — and every link repro log
+      // already pasted into an issue would describe a storm that no longer
+      // happens. The salt is what makes the two independent, and this case is
+      // what makes the independence checkable.
+      const seed = 2026;
+      final alone = ScenarioSchedule.generate(seed: seed, duration: _fullSoak);
+      final timeline = _timeline(seed: seed, duration: _fullSoak);
+
+      // ignore: avoid_print
+      print('link-half identity: compared ${alone.length} entries against '
+          '${timeline.link.length}');
+
+      expect(timeline.link, equals(alone),
+          reason: 'buildTimeline\'s link half is not what '
+              'ScenarioSchedule.generate produces for seed $seed on its own. '
+              'Either the link half is being regenerated with different '
+              'arguments or the two streams share an RNG');
+      expect(
+          ScenarioSchedule.reproLog(seed: seed, timeline: timeline.link),
+          equals(ScenarioSchedule.reproLog(seed: seed, timeline: alone)),
+          reason: 'and byte-identical once serialised, because the serialised '
+              'form is what a human pastes back');
+    });
+
+    test('the two repro logs for one seed are string-identical', () {
+      final first = _timeline(seed: 2026, duration: _fullSoak).reproLog;
+      final second = _timeline(seed: 2026, duration: _fullSoak).reproLog;
+
+      expect(second, equals(first),
+          reason: 'the repro log is the artifact; two generations of one seed '
+              'whose logs differ mean the artifact is not reproducible even '
+              'where the timeline is');
+      expect(first.split('\n'), hasLength(greaterThan(100)),
+          reason: 'two short strings are equal too');
+    });
+
     test('the merged half-counts add up', () {
       final timeline = _timeline(seed: 11, duration: _fullSoak);
       expect(
