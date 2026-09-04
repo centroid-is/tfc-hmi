@@ -293,7 +293,7 @@ final class PreferenceChangeFeed {
       final db = (database() ?? _noStore()).db;
       final channel = await db.enableKeyedNotificationChannel(table, keyColumn);
       if (_closed || !_controller.hasListener) return;
-      _channelSub = db.listenToChannel(channel).listen(
+      final sub = db.listenToChannel(channel).listen(
         _onPayload,
         onError: (Object e) {
           log?.call('preference notification channel error: $e');
@@ -302,6 +302,24 @@ final class PreferenceChangeFeed {
         // connection carrying it dies (`database_drift.dart:1066-1069`).
         onDone: _channelDropped,
       );
+      // **Re-checked after the assignment, not only before it** (10-REVIEW
+      // WR-09). The guard one line up runs, then `listen` happens; if the last
+      // subscriber cancels in that gap, [_stop] reads a still-null
+      // [_channelSub], sets no [_stopping] and returns — and this line would
+      // then install a subscription nothing cancels until [close]. A live
+      // `LISTEN` on the shared notification connection with no listener behind
+      // it is exactly what [_stopping] exists to serialise away, arriving one
+      // statement earlier than that machinery guards, and session churn is the
+      // ordinary case rather than the exotic one.
+      //
+      // Unwound into [_stopping] rather than merely cancelled, so the next
+      // `LISTEN` still waits for this `UNLISTEN` to land: out of order, the
+      // server silently unsubscribes the NEW subscriber.
+      if (_closed || !_controller.hasListener) {
+        _stopping = sub.cancel().catchError((Object _) {});
+        return;
+      }
+      _channelSub = sub;
       // **A wall clock here on purpose**, and the one place it is right: a
       // nonce is not a duration. What it has to be is unlikely to collide with
       // a *neighbouring gateway's* probe on the same channel, and two
@@ -316,6 +334,12 @@ final class PreferenceChangeFeed {
           Variable.withString(jsonEncode({'action': 'PROBE', 'probe': nonce})),
         ]).get();
       });
+      // Checked again, for WR-09's other half: [_proveListening] returns early
+      // on its own `hasListener` test, and control used to fall straight
+      // through to here — so the feed reported the channel as up with nobody
+      // listening, and [_closeTheGap] then ran two full reads of the store for
+      // an audience of none.
+      if (_closed || !_controller.hasListener) return;
       _channelUp = true;
     } catch (e) {
       log?.call('preference notification channel could not be opened, '
