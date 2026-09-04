@@ -1196,6 +1196,65 @@ pinned Flutter version with soak-before-bump (a stable release shipped a
 before Dart 3.13; gateway event-loop lag monitor exposed as a `PIPE.` key;
 own dart2wasm smoke test when the web phase starts.
 
+## 8a. The chaos soak (conventions)
+
+A seeded randomized fault schedule that runs the composed pipe — four fake
+PLCs behind the real `LocalStateMan`, the real `RelayServer` on an ephemeral
+port, five real `FaultProxy`, five real `RemoteStateMan` over real TCP — for
+ninety seconds on every push and thirty-five minutes on every push to `main`.
+**The only fake is the PLC.** RES-03 is the requirement; the invariants are
+§7.8's five.
+
+It lives in `packages/tfc_relay_local/test/soak/`, behind the `soak` tag,
+because a soak that composes both ends can only live where both ends are
+already dependencies.
+
+### Environment
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `RELAY_SOAK` | unset | Set to anything non-empty to select the 35-minute arm. The same variable also lengthens gate A's F2c and F17b. |
+| `RELAY_SOAK_MINUTES` | unset | An explicit duration in minutes. Wins over `RELAY_SOAK`. |
+| `RELAY_SOAK_SEED` | `11` | The storm's seed. `random` draws one and prints it. |
+| `RELAY_HERD_N` | `5` | Panels in the herd, one of which is the never-faulted control. |
+
+**Two durations, one code path.** The long arm is the same function with a
+longer window — not a second run mode — so "the same assertions ran" is a
+fact about the code rather than a claim in a comment. What differs is only
+what each arm can *prove*: the short one that the machinery has not rotted,
+the long one that the pipe endures. Both are declared in `soakDeviations`.
+
+**The seed is fixed by default and that is deliberate** (11-CONTEXT ruling 4):
+bit-rot protection has to be deterministic, so the lane replays one schedule
+and a deliberate re-run names its own seed through `RELAY_SOAK_SEED`. A failed
+run's seed is in its artifact by construction — `repro.log`'s first line is
+written before anything composes.
+
+### Forensics
+
+Everything streams to `build/soak/` (gitignored) as it happens rather than
+being assembled at the end, because the run that most needs a journal is the
+one that died: `repro.log` (seed, both schedules, weights, quiet windows,
+every merged entry), `config.json`, `metrics.jsonl` (one line per 5 s
+checkpoint, **both clocks on every line**), `events.jsonl`, `verdict.txt`,
+`divergences.jsonl`, and a numbered `trip-N.txt` per violation carrying the
+last twenty checkpoints and the modes armed at the instant. CI uploads the
+directory with `if: always()`, including on a green run — a green journal is
+the baseline a later red run's slopes are read against.
+
+### What it does not settle
+
+- **Freshness monotonicity is enforced structurally, not behaviourally.**
+  Freeze 9 sweeps `DateTime.now()` out of the soak trees; the soak itself
+  cannot catch a wall-clock-aged verdict on a machine nobody is stepping.
+- **F22d against VM snapshots stays open.** Both clocks are journalled at
+  every checkpoint, which is evidence and not a verdict. Guest-monotonic
+  divergence under a real snapshot is unmeasured and rides the on-site arm.
+- **The on-site arm is a post-milestone follow-up** (11-CONTEXT ruling 6):
+  the same storm against a deployed gateway on plant hardware, which is the
+  only thing that can answer the process-isolation and VM-snapshot halves.
+  The config seam exists now so the retrofit is not a rewrite.
+
 ## 9. What this design deliberately does not do
 
 - No broker, no Envoy, no second wire protocol for native vs web.

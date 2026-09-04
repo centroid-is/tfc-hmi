@@ -150,6 +150,20 @@ const List<String> soakAliases = <String>[
 /// `AREA.DEV.SUB` names in play at two hundred values a sweep.
 const int soakKeysPerAlias = 10;
 
+/// Panel *i*'s credential.
+///
+/// Deterministic, long enough for `FileTokenValidator.minTokenLength`, and
+/// visibly a fixture rather than something anybody would mistake for a plant
+/// secret.
+///
+/// **Top-level so there is exactly one spelling of it.** T-11-30's sweep over
+/// the uploaded artifact needs the same literal the fixture presents, and a
+/// needle written out a second time in the test is a sweep that keeps passing
+/// on the day the token changes — the drift 08-04's freeze exists to prevent,
+/// applied to a credential.
+String soakTokenForPanel(int index) =>
+    'soak-${soakPanelName(index)}-000000000000000';
+
 /// How often the plant moves every key.
 ///
 /// Slower than gate B's 100 ms for the same reason the page is narrower: this
@@ -1227,8 +1241,7 @@ final class SoakDriver
   /// Panel *i*'s credential. Deterministic, long enough for
   /// `FileTokenValidator.minTokenLength`, and visibly a fixture rather than
   /// something anybody would mistake for a plant secret.
-  String _tokenForPanel(int index) =>
-      'soak-${soakPanelName(index)}-000000000000000';
+  String _tokenForPanel(int index) => soakTokenForPanel(index);
 
   /// Writes the credential set as it now stands, owner-only.
   ///
@@ -1537,6 +1550,26 @@ final class SoakDriver
 
   void _record(SoakViolation violation) {
     violationLog.add(violation);
+    writeTripFor(violation);
+  }
+
+  /// Writes one violation's trip record — the seed, the schedule offset, the
+  /// modes the timeline had armed, the last twenty checkpoints and the frame
+  /// ring for the panel it names.
+  ///
+  /// **Public because the checkers' violations need it and had never had it.**
+  /// This was reachable only from [_record], which is the population floor and
+  /// nothing else, while every violation the soak has ever recorded on a real
+  /// run came from a checker. The failure message the run prints has always
+  /// ended "The rest are in build/soak/, one trip record each" — measured on
+  /// the 35-minute arm, that was six violations and no trip records at all,
+  /// which is T-11-31's mitigation not holding.
+  ///
+  /// Called once per violation at run end rather than at the instant, because
+  /// a checker's log is what the run has: the checkpoint tail is the last
+  /// twenty of the run, and the offset the violation carries is still the
+  /// instant it happened.
+  void writeTripFor(SoakViolation violation) {
     _journal?.writeTrip(violation, armedModes: _armedModesAt(violation));
   }
 

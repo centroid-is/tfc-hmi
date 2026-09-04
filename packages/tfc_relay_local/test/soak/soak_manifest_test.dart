@@ -71,6 +71,54 @@ const int _declaredCheckerNames = 6;
 const int _reasoningFloor = 60;
 
 void main() {
+  group('RES-03\'s ledger', () {
+    test('is printed, in full, on every run', () {
+      // Same argument as the deviations block below: the print IS the
+      // deliverable. The milestone audit reads this beside gate A's and gate
+      // B's registries, and a ledger only ever read by an assertion is a
+      // ledger nobody reads.
+      print('');
+      print('RES-03 evidence ledger (${res03Ledger.length} rows)');
+      print('');
+      for (final row in res03Ledger) {
+        print(row.criterion);
+        print('   command : ${row.command}');
+        print('   result  : ${row.result}');
+        print('   SILENT ABOUT: ${row.caveat}');
+        print('');
+      }
+      expect(res03Ledger, isNotEmpty);
+    });
+
+    test('every row carries a command, a result and a caveat', () {
+      // **The caveat is the load-bearing field.** This phase produced four
+      // separate cases where a green run meant less than it appeared —
+      // 11-04 sabotage 2, 11-05 sabotage 4, and both halves of 11-06's
+      // epochChange finding — each caught by a structural pin and by nothing
+      // in the soak. A ledger row with an empty caveat is a row claiming its
+      // evidence has no edge, and none of them does.
+      for (final row in res03Ledger) {
+        expect(row.command, isNotEmpty, reason: row.criterion);
+        expect(row.result, isNotEmpty, reason: row.criterion);
+        expect(row.caveat.length, greaterThan(40),
+            reason: 'the caveat on "${row.criterion}" is '
+                '${row.caveat.length} characters, which is not a statement of '
+                'what the row is silent about. A ledger that reads as '
+                'unqualified green is a failing ledger');
+      }
+    });
+
+    test('covers all four of the ROADMAP\'s criteria', () {
+      final numbered = res03Ledger.map((row) => row.criterion.trim()).toList();
+      for (final prefix in <String>['1.', '2.', '3.', '4.']) {
+        expect(numbered.any((c) => c.startsWith(prefix)), isTrue,
+            reason: 'no ledger row answers ROADMAP criterion $prefix — and a '
+                'requirement closed with a criterion unanswered is closed on '
+                'somebody\'s memory of it. Rows present: $numbered');
+      }
+    });
+  });
+
   group('the deviations registry', () {
     test('is printed, in full, on every run', () {
       // The print is the deliverable. 11-01's SUMMARY pastes this block

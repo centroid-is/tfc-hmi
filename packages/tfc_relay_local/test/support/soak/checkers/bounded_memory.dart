@@ -190,8 +190,29 @@ const Map<String, int> boundedMemoryConstructionCaps = <String, int>{
 /// descriptor count that only ever grew at that cadence. A socket leak is a
 /// sustained climb and clears ten without difficulty; this is not a loosening
 /// of M but a translation of it into the units this one series is sampled in.
+///
+/// `recordedOutcomes` is here for a different reason and it is the correction
+/// of a mis-filed derivation rather than a new argument.
+/// [boundedMemorySettleOverrides] already reasons that the outcome log
+/// "accumulates every settled write until the oldest crosses the horizon",
+/// which at the checkpoint cadence is twelve consecutive increases of entirely
+/// legitimate growth — and then applies that number to the SETTLE window,
+/// which governs only a run's first thirteen checkpoints. **The property is
+/// about the structure, not about the start of the run.** Every time the write
+/// rate rises, the log accumulates for a whole `ServerConfig.writeOutcomeTtl`
+/// before the horizon prunes again, at minute eighteen exactly as at minute
+/// zero.
+///
+/// Measured: the 35-minute arm recorded exactly two violations, both on this
+/// structure, at +18:10.003 and +18:35.050, each after five consecutive
+/// increases — while the whole-run shape was `last=27 median=28 peak=32` over
+/// 420 readings. **These are 11-05b's two unidentified survivors**, and the
+/// series 11-06 exonerated from end-of-run statistics about a mid-run rule.
+/// Thirteen is the same number as the settle override and comes from the same
+/// constant, because it is the same fact.
 const Map<String, int> boundedMemoryMonotoneOverrides = <String, int>{
   openSocketsStructure: 10,
+  recordedOutcomesStructure: 13,
 };
 
 /// Judged checkpoints per minute below which this checker's green is not

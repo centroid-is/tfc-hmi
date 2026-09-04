@@ -45,6 +45,7 @@ import '../support/soak/divergence_ledger.dart';
 import '../support/soak/invariant.dart';
 import '../support/soak/soak_driver.dart';
 import '../support/soak/soak_event.dart';
+import '../support/soak/soak_journal.dart';
 import '../support/soak/soak_observables.dart';
 import '../support/soak/soak_timeline.dart';
 import 'soak_registry.dart';
@@ -110,6 +111,180 @@ void main() {
               'with the link marked stale is telling the operator exactly '
               'what is true');
       expect(checker.staleSamples, greaterThan(0));
+    });
+
+    group('a key the storm has pinned to one value', () {
+      // **The RES-03 red, and it was the instrument rather than the pipe.**
+      //
+      // `PlantMutate` does not write once — it installs a raw override, and
+      // `GateBPlantDriver._sweep` then re-emits that ONE value on every 250 ms
+      // poll cycle for the rest of the run, deliberately, because "a real
+      // device keeps reporting the new number until something changes it" is
+      // what makes plant truth a thing invariant 3 can compare against.
+      //
+      // This checker's arrival proxy is *a change in the rendered triple*, and
+      // its own doc states the premise that makes the proxy sound: "the soak's
+      // plant moves every key of every link every 250 ms with a monotonically
+      // increasing number, so every key genuinely changes on every sweep".
+      // **A pinned key is the one lever in the storm that breaks that
+      // premise.** The re-emission is a genuine arrival the render surface
+      // cannot see, so `arrivedAt` freezes while the gateway — which sees the
+      // arrivals — correctly keeps the quality good.
+      //
+      // Measured, at seed 11 over thirty-five minutes: `[05:01.059] plant
+      // BAADER.CN01.MOT03.setpoint=680` pins the key, and the first violation
+      // is +05:12.377 at an age of 11275 ms — a last arrival of +05:01.102,
+      // 43 ms after the pin. Four panels then re-counted the same frozen
+      // arrival every 25 ms until the violation log's capacity of 200 was
+      // full. Two whole 35-minute runs, twice each, reported that as the
+      // headline failure of the phase's headline deliverable.
+      test('is not a violation while the panel renders exactly what the plant '
+          'is publishing', () {
+        const key = 'ST101.CN01.MOT01.setpoint';
+        final source = _Source(keys: <String>[key])
+          ..plantTruth[key] =
+              const SoakPlantTruth(value: 680, overridden: true);
+        final checker = FreshnessHonestyChecker(source);
+
+        source.panel(1).say(key, 680);
+        checker.sample(_at(Duration.zero));
+        source.offset = const Duration(seconds: 40);
+        checker.sample(_at(const Duration(seconds: 40)));
+
+        expect(checker.violations, isEmpty,
+            reason: 'the plant is publishing 680 every poll cycle and the '
+                'panel is rendering 680, so 680 IS the current state of the '
+                'plant. There is no old number on the screen and no operator '
+                'is being misled — which is the property, and the age of the '
+                'last CHANGE is only ever a proxy for it');
+      });
+
+      test('is still judged when the panel renders something else', () {
+        // The exclusion above must not become "pinned keys are not judged".
+        // A panel still showing the pre-pin sweep counter while the plant has
+        // moved on to 680 is exactly the failure invariant 1 is for, and it is
+        // the failure a blanket exclusion would hide.
+        const key = 'ST101.CN01.MOT01.setpoint';
+        final source = _Source(keys: <String>[key])
+          ..plantTruth[key] =
+              const SoakPlantTruth(value: 680, overridden: true);
+        final checker = FreshnessHonestyChecker(source);
+
+        source.panel(1).say(key, 5123);
+        checker.sample(_at(Duration.zero));
+        source.offset = const Duration(seconds: 40);
+        checker.sample(_at(const Duration(seconds: 40)));
+
+        expect(checker.violations, hasLength(1),
+            reason: 'the plant has been publishing 680 for forty seconds and '
+                'this panel is rendering 5123 as CURRENT. Pinning a key must '
+                'narrow the arithmetic, never retire the arm');
+      });
+
+      test('is still counted as a judged, fresh reading', () {
+        // The rule refreshes the anchor; it does not retire the key. At seed 11
+        // roughly ten of the twelve storm keys are pinned by the end of a
+        // 35-minute run, so a rule that skipped the reading would stop judging
+        // about a fifth of the surface while `judgedSamples` still claimed
+        // otherwise — a vacuity gate cleared by readings nobody looked at.
+        const key = 'ST101.CN01.MOT01.setpoint';
+        final source = _Source(keys: <String>[key])
+          ..plantTruth[key] =
+              const SoakPlantTruth(value: 680, overridden: true);
+        final checker = FreshnessHonestyChecker(source);
+
+        source.panel(1).say(key, 680);
+        checker.sample(_at(Duration.zero));
+        source.offset = const Duration(seconds: 40);
+        checker.sample(_at(const Duration(seconds: 40)));
+
+        expect(checker.freshSamples, greaterThan(0));
+        expect(checker.pinnedAnchorRefreshed, greaterThan(0),
+            reason: 'the counter is how the verdict block says how often the '
+                'arrival proxy could not answer and plant truth had to');
+      });
+
+      test('a key the plant sweeps is unaffected by the equality rule', () {
+        // `overridden: false` is the sweep counter, which never repeats, so a
+        // stale reading can never equal plant truth by accident. The rule is
+        // gated on `overridden` anyway — the same distinction invariant 3
+        // already draws ("overridden keys are judged on equality") — so that a
+        // frozen PLANT cannot silence this checker across the board.
+        const key = 'ST101.CN01.MOT01.setpoint';
+        final source = _Source(keys: <String>[key])
+          ..plantTruth[key] = const SoakPlantTruth(
+              value: 5123, overridden: false, sweepIndex: 5123);
+        final checker = FreshnessHonestyChecker(source);
+
+        source.panel(1).say(key, 5123);
+        checker.sample(_at(Duration.zero));
+        source.offset = const Duration(seconds: 40);
+        checker.sample(_at(const Duration(seconds: 40)));
+
+        expect(checker.violations, hasLength(1),
+            reason: 'equality with a swept key proves nothing: the counter is '
+                'shared by every key on every link, so a panel frozen at the '
+                'value the plant happens to be publishing is a coincidence '
+                'and not evidence of an arrival');
+      });
+    });
+
+    group('the per-episode latch', () {
+      // **One episode is one finding, and 11-06 made this a prerequisite
+      // rather than a nicety.** The violation printer truncates at 25 entries;
+      // one freshness episode fanned out over four panels and re-counted every
+      // 25 ms consumed all 25 slots on both 35-minute runs, which is why the
+      // two surviving `boundedMemory` violations could not be identified at
+      // all. Invariants 4 and 5 both latch already (`ratioReported`,
+      // `overReported`); this was the one that did not.
+      test('records one violation per panel and key, not one per tick', () {
+        const key = 'ST101.CN01.MOT01.setpoint';
+        final source = _Source(keys: <String>[key]);
+        final checker = FreshnessHonestyChecker(source);
+
+        source.panel(1).say(key, 7);
+        checker.sample(_at(Duration.zero));
+        for (var ms = 40000; ms <= 40200; ms += 25) {
+          source.offset = Duration(milliseconds: ms);
+          checker.sample(_at(Duration(milliseconds: ms)));
+        }
+
+        expect(checker.violations, hasLength(1),
+            reason: 'nine consecutive ticks over the budget on one key of one '
+                'panel is ONE breach observed nine times, and a log that '
+                'records it nine times crowds out every other checker');
+        expect(checker.repeatsSuppressed, greaterThan(0),
+            reason: 'the suppressed repeats have to be counted, or the latch '
+                'is a way of under-reporting rather than of grouping');
+        expect(checker.freshnessEpisodes, 1);
+      });
+
+      test('a second episode after a recovery is recorded again', () {
+        const key = 'ST101.CN01.MOT01.setpoint';
+        final source = _Source(keys: <String>[key]);
+        final checker = FreshnessHonestyChecker(source);
+
+        source.panel(1).say(key, 7);
+        checker.sample(_at(Duration.zero));
+        source.offset = const Duration(seconds: 40);
+        checker.sample(_at(const Duration(seconds: 40)));
+
+        // A value arrives: the breach is over.
+        source.panel(1).say(key, 8);
+        source.offset = const Duration(seconds: 41);
+        checker.sample(_at(const Duration(seconds: 41)));
+
+        // And it goes over the budget a second time.
+        source.offset = const Duration(seconds: 81);
+        checker.sample(_at(const Duration(seconds: 81)));
+
+        expect(checker.freshnessEpisodes, 2,
+            reason: 'a latch that never released would report a pipe that '
+                'breached, recovered and breached again as a single finding — '
+                'which is the failure mode of latching, and the reason the '
+                'release is asserted rather than assumed');
+        expect(checker.violations, hasLength(2));
+      });
     });
 
     test('a key with no value yet is not judged', () {
@@ -396,6 +571,143 @@ void main() {
       final first = lying.violations.first.toString();
       expect(first, contains(soakPanelName(blackholed)));
       expect(first, contains('seed=11'));
+    });
+  });
+
+  group('the uploaded artifact', () {
+    // **T-11-31, and two things the 35-minute arm proved were not true.**
+    //
+    // The soak's own failure reason ends: "The rest are in build/soak/, one
+    // trip record each, with the twenty checkpoints before them and the
+    // command that reproduces the run." Measured on the full arm: six
+    // violations, and **not one trip record on disk** — `writeTrip` was
+    // reachable only from `SoakDriver._record`, which is the population floor
+    // and nothing else. Every violation this phase has ever recorded on a real
+    // run came from a checker, so the forensics promised by the message have
+    // never once been written.
+    //
+    // And `divergences.jsonl` is absent from a clean run entirely, because it
+    // is only created when there is something to stream. An **empty** file is
+    // evidence — the ledger ran and saw nothing; a **missing** one cannot be
+    // told apart from a ledger that never ran, and the keyframe verdict rests
+    // on that distinction.
+    //
+    // Asserted rather than eyeballed, because a missing file is exactly the
+    // failure mode nobody notices while the run is green.
+    test('carries every file a minute-23 trip needs to be diagnosable', () {
+      final dir = _tempJournal();
+
+      final journal = SoakJournal.open(seed: 4242, path: dir);
+      journal.writeReproLog('soak seed=4242 duration=0:00:10.000000 entries=0');
+      journal.writeConfig(<String, Object?>{'declaredDurationMs': 10000});
+      journal.checkpoint(
+        SoakClock.frozenAt(const Duration(seconds: 5),
+            declaredDuration: const Duration(seconds: 10)),
+        <String, Object?>{'checkpoint': 1},
+      );
+      journal.writeTrip(
+        const SoakViolation(
+          checker: freshnessHonesty,
+          monotonic: Duration(seconds: 5),
+          scheduleOffset: Duration(seconds: 5),
+          detail: 'seed=4242 — a planted trip',
+          observed: 1,
+          expected: 0,
+        ),
+        armedModes: const <String>['blackhole'],
+      );
+
+      // The clean-run ledger: nothing recorded, and it still has to leave both
+      // of its files behind.
+      DivergenceLedger(_ResyncSource()..journalPath = dir).finish();
+
+      final present = Directory(dir)
+          .listSync()
+          .map((entity) => entity.uri.pathSegments.last)
+          .where((name) => name.isNotEmpty)
+          .toSet();
+      for (final required in <String>[
+        'repro.log',
+        'config.json',
+        'metrics.jsonl',
+        'events.jsonl',
+        verdictFileName,
+        divergenceFileName,
+        'trip-0.txt',
+      ]) {
+        expect(present, contains(required),
+            reason: 'the artifact is the whole of what a diagnosis has at '
+                '07:00, and "$required" is not in it. Present: '
+                '${present.toList()..sort()}');
+      }
+    });
+
+    test('a checker violation writes a trip record, not only the driver\'s',
+        () {
+      // The narrow half of the case above, stated so the regression has a name
+      // rather than being one entry in a file list.
+      final dir = _tempJournal();
+      final journal = SoakJournal.open(seed: 7, path: dir);
+      journal.writeTrip(
+        const SoakViolation(
+          checker: boundedMemory,
+          monotonic: Duration(minutes: 23),
+          scheduleOffset: Duration(minutes: 23),
+          detail: 'seed=7 — the minute-23 trip this artifact exists for',
+        ),
+        armedModes: const <String>[],
+      );
+      final record = File('$dir/trip-0.txt').readAsStringSync();
+      expect(record, contains('minute-23 trip'));
+      expect(record, contains('seed=7'),
+          reason: 'a trip record has to be quotable into an issue without the '
+              'run that produced it');
+    });
+  });
+
+  group('the artifact carries no credential', () {
+    // **T-11-30.** Phase 6 proved the credential appears in no message, no
+    // close reason, no status frame and no log. The soak's journal is a
+    // surface Phase 6 did not have: it is uploaded to a CI artifact, retained
+    // seven days, and downloadable by anyone with repository access. Same
+    // assertion, new surface.
+    //
+    // The fixture's tokens are `soak-panel-N-000000000000000`
+    // (`SoakDriver._tokenForPanel`), which is deliberately shaped so nobody
+    // mistakes it for a plant secret — and equally deliberately swept for, so
+    // that the day a real credential reaches this code the sweep already
+    // exists.
+    test('and the sweep can find a planted one', () {
+      // **The anti-vacuity control, and it comes first on purpose.** A sweep
+      // that cannot find a needle proves nothing about a haystack, and this
+      // phase has now produced four cases of a green result that meant less
+      // than it looked like. Written before the real sweep runs so that a
+      // broken sweep fails here rather than passing there.
+      final dir = _tempJournal();
+      File('$dir/repro.log').writeAsStringSync(
+          'soak seed=11\n  panel-2 presented ${soakTokenForPanel(2)}\n');
+      expect(_credentialHits(dir), isNotEmpty,
+          reason: 'the sweep did not find a credential written into the '
+              'directory by this very test, so a clean result from it would '
+              'be a statement about the sweep and not about the artifact');
+    });
+
+    test('over the real artifact of the run that just happened', () {
+      final dir = Directory(defaultSoakJournalDir);
+      if (!dir.existsSync()) {
+        // Guarded rather than failed: this file is run on its own in CI and by
+        // anybody debugging one case, and a soak has not necessarily happened
+        // in this working directory. The guard is `existsSync`, so the case
+        // that matters — a directory that IS there — is never skipped.
+        printOnFailure('no $defaultSoakJournalDir; nothing to sweep');
+        return;
+      }
+      expect(_credentialHits(dir.path), isEmpty,
+          reason: 'a token literal reached the forensics artifact, which is '
+              'uploaded to CI and downloadable for seven days by anyone with '
+              'repository access. The journal writes the storm, not the '
+              'session — a credential in it means something is logging what '
+              'it authenticated with');
     });
   });
 
@@ -981,6 +1293,84 @@ void main() {
       expect(boundedMemorySettleOverrides[recordedOutcomesStructure], 13,
           reason: '60 s of TTL at a 5 s cadence is twelve checkpoints of fill '
               'plus the one the horizon is first crossed on');
+    });
+
+    test('and it needs the same allowance in the MIDDLE of a run, where the '
+        'settle override cannot reach', () {
+      // **The two surviving boundedMemory violations, identified.** 11-05b
+      // dropped the count from 5 to 2 and could not say what the last two
+      // were, because the violation printer's 25 slots were entirely consumed
+      // by one freshness episode; 11-06 named the per-episode latch as the
+      // prerequisite for reading them and, reasoning from the END-OF-RUN
+      // spread (`worstRun=11` under the override of 13, `last` below
+      // `median`), EXONERATED `recordedOutcomes`. With the latch in, the
+      // 35-minute arm printed them: both are `recordedOutcomes`, at +18:10.003
+      // and +18:35.050, each "after 5 consecutive increases from 28 (median)".
+      //
+      // The exoneration reasoned about a mid-run rule from end-of-run
+      // statistics. `worstRun` is the longest climb ANYWHERE; the override it
+      // was compared against governs only the run's first thirteen
+      // checkpoints.
+      //
+      // And the derivation was already right — it just landed on the wrong
+      // parameter. `boundedMemorySettleOverrides`' own comment argues that the
+      // outcome log "accumulates every settled write until the oldest crosses
+      // the horizon", which is twelve checkpoints of legitimate monotone
+      // growth at the 5 s cadence. **That is a property of the structure, not
+      // of the start of the run**: every time the write rate rises, the log
+      // accumulates for a whole TTL before the horizon prunes again, at minute
+      // 18 exactly as at minute 0. So the number belongs in
+      // `boundedMemoryMonotoneOverrides` as well, for the same reason
+      // `openSockets` is there — a translation of M into the units the series
+      // is actually bounded in, not a loosening of it.
+      //
+      // The shape it is protecting is flat: 420 readings of
+      // `recordedOutcomes: last=27 median=28 peak=32` across thirty-five
+      // minutes. Nothing is leaking.
+      final source = _StructureSource();
+      final checker = BoundedMemoryChecker(source);
+
+      // Past the settle window first, on a structure at rest.
+      for (var i = 0; i < 20; i++) {
+        source.plantWide[recordedOutcomesStructure] = 28;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      // Then one whole TTL of accumulation, mid-run.
+      for (var i = 20; i < 32; i++) {
+        source.plantWide[recordedOutcomesStructure] = 28 + (i - 19);
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+
+      expect(checker.violations, isEmpty,
+          reason: 'twelve checkpoints of fill is the prune working whenever it '
+              'happens, and a rule that says so only for the first sixty '
+              'seconds of a run reports the same healthy behaviour as a leak '
+              'from minute two onwards');
+      expect(boundedMemoryMonotoneOverrides[recordedOutcomesStructure], 13,
+          reason: 'the same number as the settle override and from the same '
+              'constant — ServerConfig.writeOutcomeTtl over the checkpoint '
+              'cadence — because it is the same fact about the structure');
+    });
+
+    test('and thirteen consecutive increases still bites', () {
+      // Or the override is an exemption wearing a number, which is the
+      // objection `openSockets`' own case answers and this one has to answer
+      // too. Past one whole TTL of accumulation the horizon must have started
+      // pruning, so growth beyond it is growth the prune is not keeping up
+      // with — which is the leak.
+      final source = _StructureSource();
+      final checker = BoundedMemoryChecker(source);
+      for (var i = 0; i < 20; i++) {
+        source.plantWide[recordedOutcomesStructure] = 28;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      for (var i = 20; i < 40; i++) {
+        source.plantWide[recordedOutcomesStructure] = 28 + (i - 19);
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      expect(checker.violations, isNotEmpty,
+          reason: 'an outcome log that only ever grew for longer than its own '
+              'TTL is a horizon that stopped pruning');
     });
 
     test('judgedSamples counts checkpoints with a non-zero structure, never '
@@ -2660,6 +3050,24 @@ SoakClock _at(Duration elapsed) =>
 
 /// A journal directory an auxiliary case owns, so it cannot overwrite the
 /// artifact the real arm writes to `build/soak/`.
+/// Every `(file, panel)` pair whose file contains that panel's token literal.
+///
+/// Reads the tokens from [soakTokenForPanel] rather than restating them, so the
+/// sweep cannot drift away from what the fixture actually presents.
+List<String> _credentialHits(String path) {
+  final hits = <String>[];
+  for (final entity in Directory(path).listSync(recursive: true)) {
+    if (entity is! File) continue;
+    final text = entity.readAsStringSync();
+    for (var panel = 0; panel < 16; panel++) {
+      if (text.contains(soakTokenForPanel(panel))) {
+        hits.add('${entity.uri.pathSegments.last}: panel-$panel');
+      }
+    }
+  }
+  return hits;
+}
+
 String _tempJournal() {
   final dir = Directory.systemTemp.createTempSync('relay-soak-meta-');
   addTearDown(() {
@@ -2705,6 +3113,16 @@ final class _Source implements SoakFreshnessSource {
 
   @override
   Duration freshnessBudget = const Duration(seconds: 12);
+
+  /// What the soak's plant is publishing, for the keys a case has scripted.
+  ///
+  /// Empty by default, so every case written before the pinned-key rule
+  /// existed keeps answering `null` — "no link carries this key" — and is
+  /// judged on the arrival proxy alone.
+  final Map<String, SoakPlantTruth> plantTruth = <String, SoakPlantTruth>{};
+
+  @override
+  SoakPlantTruth? plantTruthFor(String key) => plantTruth[key];
 
   _Panel panel(int index) => panelViews[index];
 }
@@ -2772,6 +3190,9 @@ final class _LyingSource implements SoakFreshnessSource {
 
   @override
   Duration get freshnessBudget => _real.freshnessBudget;
+
+  @override
+  SoakPlantTruth? plantTruthFor(String key) => _real.plantTruthFor(key);
 
   @override
   List<SoakPanelView> get panelViews => <SoakPanelView>[

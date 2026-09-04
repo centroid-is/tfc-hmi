@@ -204,6 +204,20 @@ abstract interface class SoakFreshnessSource {
 
   /// How old a value may be while the panel still renders it fresh.
   Duration get freshnessBudget;
+
+  /// What the soak's own plant is publishing for [key] right now, or null for
+  /// a key no link carries.
+  ///
+  /// **Invariant 1 reads this for one narrow reason and it is not a shortcut
+  /// to invariant 3's comparison.** This checker's arrival proxy is a change
+  /// in the rendered triple, which is sound only while the premise in
+  /// `freshness_honesty.dart` holds — that the plant moves every key every
+  /// 250 ms with a number that never repeats. `PlantMutate` breaks it by
+  /// design: an override re-emits ONE value every poll cycle for the rest of
+  /// the run, so the arrivals continue and the render surface stops being able
+  /// to see them. A panel rendering exactly the value a pinned key is being
+  /// published with is not showing an old number, whatever the proxy says.
+  SoakPlantTruth? plantTruthFor(String key);
 }
 
 /// What invariant 2 reads.

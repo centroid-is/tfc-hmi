@@ -239,3 +239,112 @@ const List<SoakDeviation> soakDeviations = <SoakDeviation>[
         'config seam built now so the retrofit is not a rewrite.',
   ),
 ];
+
+// ------------------------------------------------------------- RES-03's ledger
+
+/// One of RES-03's ROADMAP criteria, the command that demonstrates it, and the
+/// number that command produced.
+///
+/// **Written for somebody who was not here.** 09-09's closing ledger is the
+/// shape: a criterion whose evidence is a paragraph is a criterion nobody can
+/// re-check, so every row carries a command that can be pasted into a shell and
+/// a result that can be compared against what it prints. The results below are
+/// from the thirty-five-minute arm at seed 11 on 2026-09-04, and the
+/// [caveat] is the half a green tick does not say.
+final class SoakEvidence {
+  const SoakEvidence({
+    required this.criterion,
+    required this.command,
+    required this.result,
+    required this.caveat,
+  });
+
+  /// The ROADMAP criterion, abbreviated but not paraphrased away.
+  final String criterion;
+
+  /// A command that re-demonstrates it.
+  final String command;
+
+  /// What that command produced, with the number.
+  final String result;
+
+  /// **What this row is silent about.** Never empty: this phase produced four
+  /// separate cases where a green run means less than it appears, and a ledger
+  /// with a blank here would be the fifth.
+  final String caveat;
+}
+
+/// RES-03, criterion by criterion.
+const List<SoakEvidence> res03Ledger = <SoakEvidence>[
+  SoakEvidence(
+    criterion: '1. A seeded randomized fault schedule runs 30+ minutes '
+        'unattended and reports pass/fail per invariant',
+    command: 'cd packages/tfc_relay_local && RELAY_SOAK=1 RELAY_SOAK_SEED=11 '
+        'dart test test/soak --tags soak -r expanded',
+    result: '35:00 declared, 36:00 wall; 452 of 452 timeline entries applied, '
+        '0 never reached; six per-invariant verdicts printed in the verdict '
+        'block, each with its judged count against its floor',
+    caveat: 'ONE SEED. Seed 11 is thin in three levers even at 35 minutes — '
+        '1 upstreamEpochBump, 1 gatewayRestart, 1 panelUnsubscribe — so a '
+        'green run is not coverage of those three. The event MACHINERY is '
+        'protected on every push by soak_driver_test.dart\'s all-fourteen-arms '
+        'case, and that is the coverage claim this row may make.',
+  ),
+  SoakEvidence(
+    criterion: '2. All five invariants hold continuously',
+    command: 'the same run\'s verdict block',
+    result: 'freshnessHonesty 16,689,920 judged against a floor of 168,000, 0 '
+        'violations; boundedLogs 1,827 windows against 350, 0; eventualResync '
+        '8 windows against 7 over 127,440 key comparisons, 0; divergenceLedger '
+        '1 against 1, 0; boundedMemory 420 against 210. '
+        'terminalStateWrites 1,055 resolved writes against a floor of 280 and '
+        '**4 violations** — see the finding below.',
+    caveat: 'NOT ALL FIVE HOLD. Invariant 2 recorded four writes that reached '
+        'a socket and settled nowhere, and that is a real finding rather than '
+        'an instrument fault — it rides its own RED in its own plan. Invariant '
+        '1\'s monotonic anchor is proved by freeze 9 and NOT by this run '
+        '(11-04 sabotage 2 ran fully green with a wall-clock-aged verdict). '
+        'Invariant 5\'s ceiling has never judged a non-zero reading: its '
+        'sampler, floors and gates all bite, but the verdict itself has only '
+        'ever compared 0.0 against 20.',
+  ),
+  SoakEvidence(
+    criterion: '3. Re-running with the same seed reproduces the identical '
+        'fault schedule',
+    command: 'cd packages/tfc_relay_local && dart test '
+        'test/soak/soak_schedule_test.dart',
+    result: 'the unit half: the merged timeline is identical across two '
+        'generations at one seed, under a TOTAL order, with the link half '
+        'proved in Phase 2 at schedule_test.dart:42 and :233',
+    caveat: 'The hard half PREDATES this phase. Phase 2 proved the link '
+        'schedule; 11-02 extended it to the merged timeline. What this phase '
+        'added is the event half and the full-duration demonstration below.',
+  ),
+  SoakEvidence(
+    criterion: '3b. …demonstrated at full scale',
+    command: 'two 35-minute runs at seed 11, then '
+        'diff run1/events.jsonl run2/events.jsonl on the projection that '
+        'omits both clocks and the bound port',
+    result: 'see 11-07-SUMMARY. The projection is (offsetMs, stream, payload, '
+        'kind, lever, fired) — monotonicMs and wallMs are on every journal '
+        'line by 11-01\'s WR-01 design and epoch ids are random hex, so a raw '
+        'byte diff would compare the clock rather than the storm.',
+    caveat: 'Two runs on one machine. Reproducibility ACROSS machines is '
+        'untested and the generator gives no reason to doubt it — it reads no '
+        'clock and no platform value — but untested is untested.',
+  ),
+  SoakEvidence(
+    criterion: '4. A deliberately injected invariant violation is caught and '
+        'reported with the seed and timestamp needed to reproduce it',
+    command: 'cd packages/tfc_relay_local && dart test '
+        'test/soak/soak_meta_test.dart',
+    result: 'six positive controls, one per checker plus the divergence '
+        'ledger, each asserting its own violation is recorded and that the '
+        'record names the panel, the key, the schedule offset and the seed',
+    caveat: 'A positive control proves the checker can fire. It does not prove '
+        'the composed run would have driven it there — and this phase has four '
+        'measured cases where it would not have: 11-04 sabotage 2, 11-05 '
+        'sabotage 4, and both halves of 11-06\'s epochChange finding. Each was '
+        'caught by a STRUCTURAL PIN and by nothing else.',
+  ),
+];
