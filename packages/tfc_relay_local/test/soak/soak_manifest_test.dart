@@ -33,8 +33,11 @@
 @Tags(['soak'])
 library;
 
+import 'dart:io';
+
 import 'package:test/test.dart';
 
+import '../support/soak/invariant.dart';
 import 'soak_registry.dart';
 
 /// How many departures from §7.8 this plan seeded, and how many names the
@@ -235,4 +238,372 @@ void main() {
               'report while failing every lookup');
     });
   });
+
+  group('the vacuity gate', () {
+    test('a checker one reading below its floor fails, and it is named', () {
+      final blind = _FakeChecker(
+        name: boundedLogs,
+        judged: 29,
+        floor: 30,
+      );
+
+      Object? thrown;
+      try {
+        assertNoVacuousVerdict(<InvariantChecker>[blind]);
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown, isA<TestFailure>(),
+          reason: 'a checker one reading short of its floor passed the gate. '
+              'That is a run reporting a green verdict on an invariant it did '
+              'not measure enough of to have one, which is the exact failure '
+              'this gate exists for');
+      expect(thrown.toString(), contains(boundedLogs),
+          reason: 'the failure does not name the checker: $thrown. Naming only '
+              'the invariant sends the reader to the wrong file — the pipe may '
+              'be fine and the instrument blind, and those are different '
+              'mornings');
+      expect(thrown.toString(), contains('29'),
+          reason: 'the failure does not carry the count it measured: $thrown. '
+              'Without both numbers the reader cannot tell "took none" from '
+              '"took nearly enough", and those need different responses');
+      expect(thrown.toString(), contains('30'),
+          reason: 'the failure does not carry the floor it measured against: '
+              '$thrown');
+    });
+
+    test('a checker exactly at its floor passes', () {
+      final atFloor = _FakeChecker(
+        name: freshnessHonesty,
+        judged: 30,
+        floor: 30,
+      );
+
+      expect(() => assertNoVacuousVerdict(<InvariantChecker>[atFloor]),
+          returnsNormally,
+          reason: 'the floor is a minimum, not an exclusive bound. A checker '
+              'that took exactly the readings its floor demands has the '
+              'evidence its verdict claims, and failing it would make every '
+              'floor secretly one higher than it says');
+    });
+
+    test('an empty list passes, because 11-03 lands a driver with none', () {
+      expect(() => assertNoVacuousVerdict(<InvariantChecker>[]), returnsNormally,
+          reason: 'the empty-list call is deliberately a seam: 11-03 lands the '
+              'driver with zero checkers registered and calls this, so 11-04 '
+              'adds a checker instead of performing a refactor. Failing here '
+              'would force the driver plan to debug a checker and a harness at '
+              'the same time');
+    });
+
+    test('the floor scales with the DECLARED duration, not with elapsed', () {
+      const perMinute = 20;
+      final short = minimumSamplesForDuration(
+          perMinute: perMinute, declared: const Duration(seconds: 90));
+      final full = minimumSamplesForDuration(
+          perMinute: perMinute, declared: const Duration(minutes: 35));
+
+      print('floor at $perMinute/min: 90 s arm = $short readings, '
+          '35 min arm = $full readings');
+
+      expect(short, 30,
+          reason: 'the 90-second arm floors at $short readings for '
+              '$perMinute/min, and ninety seconds is a minute and a half. A '
+              'floor that did not scale would give the short arm the long '
+              "arm's floor, which it cannot reach — and a lane that always "
+              'fails gets excluded, which is how a soak stops running');
+      expect(full, 700,
+          reason: 'the 35-minute arm floors at $full readings for '
+              '$perMinute/min. If this equalled the short arm\'s floor the '
+              'long arm would clear it in the first ninety seconds and the '
+              'remaining thirty-three minutes would be unaudited');
+    });
+
+    test('the floor never computes to zero', () {
+      final tiny = minimumSamplesForDuration(
+          perMinute: 1, declared: const Duration(milliseconds: 200));
+      print('floor at 1/min over 200 ms = $tiny reading');
+
+      expect(tiny, greaterThanOrEqualTo(1),
+          reason: 'the floor computed to $tiny for a very short run, which is '
+              'an assertion that cannot fail. A checker with a zero floor is '
+              'indistinguishable in a run report from a checker that worked, '
+              'and that is the whole thing this apparatus exists to prevent');
+    });
+  });
+
+  group('a checker whose sample throws', () {
+    test('records a violation and does not propagate', () {
+      final broken = _ThrowingChecker();
+      final clock = SoakClock.frozenAt(const Duration(seconds: 12),
+          declaredDuration: const Duration(seconds: 90));
+
+      expect(() => broken.sample(clock), returnsNormally,
+          reason: 'the checker threw out of sample() and killed the run. One '
+              'trip must not end the soak: the question "did the other four '
+              'also fail, and did this one recur?" is worth more than the '
+              'minutes saved, and the run has to reach its end-of-run '
+              'reconciliation to produce a verdict at all');
+
+      expect(broken.violations, hasLength(1),
+          reason: 'the throw was swallowed without a trace. A checker that '
+              'silently stops reading is worse than one that crashes — it '
+              'reports green for the rest of the run');
+      expect(broken.violations.single.toString(), contains('the sampler blew up'),
+          reason: 'the recorded violation does not carry the original error: '
+              '${broken.violations.single}. The exception is the only evidence '
+              'of what broke, and it is gone by the time anybody reads the '
+              'journal');
+      expect(broken.violations.single.checker, boundedMemory,
+          reason: 'the violation is attributed to '
+              '"${broken.violations.single.checker}" rather than to the '
+              'checker that threw');
+    });
+
+    test('and takes no judgeable reading for it', () {
+      final broken = _ThrowingChecker();
+      final clock = SoakClock.frozenAt(const Duration(seconds: 1),
+          declaredDuration: const Duration(seconds: 90));
+      for (var i = 0; i < 5; i++) {
+        broken.sample(clock);
+      }
+
+      expect(broken.judgedSamples, 0,
+          reason: 'a checker that threw five times counted '
+              '${broken.judgedSamples} judgeable readings. A reading that '
+              'ended in an exception judged nothing, and counting it would let '
+              'a permanently broken sampler clear its own floor — the two '
+              'mechanisms would then cancel out exactly where they are both '
+              'needed');
+    });
+  });
+
+  group('the violation log', () {
+    test('caps at its capacity and counts the overflow', () {
+      final log = ViolationLog(capacity: 10);
+      for (var i = 0; i < 84; i++) {
+        log.add(_violation(detail: 'occurrence $i'));
+      }
+      print('violation log at capacity 10 after 84 records: '
+          '${log.entries.length} retained, ${log.overflow} overflowed, '
+          '${log.total} total');
+
+      expect(log.entries, hasLength(10),
+          reason: 'the log retained ${log.entries.length} of 84 violations '
+              'against a capacity of 10. The freshness sampler runs at 25 ms '
+              'per key per panel, so one stuck panel is eighty-four thousand '
+              'violations over a full run, and retaining them makes the '
+              'harness the leak it is measuring');
+      expect(log.overflow, 74,
+          reason: 'the overflow counted ${log.overflow} rather than 74. A '
+              'capped list without a counter reports "10 violations" for a run '
+              'that had eighty-four, which is a worse lie than the memory it '
+              'saves');
+      expect(log.total, 84,
+          reason: 'the total came to ${log.total} rather than 84 — and the '
+              'total is the number that goes in the verdict block');
+    });
+
+    test('keeps the first occurrences, not the last', () {
+      final log = ViolationLog(capacity: 3);
+      for (var i = 0; i < 6; i++) {
+        log.add(_violation(detail: 'occurrence $i'));
+      }
+
+      expect(log.entries.first.detail, 'occurrence 0',
+          reason: 'the log kept the latest violations and dropped the '
+              'earliest. What a soak needs is when the breach STARTED — the '
+              'hundred-thousandth instance of a stuck panel says nothing the '
+              'first did not, and the first is the one with the timeline '
+              'position worth looking up');
+      expect(log.entries.last.detail, 'occurrence 2',
+          reason: 'the retained window is not the first three: '
+              '${log.entries.map((v) => v.detail).toList()}');
+    });
+  });
+
+  group('a violation quotes itself completely', () {
+    test('so it can be pasted into an issue without the run', () {
+      final rendered = _violation(
+        detail: 'rendered a value 4,200 ms old as fresh',
+        panel: 'panel-3',
+        key: 'ST101.CN01.run',
+        observed: 'fresh',
+        expected: 'stale',
+        scheduleOffset: const Duration(minutes: 23, seconds: 4),
+      ).toString();
+      print('violation renders as: $rendered');
+
+      for (final fragment in <String>[
+        boundedMemory,
+        'panel-3',
+        'ST101.CN01.run',
+        'fresh',
+        'stale',
+        '+23:04',
+        'rendered a value 4,200 ms old as fresh',
+      ]) {
+        expect(rendered, contains(fragment),
+            reason: 'the rendered violation is missing "$fragment": '
+                '$rendered. A violation quoted into an issue is read by '
+                'somebody who does not have the run, and every field left out '
+                'of toString is a field they have to ask for');
+      }
+    });
+
+    test('a violation with no timeline position says so rather than zero', () {
+      final rendered = _violation(detail: 'the sampler blew up').toString();
+
+      expect(rendered, contains('n/a'),
+          reason: 'a violation with no schedule offset rendered as $rendered. '
+              'Printing +00:00.000 for "not attributable to a timeline entry" '
+              'sends the reader to the first event of the run, which is the '
+              'one place the fault definitely was not');
+    });
+  });
+
+  group('the contract exposes no wall clock', () {
+    test('invariant.dart does not reach one, anywhere', () {
+      final source = File(_invariantSource).readAsStringSync();
+      final mentions = _wallClockMentions(source);
+
+      expect(mentions, isEmpty,
+          reason: 'the checker contract reaches a wall clock at: $mentions. '
+              'SoakClock hands out monotonic elapsed and the declared duration '
+              'and nothing else on purpose — 07-REVIEW CR-01\'s standing '
+              'lesson is never to age a verdict on the panel\'s RTC, and this '
+              'file makes that unreachable rather than merely forbidden. The '
+              'journal takes its own wall reading, because the journal is '
+              'output');
+    });
+
+    test('and the sweep bites a file that does reach one', () {
+      // A sweep that stops looking reports full coverage of nothing
+      // (gate_manifest_test.dart:35). The arm above passes on an empty file,
+      // so this one feeds it a file that should fail.
+      const planted = 'final stamp = DateTime.now();';
+
+      expect(_wallClockMentions(planted), isNotEmpty,
+          reason: 'the wall-clock sweep did not catch a planted '
+              'occurrence, so the arm above is decoration: it would pass on '
+              'the day somebody adds one');
+    });
+  });
+
+  group('the reverse sweep', () {
+    test('a checker under an undeclared name fails, and is named', () {
+      final rogue = _FakeChecker(name: 'jitterBudget', judged: 10, floor: 1);
+
+      Object? thrown;
+      try {
+        assertEveryCheckerIsDeclared(
+            <InvariantChecker>[rogue], declaredCheckers);
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown, isA<TestFailure>(),
+          reason: 'a checker registered under a name soak_registry.dart does '
+              'not declare passed the sweep. That checker is invisible to the '
+              'verdict block, so it neither reports nor shows up as pending — '
+              'the one state the registry exists to make impossible');
+      expect(thrown.toString(), contains('jitterBudget'),
+          reason: 'the failure does not name the undeclared checker: $thrown');
+    });
+
+    test('the declared names pass', () {
+      final declared = <InvariantChecker>[
+        for (final name in declaredCheckers)
+          _FakeChecker(name: name, judged: 1, floor: 1),
+      ];
+
+      expect(() => assertEveryCheckerIsDeclared(declared, declaredCheckers),
+          returnsNormally,
+          reason: 'a checker registered under one of the six declared names '
+              'was rejected, which would make the registry unusable by the '
+              'three plans that register against it');
+    });
+  });
+}
+
+/// Where the contract lives, relative to the package root.
+const String _invariantSource = 'test/support/soak/invariant.dart';
+
+/// Every line of [source] that reaches a wall clock.
+///
+/// Two spellings, because both are reachable: the type name, and the `.now()`
+/// call on anything that offers one.
+List<String> _wallClockMentions(String source) {
+  final lines = source.split('\n');
+  return <String>[
+    for (var i = 0; i < lines.length; i++)
+      if (lines[i].contains('DateTime') || lines[i].contains('.now()'))
+        'line ${i + 1}: ${lines[i].trim()}',
+  ];
+}
+
+SoakViolation _violation({
+  required String detail,
+  String? panel,
+  String? key,
+  Object? observed,
+  Object? expected,
+  Duration? scheduleOffset,
+}) =>
+    SoakViolation(
+      checker: boundedMemory,
+      monotonic: const Duration(minutes: 23, seconds: 7, milliseconds: 412),
+      scheduleOffset: scheduleOffset,
+      detail: detail,
+      panel: panel,
+      key: key,
+      observed: observed,
+      expected: expected,
+    );
+
+/// A checker with the counters set by hand, for driving the gate.
+final class _FakeChecker implements InvariantChecker {
+  _FakeChecker({
+    required this.name,
+    required int judged,
+    required int floor,
+  })  : judgedSamples = judged,
+        minimumSamplesForAVerdict = floor;
+
+  @override
+  final String name;
+
+  @override
+  final int judgedSamples;
+
+  @override
+  final int minimumSamplesForAVerdict;
+
+  @override
+  List<SoakViolation> get violations => const <SoakViolation>[];
+
+  @override
+  void sample(SoakClock clock) {}
+}
+
+/// A checker whose reading throws every time, which is what
+/// [GuardedSampling] is for.
+final class _ThrowingChecker with GuardedSampling {
+  @override
+  final String name = boundedMemory;
+
+  @override
+  final ViolationLog violationLog = ViolationLog();
+
+  @override
+  int judgedSamples = 0;
+
+  @override
+  int get minimumSamplesForAVerdict => 1;
+
+  @override
+  void takeReading(SoakClock clock) {
+    throw StateError('the sampler blew up');
+  }
 }
