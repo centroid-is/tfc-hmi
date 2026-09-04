@@ -263,6 +263,34 @@ void main() {
     });
   });
 
+  group('the catalogue is asked about one schema', () {
+    // 10-REVIEW WR-03. The statements built from the catalogue answer name the
+    // table UNQUALIFIED, so they resolve through search_path — and without a
+    // table_schema predicate the probe matched the name in every schema the
+    // role can see and returned the UNION of their columns.
+    test('the probe pins the schema the statements resolve to', () async {
+      backend.rows = [
+        {'value': 7, 'time': to}
+      ];
+      await reader.queryTimeseriesData('Line1.Motor1', to);
+
+      final probe = backend.statements
+          .firstWhere((s) => s.contains('information_schema.columns'));
+
+      expect(probe, contains('table_schema = current_schema()'),
+          reason: 'a staging schema, a timescaledb_internal chunk view, a '
+              'per-tenant schema or an archive copy of the same table is '
+              'enough, and all three consequences are silent: a struct read '
+              'as a scalar, UnknownSeriesMember not raised (so a permanent '
+              'failure goes out as retryable -32011), and SeriesTableMissing '
+              'not raised for a table that is not there');
+      expect(probe, isNot(contains("'public'")),
+          reason: 'current_schema() and not a literal: what this has to match '
+              'is wherever the unqualified statements resolve, which is the '
+              'deployment\'s business and not this file\'s');
+    });
+  });
+
   group('every refusal carries its own disposition to the wire', () {
     // One instance of every member of the sealed family, so the switch that
     // decides `retryable` is exercised on all of them rather than on the one

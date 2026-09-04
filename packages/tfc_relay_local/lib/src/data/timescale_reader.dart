@@ -640,12 +640,39 @@ final class TimescaleReader implements TimeseriesApi {
   /// `database.dart:1421-1433`: the type is only stable while the table is,
   /// and a remembered type that outlives a retyped table fails in two
   /// different ways, one of them silently.
+  ///
+  /// ## The schema predicate is load-bearing (10-REVIEW WR-03)
+  ///
+  /// Every statement built from this answer — [_read] and the downsample CTE —
+  /// names the table **unqualified**, so it resolves through `search_path`.
+  /// Without `table_schema` this query does not: it matches the name in
+  /// *every* schema the gateway's role can see, and returns the **union** of
+  /// their columns with duplicate names collapsing arbitrarily. A staging
+  /// schema, a `timescaledb_internal` chunk view, a per-tenant schema or an
+  /// `archive` copy of the same table is enough, and all three consequences
+  /// are silent:
+  ///
+  ///  * a struct table read as a scalar or the reverse, because
+  ///    `members.length == 1 && members.single == 'value'` is decided on the
+  ///    merged set;
+  ///  * [UnknownSeriesMember] not raised for a member that exists only in the
+  ///    other schema, so the query goes out naming a column the queried table
+  ///    does not have and the driver error surfaces as `handlerFailed`
+  ///    (-32011, **retryable**) for a request that can never succeed;
+  ///  * [SeriesTableMissing] not raised for a table that exists only in the
+  ///    other schema, defeating the `columns.isEmpty` guard.
+  ///
+  /// `current_schema()` and not a literal `'public'`: what this has to match is
+  /// wherever the unqualified statements resolve, which is the deployment's
+  /// business. Qualifying the generated SQL would be stronger still and is a
+  /// larger change; this keeps the catalogue answer and the statement
+  /// resolution in step without deciding a schema for anyone.
   Future<Map<String, String>> _columnsOf(ts.Database db, String table) async {
     final rows = await db.db.customSelect(
       r'''
       SELECT column_name, data_type
       FROM information_schema.columns
-      WHERE table_name = $1
+      WHERE table_name = $1 AND table_schema = current_schema()
       ''',
       variables: [Variable.withString(table)],
     ).get();
