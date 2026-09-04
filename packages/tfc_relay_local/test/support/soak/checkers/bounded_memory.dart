@@ -87,127 +87,6 @@ import '../../../soak/soak_registry.dart';
 import '../invariant.dart';
 import '../soak_observables.dart';
 
-// -------------------------------------------------------- the structure names
-
-/// The unresolved-write set, per panel — `RemoteStateMan.debugUnresolvedCmds`.
-///
-/// The structure `long_outage_gate_test.dart` already watches as a slope, and
-/// the one invariant 2 caps absolutely at 64. The two readers are deliberate: a
-/// ceiling catches the set that exploded, a slope catches the set that never
-/// stops climbing, and neither sees what the other does.
-const String unresolvedCmdsStructure = 'unresolvedCmds';
-
-/// The uncapped complaint list, per panel — `ResyncEngine.complaints`.
-///
-/// **Shared with invariant 5.** See the library doc.
-const String complaintsStructure = 'complaints';
-
-/// The subscriptions the client judged stale at the last tick, per panel.
-///
-/// Standing in for the resync engine's private `_inFlight` map — see the
-/// library doc for why, and for the fact that it is a substitution.
-const String staleSubscriptionsStructure = 'staleSubscriptions';
-
-/// The client's retained `writeStatus` query history, per panel.
-///
-/// Bounded by construction at `RemoteStateMan._debugHistory` (64), which is why
-/// it is worth watching: a structure with a declared cap is the cheapest place
-/// to notice that the code enforcing the cap stopped running.
-const String writeStatusQueriesStructure = 'writeStatusQueries';
-
-/// Settled write outcomes the gateway is still vouching for.
-///
-/// `WriteOutcomeLog.recordedOutcomes` (`write_outcome_log.dart:167`). **This one
-/// proves the prune runs.** The log sweeps its horizon on `record`, `entryFor`
-/// and `prune` and nowhere else, so a run in which this climbs past the TTL's
-/// worth of writes is a run in which the sweep stopped.
-const String recordedOutcomesStructure = 'recordedOutcomes';
-
-/// Live sessions on the gateway — `SessionRegistry.sessionCount`.
-const String sessionsStructure = 'sessions';
-
-/// Every live session's subscriptions, summed —
-/// `SessionSubscriptionCounts.subscriptionCount`.
-const String subscriptionsStructure = 'subscriptions';
-
-/// Every live session's attached listeners, summed —
-/// `SessionSubscriptionCounts.listenerCount`.
-///
-/// Derived on read rather than tallied, which is the property that makes it
-/// worth asserting: *"a maintained count can drift from the thing it counts,
-/// and a teardown assertion reading a drifted tally is an assertion that passes
-/// while the listeners are still attached"* (`subscription_registry.dart:276`).
-const String listenersStructure = 'listeners';
-
-/// How many panels currently render `PIPE.link_degraded` as true.
-///
-/// **The send-buffer clause's observable, and it is a verdict rather than a
-/// depth — deliberately, because the depth is not reachable.**
-/// `ConflatingSendBuffer` lives on a private `_Connection` inside
-/// `relay_server.dart`; nothing public hands it out, and adding a getter would
-/// be a change to `tfc_relay_server/lib`, which this plan does not make. What
-/// the gateway *does* publish is `_SessionProbe.linkDegraded`, which is the
-/// composition of both numbers the clause is about:
-/// `pendingCount > (peakThreshold ?? maxPending) || pendingBytes >
-/// maxPendingBytes` (`relay_server.dart:896-903`).
-///
-/// **`pendingBytes` counts the priority lane only** — `_priorityBytes`,
-/// `send_buffer.dart:104` — so it is not total egress and a checker reporting
-/// it as a byte count would be overstating what it measured (08-PATTERNS §6).
-/// Folded into the verdict here, it says the one thing an operator needs: this
-/// session is shedding.
-///
-/// F27c already asserts the buffer itself, directly, as a unit arm with a hand
-/// clock. That is where the depth evidence lives; this is the composed run's
-/// view of the same thing.
-const String degradedPanelsStructure = 'degradedPanels';
-
-/// Open sockets in this process — `openSocketCount()`.
-///
-/// Skipped **by name** where `canCountOpenSockets` is false (`fd_count.dart:46`,
-/// Windows), never by silence: the skip reason travels in the checkpoint row's
-/// `skips` map and prints in the verdict block, because a descriptor clause
-/// that quietly evaporates on one platform is the failure
-/// `gate_manifest_test.dart`'s skip audit exists to catch.
-const String openSocketsStructure = 'openSockets';
-
-/// Every structure this invariant watches, in the order a row prints them.
-///
-/// A named list rather than "whatever the reading happened to contain": a
-/// structure silently dropped from the reading is a structure nobody is
-/// watching any more, and it would otherwise look exactly like a structure that
-/// stayed flat. `soak_meta_test.dart` asserts the row's key set against this.
-const List<String> boundedMemoryStructures = <String>[
-  unresolvedCmdsStructure,
-  complaintsStructure,
-  staleSubscriptionsStructure,
-  writeStatusQueriesStructure,
-  recordedOutcomesStructure,
-  sessionsStructure,
-  subscriptionsStructure,
-  listenersStructure,
-  degradedPanelsStructure,
-  openSocketsStructure,
-];
-
-/// The four that are read from a panel's own client.
-const List<String> boundedMemoryPanelStructures = <String>[
-  unresolvedCmdsStructure,
-  complaintsStructure,
-  staleSubscriptionsStructure,
-  writeStatusQueriesStructure,
-];
-
-/// The six that belong to the gateway or to the process.
-const List<String> boundedMemoryPlantWideStructures = <String>[
-  recordedOutcomesStructure,
-  sessionsStructure,
-  subscriptionsStructure,
-  listenersStructure,
-  degradedPanelsStructure,
-  openSocketsStructure,
-];
-
 // --------------------------------------------------------------- the numbers
 
 /// How far above its own median a structure may finish. **K.**
@@ -422,6 +301,10 @@ final class BoundedMemoryChecker with GuardedSampling implements SoakRunEndCheck
   /// Structures that could not be read on this platform, with the reason.
   final Map<String, String> skipped = <String, String>{};
 
+  /// Structures read on a cadence of their own, so their series is shorter than
+  /// the checkpoint count. See [openSocketCheckpointCadence].
+  final Set<String> carriedForward = <String>{};
+
   /// The control's per-structure peak while the storm had aimed nothing
   /// plant-wide.
   final Map<String, int> controlPeakBeforeAnyPlantWideArm = <String, int>{};
@@ -464,6 +347,15 @@ final class BoundedMemoryChecker with GuardedSampling implements SoakRunEndCheck
       if (reading.skips.containsKey(structure)) continue;
       final value = reading.plantWide[structure] ?? 0;
       if (value != 0) anythingWasNonZero = true;
+      // A carried-forward value is a number the row still owes the journal and
+      // a reading the series must not have. Feeding a repeat into the monotone
+      // rule would break every run of a genuinely climbing structure five
+      // times out of six, which is a rule that cannot fire dressed as a rule
+      // that can. See `openSocketCheckpointCadence`.
+      if (reading.carriedForward.contains(structure)) {
+        carriedForward.add(structure);
+        continue;
+      }
       _observe('plantWide/$structure', structure, value, clock);
     }
 
@@ -599,6 +491,11 @@ final class BoundedMemoryChecker with GuardedSampling implements SoakRunEndCheck
         if (skipped.isNotEmpty)
           for (final entry in skipped.entries)
             '  SKIPPED ${entry.key}: ${entry.value}',
+        if (carriedForward.isNotEmpty)
+          '  ${carriedForward.join(', ')} read every '
+              '$openSocketCheckpointCadence checkpoints, not every one — a '
+              'synchronous lsof costs ~50 ms with the isolate stopped, and the '
+              'row carries the last value so the shape never changes',
       ].join('\n');
 
   @override

@@ -27,6 +27,36 @@
 /// exists to catch it if it is there and to leave a measured number behind if it
 /// is not.
 ///
+/// # What a complaint actually is, measured — and the premise this corrects
+///
+/// 11-05's plan asserts *"`complaints.length > 0` at run end. A storm that
+/// produced no complaints at all means the panels never lost a subscription,
+/// which for a flap storm means the faults did not reach them."* **The first
+/// step of that inference is false, and the lane measured it.** Five
+/// ninety-second runs at seed 11 produced 2–8 readiness dips per storm-targeted
+/// panel and **zero complaints in the whole herd, every run.**
+///
+/// The cause is in the append sites rather than in the storm. There are three,
+/// all in `resync_engine.dart`, and every one of them needs a re-establishment
+/// that went **wrong**:
+///
+/// - `:208` — inside `_recover`'s `catch`. The `subscribe` threw.
+/// - `:249` — one per key the gateway returned in `SubscribeResult.rejected`
+///   (`_classify`, `session_handlers.dart:303`: an empty key or one this source
+///   does not serve).
+/// - `:252` — `result.complaints`, whatever the gateway chose to say.
+///
+/// An ordinary flap — socket dies, backoff, reconnect, resubscribe succeeds —
+/// appends **nothing**. That is the pipe working, and it is the common case.
+/// So a run with zero complaints is not evidence of a broken soak; it is
+/// evidence that every rebuild the storm forced actually rebuilt.
+///
+/// The anti-vacuity gate is therefore written against the condition that makes
+/// the complaint path *reachable*, which is [SoakPanelLogView.reestablishments]
+/// — see [BoundedLogsChecker.reestablishments] and
+/// [boundedLogsExercisedFloor]. The complaint total is printed on every run and
+/// asserted against zero on none.
+///
 /// # Why the verdict is a rate and not a total
 ///
 /// A total over thirty-five minutes is either so loose it never fires or so
@@ -34,14 +64,22 @@
 /// same number seen from different runs, which is why nobody can pick it. The
 /// primary verdict is therefore **complaints per minute per panel**, measured
 /// over a sliding [boundedLogsRateWindow] and sampled at every checkpoint,
-/// against [boundedLogsCeilingPerMinute]. The absolute total is kept as a much
-/// looser second backstop ([boundedLogsTotalBackstop]) for the one thing a rate
-/// cannot see: a list that grows steadily, slowly and for ever.
+/// against [boundedLogsCeilingPerMinute]. The absolute total is a second,
+/// **sustained** allowance ([boundedLogsTotalBackstopPerMinute]) for the one
+/// thing a burst ceiling cannot see: a list that grows steadily, slowly and for
+/// ever. It sits *below* the burst ceiling rather than above it, and the
+/// constant says why.
 ///
-/// The ceiling is **derived and not chosen** — the measured p95 across the short
-/// runs 11-05 took, times a stated margin. The arithmetic is on the constant.
-/// `GATE_LANE_BUDGET`'s 480 s is the precedent for how a number like this is
-/// declared and argued in this repository.
+/// Measured, under the sabotage the plan asked for: replacing the rate with an
+/// absolute total made a genuine one-window burst — 30 complaints in 30 s, 60 a
+/// minute — **stop being recorded at all**, while a slow drift to the same
+/// total fired. The verdict had become a statement about how long the run was.
+/// That pair of outcomes is the argument for a rate.
+///
+/// The ceiling is **derived and not chosen**, and the derivation had to change
+/// shape because the measured p95 came back zero. Both anchors are on the
+/// constant. `GATE_LANE_BUDGET`'s 480 s is the precedent for how a number like
+/// this is declared and argued in this repository.
 ///
 /// # Do not raise the gateway's log level to get better forensics
 ///
@@ -111,22 +149,59 @@ const Duration boundedLogsMinimumWindowSpan = Duration(seconds: 20);
 
 /// How many complaints a minute one panel may produce. **The ceiling.**
 ///
-/// Derived from measurement in 11-05, not chosen: see the SUMMARY for the
-/// per-panel per-minute distribution across the short runs behind it, and the
-/// margin applied to the observed p95.
-const int boundedLogsCeilingPerMinute = 60;
-
-/// The absolute total one panel may reach, scaled per declared minute.
+/// **Twenty, and the derivation has two halves because the measured p95 is
+/// zero.** The plan says to set this at a margin above the observed p95 across
+/// five short runs. Those runs were taken and the distribution is degenerate:
+/// five ninety-second runs at seed 11, five panels each, 274 judged windows
+/// altogether, **every rate 0.0/min — p50, p95 and max are all zero.** A margin
+/// above zero is any number at all, so a second anchor is needed and the honest
+/// one is the failure this ceiling exists to catch.
 ///
-/// **The backstop, deliberately much looser than the ceiling.** Its job is the
-/// one failure a rate cannot see: a list that grows steadily and slowly for
-/// thirty-five minutes, never fast enough to trip a window and large enough at
-/// the end to matter. It is not the primary verdict and it is not tuned; if this
-/// fires and the rate did not, the finding is "slow unbounded growth" and it
-/// belongs in invariant 4's language as much as this one's.
-const int boundedLogsTotalBackstopPerMinute = 240;
+/// **From below — the highest legitimate rate the surface can reach.** A
+/// complaint costs a re-establishment that went wrong (see the library doc), so
+/// the ceiling on legitimate complaints is the ceiling on rebuilds. Measured
+/// across the same five runs, per panel: `panel-1` 2, 2, 5, 3, 4 dips and
+/// `panel-4` 3 dips every run, over ninety seconds — a worst case of **3.3
+/// rebuilds a minute**. If every single one of them failed and complained, that
+/// is 3.3 complaints a minute. Twenty is **6x** that.
+///
+/// **From above — the rate the regression produces.** Phase 7's
+/// `_tickResyncComplained` damping (`connection_supervisor.dart:771`) turns
+/// "one complaint per resync tick" into "one per subscription per connection".
+/// The shipping tick is 1500 ms, so removing it costs **40 complaints a minute**
+/// per mismatching page, and the `u`-frame path at `:692-702` is faster still.
+/// Twenty is **half** of 40, so the control trips the shipping number with 2x of
+/// room rather than needing a tighter one passed in.
+///
+/// The window between the two anchors is 3.3 and 40. Twenty sits near the
+/// geometric middle of it and is the number both arms are argued against.
+const int boundedLogsCeilingPerMinute = 20;
+
+/// The **sustained** rate, averaged over the whole run. The backstop.
+///
+/// **Ten a minute — deliberately BELOW the burst ceiling, which is the only way
+/// it can see anything the rate cannot.** The first draft of this file made the
+/// backstop 240/minute on the reasoning that a backstop should be "much looser".
+/// It cannot be: a per-minute allowance looser than [boundedLogsCeilingPerMinute]
+/// is unreachable by definition — anything fast enough to breach it has already
+/// breached the ceiling — so the arm the doc describes as catching *"a list
+/// growing steadily, slowly and for ever"* would never have fired.
+///
+/// The pair is a burst allowance and a sustained allowance: a panel may reach
+/// 20/min inside any one minute, but may not average more than 10/min across the
+/// declared run. Nineteen a minute for thirty-five minutes — under the ceiling
+/// the whole way — is 665 complaints against a backstop of 350, and that is
+/// exactly the failure this arm is for. In the ninety-second lane it is 15
+/// against a measured 0, with the worst legitimate case (five rebuilds, all
+/// failing) at 5.
+const int boundedLogsTotalBackstopPerMinute = 10;
 
 /// How many complaints the control panel may hold at the end of the run.
+///
+/// Measured, for the record: **0 across all five lane runs, with 0 readiness
+/// dips** — the control is not merely unaimed-at, seed 11's ninety seconds never
+/// disturb it at all. The threshold is not derived from that, because the
+/// property it guards is a thirty-five-minute one.
 ///
 /// **The arm that would have caught the pre-07-08b heartbeat bug** — a gateway
 /// punishing healthy panels. Near-empty rather than empty, and the correction
@@ -144,6 +219,41 @@ const int boundedLogsControlTotal = 12;
 /// most of its timer slices, while failing instantly for a run in which no
 /// panel ever established a session.
 const int boundedLogsFloorPerMinute = 10;
+
+/// The shortest declared run in which one window can exist at all.
+///
+/// **Twenty-five seconds: [boundedLogsMinimumWindowSpan] plus the checkpoint
+/// that opens it.** Below this the arithmetic is not tight, it is impossible —
+/// an eight-second run takes one checkpoint, and a rate needs two readings. A
+/// floor of one against a physically unreachable reading is not an anti-vacuity
+/// gate; it is a case that fails for the length of the arm rather than for
+/// anything about the pipe.
+///
+/// So below this duration the checker declares itself **not measurable**, its
+/// floor is zero, and [BoundedLogsChecker.measurable] prints false in the
+/// verdict row — 11-04's `distributionWasAsked` shape, applied to a floor. The
+/// exemption cannot hide, and neither real arm is anywhere near it: the lane is
+/// ninety seconds and RES-03's is thirty-five minutes. What it exempts is
+/// `soak_test.dart`'s auxiliary runs, which declare eight and twelve seconds to
+/// prove things about seeds and repro logs.
+const Duration boundedLogsMeasurableFrom = Duration(seconds: 25);
+
+/// How many re-establishments the herd must have been put through for this
+/// invariant's green to be evidence. **The anti-vacuity floor.**
+///
+/// **One, and it is a floor on rebuilds rather than on complaints.** See the
+/// library doc for the measurement that moved it there: the complaint path runs
+/// only inside a re-establishment that failed, so a run in which nobody ever
+/// rebuilt could not have produced a complaint for a reason that has nothing to
+/// do with whether the surface is bounded — and asserting `complaints > 0`
+/// against that run fails the soak for the pipe working.
+///
+/// One rather than a per-minute rate, because the storm's rebuild count is a
+/// property of the seed and the fault band and not of this invariant: seed 11
+/// produces 5–8 across the herd in ninety seconds and 11-02 measured bands that
+/// would produce far more. What this floor is for is the run in which the faults
+/// reached nobody, and one rebuild is the whole of that distinction.
+const int boundedLogsExercisedFloor = 1;
 
 // ------------------------------------------------------------ one panel's window
 
@@ -176,6 +286,10 @@ final class BoundedLogsWindow {
 
   /// How many windows were wide enough and established enough to judge.
   int judged = 0;
+
+  /// How many times this panel has been made to rebuild. See
+  /// [SoakPanelLogView.reestablishments].
+  int reestablishments = 0;
 
   /// Whether the ceiling breach in progress has already been recorded.
   ///
@@ -210,7 +324,8 @@ final class BoundedLogsWindow {
   @override
   String toString() =>
       '$panel: $last complaints, worst ${worstRate.toStringAsFixed(1)}/min at '
-      '${formatSoakOffset(worstAt)} over $judged judged windows';
+      '${formatSoakOffset(worstAt)} over $judged judged windows, '
+      '$reestablishments rebuilds';
 }
 
 // ------------------------------------------------------------- the instrument
@@ -226,6 +341,7 @@ final class BoundedLogsChecker with GuardedSampling implements SoakRunEndCheck {
     this.totalBackstopPerMinute = boundedLogsTotalBackstopPerMinute,
     this.controlTotal = boundedLogsControlTotal,
     this.floorPerMinute = boundedLogsFloorPerMinute,
+    this.exercisedFloor = boundedLogsExercisedFloor,
   }) : _declaredOverride = declared;
 
   /// The panels' complaint surfaces and the gateway's line count.
@@ -242,6 +358,9 @@ final class BoundedLogsChecker with GuardedSampling implements SoakRunEndCheck {
   final int totalBackstopPerMinute;
   final int controlTotal;
   final int floorPerMinute;
+
+  /// See [boundedLogsExercisedFloor].
+  final int exercisedFloor;
 
   @override
   final String name = boundedLogs;
@@ -265,11 +384,33 @@ final class BoundedLogsChecker with GuardedSampling implements SoakRunEndCheck {
   /// The plant's damped ingest-refusal line count at the last reading.
   int plantIngestLogLines = 0;
 
+  /// Whether the declared run is long enough to contain one window.
+  ///
+  /// See [boundedLogsMeasurableFrom]. Printed either way.
+  bool get measurable => declaredDuration >= boundedLogsMeasurableFrom;
+
+  /// How many times the herd was made to rebuild, summed across the panels.
+  ///
+  /// The anti-vacuity observable. See [boundedLogsExercisedFloor] and the
+  /// library doc's measurement.
+  int reestablishments = 0;
+
+  /// Whether the storm made anybody rebuild, so the complaint path was
+  /// reachable at all.
+  ///
+  /// Exempt below [boundedLogsMeasurableFrom] for the same reason the sample
+  /// floor is: an eight-second run may legitimately flap nobody, and a case
+  /// that fails for the length of the arm is not an anti-vacuity gate.
+  bool get surfaceWasExercised =>
+      !measurable || reestablishments >= exercisedFloor;
+
   @override
-  int get minimumSamplesForAVerdict => minimumSamplesForDuration(
-        perMinute: floorPerMinute,
-        declared: declaredDuration,
-      );
+  int get minimumSamplesForAVerdict => measurable
+      ? minimumSamplesForDuration(
+          perMinute: floorPerMinute,
+          declared: declaredDuration,
+        )
+      : 0;
 
   /// The backstop, scaled to the declared duration.
   int get totalBackstop => minimumSamplesForDuration(
@@ -283,10 +424,13 @@ final class BoundedLogsChecker with GuardedSampling implements SoakRunEndCheck {
     gatewayLogLines = source.gatewayLogLines;
     plantIngestLogLines = source.plantIngestLogLines;
 
+    var rebuilds = 0;
     for (final view in source.panelLogs) {
+      rebuilds += view.reestablishments;
       final panel = windows.putIfAbsent(
           view.index, () => BoundedLogsWindow(view.name, window))
-        ..push(now, view.complaints);
+        ..push(now, view.complaints)
+        ..reestablishments = view.reestablishments;
 
       // A panel that never connected produced no complaints for a reason that
       // is not this invariant's, and a window five seconds wide extrapolates
@@ -333,6 +477,10 @@ final class BoundedLogsChecker with GuardedSampling implements SoakRunEndCheck {
             'it recorded too, this is ONE finding seen by two instruments',
       ));
     }
+    // Monotone by construction (`readyDips` only ever increments), but taken as
+    // a maximum rather than assigned, so a redial that hands back a fresh
+    // health record cannot walk the run's own count backwards.
+    if (rebuilds > reestablishments) reestablishments = rebuilds;
   }
 
   /// Every complaint total, summed across the herd.
@@ -344,15 +492,25 @@ final class BoundedLogsChecker with GuardedSampling implements SoakRunEndCheck {
   @override
   void finish() {
     // -------------------------------------------------------- anti-vacuity
-    if (totalComplaints == 0) {
+    //
+    // The question is whether the complaint PATH was reachable, not whether it
+    // was taken. `complaints > 0` was this arm's first shape and the lane
+    // refuted it: an ordinary flap that reconnects and resubscribes cleanly
+    // appends nothing, so five green runs produced 5-8 rebuilds and zero
+    // complaints between them. Asserting a non-zero list would have failed the
+    // soak for the pipe working. See the library doc for the three append sites
+    // and the measurement.
+    if (!surfaceWasExercised) {
       _record(
-        'the whole herd produced no complaint at all over the run, so this '
-        'ceiling held against a list nothing ever appended to. For a flap '
-        'storm that means the panels never lost a subscription, i.e. the '
-        'faults did not reach them — which is a broken soak wearing a green '
-        'tick rather than evidence that the complaint surface is bounded',
-        observed: 0,
-        expected: '> 0',
+        'the storm never made a single panel rebuild over the whole run, so '
+        'this ceiling held against a surface nothing ever exercised. Every '
+        'append site on ResyncEngine.complaints is inside a re-establishment '
+        'that went wrong (resync_engine.dart:208, :249, :252) — no rebuild, no '
+        'reachable path, and a green row that means nothing. For a flap storm '
+        'it also means the faults did not reach anybody, which is a broken '
+        'soak wearing a green tick',
+        observed: reestablishments,
+        expected: 'at least $exercisedFloor',
       );
     }
 
@@ -419,6 +577,9 @@ final class BoundedLogsChecker with GuardedSampling implements SoakRunEndCheck {
               '${index == source.controlPanelIndex ? '   [CONTROL]' : ''}',
         '  gateway log lines $gatewayLogLines, plant ingest log lines '
             '$plantIngestLogLines',
+        '  $reestablishments rebuilds across the herd against a floor of '
+            '$exercisedFloor — the anti-vacuity observable, because a complaint '
+            'costs a re-establishment that went wrong and never an ordinary one',
       ].join('\n');
 
   @override
@@ -429,7 +590,12 @@ final class BoundedLogsChecker with GuardedSampling implements SoakRunEndCheck {
               ..sort((a, b) => b.worstRate.compareTo(a.worstRate)))
             .first;
     return '$name: $judgedSamples judged windows against a floor of '
-        '$minimumSamplesForAVerdict; $totalComplaints complaints across the '
+        '$minimumSamplesForAVerdict'
+        '${measurable ? '' : ' (NOT MEASURABLE at a declared $declaredDuration '
+            '— one window needs $boundedLogsMeasurableFrom, so the floor is '
+            'exempt and this run is not evidence)'}'
+        '; $reestablishments rebuilds (floor $exercisedFloor)'
+        '; $totalComplaints complaints across the '
         'herd, worst ${worst == null ? 'n/a' : '${worst.worstRate.toStringAsFixed(1)}/min '
             'on ${worst.panel} at ${formatSoakOffset(worst.worstAt)}'} against '
         'a ceiling of $ceilingPerMinute; control '

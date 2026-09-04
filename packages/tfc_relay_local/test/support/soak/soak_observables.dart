@@ -256,11 +256,19 @@ abstract interface class SoakWriteSource {
 /// of `gate_manifest_test.dart`'s skip audit at one structure's scale. A skipped
 /// structure is absent from [plantWide] and present here with the reason the
 /// platform gave, in its own words.
+///
+/// [carriedForward] is the third case, between "read" and "cannot be read here":
+/// a structure whose value in [plantWide] is the last one taken rather than a
+/// fresh one. Only [openSocketsStructure] is ever in it, and
+/// [openSocketCheckpointCadence] says why. It is separate from [skips] because
+/// the row still carries a number and the number is still true — it is just not
+/// new, and a rule about slopes must not count it as a reading.
 final class SoakStructureReading {
   const SoakStructureReading({
     required this.perPanel,
     required this.plantWide,
     this.skips = const <String, String>{},
+    this.carriedForward = const <String>{},
   });
 
   /// Panel index -> structure name -> size. The client-side half.
@@ -272,7 +280,156 @@ final class SoakStructureReading {
 
   /// Structure name -> why it could not be read on this platform.
   final Map<String, String> skips;
+
+  /// Structures whose value in [plantWide] is carried from an earlier
+  /// checkpoint rather than read at this one.
+  final Set<String> carriedForward;
 }
+
+// -------------------------------------------------------- the structure names
+
+/// The unresolved-write set, per panel — `RemoteStateMan.debugUnresolvedCmds`.
+///
+/// The structure `long_outage_gate_test.dart` already watches as a slope, and
+/// the one invariant 2 caps absolutely at 64. The two readers are deliberate: a
+/// ceiling catches the set that exploded, a slope catches the set that never
+/// stops climbing, and neither sees what the other does.
+const String unresolvedCmdsStructure = 'unresolvedCmds';
+
+/// The uncapped complaint list, per panel — `ResyncEngine.complaints`.
+///
+/// **Shared with invariant 5.** See the library doc.
+const String complaintsStructure = 'complaints';
+
+/// The subscriptions the client judged stale at the last tick, per panel.
+///
+/// Standing in for the resync engine's private `_inFlight` map — see the
+/// library doc for why, and for the fact that it is a substitution.
+const String staleSubscriptionsStructure = 'staleSubscriptions';
+
+/// The client's retained `writeStatus` query history, per panel.
+///
+/// Bounded by construction at `RemoteStateMan._debugHistory` (64), which is why
+/// it is worth watching: a structure with a declared cap is the cheapest place
+/// to notice that the code enforcing the cap stopped running.
+const String writeStatusQueriesStructure = 'writeStatusQueries';
+
+/// Settled write outcomes the gateway is still vouching for.
+///
+/// `WriteOutcomeLog.recordedOutcomes` (`write_outcome_log.dart:167`). **This one
+/// proves the prune runs.** The log sweeps its horizon on `record`, `entryFor`
+/// and `prune` and nowhere else, so a run in which this climbs past the TTL's
+/// worth of writes is a run in which the sweep stopped.
+const String recordedOutcomesStructure = 'recordedOutcomes';
+
+/// Live sessions on the gateway — `SessionRegistry.sessionCount`.
+const String sessionsStructure = 'sessions';
+
+/// Every live session's subscriptions, summed —
+/// `SessionSubscriptionCounts.subscriptionCount`.
+const String subscriptionsStructure = 'subscriptions';
+
+/// Every live session's attached listeners, summed —
+/// `SessionSubscriptionCounts.listenerCount`.
+///
+/// Derived on read rather than tallied, which is the property that makes it
+/// worth asserting: *"a maintained count can drift from the thing it counts,
+/// and a teardown assertion reading a drifted tally is an assertion that passes
+/// while the listeners are still attached"* (`subscription_registry.dart:276`).
+const String listenersStructure = 'listeners';
+
+/// How many panels currently render `PIPE.link_degraded` as true.
+///
+/// **The send-buffer clause's observable, and it is a verdict rather than a
+/// depth — deliberately, because the depth is not reachable.**
+/// `ConflatingSendBuffer` lives on a private `_Connection` inside
+/// `relay_server.dart`; nothing public hands it out, and adding a getter would
+/// be a change to `tfc_relay_server/lib`, which this plan does not make. What
+/// the gateway *does* publish is `_SessionProbe.linkDegraded`, which is the
+/// composition of both numbers the clause is about:
+/// `pendingCount > (peakThreshold ?? maxPending) || pendingBytes >
+/// maxPendingBytes` (`relay_server.dart:896-903`).
+///
+/// **`pendingBytes` counts the priority lane only** — `_priorityBytes`,
+/// `send_buffer.dart:104` — so it is not total egress and a checker reporting
+/// it as a byte count would be overstating what it measured (08-PATTERNS §6).
+/// Folded into the verdict here, it says the one thing an operator needs: this
+/// session is shedding.
+///
+/// F27c already asserts the buffer itself, directly, as a unit arm with a hand
+/// clock. That is where the depth evidence lives; this is the composed run's
+/// view of the same thing.
+const String degradedPanelsStructure = 'degradedPanels';
+
+/// Open sockets in this process — `openSocketCount()`.
+///
+/// Skipped **by name** where `canCountOpenSockets` is false (`fd_count.dart:46`,
+/// Windows), never by silence: the skip reason travels in the checkpoint row's
+/// `skips` map and prints in the verdict block, because a descriptor clause
+/// that quietly evaporates on one platform is the failure
+/// `gate_manifest_test.dart`'s skip audit exists to catch.
+const String openSocketsStructure = 'openSockets';
+
+/// Every structure this invariant watches, in the order a row prints them.
+///
+/// A named list rather than "whatever the reading happened to contain": a
+/// structure silently dropped from the reading is a structure nobody is
+/// watching any more, and it would otherwise look exactly like a structure that
+/// stayed flat. `soak_meta_test.dart` asserts the row's key set against this.
+const List<String> boundedMemoryStructures = <String>[
+  unresolvedCmdsStructure,
+  complaintsStructure,
+  staleSubscriptionsStructure,
+  writeStatusQueriesStructure,
+  recordedOutcomesStructure,
+  sessionsStructure,
+  subscriptionsStructure,
+  listenersStructure,
+  degradedPanelsStructure,
+  openSocketsStructure,
+];
+
+/// The four that are read from a panel's own client.
+const List<String> boundedMemoryPanelStructures = <String>[
+  unresolvedCmdsStructure,
+  complaintsStructure,
+  staleSubscriptionsStructure,
+  writeStatusQueriesStructure,
+];
+
+/// The six that belong to the gateway or to the process.
+const List<String> boundedMemoryPlantWideStructures = <String>[
+  recordedOutcomesStructure,
+  sessionsStructure,
+  subscriptionsStructure,
+  listenersStructure,
+  degradedPanelsStructure,
+  openSocketsStructure,
+];
+
+/// How many checkpoints apart the descriptor count is actually read.
+///
+/// **Six, i.e. every thirty seconds, and it is the only structure on a cadence
+/// of its own.** `openSocketCount()` on macOS is `Process.runSync('lsof', …)`
+/// (`fd_count.dart:78`) — a **synchronous** subprocess that blocks the isolate
+/// while it runs. Measured on this machine: **46–62 ms per call, six calls,
+/// median 50 ms.** At every checkpoint that is a 1 % duty cycle of the whole run
+/// spent with the event loop stopped, inside a soak whose entire subject is what
+/// the pipe does under stress — an instrument perturbing its own measurement,
+/// which is 07-RESEARCH trap 15 in CPU rather than in memory.
+///
+/// Every sixth checkpoint takes it to 0.17 %. The cost is resolution on one
+/// series: descriptor leaks are judged at 30 s rather than 5 s, which in the
+/// ninety-second lane leaves three readings (below the settle floor, so the
+/// series is carried and not judged there) and in the thirty-five-minute run
+/// leaves seventy. A descriptor leak is a long-run question and seventy readings
+/// is plenty of slope; a five-second one was never the point.
+///
+/// On the checkpoints in between, the last value is carried into the row so the
+/// row shape never changes, and the structure is named in
+/// [SoakStructureReading.carriedForward] so the checker does not feed a repeated
+/// reading into a rule about slopes.
+const int openSocketCheckpointCadence = 6;
 
 /// What invariant 4 reads.
 abstract interface class SoakStructureSource {
@@ -324,6 +481,22 @@ abstract interface class SoakPanelLogView {
 
   /// `RemoteStateMan.complaints.length` — the uncapped list itself.
   int get complaints;
+
+  /// How many times this panel has lost readiness and had to rebuild.
+  ///
+  /// **`SoakPanelHealth.readyDips`, and it is invariant 5's anti-vacuity
+  /// observable rather than [complaints].** The complaint path is only
+  /// reachable through a re-establishment: every append site in
+  /// `resync_engine.dart` sits inside `_recover`'s catch (`:208`) or reads the
+  /// result of a `subscribe` that came back with rejected keys (`:249`, `:252`).
+  /// A panel that never rebuilt could not have complained for a reason that is
+  /// not this invariant's, and a ceiling measured against that run is a ceiling
+  /// measured against nothing.
+  ///
+  /// Read from the driver's 250 ms health sampler rather than counted from this
+  /// view's own five-second `established` readings: a dip shorter than a
+  /// checkpoint is still a rebuild, and the checker would miss it.
+  int get reestablishments;
 }
 
 /// What invariant 5 reads.
@@ -363,4 +536,61 @@ abstract interface class SoakLogSource {
   /// server-side twin of the client damping this invariant's control removes,
   /// and watching the damped number is what makes a broken damper visible.
   int get plantIngestLogLines;
+}
+
+// -------------------------------------------------- the shared observable
+
+/// The observable invariants 4 and 5 both watch.
+///
+/// `ResyncEngine.complaints` is a bounded-growth question to invariant 4 and a
+/// rate question to invariant 5, and both are worth asking. What must not
+/// happen is the two answers being read as two findings.
+const String sharedObservable = 'complaints';
+
+/// One sentence, printed when two instruments saw the same thing.
+///
+/// **Pitfall 8, and the sentence is the deliverable rather than a comment.** A
+/// genuine complaint flood trips invariant 4's slope rules and invariant 5's
+/// rate ceiling, correctly and for the same reason — and a report showing two
+/// red invariants reads as two independent instruments corroborating each
+/// other, which is twice the confidence the evidence supports. This returns the
+/// line that says so, or null when fewer than two checkers recorded against the
+/// shared observable, in which case there is nothing to disclaim.
+///
+/// The comparison is by [SoakViolation.key], which both checkers set to
+/// [sharedObservable] on exactly these violations, and by proximity: two
+/// breaches five minutes apart on the same list are two findings and are
+/// reported as two.
+String? sharedObservableFindings(
+  List<InvariantChecker> checkers, {
+  Duration window = const Duration(seconds: 5),
+}) {
+  final byChecker = <String, List<SoakViolation>>{};
+  for (final checker in checkers) {
+    for (final violation in checker.violations) {
+      if (violation.key != sharedObservable) continue;
+      (byChecker[checker.name] ??= <SoakViolation>[]).add(violation);
+    }
+  }
+  if (byChecker.length < 2) return null;
+
+  final names = byChecker.keys.toList()..sort();
+  var coincident = 0;
+  for (final left in byChecker[names.first]!) {
+    for (final right in byChecker[names.last]!) {
+      if ((left.monotonic - right.monotonic).abs() <= window) coincident++;
+    }
+  }
+  final lead = '  SHARED      : ${names.join(' and ')} both recorded against '
+      '"$sharedObservable"';
+  if (coincident == 0) {
+    return '$lead, at different checkpoints. Those are separate findings on '
+        'one list; the shared observable is noted so nobody counts them as '
+        'independent confirmation of each other.';
+  }
+  return '$lead within one checkpoint on $coincident '
+      'occasion${coincident == 1 ? '' : 's'}. Read that as ONE FINDING SEEN BY '
+      'TWO INSTRUMENTS, not as two invariants corroborating each other — they '
+      'are watching the same list and asking different questions of it '
+      '(growth, and rate).';
 }

@@ -1136,6 +1136,42 @@ void main() {
               'not advance — 11-01\'s third sabotage in one assertion');
     });
 
+    test('a carried-forward structure is a row entry and not a reading', () {
+      // The descriptor count is read every sixth checkpoint because a
+      // synchronous lsof stops the isolate for ~50 ms, and a soak about
+      // behaviour under stress must not spend 1 % of itself inside its own
+      // instrument. What must not follow is the repeat being fed to the rules:
+      // five repeats in every six would break the monotone run of a structure
+      // that is genuinely climbing, and the rule would look armed while being
+      // unable to fire.
+      final source = _StructureSource(panels: 2);
+      final checker = BoundedMemoryChecker(source, monotoneRun: 3);
+      for (var i = 0; i <= 20; i++) {
+        source.plantWide[openSocketsStructure] = i; // climbing every checkpoint
+        source.carriedForward
+          ..clear()
+          ..addAll(i % openSocketCheckpointCadence == 0
+              ? const <String>[]
+              : <String>[openSocketsStructure]);
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+
+      final series = checker.series['plantWide/$openSocketsStructure'];
+      expect(series, isNotNull);
+      expect(series!.readings, 4,
+          reason: 'twenty-one checkpoints at a cadence of '
+              '$openSocketCheckpointCadence is four readings, not twenty-one');
+      expect(series.worstMonotoneRun, 3,
+          reason: 'and the four readings it did take were each larger than the '
+              'last, so the slope is intact at a coarser resolution rather '
+              'than destroyed by the repeats');
+      expect(checker.carriedForward, contains(openSocketsStructure));
+      expect(checker.spreadReport, contains('not every one'),
+          reason: 'the coarser cadence prints, because a series with a '
+              'quarter of the readings of its neighbours is something a '
+              'reader has to be told rather than left to notice');
+    });
+
     test('the POSITIVE CONTROL: a held unresolved command trips the monotone '
         'rule and names the structure', () {
       // The plan asked for a held `ResyncEngine._inFlight` entry. That map is
@@ -1172,6 +1208,18 @@ void main() {
           reason: 'the monotone rule and not the ratio rule: a held entry '
               'climbs by one a checkpoint and never spikes, so a maximum '
               'never sees it');
+      expect(first, contains('+00:25'),
+          reason: 'and WHEN it fires is the sabotage number worth pinning. '
+              'Two settle checkpoints then five increases is the sixth '
+              'reading, twenty-five seconds in. Replacing these rules with a '
+              'maximum against a ceiling of 10 pushed the same control out to '
+              '+00:50 and cost 22 violations on a HEALTHY ninety-second lane '
+              'run (listeners at 250, recordedOutcomes at 28, openSockets at '
+              '34, all against 10); against 64 — the cap 11-04 put on '
+              'debugUnresolvedCmds, which is the number somebody reaching for '
+              'a ceiling reaches for — it never fired at all, and could not '
+              'have before checkpoint 65 at +05:20, which is four minutes past '
+              'the end of the lane');
     });
   });
 
@@ -1242,8 +1290,17 @@ void main() {
               'reason that is not this invariant\'s');
     });
 
-    test('zero complaints across the whole run is a recorded violation', () {
+    test('a run in which nobody ever rebuilt is a recorded violation', () {
+      // The anti-vacuity arm, and it is a floor on REBUILDS. The RED asserted
+      // `complaints > 0` here, on the plan's premise that no complaints means
+      // no subscription was ever lost. Five lane runs refuted it: 5-8 rebuilds
+      // and zero complaints, every run, because an ordinary flap that
+      // resubscribes cleanly appends nothing. See `bounded_logs.dart`'s library
+      // doc for the three append sites that make that so.
       final source = _LogSource(panels: 3);
+      for (final panel in source.panelLogs) {
+        panel.reestablishments = 0;
+      }
       final checker = BoundedLogsChecker(source);
       for (var i = 0; i <= 12; i++) {
         checker.sample(_at(Duration(seconds: 5 * i)));
@@ -1252,16 +1309,44 @@ void main() {
 
       expect(
           checker.violations.map((one) => one.detail).join('\n'),
-          contains('no complaint at all'),
-          reason: 'a storm that produced no complaints anywhere means the '
-              'panels never lost a subscription, which for a flap storm means '
-              'the faults did not reach them. That is a broken soak wearing a '
-              'green tick');
+          contains('never made a single panel rebuild'),
+          reason: 'no rebuild means the complaint path was never reachable, so '
+              'the ceiling held against a surface nothing exercised. For a flap '
+              'storm it also means the faults reached nobody');
+      expect(checker.surfaceWasExercised, isFalse);
+    });
+
+    test('zero complaints over a run that DID rebuild is not a violation', () {
+      // The measured lane, exactly: the storm made panels rebuild and every
+      // rebuild succeeded. This is the pipe working, and the first shape of
+      // this arm would have failed the soak for it.
+      final source = _LogSource(panels: 3);
+      source.panel(1).reestablishments = 5;
+      final checker = BoundedLogsChecker(source);
+      for (var i = 0; i <= 12; i++) {
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      checker.finish();
+
+      expect(checker.totalComplaints, 0);
+      expect(checker.violations, isEmpty,
+          reason: 'five ninety-second lane runs produced exactly this shape — '
+              '5-8 rebuilds across the herd and not one complaint — and a '
+              'checker that calls it a broken soak is a checker that gets '
+              'muted the week it lands');
+      expect(checker.surfaceWasExercised, isTrue);
+      expect(checker.toString(), contains('7 rebuilds'));
     });
 
     test('the control panel\'s complaint list stays near-empty', () {
       final source = _LogSource(panels: 3);
-      final checker = BoundedLogsChecker(source, controlTotal: 12);
+      // Declared at the RES-03 arm's length on purpose: the control's threshold
+      // is an absolute total for the whole run while the backstop scales with
+      // it, so on a one-minute run the backstop (10) is the stricter of the two
+      // and would answer first. At thirty-five minutes the backstop is 350 and
+      // this case is about the arm it says it is about.
+      final checker = BoundedLogsChecker(source,
+          declared: const Duration(minutes: 35), controlTotal: 12);
       source.panel(0).complaints = 40;
       source.panel(1).complaints = 3;
       for (var i = 0; i <= 12; i++) {
@@ -1331,7 +1416,13 @@ void main() {
           BoundedLogsChecker(_LogSource(),
                   declared: const Duration(seconds: 90))
               .totalBackstop,
-          360);
+          15);
+      expect(boundedLogsTotalBackstopPerMinute,
+          lessThan(boundedLogsCeilingPerMinute),
+          reason: 'the sustained allowance must sit BELOW the burst ceiling or '
+              'it is unreachable: anything fast enough to breach a looser '
+              'backstop breached the ceiling first, and the arm that is '
+              'supposed to see slow steady growth would never fire');
     });
 
     test('the violation names the seed and the schedule offset', () {
@@ -1357,15 +1448,22 @@ void main() {
       // complaint per suppressed tick.
       //
       // The counterfactual is computed from the same run rather than by editing
-      // the client: `suppressedTicks` is how many ticks WOULD have complained,
-      // and the case asserts the damped number is under the ceiling while the
-      // undamped number is over it. If somebody deletes the guard, the two
-      // numbers become one number and this case fails.
+      // the client, and it runs against the SHIPPING ceiling rather than a
+      // tighter one passed in — which is the point of the derivation on
+      // `boundedLogsCeilingPerMinute`. Twenty is half of the forty a minute the
+      // undamped tick produces, so the number in the tree catches this without
+      // help. The first draft of this file set the ceiling at sixty, which is
+      // ABOVE the regression's own rate: the control passed only because the
+      // case handed it a thirty.
+      //
+      // The arithmetic alone is not a regression test on the product — both
+      // sources here are fakes — so the deletion is pinned structurally as
+      // well, in the case below this one.
       const ticksPerMinute = 40; // a 1500 ms tick, the shipping default
       final damped = _LogSource(panels: 3);
       final undamped = _LogSource(panels: 3);
-      final dampedChecker = BoundedLogsChecker(damped, ceilingPerMinute: 30);
-      final undampedChecker = BoundedLogsChecker(undamped, ceilingPerMinute: 30);
+      final dampedChecker = BoundedLogsChecker(damped);
+      final undampedChecker = BoundedLogsChecker(undamped);
 
       for (var i = 0; i <= 12; i++) {
         // Damped: one complaint for the whole mismatching stretch.
@@ -1382,10 +1480,162 @@ void main() {
               'ceiling should ever see');
       expect(undampedChecker.violations, isNotEmpty,
           reason: 'without it the same subscription costs one complaint per '
-              'tick — $ticksPerMinute a minute against a ceiling of 30. This '
-              'arm is a live regression test on connection_supervisor.dart:771 '
-              'and it keeps earning its keep after this phase closes');
+              'tick — $ticksPerMinute a minute against the shipping ceiling of '
+              '$boundedLogsCeilingPerMinute. This arm is a live regression test '
+              'on connection_supervisor.dart:771 and it keeps earning its keep '
+              'after this phase closes');
       expect(undampedChecker.violations.first.toString(), contains('panel-1'));
+      expect(ticksPerMinute, greaterThan(boundedLogsCeilingPerMinute * 2 - 1),
+          reason: 'the ceiling must stay at or under half the rate the '
+              'regression produces, or somebody raising it has quietly '
+              'disarmed this control');
+    });
+
+    test('the POSITIVE CONTROL\'s other half: the damping itself is pinned',
+        () {
+      // The counterfactual above is arithmetic over two fakes; it proves the
+      // ceiling would catch an undamped rate, and it cannot notice the guard
+      // being deleted from the client. This half can, and it is the freeze
+      // idiom this repository already uses for exactly that.
+      final supervisor = File(
+          '../tfc_relay_client/lib/src/connection_supervisor.dart');
+      expect(supervisor.existsSync(), isTrue,
+          reason: 'the pin is worthless if the path rots: ${supervisor.path}');
+      final source = supervisor.readAsStringSync();
+
+      expect(source, contains('_tickResyncComplained'),
+          reason: 'Phase 7 added this suppression set for the G1 fix. Without '
+              'it a permanently mismatching page complains once per 1500 ms '
+              'tick — 40 a minute against invariant 5\'s ceiling of '
+              '$boundedLogsCeilingPerMinute. Deleting it is the regression the '
+              'soak\'s positive control describes, and this is the line that '
+              'fails when somebody does');
+      expect(source, contains('if (_tickResyncComplained.add('),
+          reason: 'the SET is not the damping — the guarded append is. A '
+              'suppression set that is still declared, still cleared on '
+              'reconnect and no longer consulted is the same flood with a '
+              'reassuring name');
+      expect(source, contains('_tickResyncComplained.clear()'),
+          reason: 'and the clear on reconnect stays, deliberately: a recovered '
+              'page must not be refused the rebuild it needs '
+              '(11-05\'s objective quotes the reasoning). This invariant exists '
+              'because that clearing is what makes a flood possible, not '
+              'because the clearing is wrong');
+    });
+  });
+
+  // ------------------------------------------------ the shared observable
+
+  group('invariants 4 and 5 share an observable', () {
+    test('two instruments recording against complaints in one checkpoint print '
+        'as ONE FINDING, not as two', () {
+      // Both checkers driven, at the same offsets, on the same list — which is
+      // what a genuine flood does. Invariant 4 sees a structure that only ever
+      // grows; invariant 5 sees a rate over its ceiling. They are right and
+      // they are the same finding.
+      final structures = _StructureSource(panels: 3);
+      final logs = _LogSource(panels: 3);
+      final memory = BoundedMemoryChecker(structures);
+      final rate = BoundedLogsChecker(logs, ceilingPerMinute: 30);
+
+      for (var i = 0; i <= 8; i++) {
+        final at = Duration(seconds: 5 * i);
+        structures.panel(1)[complaintsStructure] = i * 5;
+        logs.panel(1).complaints = i * 5;
+        memory.sample(_at(at));
+        rate.sample(_at(at));
+      }
+
+      expect(memory.violations, isNotEmpty,
+          reason: 'invariant 4 must have seen the growth, or this case is '
+              'testing the cross-reference against one instrument');
+      expect(rate.violations, isNotEmpty,
+          reason: 'invariant 5 must have seen the rate, likewise');
+
+      final sentence = sharedObservableFindings(<InvariantChecker>[memory, rate]);
+      expect(sentence, isNotNull,
+          reason: 'both instruments recorded against "$sharedObservable" and '
+              'the block said nothing about it. Pitfall 8 is a report in which '
+              'the two appear to corroborate each other');
+      expect(sentence, contains('ONE FINDING SEEN BY TWO INSTRUMENTS'));
+      expect(sentence, contains(boundedLogs));
+      expect(sentence, contains(boundedMemory));
+    });
+
+    test('one instrument alone says nothing about a shared observable', () {
+      final logs = _LogSource(panels: 3);
+      final rate = BoundedLogsChecker(logs, ceilingPerMinute: 30);
+      for (var i = 0; i <= 8; i++) {
+        logs.panel(1).complaints = i * 5;
+        rate.sample(_at(Duration(seconds: 5 * i)));
+      }
+      expect(rate.violations, isNotEmpty);
+      expect(sharedObservableFindings(<InvariantChecker>[rate]), isNull,
+          reason: 'there is nothing to disclaim when only one instrument '
+              'recorded, and a sentence printed anyway would be noise that '
+              'trains everybody to skip the line that matters');
+    });
+
+    test('violations on other structures are not cross-referenced', () {
+      final structures = _StructureSource(panels: 3);
+      final logs = _LogSource(panels: 3);
+      final memory = BoundedMemoryChecker(structures);
+      final rate = BoundedLogsChecker(logs, ceilingPerMinute: 30);
+      for (var i = 0; i <= 8; i++) {
+        // Invariant 4 climbs on the unresolved set; invariant 5 on complaints.
+        structures.panel(1)[unresolvedCmdsStructure] = i;
+        logs.panel(1).complaints = i * 5;
+        memory.sample(_at(Duration(seconds: 5 * i)));
+        rate.sample(_at(Duration(seconds: 5 * i)));
+      }
+      expect(memory.violations, isNotEmpty);
+      expect(rate.violations, isNotEmpty);
+      expect(sharedObservableFindings(<InvariantChecker>[memory, rate]), isNull,
+          reason: 'two findings on two different structures ARE two findings. '
+              'The cross-reference must key on the observable and not on the '
+              'fact that both checkers went red');
+    });
+  });
+
+  group('invariant 5 is honest about arms too short to measure', () {
+    test('a run shorter than one window exempts the floor and says so', () {
+      final short = BoundedLogsChecker(_LogSource(),
+          declared: const Duration(seconds: 8));
+      expect(short.measurable, isFalse);
+      expect(short.minimumSamplesForAVerdict, 0,
+          reason: 'an eight-second run takes ONE checkpoint and a rate needs '
+              'two readings, so a floor of one is not an anti-vacuity gate — '
+              'it is a case that fails for the length of the arm');
+      expect(short.toString(), contains('NOT MEASURABLE'),
+          reason: 'and the exemption must print, or a green row means '
+              'something it does not');
+    });
+
+    test('both real arms are far above the measurable floor', () {
+      for (final arm in <Duration>[
+        Duration(seconds: 90),
+        Duration(minutes: 35),
+      ]) {
+        final checker = BoundedLogsChecker(_LogSource(), declared: arm);
+        expect(checker.measurable, isTrue, reason: '$arm');
+        expect(checker.minimumSamplesForAVerdict, greaterThan(0), reason: '$arm');
+      }
+    });
+
+    test('an eight-second run is exempt from the rebuild floor too', () {
+      final source = _LogSource(panels: 3);
+      for (final panel in source.panelLogs) {
+        panel.reestablishments = 0;
+      }
+      final short =
+          BoundedLogsChecker(source, declared: const Duration(seconds: 8));
+      short.sample(_at(Duration.zero));
+      short.finish();
+      expect(short.surfaceWasExercised, isTrue,
+          reason: 'an eight-second auxiliary run may legitimately flap nobody, '
+              'and the same argument that exempts the sample floor exempts '
+              'this one — the exemption prints as NOT MEASURABLE either way');
+      expect(short.violations, isEmpty);
     });
   });
 
@@ -1805,6 +2055,9 @@ final class _StructureSource implements SoakStructureSource {
   /// Structures this "platform" cannot read, with the reason.
   final Map<String, String> skips = <String, String>{};
 
+  /// Structures this "checkpoint" is carrying rather than reading.
+  final Set<String> carriedForward = <String>{};
+
   Map<String, int> panel(int index) => _panels[index]!;
 
   @override
@@ -1818,6 +2071,7 @@ final class _StructureSource implements SoakStructureSource {
             if (!skips.containsKey(entry.key)) entry.key: entry.value,
         },
         skips: Map<String, String>.of(skips),
+        carriedForward: Set<String>.of(carriedForward),
       );
 }
 
@@ -1937,4 +2191,9 @@ final class _PanelLog implements SoakPanelLogView {
 
   @override
   int complaints = 0;
+
+  // One by default, so the arms that are about rates are not also about the
+  // anti-vacuity gate. The cases that are about the gate set it to zero.
+  @override
+  int reestablishments = 1;
 }
