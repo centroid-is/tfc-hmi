@@ -89,12 +89,17 @@ void main() {
       List<String> seen,
       void Function(Duration) advance,
     }) build() {
-      var clock = DateTime.utc(2026, 9, 3, 12);
+      // **Monotonic microseconds, not a DateTime** (10-REVIEW WR-02). The
+      // feed's own anchor is a process `Stopwatch` now, and a fixture handing
+      // it wall-clock instants would be testing a shape production no longer
+      // has. The starting value is nonzero so a case can step it backwards
+      // without going negative.
+      var clock = const Duration(hours: 12).inMicroseconds;
       final local = StreamController<String>.broadcast();
       final feed = PreferenceChangeFeed(
         database: () => null,
         local: local.stream,
-        now: () => clock,
+        clock: () => clock,
         window: const Duration(milliseconds: 250),
         // Short, so a case does not sit through the production backoff. The
         // channel can never open here, so this only bounds how often it
@@ -107,7 +112,7 @@ void main() {
         feed: feed,
         local: local,
         seen: seen,
-        advance: (Duration d) => clock = clock.add(d),
+        advance: (Duration d) => clock += d.inMicroseconds,
       );
     }
 
@@ -182,6 +187,60 @@ void main() {
               'for good, would make every preference written in the first '
               'seconds after a restart invisible');
       expect(f.feed.channelUp, isFalse);
+    });
+
+    // 10-REVIEW WR-02, and the fourth time this doctrine has been written down
+    // (08-CR-01, 08-CR-02, 09-WR-01). The production clock is a process
+    // `Stopwatch` and cannot step; what these two arms defend is the
+    // comparison, because the clock is injectable and an injected clock is a
+    // caller's value.
+    test('a clock that steps backwards does not silence the feed', () async {
+      final f = build();
+      final sub = f.feed.changes.listen(f.seen.add);
+      addTearDown(sub.cancel);
+
+      f.local.add('theme');
+      await pumpEventQueue();
+      // An NTP correction at boot on a plant PC — the ordinary case, which is
+      // why the wall clock was the wrong anchor.
+      f.advance(const Duration(minutes: -5));
+      f.local.add('theme');
+      await pumpEventQueue();
+
+      expect(f.seen, ['theme', 'theme'],
+          reason: 'with `at.difference(last) < window` the elapsed time is '
+              'NEGATIVE after a backwards step, so every key already announced '
+              'is suppressed for the whole of the step — five minutes of '
+              'silence here. invalidate() still runs, so the gateway\'s cache '
+              'is fresh while every connected panel renders a value nobody '
+              'told it had changed. That is "the edit nobody saw", which is '
+              'the failure DB-03 exists to prevent');
+    });
+
+    test('and the stale entry is evicted rather than pinned', () async {
+      final f = build();
+      final sub = f.feed.changes.listen(f.seen.add);
+      addTearDown(sub.cancel);
+
+      f.local.add('theme');
+      await pumpEventQueue();
+      f.advance(const Duration(minutes: -5));
+      f.local.add('theme');
+      await pumpEventQueue();
+      // Back inside a window of the *re-anchored* entry: if the step left the
+      // old timestamp in the map, this third event is compared against it and
+      // the suppression is permanent rather than momentary.
+      f.advance(const Duration(milliseconds: 10));
+      f.local.add('theme');
+      await pumpEventQueue();
+
+      expect(f.seen, ['theme', 'theme'],
+          reason: 'the prune uses the same comparison as the suppression, so '
+              'an inverted one could not evict what it could not measure. '
+              'After the step the key is re-anchored, and 10 ms later it is '
+              'genuinely inside the window and genuinely suppressed — which '
+              'is the arm that proves the fix re-anchored rather than simply '
+              'stopped de-duplicating');
     });
   });
 }

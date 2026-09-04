@@ -109,12 +109,12 @@ final class PreferenceChangeFeed {
     Future<Set<String>> Function()? resync,
     this.window = defaultWindow,
     this.relistenBackoff = defaultRelistenBackoff,
-    DateTime Function()? now,
+    int Function()? clock,
     this.log,
   })  : _local = local,
         _invalidate = invalidate,
         _resync = resync,
-        _now = now ?? DateTime.now;
+        _clock = clock ?? _uptimeMicros;
 
   /// How long after emitting a key another event for it is the same change.
   /// See the library doc for the arithmetic.
@@ -149,7 +149,42 @@ final class PreferenceChangeFeed {
   final Stream<String> _local;
   final void Function()? _invalidate;
   final Future<Set<String>> Function()? _resync;
-  final DateTime Function() _now;
+
+  /// **Monotonic microseconds, never a wall clock** (10-REVIEW WR-02).
+  ///
+  /// Both durations this class measures — the de-duplication window and the
+  /// probe deadline — used to be computed from `DateTime.now()`, and both
+  /// failed on a backwards step. An NTP correction at boot on a plant PC is
+  /// the ordinary case, not an exotic one, which is why the same doctrine
+  /// already governs `RelaySession`'s liveness clock (08-CR-01/CR-02,
+  /// 09-WR-01). This is its fourth site.
+  ///
+  ///  * *[_announce].* The suppression test was `at.difference(last) < window`.
+  ///    After a backwards step of `d` that difference is negative for every key
+  ///    already in [_announced], so **every preference change is suppressed for
+  ///    the whole of `d`** — and the pruning line could not evict the stale
+  ///    entries either, because the same comparison is inverted. `invalidate()`
+  ///    still runs, so the gateway's own cache is fresh while every connected
+  ///    panel renders a value nobody told it had changed. That is "the edit
+  ///    nobody saw", which is the failure DB-03 exists to prevent.
+  ///  * *[_proveListening].* A backwards step means the deadline never
+  ///    arrives and the loop issues `pg_notify` every 100 ms indefinitely; a
+  ///    forward step gives up on the first retry, losing the gap-close the
+  ///    probe exists to guarantee.
+  ///
+  /// Injected so a test can drive it, and **defended at the comparison
+  /// anyway**: an injected clock is a caller's value and a caller can hand
+  /// back anything. See [_announce].
+  final int Function() _clock;
+
+  /// This process's uptime, in microseconds — the default [_clock].
+  ///
+  /// Static because the anchor has to outlive any one feed: two feeds built a
+  /// second apart must agree about which of two instants came first, and a
+  /// per-instance `Stopwatch` would give each its own zero.
+  static final Stopwatch _uptime = Stopwatch()..start();
+
+  static int _uptimeMicros() => _uptime.elapsedMicroseconds;
 
   StreamSubscription<String>? _localSub;
   StreamSubscription<String>? _channelSub;
@@ -164,8 +199,9 @@ final class PreferenceChangeFeed {
   /// it, so a feed nobody is subscribed to holds no timer at all.
   Timer? _timer;
 
-  /// When each key was last announced, for the de-duplication window.
-  final Map<String, DateTime> _announced = <String, DateTime>{};
+  /// When each key was last announced, on [_clock], for the de-duplication
+  /// window.
+  final Map<String, int> _announced = <String, int>{};
 
   /// The in-flight listen probe, and the nonce it is waiting for.
   Completer<void>? _probe;
@@ -266,7 +302,14 @@ final class PreferenceChangeFeed {
         // connection carrying it dies (`database_drift.dart:1066-1069`).
         onDone: _channelDropped,
       );
-      final nonce = '${_now().microsecondsSinceEpoch}-${_probeCount++}';
+      // **A wall clock here on purpose**, and the one place it is right: a
+      // nonce is not a duration. What it has to be is unlikely to collide with
+      // a *neighbouring gateway's* probe on the same channel, and two
+      // processes share no uptime origin — [_probeCount] alone would have both
+      // of them at 0. An NTP step cannot hurt it: a repeated nonce would at
+      // worst complete a probe the same feed is already waiting for.
+      final nonce =
+          '${DateTime.now().microsecondsSinceEpoch}-${_probeCount++}';
       await _proveListening(nonce, () async {
         await db.customSelect(r'SELECT pg_notify($1, $2)', variables: [
           Variable.withString(channel),
@@ -329,7 +372,7 @@ final class PreferenceChangeFeed {
     final probe = Completer<void>();
     _probeNonce = nonce;
     _probe = probe;
-    final giveUpAt = _now().add(probeTimeout);
+    final giveUpAt = _clock() + probeTimeout.inMicroseconds;
     try {
       while (!probe.isCompleted) {
         await send();
@@ -337,7 +380,7 @@ final class PreferenceChangeFeed {
           await probe.future.timeout(probeRetryInterval);
         } on TimeoutException {
           if (_closed || !_controller.hasListener) return;
-          if (_now().isAfter(giveUpAt)) {
+          if (_clock() > giveUpAt) {
             log?.call('the preference notification probe did not come back '
                 'within ${probeTimeout.inMilliseconds}ms; listening anyway, '
                 'but a change made in the last moment may only be seen at '
@@ -441,11 +484,25 @@ final class PreferenceChangeFeed {
 
   void _announce(String key) {
     if (_closed || _controller.isClosed) return;
-    final at = _now();
+    final at = _clock();
+    final windowUs = window.inMicroseconds;
     final last = _announced[key];
-    if (last != null && at.difference(last) < window) return;
+    // **The negative arm is the belt** (10-REVIEW WR-02). [_clock] is
+    // monotonic by default and cannot go backwards, but it is injectable and
+    // an injected clock is a caller's value. A negative elapsed time means the
+    // clock moved backwards, and the honest reading of that is "long ago" —
+    // announce, and re-anchor. Treating it as "just now" is what suppressed
+    // every change for the whole of the step.
+    final since = last == null ? null : at - last;
+    if (since != null && since >= 0 && since < windowUs) return;
     _announced
-      ..removeWhere((_, when) => at.difference(when) >= window)
+      ..removeWhere((_, when) {
+        final age = at - when;
+        // Same rule for the prune: a negative age is not a fresh entry, it is
+        // an entry the clock stepped over, and leaving it in is what made the
+        // suppression permanent.
+        return age < 0 || age >= windowUs;
+      })
       ..[key] = at;
     _controller.add(key);
   }
