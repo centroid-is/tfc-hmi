@@ -685,10 +685,20 @@ final class SoakDriver
   @override
   Duration get plantSweepPeriod => soakSweepPeriod;
 
+  /// The aliases whose epoch bump is still settling.
+  ///
+  /// **Bounded to one settling span, and that bound is the property.** See the
+  /// `UpstreamEpochBump` arm for why: an entry here is subtracted from
+  /// `DivergenceLedger.residue` *and* missing from `countOf(unattributed)`, so
+  /// a stale entry moves both halves of the keyframe verdict at once.
   @override
   Set<String> get epochBumpedAliases => Set<String>.unmodifiable(_epochBumped);
 
   final Set<String> _epochBumped = <String>{};
+
+  /// Which bump each alias's pending recovery belongs to, so a later bump
+  /// extends the exemption instead of an earlier recovery ending it early.
+  final Map<String, int> _epochBumpGeneration = <String, int>{};
 
   /// The keys a `PlantMutate` has pinned, and to what.
   ///
@@ -1813,7 +1823,35 @@ final class SoakDriver
         // know the bump happened, and nothing else in the process records it:
         // the epoch is opaque above `epoch.dart` and comparing two of them for
         // recency is explicitly forbidden there.
+        //
+        // **And it needs to know when the bump STOPPED applying, which is the
+        // whole of this arm's care.** `eventual_resync.dart:484-488` attributes
+        // any non-good-quality divergence on a bumped alias to
+        // `DivergenceCause.epochChange`, and that is the one cause
+        // `DivergenceLedger.residue` subtracts — so an entry in this set is
+        // subtracted from residue AND absent from `countOf(unattributed)`,
+        // which is both terms of `keyframesNotNeeded`. One alias left in here
+        // permanently is ten of the forty plant keys exempt from the
+        // milestone's headline decision number for the rest of the run, and
+        // the storm draws this lever about four times in thirty-five minutes.
+        //
+        // What the bump actually excuses is bad quality until the re-browse
+        // completes (`epoch.dart:26`, 08-08) — a transient condition — so the
+        // exemption is cleared after the span the GENERATOR declares for this
+        // kind, exactly as `UpstreamSlowResolve` clears its latency below.
+        // Honouring `recoverySpanOf` is the driver agreeing with the timeline
+        // rather than authoring a number of its own.
+        //
+        // Generation-stamped so a second bump EXTENDS the exemption rather
+        // than the first bump's recovery cutting it short — the defect
+        // `upstreamSlowResolve` has and this arm does not.
         _epochBumped.add(alias);
+        final epochGeneration = (_epochBumpGeneration[alias] ?? 0) + 1;
+        _epochBumpGeneration[alias] = epochGeneration;
+        _scheduleRecovery(SoakEventSchedule.recoverySpanOf(event.kind), () {
+          if (_epochBumpGeneration[alias] != epochGeneration) return;
+          _epochBumped.remove(alias);
+        });
         return SoakApplyOutcome.fired(
             event.kind, 'FakeUpstreamLink.bumpEpoch',
             note: '$alias $before -> ${link.inner.epoch}');

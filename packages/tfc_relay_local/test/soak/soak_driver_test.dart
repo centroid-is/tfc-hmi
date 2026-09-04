@@ -281,6 +281,100 @@ void main() {
     });
   });
 
+  // ------------------------------------------------------- the epoch exemption
+  //
+  // `epochBumpedAliases` is the ONE input to `DivergenceCause.epochChange`
+  // (`eventual_resync.dart:484-488`), and `epochChange` is the ONE cause the
+  // keyframe verdict subtracts (`divergence_ledger.dart:413-420`). A
+  // divergence re-attributed to it leaves `countOf(unattributed)` AND the
+  // residue sum in the same step — both terms of `keyframesNotNeeded` — so
+  // whatever this set says is the milestone's headline decision number.
+  //
+  // Which makes its LIFETIME the property, not its contents. The condition an
+  // epoch bump excuses is a re-browse; the set is a plain `Set<String>`, and
+  // the exemption must not outlive the settling the generator declares for the
+  // kind.
+  group('the epoch exemption', () {
+    test('a bump exempts its alias for the settling span and not for the rest '
+        'of the run', () async {
+      final driver = _driver(
+        duration: const Duration(seconds: 30),
+        timeline: _handTimeline(const <SoakTimelineEntry>[],
+            duration: const Duration(seconds: 30)),
+      );
+      await driver.start();
+
+      final span = SoakEventSchedule.recoverySpanOf(
+          SoakEventKinds.upstreamEpochBump);
+
+      final outcome = await driver.apply(const UpstreamEpochBump('ST101'));
+      expect(outcome.fired, isTrue);
+      expect(driver.epochBumpedAliases, <String>{'ST101'},
+          reason: 'the bump happened, so the alias is exempt while the '
+              're-browse it excuses is in flight');
+
+      await Future<void>.delayed(span + const Duration(milliseconds: 750));
+
+      expect(driver.epochBumpedAliases, isEmpty,
+          reason: 'the bump is a TRANSIENT condition and the exemption it '
+              'buys must be transient too. Left permanent, every subsequent '
+              'non-good-quality divergence on ST101 is attributed epochChange '
+              'for the rest of the run — subtracted from residue AND absent '
+              'from countOf(unattributed), which is both halves of the '
+              'keyframe verdict. The storm draws this lever ~4 times in '
+              'thirty-five minutes, so two draws on distinct aliases exempt '
+              'half the plant');
+    });
+
+    test('a second bump extends the exemption instead of the first recovery '
+        'cutting it short', () async {
+      // The defect the obvious fix imports. One timer per bump, with no
+      // bookkeeping, means bump A's recovery fires while bump B is still
+      // armed and clears an exemption B is entitled to — `upstreamSlowResolve`
+      // has exactly this shape today (M-15). Avoided here by construction
+      // rather than reproduced one file over.
+      final driver = _driver(
+        duration: const Duration(seconds: 30),
+        timeline: _handTimeline(const <SoakTimelineEntry>[],
+            duration: const Duration(seconds: 30)),
+      );
+      await driver.start();
+
+      final span = SoakEventSchedule.recoverySpanOf(
+          SoakEventKinds.upstreamEpochBump);
+
+      await driver.apply(const UpstreamEpochBump('ST101'));
+      await Future<void>.delayed(const Duration(seconds: 2));
+      await driver.apply(const UpstreamEpochBump('ST101'));
+
+      // Past the FIRST bump's span, inside the second's.
+      await Future<void>.delayed(span - const Duration(seconds: 1));
+      expect(driver.epochBumpedAliases, <String>{'ST101'},
+          reason: 'the first bump\'s recovery must not clear an exemption the '
+              'second bump is still entitled to');
+
+      // Past the second's.
+      await Future<void>.delayed(const Duration(milliseconds: 1750));
+      expect(driver.epochBumpedAliases, isEmpty,
+          reason: 'and the second bump\'s own span still ends it');
+    });
+
+    test('one alias\'s bump exempts that alias and nobody else', () async {
+      final driver = _driver(
+        duration: const Duration(seconds: 30),
+        timeline: _handTimeline(const <SoakTimelineEntry>[],
+            duration: const Duration(seconds: 30)),
+      );
+      await driver.start();
+
+      await driver.apply(const UpstreamEpochBump('ST101'));
+      expect(driver.epochBumpedAliases, hasLength(1),
+          reason: 'ten of the forty plant keys ride on one alias, so a set '
+              'that widened by accident would exempt a quarter of the plant');
+      expect(driver.epochBumpedAliases, isNot(contains('BAADER')));
+    });
+  });
+
   group('a short run against the composed pipe', () {
     test('the pipe stands up, the storm plays, and every planned entry is '
         'applied', () async {
