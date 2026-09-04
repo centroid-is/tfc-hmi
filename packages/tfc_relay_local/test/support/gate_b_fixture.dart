@@ -417,15 +417,27 @@ final class GateBPlantDriver {
 /// One panel of the pipe: its client, what it heard, and its private proxy if
 /// it has one.
 final class GateBPanel {
-  GateBPanel._(this.index, this.client, this._proxy);
+  GateBPanel._(this.index, this._client, this._proxy, this._token);
 
   /// Its position, for the messages a multi-panel case has to print.
   final int index;
 
+  RemoteStateMan _client;
+
   /// The implementation under test — a real `RemoteStateMan` over a real
   /// socket, because a hand-rolled client would be this package asserting
   /// against its own idea of what a panel does (08-13's pubspec argument).
-  final RemoteStateMan client;
+  ///
+  /// **Not final, because of [GateBFixture.redial].** Phase 6 stops a panel's
+  /// reconnect loop for good when its credential is refused — that is the
+  /// design, not a bug — so restoring a revoked station means standing a new
+  /// client up, exactly as the operator restarting the app would. Every gate-B
+  /// row reads this once and never notices; the soak replaces it.
+  RemoteStateMan get client => _client;
+
+  /// The credential this panel dials with, or null on a gateway with no token
+  /// file. Held so a redial presents the same one.
+  final String? _token;
 
   /// Every status notification this panel received, in order — read off
   /// `onStatus`, so an entry here is proof the DTO crossed the wire whole and
@@ -457,7 +469,7 @@ final class GateBFixture {
   GateBFixture._(
     this.links,
     this.plant,
-    this.server,
+    this._server,
     this.port,
     this.proxies,
     this.panels,
@@ -465,6 +477,8 @@ final class GateBFixture {
     this.gatewayComplaints,
     this.driver,
     this._status,
+    this.mappings,
+    this._config,
   );
 
   /// One link per alias, in the order the aliases were given.
@@ -474,10 +488,29 @@ final class GateBFixture {
   /// never here and never over the wire.
   final LocalStateMan plant;
 
+  RelayServer _server;
+  StreamSubscription<StatusParams> _status;
+
   /// The gateway's socket half.
-  final RelayServer server;
+  ///
+  /// **Not final, because of [restartGateway].** `RelayServer.start()` refuses
+  /// on a closed server by design (*"its sessions are gone and its registry is
+  /// disposed. Build a new one"*), so a gateway restart is a new object on the
+  /// same port rather than a stopped one resumed.
+  RelayServer get server => _server;
+
+  /// The routing table the plant was composed with, so a caller can re-ingest
+  /// it through `plant.router.applyKeyMappings` without rebuilding it from the
+  /// pages — the live-editable path 08-PATTERNS §2 describes.
+  final KeyMappings mappings;
+
+  final ServerConfig _config;
 
   /// The ephemeral port the OS picked at bind.
+  ///
+  /// Fixed for the life of the fixture: [restartGateway] rebinds this exact
+  /// number, because the proxies in front of it were built pointing at it and
+  /// a restart that moved the port would be a restart no panel could follow.
   final int port;
 
   /// The proxies, one per panel — or empty on a direct-dial fixture.
@@ -499,7 +532,8 @@ final class GateBFixture {
   /// The plant driver, so every row can answer "was the plant actually busy?".
   final GateBPlantDriver driver;
 
-  final StreamSubscription<StatusParams> _status;
+  /// Clients [redial] replaced, kept so [dispose] can close their sockets too.
+  final List<RemoteStateMan> _retired = <RemoteStateMan>[];
 
   bool _disposed = false;
 
@@ -554,6 +588,100 @@ final class GateBFixture {
   int upstreamSubscriptionsCreatedOf(String alias) =>
       linkFor(alias).upstreamSubscriptionsCreated;
 
+  /// Stands a fresh client up for [index], on the same leg and with the same
+  /// credential, and retires the one it replaces.
+  ///
+  /// **The only way a stopped panel comes back.** `ConnectionSupervisor._stop`
+  /// is terminal — a refused credential ends the reconnect loop and nothing
+  /// resumes it, which is Phase 6's decision and the right one: a panel that
+  /// retried a rejected token would hammer the gateway all shift. So restoring
+  /// a station is what it is in the plant, an application restart, and this is
+  /// that in one call.
+  ///
+  /// The old client is disposed but kept in [_retired] rather than dropped:
+  /// `dispose` is idempotent, and a descriptor-count arm needs every socket
+  /// this fixture ever opened to be closed by the time it counts.
+  Future<void> redial(int index, {Duration? readyBudget}) async {
+    final one = panels[index];
+    final previous = one._client;
+    _retired.add(previous);
+    await previous.dispose();
+    final proxy = one._proxy;
+    one._client = RemoteStateMan(
+      uri: Uri.parse('ws://127.0.0.1:${proxy?.port ?? port}'),
+      config: _clientConfig(one._token),
+      keys: keys,
+      onStatus: one.statuses.add,
+    );
+    if (readyBudget != null) {
+      await until(
+        'panel $index to come back after a redial',
+        () => one._client.isReady,
+        budget: readyBudget,
+      );
+    }
+  }
+
+  /// Stops the gateway and stands a new one up **on the same port**.
+  ///
+  /// `RelayServer.start()` refuses on a closed server, so this builds a second
+  /// one over the same plant and rewires `wireStatusNotifications` — the same
+  /// three pieces in the same order `buildGateway` composes, which is the
+  /// composition this file's library doc says it restates.
+  ///
+  /// **The rebind is retried rather than assumed.** `close(force: true)`
+  /// returns before the kernel has finished with the listening socket, and how
+  /// long "before" is depends on the platform — the same fact
+  /// [untilSocketsSettle] exists for. A bounded retry turns a platform timing
+  /// detail into a slower restart instead of a dead pipe; exhausting it throws,
+  /// because a gateway that never came back is a finding and not a wait.
+  Future<void> restartGateway({
+    Duration rebindBudget = const Duration(seconds: 10),
+  }) async {
+    await _status.cancel();
+    await _server.close();
+
+    final config = ServerConfig(
+      tick: _config.tick,
+      auth: _config.auth,
+      port: port,
+    );
+    final deadline = Stopwatch()..start();
+    Object? lastError;
+    while (deadline.elapsed < rebindBudget) {
+      final replacement = RelayServer(
+        resolver: const PermissiveSeriesResolver(),
+        api: plant,
+        config: config,
+        onError: (error, _, where) => gatewayComplaints.add('$where: $error'),
+      );
+      final status = wireStatusNotifications(plant, replacement,
+          publisherId: config.publisherId);
+      try {
+        await replacement.start();
+        _server = replacement;
+        _status = status;
+        return;
+      } catch (error) {
+        lastError = error;
+        await status.cancel();
+        await replacement.close();
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+    }
+    throw StateError('the gateway did not rebind port $port within '
+        '${rebindBudget.inSeconds}s of being closed; the last attempt failed '
+        'with: $lastError');
+  }
+
+  ClientConfig _clientConfig(String? token) => token == null
+      ? ClientConfig()
+      // The plaintext gate is opened deliberately and only here: this fixture
+      // dials `ws://` on loopback, and `ClientConfig` refuses to put a token
+      // on an unencrypted dial unless it is told the deployment accepts it.
+      // A production panel gets `wss://` and never reaches this branch.
+      : ClientConfig(token: token, allowTokenOverPlaintext: true);
+
   /// Tears the pipe down in the argued order — panels, gateway, proxies,
   /// plant — so a case can watch the descriptor count settle back to its own
   /// baseline *inside* the case. Every step is idempotent, so the
@@ -565,8 +693,11 @@ final class GateBFixture {
     for (final one in panels) {
       await one.client.dispose();
     }
+    for (final retired in _retired) {
+      await retired.dispose();
+    }
     await _status.cancel();
-    await server.close();
+    await _server.close();
     for (final proxy in proxies) {
       await proxy.shutdown();
     }
@@ -623,6 +754,10 @@ Future<int> untilSocketsSettle(
 /// [encodings] is the per-alias string-encoding table, `StringEncodingConfig`
 /// itself so the fixture consumes 08-10's real configuration surface rather
 /// than a parallel one.
+///
+/// [tokenFor] gives panel *i* its credential, for a [serverConfig] that names
+/// an `AuthConfig`. Null — the default — is a gateway with no token file, and
+/// every gate-B row stays on that path.
 Future<GateBFixture> gateBFixture({
   int panels = 1,
   List<String> aliases = const <String>['ST101', 'ST201'],
@@ -635,6 +770,7 @@ Future<GateBFixture> gateBFixture({
   StringEncodingConfig encodings = const StringEncodingConfig(),
   Duration sweepPeriod = const Duration(milliseconds: 100),
   Duration staleAfter = const Duration(seconds: 30),
+  String? Function(int index)? tokenFor,
 }) async {
   if (panels <= 0) {
     throw ArgumentError('a pipe with $panels panels serves nobody');
@@ -727,9 +863,17 @@ Future<GateBFixture> gateBFixture({
   for (final proxy in proxies) {
     addTearDown(proxy.shutdown);
   }
+  // Through the fixture rather than over the captured `server`, so that a
+  // gateway [GateBFixture.restartGateway] replaced is the one that gets closed.
+  // Closing the original a second time is a no-op and closing the replacement
+  // never happens at all, which is a listening socket surviving the case that
+  // opened it. Nullable rather than `late`, because a fixture that threw before
+  // it was built must not turn its own failure into a LateInitializationError
+  // in teardown.
+  GateBFixture? built;
   addTearDown(() async {
-    await status.cancel();
-    await server.close();
+    await (built?._status ?? status).cancel();
+    await (built?._server ?? server).close();
   });
 
   final keys = <String>{
@@ -743,14 +887,17 @@ Future<GateBFixture> gateBFixture({
   final dialled = <GateBPanel>[];
   for (var i = 0; i < panels; i++) {
     final proxy = proxyPerPanel ? proxies[i] : null;
+    final token = tokenFor?.call(i);
     late final GateBPanel one;
     final client = RemoteStateMan(
       uri: Uri.parse('ws://127.0.0.1:${proxy?.port ?? port}'),
-      config: ClientConfig(),
+      config: token == null
+          ? ClientConfig()
+          : ClientConfig(token: token, allowTokenOverPlaintext: true),
       keys: keys,
       onStatus: (params) => one.statuses.add(params),
     );
-    one = GateBPanel._(i, client, proxy);
+    one = GateBPanel._(i, client, proxy, token);
     dialled.add(one);
     // Each panel registers its own teardown in the loop that builds it, so
     // the whole panel group stays last-registered — one closure over the
@@ -760,8 +907,8 @@ Future<GateBFixture> gateBFixture({
     addTearDown(client.dispose);
   }
 
-  final fixture = GateBFixture._(links, plant, server, port, proxies, dialled,
-      keys, gatewayComplaints, driver, status);
+  final fixture = built = GateBFixture._(links, plant, server, port, proxies,
+      dialled, keys, gatewayComplaints, driver, status, mappings, config);
 
   if (waitForReady) {
     await until(
