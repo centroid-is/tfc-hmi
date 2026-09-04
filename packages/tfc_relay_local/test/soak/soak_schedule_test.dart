@@ -22,6 +22,7 @@ import 'package:test/test.dart';
 import 'package:tfc_stateman_contract/faults.dart';
 
 import '../support/soak/soak_event.dart';
+import '../support/soak/soak_timeline.dart';
 
 /// The full arm's duration, and the one every printed number is quoted at.
 const Duration _fullSoak = Duration(minutes: 35);
@@ -85,6 +86,54 @@ const List<String> _seed11Head = <String>[
 ];
 const String _seed11Tail =
     '[34:51.867] panel-3 subscribe ST201.CN03.run+ST301.CN02.run';
+
+/// The lane's short arm, which runs on every push (11-CONTEXT ruling 2).
+const Duration _shortSoak = Duration(seconds: 90);
+
+/// Where the two synthetic streams collide, for the total-order case.
+const Duration _collisionOffset = Duration(seconds: 30);
+
+/// How many differently-sized merges the total-order case performs.
+const int _mergeTrials = 100;
+
+/// How many filler entries each synthetic stream carries.
+///
+/// Well past 32, which is where `package:collection`'s and the SDK's sorts
+/// stop using insertion sort and start using the unstable quicksort: a
+/// twelve-entry fixture would keep its order under an offset-only comparator
+/// too, and the case would be decoration.
+const int _fillerEntries = 200;
+
+/// A synthetic link stream with exactly one entry at [_collisionOffset].
+List<ScheduledFault> _fillerLink() => <ScheduledFault>[
+      for (var i = 0; i < _fillerEntries; i++)
+        ScheduledFault(Duration(milliseconds: 137 * i),
+            i.isEven ? const BlackholeMutation() : const FlapMutation.off()),
+      const ScheduledFault(_collisionOffset, ThrottleMutation(4096)),
+    ]..sort((a, b) => a.offset.compareTo(b.offset));
+
+/// A synthetic event stream with exactly one entry at [_collisionOffset].
+List<ScheduledSoakEvent> _fillerEvents() => <ScheduledSoakEvent>[
+      for (var i = 0; i < _fillerEntries; i++)
+        ScheduledSoakEvent(Duration(milliseconds: 149 * i),
+            PlantMutate('ST101.CN01.run', i)),
+      const ScheduledSoakEvent(_collisionOffset, GatewayRestart()),
+    ]..sort((a, b) => a.offset.compareTo(b.offset));
+
+/// The stream labels of the entries sitting exactly on [_collisionOffset].
+List<String> _orderAtCollision(List<SoakTimelineEntry> merged) => <String>[
+      for (final entry in merged)
+        if (entry.offset == _collisionOffset)
+          SoakStreams.labelOf(entry.streamIndex),
+    ];
+
+SoakTimeline _timeline({required int seed, required Duration duration}) =>
+    buildTimeline(
+      seed: seed,
+      duration: duration,
+      panels: _panels,
+      aliases: _aliases,
+    );
 
 void main() {
   group('SoakEvent — the sealed vocabulary', () {
@@ -587,6 +636,279 @@ void main() {
                   'reconnect count is every checker\'s strongest arm');
         }
       }
+    });
+  });
+
+  group('mergeTotalOrder — the third sort key', () {
+    test('two entries at one offset keep their order however many entries '
+        'follow them, over $_mergeTrials merges', () {
+      // **This is the case that would not exist if the merge sorted on offset
+      // alone.** Dart's `List.sort` is a dual-pivot quicksort past a short
+      // list, so it is not stable: two entries the comparator calls equal come
+      // out in an order that depends on how the partitioning went, and the
+      // partitioning depends on the LENGTH of the list. Comparing two
+      // generations of one seed inside one build cannot see that — the input
+      // is identical, so even an unstable sort is deterministic. What moves is
+      // the day something else in the storm changes: one more link fault, a
+      // fifteenth event kind, a longer duration. Then a pair of entries at one
+      // offset somewhere else entirely can swap, and a repro log already
+      // pasted into an issue stops describing the run it came from.
+      //
+      // So the perturbation here is the honest one: hold the colliding pair
+      // fixed and add entries AFTER it, which cannot legitimately affect its
+      // order, then check that it did not move.
+      final linkBase = _fillerLink();
+      final events = _fillerEvents();
+      final reference = _orderAtCollision(mergeTotalOrder(linkBase, events));
+
+      expect(reference, hasLength(2),
+          reason: 'the fixture must put exactly one link entry and one event '
+              'at $_collisionOffset, or this case is measuring nothing: '
+              '$reference');
+
+      var agreed = 0;
+      for (var extra = 1; extra <= _mergeTrials; extra++) {
+        final link = <ScheduledFault>[
+          ...linkBase,
+          for (var i = 0; i < extra; i++)
+            ScheduledFault(_collisionOffset + Duration(milliseconds: 1 + i),
+                const BlackholeMutation()),
+        ];
+        if (_orderAtCollision(mergeTotalOrder(link, events)) == reference) {
+          agreed++;
+        }
+      }
+
+      expect(agreed, _mergeTrials,
+          reason: '$agreed of $_mergeTrials merges kept the two entries at '
+              '$_collisionOffset in the order $reference. Under a total order '
+              'this cannot vary at all; anything less means the comparator is '
+              'leaving ties for an unstable sort to break');
+    });
+
+    test('every entry carries a unique (stream, index) pair, so there are no '
+        'ties for the sort to break', () {
+      final merged = mergeTotalOrder(_fillerLink(), _fillerEvents(),
+          quietClears: <ScheduledFault>[
+            ScheduledFault(_collisionOffset, const FlapMutation.off()),
+          ]);
+      final keys = merged
+          .map((e) => '${e.streamIndex}:${e.indexWithinStream}')
+          .toSet();
+
+      expect(keys, hasLength(merged.length),
+          reason: 'two entries share a (stream, index) pair, so the "total" '
+              'order is not total and the comparator can still return zero');
+    });
+
+    test('the merged list is in non-decreasing offset order', () {
+      final merged = mergeTotalOrder(_fillerLink(), _fillerEvents());
+      var previous = Duration.zero;
+      for (final entry in merged) {
+        expect(entry.offset, greaterThanOrEqualTo(previous));
+        previous = entry.offset;
+      }
+    });
+  });
+
+  group('the generated quiet windows', () {
+    test('are computed and printed at both arm durations', () {
+      final short = computeStableWindows(_shortSoak);
+      final full = computeStableWindows(_fullSoak);
+
+      final buffer = StringBuffer('generated quiet windows:\n');
+      for (final (label, duration, windows) in <(String, Duration, List<StableWindow>)>[
+        ('90 s arm', _shortSoak, short),
+        ('35 min arm', _fullSoak, full),
+      ]) {
+        final quiet = windows.fold(
+            Duration.zero, (sum, w) => sum + w.length);
+        buffer
+          ..writeln('  $label (${duration.inSeconds} s): '
+              '${windows.length} windows of '
+              '${windows.isEmpty ? 0 : windows.first.length.inMilliseconds}ms, '
+              'cadence ${windows.length < 2 ? "n/a" : (windows[1].start - windows[0].start).inMilliseconds}ms')
+          ..writeln('    quiet ${quiet.inSeconds} s of ${duration.inSeconds} s '
+              '(${(100 * quiet.inMicroseconds / duration.inMicroseconds).toStringAsFixed(1)} %), '
+              'storm ${(duration - quiet).inSeconds} s')
+          ..writeln('    $windows');
+      }
+      // ignore: avoid_print
+      print(buffer);
+
+      expect(full, hasLength(greaterThanOrEqualTo(8)),
+          reason: 'invariant 3 needs windows to judge, and its floor is eight '
+              'in a thirty-five-minute run (11-RESEARCH §B.3). Fewer means the '
+              'checker fails its vacuity gate for a reason nobody chose');
+      expect(short, hasLength(greaterThanOrEqualTo(2)),
+          reason: 'the 90-second arm runs on every push and exists so the '
+              'machinery cannot rot. An arm with no quiet window in it leaves '
+              'invariant 3 unexercised on every push, which is the vacuity the '
+              'whole apparatus refuses — arriving through the back door');
+
+      for (final windows in <List<StableWindow>>[short, full]) {
+        for (final window in windows) {
+          expect(window.length, greaterThanOrEqualTo(minStableWindow),
+              reason: 'a window shorter than the convergence floor reports '
+                  'divergences that were simply not finished converging');
+        }
+      }
+    });
+
+    test('leave most of the run to the storm', () {
+      // The other half of the previous case, and the reason the quiet fraction
+      // is capped: eight windows in a ninety-second run would be eighty
+      // seconds of silence, and the arm would be a soak in name only.
+      for (final duration in <Duration>[
+        _shortSoak,
+        const Duration(minutes: 5),
+        _fullSoak,
+      ]) {
+        final quiet = computeStableWindows(duration)
+            .fold(Duration.zero, (sum, w) => sum + w.length);
+        expect(quiet.inMicroseconds * quietFractionDenominator,
+            lessThanOrEqualTo(duration.inMicroseconds),
+            reason: 'a ${duration.inSeconds} s run would be quiet for '
+                '${quiet.inSeconds} s, which is more than one '
+                '$quietFractionDenominator of it. The fault-driven arms in '
+                '11-04 and 11-05 need a storm to fire into');
+      }
+    });
+
+    test('never overlap, and always end inside the run', () {
+      for (var seconds = 20; seconds <= 3600; seconds += 37) {
+        final duration = Duration(seconds: seconds);
+        final windows = computeStableWindows(duration);
+        Duration previousEnd = Duration.zero;
+        for (final window in windows) {
+          expect(window.start, greaterThanOrEqualTo(previousEnd),
+              reason: 'windows overlap at ${duration.inSeconds} s: $windows');
+          expect(window.end, lessThanOrEqualTo(duration),
+              reason: 'a window runs past the end of a '
+                  '${duration.inSeconds} s run: $windows');
+          previousEnd = window.end;
+        }
+      }
+    });
+
+    test('a run too short to hold one gets none, rather than a sliver', () {
+      expect(computeStableWindows(const Duration(seconds: 15)), isEmpty,
+          reason: 'a fifteen-second run cannot hold a judgeable window inside '
+              'the quiet cap. Returning a short one would let invariant 3 '
+              'report residue that was only unconverged, which is worse than '
+              'reporting no windows and failing the floor');
+      expect(computeStableWindows(Duration.zero), isEmpty);
+    });
+  });
+
+  group('buildTimeline — the whole storm', () {
+    test('nothing is armed inside a quiet window', () {
+      final timeline = _timeline(seed: 11, duration: _fullSoak);
+      expect(timeline.stableWindows, isNotEmpty,
+          reason: 'no windows, so this arm walks a list looking for entries '
+              'inside intervals that do not exist and passes on any timeline '
+              'at all');
+
+      for (final window in timeline.stableWindows) {
+        final inside = timeline.merged
+            .where((e) => e.offset > window.start && e.offset < window.end)
+            .toList();
+        expect(inside, isEmpty,
+            reason: 'the storm acts inside the quiet window $window, so '
+                'invariant 3 would be asked to require convergence across a '
+                'fault: $inside');
+      }
+
+      // And the clears did their job: walking the merged list up to each
+      // window's start must leave nothing armed.
+      for (final window in timeline.stableWindows) {
+        final armed = <String>{};
+        for (final entry in timeline.merged) {
+          if (entry.offset > window.start) break;
+          if (entry.payload case final FaultMutation mutation) {
+            if (mutation.arms) {
+              armed.add(mutation.mode);
+            } else {
+              armed.remove(mutation.mode);
+            }
+          }
+        }
+        expect(armed, isEmpty,
+            reason: 'the window $window opens with $armed still armed. The '
+                'injected clears are what make an interval with no entries in '
+                'it actually quiet — an empty stretch after an arming draw is '
+                'a fault held, not a fault absent');
+      }
+    });
+
+    test('the clear map covers every mode the registry declares', () {
+      // Pins the local copy of `ScenarioSchedule._clearFor` against the same
+      // registry the original keys off, so a ninth mode fails here rather
+      // than as a quiet window that is not quiet twenty minutes into a soak.
+      for (final mode in faultModes) {
+        if (mode == 'killOnce') {
+          expect(() => clearForMode(mode), throwsStateError,
+              reason: 'killOnce has no off lever, so a clear for it would be '
+                  'a log line that lies');
+          continue;
+        }
+        final clear = clearForMode(mode);
+        expect(clear.mode, mode,
+            reason: 'clearForMode("$mode") returns a ${clear.mode} mutation');
+        expect(clear.arms, isFalse,
+            reason: 'clearForMode("$mode") returns something that ARMS the '
+                'mode, so every quiet window would open by turning the storm '
+                'up');
+      }
+    });
+
+    test('the repro log names everything needed to regenerate the run', () {
+      final timeline = _timeline(seed: 11, duration: _fullSoak);
+      final log = timeline.reproLog;
+      final header = log.split('\n').take(6).join('\n');
+      // ignore: avoid_print
+      print('repro log header (seed 11, 35 min):\n$header\n'
+          '  ... ${timeline.merged.length} merged entries follow');
+
+      for (final needle in <String>[
+        'seed=11',
+        '0x50AC',
+        '${SoakEventSchedule.eventSeedFor(11)}',
+        'band=1-10s',
+        'band=10-40s',
+        'panels ${_panels.length}',
+        'aliases ${_aliases.length}',
+        'quiet ',
+      ]) {
+        expect(header, contains(needle),
+            reason: 'the repro log header does not name "$needle", so a log '
+                'pasted into an issue is no longer self-contained — a reader '
+                'has to know which cadence, which weights or which population '
+                'the failing soak used. That property is '
+                'scenario_schedule.dart:560-563\'s and it has to survive the '
+                'merge:\n$header');
+      }
+      expect(log.split('\n'), hasLength(greaterThan(timeline.merged.length)),
+          reason: 'the log is a header and then every merged entry');
+    });
+
+    test('the merged half-counts add up', () {
+      final timeline = _timeline(seed: 11, duration: _fullSoak);
+      expect(
+          timeline.merged.length,
+          timeline.events.length +
+              timeline.quietClears.length +
+              timeline.link.length -
+              timeline.linkEntriesWithheld,
+          reason: 'the merged list is the two halves plus the injected clears, '
+              'minus the link entries the windows withheld. If it is not, '
+              'something is being dropped or counted twice');
+      expect(timeline.linkEntriesWithheld, greaterThan(0),
+          reason: 'no link entry fell inside any of '
+              '${timeline.stableWindows.length} windows over '
+              '${_fullSoak.inMinutes} minutes at a 1-10 s cadence, which is '
+              'not credible — the withholding is not happening and the '
+              'windows are quiet only because nothing was scheduled there');
     });
   });
 }
