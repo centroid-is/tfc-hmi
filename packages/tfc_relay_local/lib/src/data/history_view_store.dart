@@ -329,12 +329,23 @@ final class HistoryViewStore implements HistoryViewApi {
       await db.customSelect('SELECT 1 FROM timescaledb_information.jobs '
           'LIMIT 1').get();
     } catch (error) {
+      // **The type, not the object** (10-REVIEW WR-08). A `postgres` driver
+      // exception routinely carries the host, the port, the database name and
+      // the role in its `toString()`; `timescale_sink.dart` sanitises its
+      // equivalents and this did not, with no reason given at the site. The
+      // exposure is whoever reads the gateway's logs, which at SVN is a wider
+      // set than whoever holds the database credential.
+      //
+      // Nothing actionable is lost. The four remedies the sentence already
+      // names are what an engineer does next; the connection string adds
+      // nothing to any of them, and the value returned to the wire stays null
+      // either way.
       log?.call('the retention horizon could not be determined and is being '
           'reported as "nothing has been discarded yet", which may be wrong: '
-          'reading timescaledb_information.jobs failed with $error. A chart '
-          'will draw no horizon line at all. Check that this database is '
-          'TimescaleDB, that the gateway\'s role may read the jobs view, and '
-          'that the connection is up');
+          'reading timescaledb_information.jobs failed with '
+          '${error.runtimeType}. A chart will draw no horizon line at all. '
+          'Check that this database is TimescaleDB, that the gateway\'s role '
+          'may read the jobs view, and that the connection is up');
     }
     return null;
   }

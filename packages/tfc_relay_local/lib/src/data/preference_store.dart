@@ -107,6 +107,65 @@ final class PreferenceStoreUnavailable implements SourceRefusal {
   String toString() => message;
 }
 
+/// A stored value this gateway cannot put on the wire (10-REVIEW WR-06).
+///
+/// ## Why a refusal and not a handler failure
+///
+/// `getAll` measures its own answer with `utf8.encode(jsonEncode(all))`, and
+/// `all` comes from a table **other processes write** — an SVN HMI station
+/// writes it directly. A stored non-finite double, or anything else
+/// `jsonEncode` refuses, made that line throw `JsonUnsupportedObjectError`:
+/// neither a [ResultTooLarge] nor a [SourceRefusal], so `_sized` caught
+/// neither and it reached the catch-all as `handlerFailed` (-32011) — which
+/// the wire documents as *possibly transient*. Every settings page that opened
+/// then retried forever a call no retry can fix, which is the precise failure
+/// `_sized` was written to prevent, arriving through the one call site that
+/// encodes early enough to give a good answer.
+///
+/// The gateway's own ingress is clean — `RelaySession._defuse` sanitises every
+/// inbound frame, so `1e999` cannot be *written* through this pipe. The
+/// exposure is the shared table, which is exactly the kind of thing that will
+/// not be fixed by asking nicely.
+///
+/// ## And why it names the key
+///
+/// "Something in the store cannot be encoded" is not actionable; "this key is"
+/// is one `UPDATE` away from fixed. Finding it costs one extra pass, key by
+/// key, on a path that has **already** failed — see `PreferenceStore.getAll`.
+final class UnencodablePreference implements SourceRefusal {
+  const UnencodablePreference(this.key, this.detail);
+
+  /// The preference key whose value could not be encoded, or null if the
+  /// key-by-key pass could not single one out.
+  final String? key;
+
+  /// What `jsonEncode` said, trimmed to its first line.
+  final String detail;
+
+  /// **False.** A value the encoder refuses is refused on every attempt; the
+  /// row has to change first.
+  @override
+  bool get retryable => false;
+
+  @override
+  String get message => key == null
+      ? 'a stored preference holds a value this gateway cannot encode as JSON '
+          '($detail), and the key-by-key pass could not single it out. The '
+          'table is written by other processes — an HMI station writes it '
+          'directly — so this is a row somebody else stored, not one this '
+          'pipe accepted. Read the keys you need with an allowList until it '
+          'is corrected'
+      : 'the preference "$key" holds a value this gateway cannot encode as '
+          'JSON ($detail), so the whole store cannot be read in one call. The '
+          'table is written by other processes — an HMI station writes it '
+          'directly — so this is a row somebody else stored, not one this '
+          'pipe accepted. Correct that row, or read the keys you need with an '
+          'allowList that leaves it out. Retrying unchanged cannot succeed';
+
+  @override
+  String toString() => message;
+}
+
 /// A secure store that refuses every request.
 ///
 /// Installed by the gateway's composition root. The gateway must never read or
@@ -269,7 +328,15 @@ final class PreferenceStore implements PreferencesApi {
   @override
   Future<Map<String, Object?>> getAll({Set<String>? allowList}) async {
     final all = await _allOf(allowList);
-    final encoded = utf8.encode(jsonEncode(all)).length;
+    final String json;
+    try {
+      json = jsonEncode(all);
+    } on JsonUnsupportedObjectError catch (bad) {
+      // 10-REVIEW WR-06. The measurement already has the answer in hand; what
+      // it did not have was a *type* the wire could read as permanent.
+      throw UnencodablePreference(_firstUnencodable(all), _oneLine(bad));
+    }
+    final encoded = utf8.encode(json).length;
     if (encoded > limits.maxPreferenceBytes) {
       throw ResultTooLarge.bytes(
         limit: limits.maxPreferenceBytes,
@@ -296,6 +363,40 @@ final class PreferenceStore implements PreferencesApi {
   /// exists to prevent.
   Future<Map<String, Object?>> _allOf(Set<String>? allowList) async =>
       (await _load()).getAll(allowList: allowList);
+
+  /// The first key in [all] whose value `jsonEncode` refuses, or null.
+  ///
+  /// **One extra pass, on a path that has already failed.** That is the whole
+  /// justification: this runs only after the bulk encode threw, so the cost is
+  /// paid by a request that was not going to be answered anyway — and what it
+  /// buys is the difference between "something in the store" and "this key",
+  /// which is the difference between a support call and an `UPDATE`.
+  ///
+  /// Null is a legitimate answer and is not a failure: a value can be
+  /// unencodable in a way that only shows up in composition (a cycle), and a
+  /// refusal that guessed a key would send somebody to correct a row that is
+  /// fine.
+  static String? _firstUnencodable(Map<String, Object?> all) {
+    for (final entry in all.entries) {
+      try {
+        jsonEncode(<String, Object?>{entry.key: entry.value});
+      } on JsonUnsupportedObjectError {
+        return entry.key;
+      }
+    }
+    return null;
+  }
+
+  /// The first line of [error]'s own message.
+  ///
+  /// The whole `toString()` of a `JsonUnsupportedObjectError` carries the
+  /// offending object, which is the thing that could not be encoded — putting
+  /// it in a refusal that is about to be encoded is the same trap one turn
+  /// later.
+  static String _oneLine(Object error) {
+    final text = error.runtimeType.toString();
+    return text.split('\n').first;
+  }
 
   @override
   Future<bool?> getBool(String key) async => (await _load()).getBool(key);
@@ -387,7 +488,24 @@ final class PreferenceStore implements PreferencesApi {
   /// from the interface.
   @override
   Future<void> clear({Set<String>? allowList}) async {
+    // **Rebuilt first, and the database borrowed once** (10-REVIEW WR-07).
+    //
+    // The key list comes from `Preferences.getKeys`, which reads the in-memory
+    // cache — the file's own TRAP 8 paragraph says so. The cache is only as
+    // fresh as the last [invalidate], which happens on a NOTIFY that the
+    // 250 ms de-duplication window may have suppressed or that arrived while
+    // nothing was listening. So a key another process created since the last
+    // rebuild survived a `clear()` and the call reported success. `clear` is
+    // the one method on this interface whose whole contract is *totality*, and
+    // "everything, as of whenever we last looked" is not it.
+    //
+    // The second, narrower gap on the same lines: [_load] borrowed the
+    // database and the DELETE borrowed it again, so a sink reconnect between
+    // the two awaits deleted rows from one instance using a key list built
+    // from another. One borrow, held across both.
+    invalidate();
     final prefs = await _load();
+    final db = database() ?? _noStore();
     final keys = (await prefs.getKeys(allowList: allowList)).toList();
     if (keys.isEmpty) return;
 
@@ -396,7 +514,7 @@ final class PreferenceStore implements PreferencesApi {
     // is known to bind a key list through this driver.
     final placeholders =
         List.generate(keys.length, (i) => '\$${i + 1}').join(', ');
-    await (database() ?? _noStore()).db.customUpdate(
+    await db.db.customUpdate(
           'DELETE FROM flutter_preferences WHERE key IN ($placeholders)',
           variables: [for (final key in keys) Variable.withString(key)],
           updateKind: UpdateKind.delete,

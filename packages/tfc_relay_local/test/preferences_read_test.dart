@@ -45,6 +45,7 @@ import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
 import 'package:tfc_dart/core/state_man.dart' show KeyMappingEntry, KeyMappings;
 import 'package:tfc_relay_local/src/data/preference_store.dart';
 import 'package:tfc_relay_local/tfc_relay_local.dart';
+import 'package:tfc_relay_protocol/tfc_relay_protocol.dart' show SourceRefusal;
 
 import 'support/timescale_fixture.dart';
 
@@ -279,6 +280,80 @@ void main() {
 
       expect(all['${ns}all1'], 'x');
       expect(all['${ns}all2'], 42);
+    });
+
+    // 10-REVIEW WR-07. The key list came from `Preferences.getKeys`, which
+    // reads the in-memory cache (TRAP 8) — only as fresh as the last
+    // invalidate, which happens on a NOTIFY the 250 ms window may have
+    // suppressed or that arrived while nothing was listening.
+    test('clear deletes what the TABLE holds, not what the cache last saw',
+        () async {
+      final mine = '${ns}stale1';
+      final theirs = '${ns}stale2';
+      await store.setString(mine, 'ours');
+      // The cache is now loaded and knows about `mine` and not about
+      // `theirs`. This is the HMI station at SVN writing the shared table
+      // directly, which is the ordinary case and not an exotic one.
+      await writeBehindTheStore(theirs, 'written by somebody else');
+
+      await store.clear(allowList: {mine, theirs});
+
+      expect(await rowCount(theirs), 0,
+          reason: 'a key another process created since the last cache rebuild '
+              'survived the clear and the call reported success. `clear` is '
+              'the one method on this interface whose whole contract is '
+              'totality, and "everything, as of whenever we last looked" is '
+              'not it');
+      expect(await rowCount(mine), 0,
+          reason: 'and the rebuild must not lose the keys it already had');
+    });
+
+    // 10-REVIEW WR-06. `all` comes from a table other processes write, so a
+    // value jsonEncode refuses is reachable even though this pipe's own
+    // ingress sanitises `1e999` (`relay_session.dart`'s _defuse).
+    test('a stored value the encoder refuses is a PERMANENT refusal naming '
+        'the key', () async {
+      final poisoned = '${ns}poison';
+      // A double the table can hold and JSON cannot. Written behind the store
+      // because it is not writable through it — which is the whole point:
+      // this row is somebody else's.
+      await writeBehindTheStore(poisoned, 'Infinity', 'double');
+      // Registered before the assertions: a poisoned row left behind makes
+      // every later case in this file read an unencodable store, and the
+      // report would name five cases for one defect.
+      addTearDown(() => admin.execute(
+          pg.Sql.named('DELETE FROM flutter_preferences WHERE key = @k'),
+          parameters: {'k': poisoned}));
+
+      final fresh = freshStore();
+      Object? caught;
+      try {
+        await fresh.getAll();
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught, isA<UnencodablePreference>(),
+          reason: 'it used to throw JsonUnsupportedObjectError, which is '
+              'neither ResultTooLarge nor SourceRefusal — so `_sized` caught '
+              'neither and it went out as handlerFailed (-32011), which the '
+              'wire documents as possibly transient. Every settings page that '
+              'opened then retried forever a call no retry can fix');
+      expect((caught! as SourceRefusal).retryable, isFalse,
+          reason: 'this is the bit `_sized` reads to choose INVALID_PARAMS '
+              'over -32011, and it is the whole fix');
+      expect((caught as UnencodablePreference).key, poisoned,
+          reason: 'naming the key is what turns "something in the store" into '
+              'one UPDATE. The key-by-key pass that finds it runs only on a '
+              'path that has already failed');
+      expect(caught.message, contains(poisoned));
+
+      // And the way out still works: the refusal names the allow-list, so a
+      // page that leaves the bad row out is answered.
+      expect(await fresh.getAll(allowList: {'${ns}all1'}), isNotNull,
+          reason: 'an allow-list that excludes the poisoned row must still be '
+              'answered, or the whole store is unreadable until somebody '
+              'finds a psql prompt');
     });
   });
 
