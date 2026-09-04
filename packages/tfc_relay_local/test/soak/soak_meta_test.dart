@@ -2305,6 +2305,39 @@ void main() {
               'has to be beside the constant rather than in a summary');
     });
 
+    test('a HEALED unattributed event still counts — the threshold cannot be '
+        'moved after the fact', () {
+      // **The pin, and the sabotage that produced it.** Redefining
+      // `unattributed` to skip events that healed within thirty seconds — the
+      // most reasonable-sounding relaxation available, and the one a person
+      // staring at a red verdict would reach for — flipped this ledger from
+      // *needed* to *not needed* and left the ENTIRE meta suite green. Nothing
+      // in the repository failed. 11-05b's structural-pin idiom is the answer:
+      // the rule that cannot be checked by a behavioural arm gets asserted
+      // directly.
+      //
+      // 11-CONTEXT ruling 5 counts EVENTS, not survivors: a divergence nobody
+      // could attribute is a divergence nobody could attribute, and whether the
+      // pipe happened to recover from it afterwards is a different question
+      // from whether this harness understood it.
+      final ledger = DivergenceLedger(_ResyncSource())
+        ..record(_event(1, DivergenceCause.lostPush, isControl: true))
+        ..record(_event(2, DivergenceCause.unattributed, healedWithinMs: 1200))
+        ..record(
+            _event(3, DivergenceCause.unattributed, healedWithinMs: 28000));
+
+      expect(ledger.residue, 0,
+          reason: 'both healed, so neither is residue — which is exactly the '
+              'state in which a moved threshold looks harmless');
+      expect(ledger.unattributed, 2,
+          reason: 'a threshold that discounted these two would print "not '
+              'needed" on a run that could not explain two of its own '
+              'divergences. A threshold chosen after seeing the numbers is not '
+              'a threshold');
+      expect(ledger.keyframesNotNeeded, isFalse);
+      expect(ledger.verdictBlock, contains('needed, evidence above'));
+    });
+
     test('the verdict is written to verdict.txt and matches stdout', () {
       final dir = _tempJournal();
       final source = _ResyncSource()..journalPath = dir;
