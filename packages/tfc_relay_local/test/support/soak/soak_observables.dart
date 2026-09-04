@@ -23,6 +23,7 @@ import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import 'applied_write_ledger.dart';
 import 'invariant.dart';
+import 'soak_event.dart';
 
 // ------------------------------------------------------- the run-end pass
 
@@ -536,6 +537,165 @@ abstract interface class SoakLogSource {
   /// server-side twin of the client damping this invariant's control removes,
   /// and watching the damped number is what makes a broken damper visible.
   int get plantIngestLogLines;
+}
+
+// ------------------------------------------------- what invariant 3 reads
+
+/// One panel's convergence surface, as invariant 3 reads it.
+///
+/// It extends [SoakPanelView] rather than duplicating its three members: what
+/// invariant 3 compares against plant truth is *what a widget would render*,
+/// which is exactly what [SoakPanelView.read] answers, and a second read path
+/// would be a second opinion about the same cache.
+///
+/// The three members it adds are the ones the **attribution** needs, and every
+/// one of them is a surface the shipping client already publishes — no lever,
+/// no seam, nothing added to `tfc_relay_client/lib` for this invariant.
+abstract interface class SoakPanelResyncView implements SoakPanelView {
+  /// Whether this panel currently holds an established session —
+  /// `RemoteStateMan.isReady`. The same substitution [SoakPanelLogView] makes,
+  /// for the same reason and with the same caveat.
+  bool get established;
+
+  /// `RemoteStateMan.complaints`, the list itself rather than its length.
+  ///
+  /// **This is where three of the six causes are actually detected.** The
+  /// divergence detectors Phase 7 shipped do not expose a flag — what they
+  /// expose is a sentence on this list: `connection_supervisor.dart:684-685`
+  /// for an unannounced handle, `:775` for a tick-sequence mismatch that
+  /// survived its rebuild, and `resync_engine.dart:207-209` for a page that
+  /// could not be re-established. Reading the strings is reading the shipped
+  /// detector's own verdict, which is what the plan means by building the
+  /// taxonomy from the gate's arms rather than from first principles.
+  List<String> get complaints;
+
+  /// How many times the **gateway** has rebuilt this panel's page.
+  ///
+  /// `SubscriptionState.generation`, the same reading
+  /// `divergence_gate_test.dart:_rebuildsServed` and
+  /// `resync_gate_test.dart:_rebuildsServed` both take: one generation is
+  /// minted per subscribe, so the delta is the number of rebuilds the gateway
+  /// served this page. It is the only public evidence that the tick-sequence
+  /// detector fired on a divergence it then healed — the healing path leaves
+  /// no complaint behind, deliberately (`connection_supervisor.dart:769-782`
+  /// damps to one line per subscription per connection and only when the
+  /// rebuild did **not** fix it).
+  int get pageRebuilds;
+}
+
+/// What invariant 3 and the divergence ledger read.
+///
+/// **Plant truth is on this interface and not derived by the checker**, which
+/// is the plan's own instruction restated: the soak scripted the mutation, so
+/// the expected value at any offset is a lookup into the artifact everybody is
+/// already reading rather than a second reading of the client. A checker that
+/// asked the client twice would be comparing a cache with itself.
+abstract interface class SoakResyncSource {
+  /// The run's seed, so a divergence can be reproduced from its own text.
+  int get seed;
+
+  /// What the run was declared to be. Floors scale off this.
+  Duration get declaredDuration;
+
+  /// The play clock.
+  Duration get scheduleOffset;
+
+  /// The panel the storm may never aim at.
+  int get controlPanelIndex;
+
+  /// How many plant-wide arms the storm has applied so far.
+  ///
+  /// The same counter invariants 1 and 4 read, for 11-03's reason: the
+  /// control's property is *"the storm never AIMS at it"* and never *"it is
+  /// never disturbed"*. A gateway restart, a keymapping reload and every
+  /// upstream arm reach the control like everybody else, so the control's
+  /// convergence arm judges only the windows across which this counter did not
+  /// move.
+  int get plantWideArmsApplied;
+
+  /// Every panel's convergence surface, control first.
+  List<SoakPanelResyncView> get panelResyncViews;
+
+  /// The keys convergence is judged over — the same list invariant 1 reads,
+  /// with the `PIPE.` health namespace excluded **by the checker** rather than
+  /// here, for 08-PATTERNS freeze 8's reason.
+  List<String> get freshnessKeys;
+
+  /// Where the timeline says the storm is silent.
+  ///
+  /// Computed at generation time by `computeStableWindows`, so the checker is
+  /// told *where to look* instead of watching for quiet reactively. This is
+  /// the gift of a pure generator that 11-RESEARCH §B.3 names, and it is why
+  /// invariant 3 can fail loudly on a run that produced no windows rather than
+  /// passing vacuously on one that never went quiet.
+  List<StableWindow> get stableWindows;
+
+  /// The value the plant is publishing for [key] right now, or null when no
+  /// link carries it.
+  SoakPlantTruth? plantTruthFor(String key);
+
+  /// How often the plant moves every key — `soakSweepPeriod`.
+  Duration get plantSweepPeriod;
+
+  /// The aliases whose upstream epoch the storm has bumped so far.
+  ///
+  /// An epoch bump forces a re-browse and legitimately marks that link's keys
+  /// bad-quality until it completes (`epoch.dart:26`), which is the one cause
+  /// in the taxonomy that is the system working rather than failing.
+  Set<String> get epochBumpedAliases;
+
+  /// Where `verdict.txt` goes, beside the rest of the run's artifact.
+  String get journalPath;
+}
+
+/// What the plant is publishing for one key, and how the soak knows.
+///
+/// Two shapes, because the fixture has two: `GateBPlantDriver` sweeps every
+/// clean key to one monotonically increasing integer every
+/// [SoakResyncSource.plantSweepPeriod], and a `PlantMutate` entry overrides one
+/// key to a fixed value that is then republished every cycle for the rest of
+/// the run (`gate_b_fixture.dart:overrideRaw` — *"the device does not poison
+/// one sample and recover, it keeps reporting the poison"*).
+///
+/// The distinction is not cosmetic. An overridden key is judged on **equality**
+/// because its expected value stands still; a swept key is judged on **lag in
+/// sweeps**, because demanding instantaneous equality of a value that changes
+/// four times a second would report the wire's own transit time as a
+/// divergence — two hundred of them per sample, on a healthy pipe.
+final class SoakPlantTruth {
+  const SoakPlantTruth({
+    required this.value,
+    required this.overridden,
+    this.sweepIndex,
+  });
+
+  /// What the plant last published for this key.
+  final Object? value;
+
+  /// Whether a `PlantMutate` set it. Overridden keys are judged on equality.
+  final bool overridden;
+
+  /// The sweep counter's current value, for a key the plant sweeps.
+  ///
+  /// Null for an overridden key, whose expected value no longer moves with the
+  /// counter.
+  final int? sweepIndex;
+
+  /// The quality a value straight off this plant carries.
+  ///
+  /// **Always good, and that is the point of comparing quality at all.** The
+  /// fake plant publishes nothing degraded; every `badStale`, `badCommFault`
+  /// or `uncertainNotYetKnown` a panel renders was produced by the pipe — the
+  /// gateway's freshness sweep, an epoch bump, a snapshot that has not landed.
+  /// A checker that compared value alone would call a panel converged while it
+  /// renders the right number under a quality the plant never sent, which is
+  /// exactly the epoch path and would hide it entirely.
+  Quality get quality => Quality.good;
+
+  @override
+  String toString() => overridden
+      ? '$value (overridden)'
+      : '$value (sweep ${sweepIndex ?? '?'})';
 }
 
 // -------------------------------------------------- the shared observable

@@ -46,10 +46,13 @@ import 'package:test/test.dart';
 import '../support/soak/applied_write_ledger.dart';
 import '../support/soak/checkers/bounded_logs.dart';
 import '../support/soak/checkers/bounded_memory.dart';
+import '../support/soak/checkers/eventual_resync.dart';
 import '../support/soak/checkers/freshness_honesty.dart';
 import '../support/soak/checkers/terminal_state.dart';
+import '../support/soak/divergence_ledger.dart';
 import '../support/soak/invariant.dart';
 import '../support/soak/soak_driver.dart';
+import '../support/soak/soak_event.dart';
 import '../support/soak/soak_journal.dart';
 import '../support/soak/soak_observables.dart';
 import '../support/soak/soak_timeline.dart';
@@ -161,6 +164,29 @@ List<SoakCheckerRegistration> soakCheckers(SoakDriver Function() driver) =>
       // is caught at +40 s rather than at +60 s.
       SoakCheckerRegistration.checkpoint(
           BoundedLogsChecker(_LateSource(driver))),
+      // Invariant 3 and the ledger, built as a pair because the checker is the
+      // only thing that records into the ledger and the ledger's floor is the
+      // checker's control. Registering them separately would be two objects
+      // nobody could tell were wired together; registering only one would leave
+      // the other outside the audit that makes an empty ledger loud.
+      ...() {
+        final source = _LateSource(driver);
+        final ledger = DivergenceLedger(source);
+        return <SoakCheckerRegistration>[
+          // At the plant's own sweep period rather than the checkpoint cadence:
+          // a ten-second window sampled every five seconds gets two readings,
+          // which cannot measure a convergence time and cannot tell a
+          // divergence that healed in the first second from one that survived
+          // the window. See `resyncCheckerCadence`.
+          SoakCheckerRegistration(
+              EventualResyncChecker(source, ledger), resyncCheckerCadence),
+          // The ledger records nothing on its own tick — the checker feeds it —
+          // but it streams what it holds to `divergences.jsonl` at the
+          // checkpoint cadence, so a thirty-five-minute run whose retained list
+          // overflowed still has every event on disk.
+          SoakCheckerRegistration.checkpoint(ledger),
+        ];
+      }(),
     ];
 
 /// A [SoakFreshnessSource] that resolves its driver on every call.
@@ -174,10 +200,29 @@ final class _LateSource
         SoakFreshnessSource,
         SoakWriteSource,
         SoakStructureSource,
-        SoakLogSource {
+        SoakLogSource,
+        SoakResyncSource {
   const _LateSource(this._driver);
 
   final SoakDriver Function() _driver;
+
+  @override
+  List<SoakPanelResyncView> get panelResyncViews => _driver().panelResyncViews;
+
+  @override
+  List<StableWindow> get stableWindows => _driver().stableWindows;
+
+  @override
+  Duration get plantSweepPeriod => _driver().plantSweepPeriod;
+
+  @override
+  Set<String> get epochBumpedAliases => _driver().epochBumpedAliases;
+
+  @override
+  SoakPlantTruth? plantTruthFor(String key) => _driver().plantTruthFor(key);
+
+  @override
+  String get journalPath => _driver().journalPath;
 
   @override
   int get seed => _driver().seed;
@@ -262,6 +307,10 @@ Future<SoakDriver> _runSoak(
     final checker = one.checker;
     if (checker is BoundedMemoryChecker) print(checker.spreadReport);
     if (checker is BoundedLogsChecker) print(checker.spreadReport);
+    // The measurement `minStableWindow` is judged against. 11-PLAN-INDEX
+    // assumption A4 says N is measured rather than inherited, and a
+    // measurement that stops being printed stops being a measurement.
+    if (checker is EventualResyncChecker) print(checker.convergenceReport);
   }
 
   final registered = <InvariantChecker>[
@@ -403,21 +452,24 @@ void main() {
         containsAll(<String>[
           freshnessHonesty,
           terminalStateWrites,
+          eventualResync,
           boundedMemory,
           boundedLogs,
+          divergenceLedger,
         ]),
         reason: '11-04 registers invariants 1 and 2, 11-05 registers 4 and 5, '
             'and 11-06 appends the last two to the same list');
-    expect(checkers, hasLength(4));
+    expect(checkers, hasLength(declaredCheckers.length));
     expect(
         <String>[
           for (final name in declaredCheckers)
             if (!checkers.map((one) => one.name).contains(name)) name,
         ],
-        <String>[eventualResync, divergenceLedger],
-        reason: 'the two that are still pending must be exactly these, and the '
-            'verdict block names them so the audit reads as INCOMPLETE rather '
-            'than as complete and passing');
+        isEmpty,
+        reason: 'every declared name now has a checker behind it: 11-06 was '
+            'the last wave with entries pending, so a name printing as PENDING '
+            'in the verdict block from here on means a registration was lost '
+            'rather than that a plan has not run yet');
     expect(
         () => assertEveryCheckerIsDeclared(checkers, declaredCheckers),
         returnsNormally);

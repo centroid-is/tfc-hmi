@@ -30,6 +30,7 @@ library;
 import 'dart:io';
 
 import 'package:test/test.dart';
+import 'package:tfc_relay_client/tfc_relay_client.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_relay_server/src/write_outcome_log.dart';
 import 'package:tfc_relay_server/tfc_relay_server.dart';
@@ -37,11 +38,15 @@ import 'package:tfc_relay_server/tfc_relay_server.dart';
 import '../support/soak/applied_write_ledger.dart';
 import '../support/soak/checkers/bounded_logs.dart';
 import '../support/soak/checkers/bounded_memory.dart';
+import '../support/soak/checkers/eventual_resync.dart';
 import '../support/soak/checkers/freshness_honesty.dart';
 import '../support/soak/checkers/terminal_state.dart';
+import '../support/soak/divergence_ledger.dart';
 import '../support/soak/invariant.dart';
 import '../support/soak/soak_driver.dart';
+import '../support/soak/soak_event.dart';
 import '../support/soak/soak_observables.dart';
+import '../support/soak/soak_timeline.dart';
 import 'soak_registry.dart';
 
 void main() {
@@ -1787,6 +1792,788 @@ void main() {
       expect(entry.reasoning, contains('long_outage_gate_test.dart:71-83'));
     });
   });
+
+  group('invariant 3: eventual resync in the windows the timeline generated',
+      () {
+    test('a panel holding the sweep the plant last wrote is converged, and one '
+        'sweep behind still is', () {
+      final source = _ResyncSource();
+      final checker = _resync(source);
+      source.plantSweep = 100;
+      source.panel(1).say(_resyncKey, 100);
+      source.panel(2).say(_resyncKey, 99);
+
+      source.scheduleOffset = source.insideWindow(0);
+      checker.takeReading(_at(source.insideWindow(0)));
+
+      expect(checker.ledger.total, 0,
+          reason: 'the plant moves every key every 250 ms and the pipe is '
+              'asynchronous, so a sample taken between a sweep and its '
+              'delivery legitimately sees the previous value. Demanding '
+              'instantaneous equality would report the wire\'s own transit '
+              'time as a divergence — two hundred of them per sample on a '
+              'healthy pipe, which is the flood convergedLagSweeps exists to '
+              'prevent');
+    });
+
+    test('two sweeps behind AT THE WINDOW\'S END is a divergence, and it is '
+        'handed to the ledger with a cause rather than counted', () {
+      final source = _ResyncSource();
+      final checker = _resync(source);
+      source.plantSweep = 100;
+      source.panel(1).say(_resyncKey, 97);
+
+      _judgeWindow(checker, source);
+      checker.finish();
+
+      expect(checker.ledger.total, 1);
+      final event = checker.ledger.entries.single;
+      expect(event.key, _resyncKey);
+      expect(event.panelId, 'panel-1');
+      expect(event.clientValue, 97,
+          reason: 'the record carries what the JUDGEMENT INSTANT saw. A healed '
+              'divergence whose record showed the healed values would say the '
+              'panel and the plant agreed, which is the one thing it did not '
+              'do — and the first lane run recorded exactly that before this '
+              'arm existed');
+      expect(event.plantValue, 100);
+      expect(event.windowIndex, 0,
+          reason: 'the window it was judged in is on the record, because a '
+              'divergence inside a window the timeline guaranteed was quiet '
+              'means something different from one outside it');
+    });
+
+    test('a key that is behind at a window\'s START and catches up before its '
+        'END is MEASURED, not recorded', () {
+      final source = _ResyncSource();
+      final checker = _resync(source);
+      source.plantSweep = 100;
+      source.panel(1).say(_resyncKey, 60);
+
+      source.scheduleOffset = source.insideWindow(0);
+      checker.takeReading(_at(source.insideWindow(0)));
+      source.panel(1).say(_resyncKey, 100);
+      source.scheduleOffset = source.insideWindow(0, plus: const Duration(seconds: 3));
+      checker.takeReading(
+          _at(source.insideWindow(0, plus: const Duration(seconds: 3))));
+      source.scheduleOffset = source.afterWindow(0);
+      checker.takeReading(_at(source.afterWindow(0)));
+      checker.finish();
+
+      expect(checker.ledger.total, 0,
+          reason: 'a panel still catching up from a fault armed BEFORE the '
+              'window is the pipe recovering, and the window exists to give it '
+              'room. Counting it would make this artifact a record of the '
+              'storm rather than of what survived it — the first lane run '
+              'produced 124 such events, 119 of them mis-attributed');
+      expect(checker.convergenceReport, contains('in-window convergence (ms)'));
+      expect(checker.convergenceReport, contains('n=1'),
+          reason: 'it is not an event, but it IS the measurement '
+              'minStableWindow is judged against, so it has to be counted '
+              'somewhere');
+      expect(checker.marginNote, contains('window margin'));
+    });
+
+    test('the right value under the wrong quality is a divergence — this is '
+        'the arm that keeps the epoch path visible', () {
+      final source = _ResyncSource();
+      final checker = _resync(source);
+      source.plantSweep = 100;
+      source.panel(1).sayWithQuality(_resyncKey, 100, Quality.badStale);
+
+      _judgeWindow(checker, source);
+      checker.finish();
+
+      expect(checker.ledger.total, 1,
+          reason: 'a panel rendering the right number under a quality the '
+              'plant never sent has stopped vouching for it, and comparing '
+              'value alone would report the entire epochChange cause as '
+              'convergence');
+      expect(checker.ledger.entries.single.clientQuality, Quality.badStale);
+      expect(checker.ledger.entries.single.plantQuality, Quality.good);
+    });
+
+    test('PIPE. keys are excluded by prefix, because the gateway produces them '
+        'and the plant does not', () {
+      final source = _ResyncSource(keys: <String>[_resyncKey, 'PIPE.connected']);
+      final checker = _resync(source);
+      source.plantSweep = 100;
+      source.panel(1).say(_resyncKey, 100);
+      source.panel(1).say('PIPE.connected', false);
+
+      _judgeWindow(checker, source);
+      checker.finish();
+
+      expect(checker.ledger.total, 0,
+          reason: 'there is no plant truth for a health key, so comparing one '
+              'would be comparing against nothing');
+    });
+
+    test('a divergence that heals after its window carries healedWithinMs; one '
+        'that never heals carries null', () {
+      final source = _ResyncSource();
+      final checker = _resync(source);
+      source.plantSweep = 100;
+      source.panel(1).say(_resyncKey, 60);
+      source.panel(2).say(_resyncKey, 60);
+
+      _judgeWindow(checker, source);
+      // panel-1 catches up two seconds past the window's end; panel-2 never
+      // does.
+      source.panel(1).say(_resyncKey, 100);
+      source.scheduleOffset =
+          source.afterWindow(0) + const Duration(seconds: 2);
+      checker.takeReading(
+          _at(source.afterWindow(0) + const Duration(seconds: 2)));
+      checker.finish();
+
+      final byPanel = <String, DivergenceEvent>{
+        for (final one in checker.ledger.entries) one.panelId: one,
+      };
+      expect(byPanel['panel-1']!.healedWithinMs, 2000,
+          reason: 'measured from the window\'s end, which is the instant the '
+              'invariant is about');
+      expect(byPanel['panel-1']!.isResidue, isFalse);
+      expect(byPanel['panel-2']!.healedWithinMs, isNull,
+          reason: 'null is the residue discriminator: it survived the interval '
+              'in which the timeline guaranteed nothing was armed, and then '
+              'survived everything after it');
+      expect(byPanel['panel-2']!.isResidue, isTrue);
+      expect(checker.ledger.residue, 1);
+      expect(checker.ledger.healed, 1);
+    });
+
+    test('a window that compared nothing is not a window, and says so', () {
+      final source = _ResyncSource();
+      final checker = _resync(source);
+      source.plantSweep = 100;
+      // No panel holds a value: every read answers null, so nothing is
+      // comparable.
+      source.scheduleOffset = source.insideWindow(0);
+      checker.takeReading(_at(source.insideWindow(0)));
+      source.scheduleOffset = source.afterWindow(0);
+      checker.takeReading(_at(source.afterWindow(0)));
+
+      expect(checker.judgedSamples, 0,
+          reason: 'judgedSamples counts WINDOWS MEASURED, and a window in '
+              'which every panel was down measured nothing');
+      expect(checker.violations, hasLength(1));
+      expect(checker.violations.single.detail, contains('compared ZERO keys'));
+    });
+
+    test('a run with no stable windows fails loudly, naming the number found '
+        'and the number required', () {
+      final source = _ResyncSource(windows: const <StableWindow>[]);
+      final checker = _resync(source);
+      checker.finish();
+
+      expect(checker.judgedSamples, 0);
+      expect(checker.violations, hasLength(1));
+      final detail = checker.violations.single.detail;
+      expect(detail, contains('ZERO stable windows'));
+      expect(detail, contains('against a floor of'));
+      expect(detail, contains('TIMELINE problem'),
+          reason: 'the fix is the quiet-window cadence in soak_timeline.dart, '
+              'and a checker that failed without saying so would send the '
+              'reader to the wrong file');
+      expect(checker.violations.single.observed, 0);
+      expect(checker.violations.single.expected,
+          checker.minimumSamplesForAVerdict);
+    });
+
+    test('the window floor is one fewer than the timeline generates, at both '
+        'durations', () {
+      final lane = _ResyncSource()..declaredDuration = const Duration(seconds: 90);
+      final full = _ResyncSource()..declaredDuration = const Duration(minutes: 35);
+
+      expect(computeStableWindows(const Duration(seconds: 90)), hasLength(3),
+          reason: 'the quiet-fraction cap binds at ninety seconds: three '
+              'windows of ten. If this number moved, 11-02\'s generator '
+              'changed and the floor below moved with it');
+      expect(computeStableWindows(const Duration(minutes: 35)), hasLength(8),
+          reason: 'the cadence term binds at thirty-five minutes: eight '
+              'windows of twenty');
+      expect(_resync(lane).minimumSamplesForAVerdict, 2);
+      expect(_resync(full).minimumSamplesForAVerdict, 7,
+          reason: 'one window of slack, because the storm is entitled to take '
+              'panels down and 11-05 measured a run in which panel-1 was '
+              'absent for the last fifteen minutes');
+    });
+
+    test('the never-faulted control panel diverging in an UNDISTURBED window '
+        'is a violation', () {
+      final source = _ResyncSource();
+      final checker = _resync(source);
+      source.plantSweep = 100;
+      source.panel(0).say(_resyncKey, 80);
+
+      source.scheduleOffset = source.insideWindow(0);
+      checker.takeReading(_at(source.insideWindow(0)));
+      source.scheduleOffset = source.afterWindow(0);
+      checker.takeReading(_at(source.afterWindow(0)));
+      checker.finish();
+
+      expect(checker.violations, hasLength(1));
+      expect(checker.violations.single.panel, 'panel-0');
+      expect(checker.violations.single.detail, contains('pre-07-08b'));
+    });
+
+    test('the control panel is NOT judged across a window the storm disturbed '
+        'plant-wide', () {
+      final source = _ResyncSource();
+      final checker = _resync(source);
+      source.plantSweep = 100;
+      source.panel(0).say(_resyncKey, 80);
+
+      source.scheduleOffset = source.insideWindow(0);
+      checker.takeReading(_at(source.insideWindow(0)));
+      // A gateway restart, a keymapping reload or an upstream arm — plant-wide,
+      // and it reaches the control like everybody else.
+      source.plantWideArmsApplied = 1;
+      source.scheduleOffset = source.insideWindow(0, plus: const Duration(seconds: 2));
+      checker.takeReading(_at(source.insideWindow(0, plus: const Duration(seconds: 2))));
+      source.scheduleOffset = source.afterWindow(0);
+      checker.takeReading(_at(source.afterWindow(0)));
+      checker.finish();
+
+      expect(checker.violations, isEmpty,
+          reason: 'the control\'s property is "the storm never AIMS at it", '
+              'NOT "it is never disturbed" (11-03). Getting this wrong makes '
+              'the strongest arm in the soak flaky rather than strong');
+      expect(checker.ledger.total, 1,
+          reason: 'the divergence is still on the RECORD — only the control '
+              'ARM declines to judge it');
+    });
+  });
+
+  group('the divergence ledger and its six attributed causes', () {
+    test('resyncFailure: the client wrote it down and the keyframe answer is '
+        'no', () {
+      final source = _ResyncSource();
+      final checker = _resync(source);
+      source.plantSweep = 100;
+      source.panel(1).say(_resyncKey, 60);
+
+      _judgeWindow(checker, source);
+      source.panel(1).complaints.add('"$defaultPageSubscription" '
+          '$unestablishedComplaint: Bad state. Its values are gone from the '
+          'cache rather than left on screen under good quality');
+      checker.finish();
+
+      expect(checker.ledger.entries.single.cause,
+          DivergenceCause.resyncFailure);
+      expect(checker.ledger.residueOf(DivergenceCause.resyncFailure), 1,
+          reason: 'keyframes do not arrive on a subscription that does not '
+              'exist, so this one stays in residue and reopens the decision '
+              'pointing at a different fix');
+    });
+
+    test('unknownHandle: a `u` naming a handle the session never announced',
+        () {
+      final source = _ResyncSource();
+      final checker = _resync(source);
+      source.plantSweep = 100;
+      source.panel(1).say(_resyncKey, 60);
+
+      _judgeWindow(checker, source);
+      source.panel(1).complaints.add('update for '
+          '"$defaultPageSubscription" named handle 9999, '
+          '$unknownHandleComplaint');
+      checker.finish();
+
+      expect(checker.ledger.entries.single.cause,
+          DivergenceCause.unknownHandle);
+    });
+
+    test('epochChange: recorded, and excluded from residue — both halves', () {
+      final source = _ResyncSource();
+      final checker = _resync(source);
+      source.plantSweep = 100;
+      source.epochBumpedAliases.add('ST101');
+      source.panel(1).sayWithQuality(_resyncKey, 100, Quality.badCommFault);
+
+      _judgeWindow(checker, source);
+      checker.finish();
+
+      expect(checker.ledger.entries.single.cause, DivergenceCause.epochChange,
+          reason: 'an epoch bump legitimately marks the link\'s keys bad '
+              'until the re-browse completes — the system working');
+      expect(checker.ledger.total, 1,
+          reason: 'EXCLUDED FROM RESIDUE, NEVER FROM THE RECORD: the event is '
+              'in entries with its nth and its schedule offset, and it is '
+              'streamed to the journal like every other');
+      expect(checker.ledger.residueOf(DivergenceCause.epochChange), 1);
+      expect(checker.ledger.residue, 0,
+          reason: 'counted into residue it would dominate — the storm bumps '
+              'epochs on purpose — and a residue dominated by the expected '
+              'case hides whatever real finding sits under it');
+      expect(checker.ledger.keyframesNotNeeded, isTrue);
+    });
+
+    test('generationChange: the judgement instant straddled a rebuild, and it '
+        'stays in residue because it is a DETECTOR bug', () {
+      final source = _ResyncSource();
+      final checker = _resync(source);
+      source.plantSweep = 100;
+      source.panel(1).say(_resyncKey, 60);
+
+      source.scheduleOffset = source.insideWindow(0);
+      checker.takeReading(_at(source.insideWindow(0)));
+      // The gateway rebuilt the page between the sample before the window's
+      // last one and the window's last one.
+      source.panel(1).pageRebuilds = 4;
+      source.scheduleOffset =
+          source.insideWindow(0, plus: const Duration(seconds: 3));
+      checker.takeReading(
+          _at(source.insideWindow(0, plus: const Duration(seconds: 3))));
+      source.scheduleOffset = source.afterWindow(0);
+      checker.takeReading(_at(source.afterWindow(0)));
+      checker.finish();
+
+      expect(checker.ledger.entries.single.cause,
+          DivergenceCause.generationChange);
+      expect(checker.ledger.residue, 1,
+          reason: 'discarding a replayed batch is correct, so a divergence '
+              'attributed here means this checker compared a pre-snapshot '
+              'cache with post-snapshot plant truth — a detector that cannot '
+              'be trusted makes the verdict untrustworthy, and the verdict '
+              'should say so rather than quietly subtract it');
+    });
+
+    test('lostPush: an established page holding a superseded value under GOOD '
+        'quality, on a page the gateway then rebuilt', () {
+      final source = _ResyncSource();
+      final checker = _resync(source);
+      source.plantSweep = 100;
+      source.panel(1).pageRebuilds = 3;
+      source.panel(1).say(_resyncKey, 60);
+
+      _judgeWindow(checker, source);
+      // The tick-sequence detector fires and rebuilds the page. That rebuild is
+      // the only public trace it leaves when it works.
+      source.panel(1).pageRebuilds = 4;
+      source.scheduleOffset =
+          source.afterWindow(0) + const Duration(seconds: 1);
+      checker.takeReading(
+          _at(source.afterWindow(0) + const Duration(seconds: 1)));
+      checker.finish();
+
+      expect(checker.ledger.entries.single.cause, DivergenceCause.lostPush,
+          reason: 'this is the case a periodic snapshot exists for — '
+              '07-RESEARCH-PUBSUB Part 14 case 2 — and the doc on the enum arm '
+              'says so where the reader of "lostPush=14" will find it');
+      expect(checker.ledger.entries.single.generation, 4,
+          reason: 'the generation is on the record because it is how G1 is '
+              'told from G4');
+    });
+
+    test('unattributed: a panel behind the plant that no mechanism explains',
+        () {
+      final source = _ResyncSource();
+      final checker = _resync(source);
+      source.plantSweep = 100;
+      source.panel(1)
+          .sayWithQuality(_resyncKey, 60, Quality.uncertainNotYetKnown);
+
+      _judgeWindow(checker, source);
+      checker.finish();
+
+      expect(checker.ledger.entries.single.cause,
+          DivergenceCause.unattributed);
+      expect(checker.ledger.unattributed, 1);
+      expect(checker.ledger.keyframesNotNeeded, isFalse,
+          reason: 'unattributed IS the verdict number — 11-CONTEXT ruling 5');
+    });
+
+    test('a widened lostPush detector cannot be told from a clean verdict, '
+        'which is why every cause reads a surface the CLIENT publishes', () {
+      // The taxonomy's six detectors read: two complaint strings quoted from
+      // the client verbatim, the epoch bumps the DRIVER applied, the gateway's
+      // own generation counter, and the quality on the value. Not one of them
+      // reads a flag this harness planted — which is the property that makes
+      // "widen it until unattributed reaches zero" a change somebody has to
+      // argue for rather than one that hides in a boolean.
+      final ledgerSource = File(
+              'test/support/soak/checkers/eventual_resync.dart')
+          .readAsStringSync();
+      for (final surface in <String>[
+        'unestablishedComplaint',
+        'unknownHandleComplaint',
+        'lostPushSurvivedRebuild',
+        'epochBumpedAliases',
+        'pageRebuilds',
+      ]) {
+        expect(ledgerSource, contains(surface),
+            reason: 'the detector for one of the six stopped reading the '
+                'shipped surface it was built from: $surface');
+      }
+    });
+
+    test('the ledger is bounded and the overflow is counted', () {
+      final source = _ResyncSource();
+      final ledger = DivergenceLedger(source, capacity: 3);
+      for (var i = 1; i <= 10; i++) {
+        ledger.record(_event(i, DivergenceCause.unattributed));
+      }
+
+      expect(ledger.entries, hasLength(3),
+          reason: 'a single stuck panel diverges on every key of every '
+              'sample; retaining them would make this artifact the unbounded '
+              'growth invariant 4 is asserting against');
+      expect(ledger.entries.first.nth, 1,
+          reason: 'the FIRST is kept rather than the last: what a soak needs '
+              'is when the divergence started');
+      expect(ledger.overflow, 7);
+      expect(ledger.total, 10,
+          reason: 'the counters are maintained outside the retained list, so a '
+              'capped ledger still reports the whole run — a cap without a '
+              'counter would report three for a run that had ten');
+      expect(ledger.verdictBlock, contains('total divergence events         : 10'));
+      expect(ledger.verdictBlock, contains('capped at 3'));
+    });
+  });
+
+  group('the keyframe verdict, against a threshold set before the run', () {
+    test('the block prints in the exact specified shape, line by line', () {
+      final source = _ResyncSource()..seed = 11;
+      final ledger = DivergenceLedger(source)
+        ..record(_event(1, DivergenceCause.lostPush, isControl: true));
+      final lines = ledger.verdictBlock.split('\n');
+
+      expect(lines[0], 'divergence verdict (seed=11, duration=90s, panels=3):');
+      expect(lines[1], '  total divergence events         : 0');
+      expect(lines[2], '  healed within the stable window : 0');
+      expect(lines[3], '  RESIDUE (unhealed at window end): 0');
+      expect(lines[4],
+          '  residue by cause: lostPush=0 unknownHandle=0 generationChange=0');
+      expect(lines[5],
+          '                    resyncFailure=0 epochChange=0 unattributed=0');
+      expect(lines[6], '  KEYFRAME VERDICT: not needed');
+      expect(lines[7], contains('ledger control: 1 event recorded, '
+          'attributed lostPush'));
+      expect(lines, hasLength(8),
+          reason: 'this block is pasted into the milestone audit, quoted in '
+              'STATE.md and read months from now. A shape that drifts between '
+              'runs is a shape nobody can diff, so drift fails here');
+    });
+
+    test('one unhealed unattributed event prints NEEDED', () {
+      final ledger = DivergenceLedger(_ResyncSource())
+        ..record(_event(1, DivergenceCause.lostPush, isControl: true))
+        ..record(_event(2, DivergenceCause.unattributed));
+
+      expect(ledger.unattributed, 1);
+      expect(ledger.residue, 1);
+      expect(ledger.verdictBlock, contains('KEYFRAME VERDICT: needed, '
+          'evidence above'));
+    });
+
+    test('an empty ledger whose control FIRED prints not needed; one whose '
+        'control did NOT fire prints neither and fails the vacuity gate', () {
+      final fired = DivergenceLedger(_ResyncSource())
+        ..record(_event(1, DivergenceCause.lostPush, isControl: true));
+      expect(fired.verdictBlock, contains('KEYFRAME VERDICT: not needed'));
+      expect(() => assertNoVacuousVerdict(<InvariantChecker>[fired]),
+          returnsNormally);
+
+      final silent = DivergenceLedger(_ResyncSource());
+      expect(silent.controlLine, contains('DID NOT FIRE'));
+      expect(silent.controlLine, contains('T-11-25'));
+      expect(silent.judgedSamples, 0);
+      expect(
+          () => assertNoVacuousVerdict(<InvariantChecker>[silent]),
+          throwsA(isA<TestFailure>().having((one) => one.message, 'message',
+              contains('divergenceLedger'))),
+          reason: 'a ledger that recorded nothing all run reads exactly like a '
+              'clean verdict, so the number must never be read without the '
+              'evidence that the recorder works');
+    });
+
+    test('the threshold is zero, it is a named constant, and it cites the '
+        'ruling that set it before the run', () {
+      expect(keyframeVerdictThreshold, 0,
+          reason: '11-CONTEXT ruling 5 — the strictest honest reading of the '
+              'user\'s ruling. There is no tolerance band, because a threshold '
+              'chosen after seeing the numbers is a description of the numbers '
+              'wearing a threshold\'s clothes');
+
+      final source = File('test/support/soak/divergence_ledger.dart')
+          .readAsStringSync();
+      expect(source, contains('11-CONTEXT ruling 5'));
+      expect(source, contains('set before the run'),
+          reason: 'the citation is what makes the verdict defensible, and it '
+              'has to be beside the constant rather than in a summary');
+    });
+
+    test('a HEALED unattributed event still counts — the threshold cannot be '
+        'moved after the fact', () {
+      // **The pin, and the sabotage that produced it.** Redefining
+      // `unattributed` to skip events that healed within thirty seconds — the
+      // most reasonable-sounding relaxation available, and the one a person
+      // staring at a red verdict would reach for — flipped this ledger from
+      // *needed* to *not needed* and left the ENTIRE meta suite green. Nothing
+      // in the repository failed. 11-05b's structural-pin idiom is the answer:
+      // the rule that cannot be checked by a behavioural arm gets asserted
+      // directly.
+      //
+      // 11-CONTEXT ruling 5 counts EVENTS, not survivors: a divergence nobody
+      // could attribute is a divergence nobody could attribute, and whether the
+      // pipe happened to recover from it afterwards is a different question
+      // from whether this harness understood it.
+      final ledger = DivergenceLedger(_ResyncSource())
+        ..record(_event(1, DivergenceCause.lostPush, isControl: true))
+        ..record(_event(2, DivergenceCause.unattributed, healedWithinMs: 1200))
+        ..record(
+            _event(3, DivergenceCause.unattributed, healedWithinMs: 28000));
+
+      expect(ledger.residue, 0,
+          reason: 'both healed, so neither is residue — which is exactly the '
+              'state in which a moved threshold looks harmless');
+      expect(ledger.unattributed, 2,
+          reason: 'a threshold that discounted these two would print "not '
+              'needed" on a run that could not explain two of its own '
+              'divergences. A threshold chosen after seeing the numbers is not '
+              'a threshold');
+      expect(ledger.keyframesNotNeeded, isFalse);
+      expect(ledger.verdictBlock, contains('needed, evidence above'));
+    });
+
+    test('the verdict is written to verdict.txt and matches stdout', () {
+      final dir = _tempJournal();
+      final source = _ResyncSource()..journalPath = dir;
+      final ledger = DivergenceLedger(source)
+        ..record(_event(1, DivergenceCause.lostPush, isControl: true))
+        ..finish();
+
+      final written = File('$dir/$verdictFileName').readAsStringSync();
+      expect(written.trim(), ledger.verdictBlock.trim(),
+          reason: '11-07 uploads this file as the CI artifact; a copy that '
+              'differed from stdout would be two verdicts for one run');
+    });
+
+    test('a NEEDED verdict records no violation — residue is evidence about a '
+        'design decision, not a broken pipe', () {
+      final ledger = DivergenceLedger(_ResyncSource())
+        ..record(_event(1, DivergenceCause.lostPush, isControl: true))
+        ..record(_event(2, DivergenceCause.unattributed))
+        ..record(_event(3, DivergenceCause.unattributed));
+
+      expect(ledger.verdictBlock, contains('needed, evidence above'));
+      expect(ledger.violations, isEmpty,
+          reason: 'conflating the two would make the keyframe question '
+              'un-askable without a red build, which is the one way to '
+              'guarantee nobody ever asks it. The test fails on invariant '
+              'violations; the verdict is a finding for the user');
+    });
+
+    test('an invariant violation DOES fail, and it comes from the checker',
+        () {
+      final source = _ResyncSource(windows: const <StableWindow>[]);
+      final checker = _resync(source)..finish();
+      expect(checker.violations, isNotEmpty);
+      expect(checker.ledger.violations, isEmpty);
+    });
+
+    test('nothing resembling a keyframe was built', () {
+      final hits = <String>[];
+      for (final package in <String>[
+        '../tfc_relay_local/lib',
+        '../tfc_relay_client/lib',
+        '../tfc_relay_server/lib',
+        '../tfc_relay_protocol/lib',
+      ]) {
+        final dir = Directory(package);
+        if (!dir.existsSync()) continue;
+        for (final file in dir.listSync(recursive: true).whereType<File>()) {
+          if (!file.path.endsWith('.dart')) continue;
+          // Identifiers, not prose. The word appears in one doc comment that
+          // predates this phase — `connection_supervisor.dart:655`, *"Not left
+          // to Phase 8's keyframes"*, written in Phase 7 to say why the tick
+          // carries a sequence — and a fence that failed on somebody EXPLAINING
+          // why keyframes were not built would be a fence nobody could hold.
+          // What the fence is about is a keyframe being BUILT, so what is swept
+          // for is a line of code carrying the name.
+          for (final line in file.readAsLinesSync()) {
+            final code = line.trim();
+            if (code.startsWith('//') || code.startsWith('///')) continue;
+            if (code.startsWith('*') || code.startsWith('/*')) continue;
+            if (code.toLowerCase().contains('keyframe')) {
+              hits.add('${file.path}: $code');
+            }
+          }
+        }
+      }
+      expect(hits, isEmpty,
+          reason: 'the scope fence, made mechanical: no keyframes are built in '
+              'this phase regardless of what the verdict prints. The ledger '
+              'produces the evidence; building is a post-milestone decision '
+              'with the user (11-CONTEXT scope fences). Found in: $hits');
+    });
+  });
+}
+
+// ------------------------------------------------------- invariant 3's doubles
+
+/// The one key the resync arms compare, on an alias the soak really carries.
+const String _resyncKey = 'ST101.CN01.MOT01.setpoint';
+
+/// Takes a reading inside window [index] and then the first one past its end,
+/// which is the judgement instant.
+///
+/// **Two readings and not one**, because the window's end is judged on what
+/// the LAST sample inside it saw: by the time the checker knows a window has
+/// ended, the storm has been free to resume for a tick, and a divergence
+/// recorded from a reading taken after the quiet is over is a divergence
+/// attributed to the wrong conditions.
+void _judgeWindow(EventualResyncChecker checker, _ResyncSource source,
+    {int index = 0}) {
+  source.scheduleOffset = source.insideWindow(index);
+  checker.takeReading(_at(source.insideWindow(index)));
+  source.scheduleOffset = source.afterWindow(index);
+  checker.takeReading(_at(source.afterWindow(index)));
+}
+
+EventualResyncChecker _resync(_ResyncSource source) =>
+    EventualResyncChecker(source, DivergenceLedger(source));
+
+/// One synthetic event, for the arms that are about the ledger rather than
+/// about the checker that feeds it.
+DivergenceEvent _event(int nth, DivergenceCause cause,
+        {bool isControl = false, int? healedWithinMs}) =>
+    DivergenceEvent(
+      nth: nth,
+      panelId: 'panel-1',
+      subId: defaultPageSubscription,
+      key: _resyncKey,
+      scheduleOffset: Duration(seconds: nth),
+      wallOffsetMs: nth * 1000,
+      cause: cause,
+      clientValue: 80,
+      plantValue: 100,
+      clientQuality: Quality.good,
+      plantQuality: Quality.good,
+      generation: 1,
+      windowIndex: 0,
+      healedWithinMs: healedWithinMs,
+      isControl: isControl,
+    );
+
+/// A convergence source whose plant and panels are set by hand.
+///
+/// The windows default to the three `computeStableWindows` really produces for
+/// the ninety-second lane, so an arm that steps the schedule offset through
+/// them is stepping through the shape the run actually has.
+final class _ResyncSource implements SoakResyncSource {
+  _ResyncSource({List<String>? keys, List<StableWindow>? windows, int panels = 3})
+      : freshnessKeys = keys ?? const <String>[_resyncKey],
+        stableWindows =
+            windows ?? computeStableWindows(const Duration(seconds: 90)),
+        panelResyncViews = <_ResyncPanel>[
+          for (var i = 0; i < panels; i++) _ResyncPanel(i),
+        ];
+
+  @override
+  int seed = 11;
+
+  @override
+  Duration declaredDuration = const Duration(seconds: 90);
+
+  @override
+  Duration scheduleOffset = Duration.zero;
+
+  @override
+  int controlPanelIndex = 0;
+
+  @override
+  int plantWideArmsApplied = 0;
+
+  @override
+  final List<_ResyncPanel> panelResyncViews;
+
+  @override
+  final List<String> freshnessKeys;
+
+  @override
+  final List<StableWindow> stableWindows;
+
+  @override
+  Duration plantSweepPeriod = const Duration(milliseconds: 250);
+
+  @override
+  final Set<String> epochBumpedAliases = <String>{};
+
+  @override
+  String journalPath = 'build/soak-meta';
+
+  /// The sweep counter's current value.
+  int plantSweep = 0;
+
+  /// Keys a `PlantMutate` pinned.
+  final Map<String, Object?> overrides = <String, Object?>{};
+
+  @override
+  SoakPlantTruth? plantTruthFor(String key) {
+    if (!key.startsWith('ST101') && !key.startsWith('BAADER')) return null;
+    if (overrides.containsKey(key)) {
+      return SoakPlantTruth(value: overrides[key], overridden: true);
+    }
+    return SoakPlantTruth(
+        value: plantSweep, overridden: false, sweepIndex: plantSweep);
+  }
+
+  _ResyncPanel panel(int index) => panelResyncViews[index];
+
+  /// An offset inside window [index], derived rather than assumed.
+  ///
+  /// **Derived, because the first version of these arms assumed the windows
+  /// began at ten seconds and they do not.** `computeStableWindows` spreads
+  /// them at `duration / (N + 1)`, so at ninety seconds the first is
+  /// 22.5–32.5 s, and every case that stepped through 11 s and 30 s was
+  /// stepping into open storm and then into the middle of window 0 — which is
+  /// what the RED reading actually caught. Deriving them here makes these arms
+  /// immune to a generator change as well as correct now.
+  Duration insideWindow(int index, {Duration plus = Duration.zero}) =>
+      stableWindows[index].start + const Duration(milliseconds: 500) + plus;
+
+  /// The first offset past window [index], where its residue is settled.
+  Duration afterWindow(int index) =>
+      stableWindows[index].end + const Duration(seconds: 1);
+}
+
+final class _ResyncPanel implements SoakPanelResyncView {
+  _ResyncPanel(this.index);
+
+  @override
+  final int index;
+
+  @override
+  String get name => 'panel-$index';
+
+  @override
+  bool viewIsStale = false;
+
+  @override
+  bool pageIsStale = false;
+
+  @override
+  bool established = true;
+
+  @override
+  final List<String> complaints = <String>[];
+
+  @override
+  int pageRebuilds = 1;
+
+  final Map<String, DynamicValue> _values = <String, DynamicValue>{};
+
+  void say(String key, Object? value) =>
+      _values[key] = DynamicValue(value: value, quality: Quality.good);
+
+  void sayWithQuality(String key, Object? value, Quality quality) =>
+      _values[key] = DynamicValue(value: value, quality: quality);
+
+  @override
+  DynamicValue? read(String key) => _values[key];
 }
 
 // ------------------------------------------------------- the structural sweep
