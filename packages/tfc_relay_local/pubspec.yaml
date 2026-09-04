@@ -78,8 +78,12 @@ dependencies:
   # the version tfc_dart pins, and the seam sweep's needles are the two
   # `tfc_dart/core/database*.dart` URIs and the unrestricted tfc_dart barrel —
   # drift is not one of them. The invariant the old dev-only comment claimed
-  # ("nothing under lib/ touches drift") is now false by exactly one file, and
-  # that file is the second and last member of the database seam.
+  # ("nothing under lib/ touches drift") is now false by exactly THREE files —
+  # timescale_reader.dart, preference_store.dart and preference_change_feed.dart
+  # — which 10-REVIEW counted and this sentence originally undercounted at one.
+  # That is still not the `core/database.dart` seam freeze_test.dart pins at
+  # two: drift is a query-builder type (`Variable`, `UpdateKind`), not a route
+  # to a second connection pool, which is what the seam exists to bound.
   drift: ^2.28.0
 
 dependency_overrides:
