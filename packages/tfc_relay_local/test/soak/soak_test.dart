@@ -340,6 +340,18 @@ Future<SoakDriver> _runSoak(
   final total = driver.violationLog.total +
       registered.fold<int>(0, (sum, one) => sum + one.violations.length);
 
+  // The forensics the message below promises. The driver writes its own trip
+  // record at the instant it records a violation; a checker's log is only
+  // readable here, so this is where a checker's violations become files. Until
+  // this call site existed the promise was false for every violation the soak
+  // has ever recorded on a real run — the 35-minute arm produced six and left
+  // no trip record behind.
+  for (final one in registered) {
+    for (final violation in one.violations) {
+      driver.writeTripFor(violation);
+    }
+  }
+
   // The first violation quoted in full, and the rest counted. Two hundred
   // renderings in a failure message is a message nobody reads to the end, and
   // the first occurrence is the diagnostic — `ViolationLog` keeps the first

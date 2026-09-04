@@ -45,6 +45,7 @@ import '../support/soak/divergence_ledger.dart';
 import '../support/soak/invariant.dart';
 import '../support/soak/soak_driver.dart';
 import '../support/soak/soak_event.dart';
+import '../support/soak/soak_journal.dart';
 import '../support/soak/soak_observables.dart';
 import '../support/soak/soak_timeline.dart';
 import 'soak_registry.dart';
@@ -570,6 +571,143 @@ void main() {
       final first = lying.violations.first.toString();
       expect(first, contains(soakPanelName(blackholed)));
       expect(first, contains('seed=11'));
+    });
+  });
+
+  group('the uploaded artifact', () {
+    // **T-11-31, and two things the 35-minute arm proved were not true.**
+    //
+    // The soak's own failure reason ends: "The rest are in build/soak/, one
+    // trip record each, with the twenty checkpoints before them and the
+    // command that reproduces the run." Measured on the full arm: six
+    // violations, and **not one trip record on disk** — `writeTrip` was
+    // reachable only from `SoakDriver._record`, which is the population floor
+    // and nothing else. Every violation this phase has ever recorded on a real
+    // run came from a checker, so the forensics promised by the message have
+    // never once been written.
+    //
+    // And `divergences.jsonl` is absent from a clean run entirely, because it
+    // is only created when there is something to stream. An **empty** file is
+    // evidence — the ledger ran and saw nothing; a **missing** one cannot be
+    // told apart from a ledger that never ran, and the keyframe verdict rests
+    // on that distinction.
+    //
+    // Asserted rather than eyeballed, because a missing file is exactly the
+    // failure mode nobody notices while the run is green.
+    test('carries every file a minute-23 trip needs to be diagnosable', () {
+      final dir = _tempJournal();
+
+      final journal = SoakJournal.open(seed: 4242, path: dir);
+      journal.writeReproLog('soak seed=4242 duration=0:00:10.000000 entries=0');
+      journal.writeConfig(<String, Object?>{'declaredDurationMs': 10000});
+      journal.checkpoint(
+        SoakClock.frozenAt(const Duration(seconds: 5),
+            declaredDuration: const Duration(seconds: 10)),
+        <String, Object?>{'checkpoint': 1},
+      );
+      journal.writeTrip(
+        const SoakViolation(
+          checker: freshnessHonesty,
+          monotonic: Duration(seconds: 5),
+          scheduleOffset: Duration(seconds: 5),
+          detail: 'seed=4242 — a planted trip',
+          observed: 1,
+          expected: 0,
+        ),
+        armedModes: const <String>['blackhole'],
+      );
+
+      // The clean-run ledger: nothing recorded, and it still has to leave both
+      // of its files behind.
+      DivergenceLedger(_ResyncSource()..journalPath = dir).finish();
+
+      final present = Directory(dir)
+          .listSync()
+          .map((entity) => entity.uri.pathSegments.last)
+          .where((name) => name.isNotEmpty)
+          .toSet();
+      for (final required in <String>[
+        'repro.log',
+        'config.json',
+        'metrics.jsonl',
+        'events.jsonl',
+        verdictFileName,
+        divergenceFileName,
+        'trip-0.txt',
+      ]) {
+        expect(present, contains(required),
+            reason: 'the artifact is the whole of what a diagnosis has at '
+                '07:00, and "$required" is not in it. Present: '
+                '${present.toList()..sort()}');
+      }
+    });
+
+    test('a checker violation writes a trip record, not only the driver\'s',
+        () {
+      // The narrow half of the case above, stated so the regression has a name
+      // rather than being one entry in a file list.
+      final dir = _tempJournal();
+      final journal = SoakJournal.open(seed: 7, path: dir);
+      journal.writeTrip(
+        const SoakViolation(
+          checker: boundedMemory,
+          monotonic: Duration(minutes: 23),
+          scheduleOffset: Duration(minutes: 23),
+          detail: 'seed=7 — the minute-23 trip this artifact exists for',
+        ),
+        armedModes: const <String>[],
+      );
+      final record = File('$dir/trip-0.txt').readAsStringSync();
+      expect(record, contains('minute-23 trip'));
+      expect(record, contains('seed=7'),
+          reason: 'a trip record has to be quotable into an issue without the '
+              'run that produced it');
+    });
+  });
+
+  group('the artifact carries no credential', () {
+    // **T-11-30.** Phase 6 proved the credential appears in no message, no
+    // close reason, no status frame and no log. The soak's journal is a
+    // surface Phase 6 did not have: it is uploaded to a CI artifact, retained
+    // seven days, and downloadable by anyone with repository access. Same
+    // assertion, new surface.
+    //
+    // The fixture's tokens are `soak-panel-N-000000000000000`
+    // (`SoakDriver._tokenForPanel`), which is deliberately shaped so nobody
+    // mistakes it for a plant secret — and equally deliberately swept for, so
+    // that the day a real credential reaches this code the sweep already
+    // exists.
+    test('and the sweep can find a planted one', () {
+      // **The anti-vacuity control, and it comes first on purpose.** A sweep
+      // that cannot find a needle proves nothing about a haystack, and this
+      // phase has now produced four cases of a green result that meant less
+      // than it looked like. Written before the real sweep runs so that a
+      // broken sweep fails here rather than passing there.
+      final dir = _tempJournal();
+      File('$dir/repro.log').writeAsStringSync(
+          'soak seed=11\n  panel-2 presented ${soakTokenForPanel(2)}\n');
+      expect(_credentialHits(dir), isNotEmpty,
+          reason: 'the sweep did not find a credential written into the '
+              'directory by this very test, so a clean result from it would '
+              'be a statement about the sweep and not about the artifact');
+    });
+
+    test('over the real artifact of the run that just happened', () {
+      final dir = Directory(defaultSoakJournalDir);
+      if (!dir.existsSync()) {
+        // Guarded rather than failed: this file is run on its own in CI and by
+        // anybody debugging one case, and a soak has not necessarily happened
+        // in this working directory. The guard is `existsSync`, so the case
+        // that matters — a directory that IS there — is never skipped.
+        printOnFailure('no $defaultSoakJournalDir; nothing to sweep');
+        return;
+      }
+      expect(_credentialHits(dir.path), isEmpty,
+          reason: 'a token literal reached the forensics artifact, which is '
+              'uploaded to CI and downloadable for seven days by anyone with '
+              'repository access. The journal writes the storm, not the '
+              'session — a credential in it means something is logging what '
+              'it authenticated with');
     });
   });
 
@@ -2912,6 +3050,24 @@ SoakClock _at(Duration elapsed) =>
 
 /// A journal directory an auxiliary case owns, so it cannot overwrite the
 /// artifact the real arm writes to `build/soak/`.
+/// Every `(file, panel)` pair whose file contains that panel's token literal.
+///
+/// Reads the tokens from [soakTokenForPanel] rather than restating them, so the
+/// sweep cannot drift away from what the fixture actually presents.
+List<String> _credentialHits(String path) {
+  final hits = <String>[];
+  for (final entity in Directory(path).listSync(recursive: true)) {
+    if (entity is! File) continue;
+    final text = entity.readAsStringSync();
+    for (var panel = 0; panel < 16; panel++) {
+      if (text.contains(soakTokenForPanel(panel))) {
+        hits.add('${entity.uri.pathSegments.last}: panel-$panel');
+      }
+    }
+  }
+  return hits;
+}
+
 String _tempJournal() {
   final dir = Directory.systemTemp.createTempSync('relay-soak-meta-');
   addTearDown(() {

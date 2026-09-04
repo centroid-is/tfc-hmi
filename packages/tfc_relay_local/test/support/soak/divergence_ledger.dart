@@ -513,6 +513,15 @@ final class DivergenceLedger with GuardedSampling implements SoakRunEndCheck {
     final dir = Directory(_source.journalPath);
     if (!dir.existsSync()) dir.createSync(recursive: true);
     File('${dir.path}/$verdictFileName').writeAsStringSync('$verdictBlock\n');
+    // **An empty file, when there is nothing to stream.** `takeReading` only
+    // creates `divergences.jsonl` when it has an entry to append, so a clean
+    // run left the artifact without it — and a MISSING file cannot be told
+    // apart from a ledger that never ran, which is the distinction the whole
+    // keyframe verdict rests on. An empty one says "the ledger ran and saw
+    // nothing", which is the finding. Measured on the 35-minute arm: five
+    // files uploaded, and this was not among them.
+    final record = File('${dir.path}/$divergenceFileName');
+    if (!record.existsSync()) record.writeAsStringSync('');
   }
 
   /// Streams whatever it has not yet written to the journal.
