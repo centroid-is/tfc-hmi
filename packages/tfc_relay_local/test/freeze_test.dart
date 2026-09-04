@@ -1396,8 +1396,19 @@ List<String> nonDeterministicLines(String source) {
 }
 
 /// Every file under [directory] that reaches one, outside the allow-list.
+///
+/// Reported as `path:line: text`, so a failure names the file and the line
+/// rather than only the count — the reader's next action is to open it.
 List<String> soakDeterminismOffenders(Directory directory) {
-  throw UnimplementedError('soakDeterminismOffenders');
+  final offenders = <String>[];
+  for (final file in dartFilesIn(directory)) {
+    final name = file.uri.pathSegments.last;
+    if (soakDeterminismAllowList.containsKey(name)) continue;
+    for (final hit in nonDeterministicLines(file.readAsStringSync())) {
+      offenders.add('${file.path}:${hit.replaceFirst('line ', '')}');
+    }
+  }
+  return offenders;
 }
 
 /// A four- or five-digit integer that is not part of a longer identifier.
