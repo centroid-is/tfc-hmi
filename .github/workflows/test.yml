@@ -4,6 +4,24 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
+  # The chaos soak's full arm, summoned with a chosen seed. 11-CONTEXT
+  # ruling 4: the lane's seed is FIXED so bit-rot protection is
+  # deterministic, and a deliberate re-run names its own.
+  #
+  # **Keep every input a string.** A `workflow_dispatch`/`workflow_call`
+  # input typed `boolean` arrives as the STRINGS "true"/"false" in an `if:`,
+  # where `${{ inputs.x }}` is then truthy either way and the job runs when
+  # it was asked not to. Nothing here is a boolean and nothing here should
+  # become one; if a flag is ever needed, make it a string and compare it.
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: >-
+          The storm's seed. Leave as 11 for the lane's own schedule; paste
+          the seed from a failed run's repro.log to reproduce it exactly.
+        required: false
+        default: "11"
+        type: string
 
 # Superseding is right for a pull request and wrong for main. Merges land
 # faster than a ~13 minute macOS run, so without this a merge burst goes by
@@ -130,8 +148,8 @@ jobs:
       working-directory: centroid-hmi
       run: |
         [ -f test-report.json ] || { echo "::error::no test-report.json — the test step never produced a report"; exit 1; }
-        total=$(grep -o '"type":"testStart"' test-report.json | wc -l)
-        loading=$(grep -o '"name":"loading ' test-report.json | wc -l)
+        total=$( { grep -o '"type":"testStart"' test-report.json || true; } | wc -l)
+        loading=$( { grep -o '"name":"loading ' test-report.json || true; } | wc -l)
         ran=$((total - loading))
         echo "centroid-hmi tests reported: $ran"
         if [ "$ran" -lt 15 ]; then
@@ -203,8 +221,8 @@ jobs:
       working-directory: packages/jbtm
       run: |
         [ -f test-report.json ] || { echo "::error::no test-report.json — the test step never produced a report"; exit 1; }
-        total=$(grep -o '"type":"testStart"' test-report.json | wc -l)
-        loading=$(grep -o '"name":"loading ' test-report.json | wc -l)
+        total=$( { grep -o '"type":"testStart"' test-report.json || true; } | wc -l)
+        loading=$( { grep -o '"name":"loading ' test-report.json || true; } | wc -l)
         ran=$((total - loading))
         echo "jbtm tests reported: $ran"
         # 227 as of this commit. The floor is deliberately just under that, so
@@ -497,6 +515,148 @@ jobs:
         GATE_B_LANE_BUDGET: "1"
       run: dart test test/gate/gate_b_manifest_test.dart
 
+  # RES-03's evidence, and the job that keeps producing it.
+  #
+  # **Cadence: on every push to main, plus on demand.** 11-CONTEXT ruling 1,
+  # resolved by the user on 2026-09-02 — the repository is public, so runner
+  # minutes are free and there is no reason to ration the arm to a nightly.
+  # The arithmetic is written down anyway, because "free" is a property of
+  # this repository and not of this file: ~35 billable minutes a run, so a
+  # weekly would be ~150 a month and a nightly ~1,050. If this workflow is
+  # ever copied somewhere private, the whole cost decision is the `if:` below
+  # and nothing else.
+  #
+  # NOT on pull requests. A 35-minute arm on every push to every branch would
+  # make the soak the slowest thing in review, and what a PR needs from the
+  # soak is the 90-second arm that already runs in `relay-packages-test` on
+  # all three platforms. This job is the endurance half.
+  #
+  # **The concurrency group is the whole coalescing decision** — the
+  # workflow-level group above deliberately gives every push to main its own
+  # `run_id` so nothing cancels a merge's run, which is right for a 13-minute
+  # matrix and wrong for a 35-minute soak: a merge burst would queue four of
+  # them to prove the same thing about four commits nobody has read yet. So
+  # this job overrides it with a group that OMITS `run_id`, and stacked pushes
+  # then coalesce to the newest. Note where `cancel-in-progress` is: it is the
+  # literal `true`, never a template. #249 measured what a templated one does
+  # (10 of 29 main runs cancelled), and the fix was to put the distinction in
+  # the group. That lesson is why this override exists at all.
+  relay-soak:
+    name: Chaos soak (35 min, RES-03)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    concurrency:
+      group: ${{ github.workflow }}-relay-soak-${{ github.ref }}
+      cancel-in-progress: true
+    # **Ubuntu only, and the reason is deviation 4 rather than cost.**
+    # `openSocketCount()` cannot answer on Windows — it needs /proc/self/fd or
+    # lsof, and `canCountOpenSockets` is false there (fd_count.dart:46) — so a
+    # Windows soak would judge four invariants and part of the fifth while
+    # reporting a green RES-03: the exact "judged on a column where it never
+    # ran" failure this milestone keeps finding. macOS runners also bill at
+    # 10x, which would matter the moment this file moved to a private repo.
+    # The 90-second arm still runs on all three platforms in
+    # `relay-packages-test`; this restriction is the full arm's alone.
+    runs-on: ubuntu-latest
+    # The arm is 35 minutes. This ceiling catches a wedge rather than a slow
+    # runner. It and `@Timeout(Duration(minutes: 45))` on soak_test.dart are
+    # ONE decision written in two files and NEITHER MAY MOVE ALONE: the
+    # library timeout has to fire first so the failure is a test report with a
+    # journal behind it, not a runner killed mid-write with nothing to upload.
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dart-lang/setup-dart@v1
+
+    # `RELAY_SOAK_SEED` is the dispatch input on a dispatch and the lane's
+    # fixed 11 on a push — `inputs.seed` is null outside `workflow_dispatch`,
+    # so the fallback is doing real work here and is not belt-and-braces.
+    #
+    # A note for whoever reads a red run: `dart test --tags soak` selects
+    # nothing and exits GREEN if the tag is ever renamed, which is why the
+    # count floor below exists. A MISSPELLED selector is different — 11-01
+    # measured `--tags soakk` exiting 79 with "No tests match the requested
+    # tag selectors", so that half takes the step red on its own.
+    - name: Chaos soak (35 min arm)
+      shell: bash
+      working-directory: packages/tfc_relay_local
+      env:
+        RELAY_SOAK: "1"
+        RELAY_SOAK_SEED: ${{ inputs.seed || '11' }}
+      run: |
+        dart pub get
+        dart test test/soak --tags soak -r expanded --file-reporter "json:soak-report.json"
+        [ -f soak-report.json ] || { echo "::error::no soak-report.json — the soak step never produced a report"; exit 1; }
+        # `|| true` on both. `shell: bash` is `bash -eo pipefail` and `grep -o`
+        # exits 1 on no match, so without it the one input this floor exists
+        # for — a report with no testStart in it — aborts the step before the
+        # message prints, and a lane that selected nothing reads as a shell
+        # error instead.
+        total=$( { grep -o '"type":"testStart"' soak-report.json || true; } | wc -l)
+        loading=$( { grep -o '"name":"loading ' soak-report.json || true; } | wc -l)
+        ran=$((total - loading))
+        echo "soak-tagged tests reported: $ran"
+        # Same floor and the same 19% margin as the 90-second step's, against
+        # the same selection: this job runs the identical files with a longer
+        # window, so the COUNT is the lane's count and only the duration
+        # differs. That is the point of F2c's precedent — the long arm is
+        # literally the same function with a longer window.
+        if [ "$ran" -lt 75 ]; then
+          echo "::error::the soak lane ran only $ran soak-tagged tests, expected ~93 — the soak tag is not selecting what it used to"
+          exit 1
+        fi
+
+    # F2c and F17b at their full durations, on the same env and the same
+    # runner. **Neither is subsumed by the soak and both are still their own
+    # arms** (11-CONTEXT: "the soak is composition + endurance and SUBSUMES
+    # nothing"). F2c holds one lever continuously for a minute, which a storm
+    # whose event band tops out at a 10 s `maxGap` structurally cannot do;
+    # F17b crosses `writeOutcomeTtl`, which the soak's seconds-long blackholes
+    # never reach. What the absorption buys is that on a night the soak passes
+    # this job still produced two pieces of evidence nothing else runs at
+    # length — for the price of one runner and no second checkout.
+    #
+    # `if: always()` so a red soak does not hide whether the gate arms also
+    # moved; the step still fails the job on its own.
+    - name: Gate arms at full duration (F2c, F17b)
+      if: always()
+      shell: bash
+      working-directory: packages/tfc_relay_client
+      env:
+        RELAY_SOAK: "1"
+      run: |
+        dart pub get
+        dart test test/gate --tags gate -r expanded
+
+    # **The forensics, and `if: always()` is the whole point of the step.**
+    # An invariant trips at minute 23: what has to already be on disk for that
+    # to be diagnosable without re-running 23 minutes? The seed on line one of
+    # repro.log before anything composes, the merged timeline, both clocks at
+    # every checkpoint, the trip record with its last 20 checkpoints, the
+    # divergence ledger and the verdict block.
+    #
+    # A GREEN run's journal is uploaded for the same reason and it is not
+    # waste: it is the control. A later red run's slopes are read against it,
+    # and discarding the baseline is throwing away the only comparison anyone
+    # will have at 07:00.
+    #
+    # `verdict.txt` and `divergences.jsonl` are named in the acceptance
+    # criteria rather than left to the wildcard, because they are the two
+    # files the keyframe decision rests on (11-06). `soak_manifest_test.dart`
+    # asserts the directory's contents, so a file that stops being written
+    # fails a test rather than producing a quietly thinner artifact.
+    - name: Upload soak forensics
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: relay-soak-seed-${{ inputs.seed || '11' }}-${{ github.run_id }}
+        path: packages/tfc_relay_local/build/soak/
+        retention-days: 7
+        # A soak that died before writing anything is a finding about the
+        # harness, and a silent empty upload would hide it.
+        if-no-files-found: error
+
   tfc-dart-test:
     strategy:
       fail-fast: false
@@ -638,8 +798,8 @@ jobs:
       working-directory: packages/tfc_relay_local
       run: |
         [ -f test-report.json ] || { echo "::error::no test-report.json — the db lane never produced a report"; exit 1; }
-        total=$(grep -o '"type":"testStart"' test-report.json | wc -l)
-        loading=$(grep -o '"name":"loading ' test-report.json | wc -l)
+        total=$( { grep -o '"type":"testStart"' test-report.json || true; } | wc -l)
+        loading=$( { grep -o '"name":"loading ' test-report.json || true; } | wc -l)
         ran=$((total - loading))
         echo "relay db-tagged tests reported: $ran"
         # MEASURED 148 at 10-11, by this exact arithmetic, on a local run of
@@ -682,8 +842,8 @@ jobs:
       run: |
         dart test test/gate --tags db --file-reporter "json:gate-db-report.json"
         [ -f gate-db-report.json ] || { echo "::error::no gate-db-report.json — the gate db leg never produced a report"; exit 1; }
-        total=$(grep -o '"type":"testStart"' gate-db-report.json | wc -l)
-        loading=$(grep -o '"name":"loading ' gate-db-report.json | wc -l)
+        total=$( { grep -o '"type":"testStart"' gate-db-report.json || true; } | wc -l)
+        loading=$( { grep -o '"name":"loading ' gate-db-report.json || true; } | wc -l)
         ran=$((total - loading))
         echo "gate db leg tests reported: $ran"
         # 1 as of 09-09 (F22e). The floor is the whole point of the reporter:
