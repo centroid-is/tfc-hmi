@@ -2164,6 +2164,27 @@ final class _LivePanelResyncView implements SoakPanelResyncView {
 /// complaints — which, for an invariant about a list that never shrinks, would
 /// read as a panel that stopped complaining rather than as a panel that was
 /// replaced.
+///
+/// # Reading a live-client observable across a redial: the choice, once
+///
+/// **Building per call fixes the stale half and creates the other half**, and
+/// every checker that reads a live-client observable has to answer it: the new
+/// client's counter starts at zero, so the reading DROPS mid-run for a reason
+/// that has nothing to do with the property being judged. There are two
+/// correct answers and which one applies depends on what the observable is.
+///
+/// **A complaint is a thing that HAPPENED**, so its count is a magnitude and
+/// the run's total is the honest number: invariant 5 accumulates across
+/// incarnations ([BoundedLogsWindow.push]) and never needs to know which
+/// client produced which complaint. **An unresolved command is a thing still
+/// PENDING**, so it is an identity question — *where did this cmd go?* — and
+/// summing magnitudes answers nothing. A checker asking that one has to reach
+/// the retired client itself, which is what [GateBFixture.retiredClients] is
+/// for.
+///
+/// Do not derive one from the other. A drop in a monotone counter is enough to
+/// notice a replacement and is not enough to name it, and `debugUnresolvedCmds`
+/// is not monotone.
 final class _LivePanelLogView implements SoakPanelLogView {
   _LivePanelLogView(this.index, this._client, this.reestablishments);
 
