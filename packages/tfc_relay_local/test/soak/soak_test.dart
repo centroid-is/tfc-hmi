@@ -80,7 +80,20 @@ const String randomSeedWord = 'random';
 /// asserts about *this function* rather than about a run — which is why
 /// "RELAY_SOAK selects thirty-five minutes" costs milliseconds to prove.
 Duration chosenDuration(Map<String, String> environment) {
-  throw UnimplementedError('chosenDuration');
+  final minutes = environment[minutesVariable];
+  if (minutes != null && minutes.isNotEmpty) {
+    final parsed = int.tryParse(minutes);
+    if (parsed == null || parsed <= 0) {
+      throw ArgumentError('$minutesVariable="$minutes" is not a number of '
+          'minutes. A run that fell back to the default here would report a '
+          'duration nobody asked for, and every floor in the harness is '
+          'scaled off the declared duration');
+    }
+    return Duration(minutes: parsed);
+  }
+  final full = environment[soakVariable];
+  if (full != null && full.isNotEmpty) return fullArm;
+  return shortArm;
 }
 
 /// This run's seed.
@@ -91,7 +104,17 @@ Duration chosenDuration(Map<String, String> environment) {
 /// fed back through `RELAY_SOAK_SEED` to reproduce, so it decides nothing that
 /// is not immediately recorded.
 int chosenSeed(Map<String, String> environment) {
-  throw UnimplementedError('chosenSeed');
+  final raw = environment[seedVariable];
+  if (raw == null || raw.isEmpty) return fixedLaneSeed;
+  if (raw == randomSeedWord) return _drawSeed();
+  final parsed = int.tryParse(raw);
+  if (parsed == null) {
+    throw ArgumentError('$seedVariable="$raw" is neither a number nor '
+        '"$randomSeedWord". Falling back to $fixedLaneSeed would make the run '
+        'report a seed it was not asked for, which is the one failure the '
+        'whole reproducibility story cannot survive');
+  }
+  return parsed;
 }
 
 // ------------------------------------------------------------------- the run
@@ -111,7 +134,53 @@ Future<SoakDriver> _runSoak(
   required int seed,
   String journalPath = defaultSoakJournalDir,
 }) async {
-  throw UnimplementedError('_runSoak');
+  // First, and before any composition. A run killed by a CI timeout, an OOM or
+  // a cancelled workflow still names its seed, which is the cheapest insurance
+  // available and the difference between a failure that can be reproduced and
+  // one that cannot.
+  announceSoakSeed(seed, declaredDuration: duration);
+
+  final checkers = soakCheckers();
+  final driver = SoakDriver(
+    seed: seed,
+    duration: duration,
+    checkers: checkers,
+    journalPath: journalPath,
+  );
+  addTearDown(driver.dispose);
+
+  await driver.run();
+
+  // The run's public output, printed on a green run too: a green run's numbers
+  // are the baseline the next red run is read against, and a block that only
+  // appears on failure is a block nobody has ever seen working.
+  print(driver.verdictBlock);
+
+  final registered = <InvariantChecker>[
+    for (final one in checkers) one.checker,
+  ];
+  // The reverse sweep first: a checker nobody declared prints nowhere in the
+  // block above, so it is invisible whether it passed or was never there.
+  assertEveryCheckerIsDeclared(registered, declaredCheckers);
+  assertNoVacuousVerdict(registered);
+
+  expect(driver.neverReached, isEmpty,
+      reason: 'the run did not reach every entry of its own timeline, so the '
+          'storm it played is not the storm its repro log '
+          'describes:\n${driver.divergenceReport}');
+
+  // The first violation quoted in full, and the rest counted. Two hundred
+  // renderings in a failure message is a message nobody reads to the end, and
+  // the first occurrence is the diagnostic — `ViolationLog` keeps the first
+  // rather than the last for exactly this.
+  expect(driver.violations, isEmpty,
+      reason: 'the soak recorded ${driver.violationLog.total} violations. The '
+          'first, in full:\n\n  ${driver.violations.isEmpty ? '(none)' : driver.violations.first}\n\n'
+          'The rest are in ${driver.journalPath}/, one trip record each, with '
+          'the twenty checkpoints before them and the command that reproduces '
+          'the run.\n\n${driver.verdictBlock}');
+
+  return driver;
 }
 
 // ----------------------------------------------------------------- the cases
