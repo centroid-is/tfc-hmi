@@ -156,6 +156,18 @@ const Map<String, String> retainedTimerAllowList = <String, String>{
 /// this suite at once.
 const Map<String, String> literalPortAllowList = <String, String>{};
 
+/// The soak's plant-side applied-write ledger, by name.
+///
+/// **A symbol and not a path**, because the failure this guards against is an
+/// import *from* `lib/`, and an import names the class. Written down here so
+/// the sweep, its falsification arm and the "the needle is real" arm all read
+/// the same string.
+const String appliedWriteLedgerSymbol = 'AppliedWriteLedger';
+
+/// Where that class is declared, relative to the package root.
+const String appliedWriteLedgerSource =
+    'test/support/soak/applied_write_ledger.dart';
+
 /// Files under the soak trees permitted to reach a wall clock or an unseeded
 /// random, each naming why.
 ///
@@ -609,6 +621,49 @@ void main() {
       expect(File('pubspec.yaml').readAsStringSync(), contains(contractKitPackage),
           reason: 'no dev_dependency by that name, so the sweep above is '
               'hunting a string this repository does not use');
+    });
+  });
+
+  group('freeze 10: the soak\'s applied-write ledger is not in lib/ (11-04)',
+      () {
+    test('no file under lib/ mentions it, comments included', () {
+      // 08-03 task 2's rule — levers never go on a production class — made
+      // mechanical. The ledger exists because `WriteOutcomeLog` prunes at 60 s
+      // and cannot answer "applied twice?" at minute 35; the temptation it
+      // creates is to solve that in the gateway by keeping applied writes for
+      // ever, which is an unbounded structure on the one isolate serving every
+      // panel in the plant. A test-only ledger is the right answer precisely
+      // because it is test-only, and this is what keeps it so.
+      //
+      // Comments included, for freeze 2's reason: a commented-out import is
+      // one keystroke from a real one.
+      expect(mentionsOf(libRoot, appliedWriteLedgerSymbol), isEmpty,
+          reason: 'the applied-write ledger is a test harness. Reachable from '
+              'lib/ it becomes an unbounded per-write structure in the '
+              'shipping gateway, which is the memory invariant 4 exists to '
+              'assert about. If lib/ needs to answer "applied twice", that is '
+              'a design conversation and a bounded structure, not this class');
+    });
+
+    test('and the sweep bites a file that does mention it', () {
+      // Non-vacuous: a renamed class would make the arm above pass for ever
+      // while the sweep hunted a string this repository no longer uses.
+      final planted = _plant('leaked.dart',
+          'import "../test/support/soak/applied_write_ledger.dart";\n'
+          'final ledger = $appliedWriteLedgerSymbol();\n');
+      expect(mentionsOf(planted, appliedWriteLedgerSymbol), isNotEmpty,
+          reason: 'the sweep did not catch a file that names the ledger '
+              'twice, so the arm above is hunting nothing');
+    });
+
+    test('the needle is the real class name', () {
+      // The other half of non-vacuity, and freeze 2's own second case: the
+      // string has to exist where the class is declared, or a typo in the
+      // needle passes both arms above.
+      expect(File(appliedWriteLedgerSource).readAsStringSync(),
+          contains('final class $appliedWriteLedgerSymbol'),
+          reason: 'no class by that name at $appliedWriteLedgerSource, so the '
+              'sweep is hunting a symbol this repository does not declare');
     });
   });
 

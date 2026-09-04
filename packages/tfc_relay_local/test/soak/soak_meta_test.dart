@@ -31,7 +31,10 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
+import 'package:tfc_relay_server/src/write_outcome_log.dart';
+import 'package:tfc_relay_server/tfc_relay_server.dart';
 
+import '../support/soak/applied_write_ledger.dart';
 import '../support/soak/checkers/freshness_honesty.dart';
 import '../support/soak/invariant.dart';
 import '../support/soak/soak_driver.dart';
@@ -384,6 +387,152 @@ void main() {
       final first = lying.violations.first.toString();
       expect(first, contains(soakPanelName(blackholed)));
       expect(first, contains('seed=11'));
+    });
+  });
+
+  group('the plant-side applied-write ledger', () {
+    test('the same key and value applied twice under two cmd ids appears '
+        'twice', () {
+      // The question the ledger exists to answer, and the one WriteOutcomeLog
+      // structurally cannot: was this applied more than once? Two ids, because
+      // one id twice is a different failure the client already refuses
+      // (04-REVIEW CR-05).
+      final ledger = AppliedWriteLedger();
+      ledger.recordApplied(
+          key: 'ST101.CN01.MOT01.setpoint', value: 1500, cmd: 'cmd-a');
+      ledger.recordApplied(
+          key: 'ST101.CN01.MOT01.setpoint', value: 1500, cmd: 'cmd-b');
+
+      expect(ledger.appearances('ST101.CN01.MOT01.setpoint', 1500), 2);
+      expect(ledger.appearances('ST101.CN01.MOT01.setpoint', 1400), 0,
+          reason: 'the pair is the question; a different value is a '
+              'different write');
+    });
+
+    test('nthWrite is run-stable and the cmd id is carried opaque', () {
+      // Cmd ids are minted with Random.secure (ulid.dart:17-21), deliberately:
+      // a predictable write id lets a hostile client re-query another
+      // operator's outcome. So they differ between two runs of ONE seed, and
+      // nothing reproducible may key on them.
+      AppliedWriteLedger runWith(List<String> cmds) {
+        final ledger = AppliedWriteLedger();
+        for (final cmd in cmds) {
+          ledger.recordApplied(key: 'ST201.CN02.MOT03.setpoint',
+              value: cmds.indexOf(cmd), cmd: cmd);
+        }
+        return ledger;
+      }
+
+      final first = runWith(<String>['01JA', '01JB', '01JC']);
+      final second = runWith(<String>['01ZZ', '01ZY', '01ZX']);
+
+      expect(second.entries.map((one) => one.nthWrite),
+          first.entries.map((one) => one.nthWrite),
+          reason: 'two runs of one seed apply the same writes in the same '
+              'order, so the n-th write is the identity that reproduces');
+      expect(second.entries.map((one) => one.cmd),
+          isNot(first.entries.map((one) => one.cmd)),
+          reason: 'and the cmd ids are exactly what does not');
+    });
+
+    test('a panel attributed before the write lands is carried on the entry',
+        () {
+      final ledger = AppliedWriteLedger()..attribute('cmd-a', 'panel-3');
+      ledger.recordApplied(
+          key: 'ST301.CN01.MOT01.setpoint', value: 9, cmd: 'cmd-a');
+
+      expect(ledger.entries.single.panel, 'panel-3',
+          reason: 'the plant side does not know which panel acted; the driver '
+              'does, and says so before the write crosses');
+    });
+
+    test('an unattributed application is recorded rather than dropped', () {
+      final ledger = AppliedWriteLedger()
+        ..recordApplied(key: 'ST301.CN01.MOT01.setpoint', value: 9,
+            cmd: 'stranger');
+
+      expect(ledger.entries.single.panel, isNull);
+      expect(ledger.total, 1,
+          reason: 'a write nobody attributed still reached the plant, and a '
+              'ledger that dropped it would answer "applied once" about a '
+              'key that moved twice');
+    });
+
+    test('DEVIATION 3\'s evidence: the entry outlives the gateway\'s own log',
+        () {
+      // The measurement the deviation rests on, taken rather than asserted.
+      // WriteOutcomeLog prunes on every record AND every read
+      // (write_outcome_log.dart:210-214, removeWhere against now() - ttl)
+      // against ServerConfig.writeOutcomeTtl, default 60 s
+      // (server_config.dart:337). After thirty-five minutes it holds at most
+      // the last minute, so "compared after the run" is a comparison of the
+      // last sixty seconds wearing the label of the whole soak.
+      var wall = 1_700_000_000_000;
+      final ttl = ServerConfig().writeOutcomeTtl;
+      final gateway = WriteOutcomeLog(ttl: ttl, now: () => wall);
+      final ledger = AppliedWriteLedger();
+
+      gateway.record('cmd-a', const WriteApplied('cmd-a', readback: 1500, at: 0));
+      ledger.recordApplied(
+          key: 'ST101.CN01.MOT01.setpoint', value: 1500, cmd: 'cmd-a');
+
+      expect(gateway.entryFor('cmd-a'), isNotNull,
+          reason: 'inside the window the gateway does hold it, so the arm '
+              'below is measuring the TTL and not a log that never recorded');
+
+      wall += const Duration(seconds: 61).inMilliseconds;
+
+      // Asked the way a post-run comparison would have to ask it. Note that
+      // `recordedOutcomes` alone does NOT prune — it reads the raw map, and
+      // only `record`, `entryFor` and `prune` sweep the horizon — so a reader
+      // who took that counter as the log's contents would see an entry the
+      // gateway will answer `null` about the moment anybody asks.
+      final answer = gateway.entryFor('cmd-a');
+      print('deviation 3, at +61 s: WriteOutcomeLog.entryFor(cmd-a)='
+          '$answer, recordedOutcomes=${gateway.recordedOutcomes}, '
+          'AppliedWriteLedger.total=${ledger.total} '
+          '(ttl=$ttl)');
+
+      expect(answer, isNull,
+          reason: 'the gateway pruned it, which is correct behaviour and is '
+              'exactly why §7.8\'s "compared after the run" cannot be done');
+      expect(gateway.recordedOutcomes, 0,
+          reason: 'and the sweep the question triggered dropped it from the '
+              'map as well');
+      expect(ledger.appearances('ST101.CN01.MOT01.setpoint', 1500), 1,
+          reason: 'and the ledger still answers, which is what makes '
+              '"applied twice?" a question minute 35 can ask about minute 3');
+    });
+
+    test('the cap bounds it and the overflow is counted', () {
+      final ledger = AppliedWriteLedger(capacity: 10);
+      for (var i = 0; i < 84; i++) {
+        ledger.recordApplied(
+            key: 'ST101.CN01.MOT01.setpoint', value: i, cmd: 'cmd-$i');
+      }
+
+      expect(ledger.entries, hasLength(10));
+      expect(ledger.overflow, 74);
+      expect(ledger.total, 84,
+          reason: 'a capped list without a counter reports ten applications '
+              'for a run that had eighty-four, which is a worse lie than the '
+              'memory it saves');
+      expect(ledger.entries.first.nthWrite, 1,
+          reason: 'the FIRST applications are kept, as ViolationLog keeps the '
+              'first violations: what a soak needs is when it started');
+    });
+
+    test('a truncated ledger says so rather than answering a question it can '
+        'no longer answer', () {
+      final ledger = AppliedWriteLedger(capacity: 1);
+      expect(ledger.isTruncated, isFalse);
+      ledger.recordApplied(key: 'k', value: 1, cmd: 'a');
+      ledger.recordApplied(key: 'k', value: 2, cmd: 'b');
+
+      expect(ledger.isTruncated, isTrue,
+          reason: 'past the cap, appearances() is a FLOOR and not an answer, '
+              'and a reconciliation that read it as an answer would report '
+              '"applied once" about a write it had forgotten');
     });
   });
 }

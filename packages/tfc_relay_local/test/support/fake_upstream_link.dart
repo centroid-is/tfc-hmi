@@ -183,6 +183,27 @@ final class FakeUpstreamLink implements UpstreamLink, UpstreamLinkDriver {
   final List<({String key, Object? raw})> _rawEmissions =
       <({String key, Object? raw})>[];
 
+  /// Told about every write this link **applied**, if anybody is listening.
+  ///
+  /// **Opt-in and null by default**, so every existing user of this fake is
+  /// untouched. The one consumer is 11-04's `AppliedWriteLedger`: §7.8 asks for
+  /// a server-side log of applied writes compared after the run, and the
+  /// gateway's own `WriteOutcomeLog` prunes at sixty seconds
+  /// (`write_outcome_log.dart:210-214`), so the durable record has to live on
+  /// the plant side of the fake. That is deviation 3 in `soak_registry.dart`.
+  ///
+  /// **On the test class, deliberately** — 08-03 task 2's rule that levers
+  /// never go on a production class, and `freeze_test.dart`'s freeze 10 sweeps
+  /// `lib/` for the ledger's name so the rule is mechanical rather than a
+  /// convention.
+  ///
+  /// It fires on the line below that publishes the value and answers
+  /// `WriteApplied`, and nowhere else: a staged outcome
+  /// ([setNextWriteOutcome]) applies nothing, and a refusal is not an
+  /// application. "Applied" here means what it means everywhere else in this
+  /// system — applied *and read back*.
+  void Function(String key, Object? value, String cmd)? onWriteApplied;
+
   // ------------------------------------------------------------ UpstreamLink
 
   @override
@@ -309,6 +330,7 @@ final class FakeUpstreamLink implements UpstreamLink, UpstreamLinkDriver {
     }
 
     _publish(ref.key, value);
+    onWriteApplied?.call(ref.key, value.value, cmd);
     // "Applied" means applied *and read back*; readback is the only
     // confirmation this system accepts.
     return WriteApplied(cmd,
