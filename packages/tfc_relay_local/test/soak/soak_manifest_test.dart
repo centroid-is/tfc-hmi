@@ -107,6 +107,30 @@ void main() {
               'from the list itself');
     });
 
+    test('still holds all five day-one departures, by id', () {
+      // Written out rather than derived, and it is the arm that makes a
+      // deletion *legible*. The count above catches that something went
+      // missing; a bare count cannot say what, because the list it would name
+      // it from is the list that lost it. These five ids are the second copy.
+      expect(
+          soakDeviations.map((d) => d.id),
+          containsAll(<String>[
+            'the 90-second default',
+            'invariant 4 is asserted structurally; RSS is journalled and never '
+                'asserted',
+            'invariant 2 reconciles continuously against a test-only '
+                'plant-side ledger',
+            'the full arm is judged on Ubuntu only',
+            'no docker-compose integration tier',
+          ]),
+          reason: 'one of the five departures 11-01 seeded is no longer in '
+              'soakDeviations — the ids present are '
+              '${soakDeviations.map((d) => d.id).toList()}. Every one of the '
+              'five is a thing the soak does differently from §7.8, so an '
+              'entry that disappears does not make the soak match the '
+              'catalogue, it makes the mismatch undocumented');
+    });
+
     test('every entry quotes a clause and argues for its replacement', () {
       final emptyClause = [
         for (final deviation in soakDeviations)
