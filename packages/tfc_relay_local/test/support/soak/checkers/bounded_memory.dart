@@ -146,6 +146,54 @@ const Map<String, int> boundedMemorySettleOverrides = <String, int>{
   recordedOutcomesStructure: 13,
 };
 
+/// Structures the product caps, and the cap.
+///
+/// **Growth below a declared cap is the container filling, and the monotone
+/// rule must not be asked about it.** `writeStatusQueries` is
+/// `RemoteStateMan._debugHistory`, trimmed to 64 at
+/// `remote_state_man.dart:1108`. Two thirty-five-minute runs measured it
+/// identically — `panel-1/writeStatusQueries: last=64 median=64 peak=64
+/// worstRun=5` — on the panel the storm rebuilt 234 times. That is the cap
+/// working, and M cannot see the difference between a ring filling and a list
+/// leaking.
+///
+/// **The ninety-second lane cannot reproduce this**: eighteen checkpoints never
+/// get the ring past single digits, which is why M = 5 survived its original
+/// derivation. The number here comes from 420 checkpoints.
+///
+/// What replaces the slope for a capped structure is the **cap itself**, which
+/// is the stronger question and the reason this structure was picked: a reading
+/// above the cap means the code enforcing it stopped running. The ratio rule
+/// still applies either way.
+///
+/// The constant is duplicated from the client rather than imported — these
+/// checkers depend on `soak_observables.dart` and nothing else, so every unit
+/// arm runs without composing a pipe — and `soak_meta_test.dart` pins it
+/// against `remote_state_man.dart`, because a duplicated number with nothing
+/// holding it to its original exempts at the wrong threshold the day somebody
+/// raises the ring.
+const Map<String, int> boundedMemoryConstructionCaps = <String, int>{
+  writeStatusQueriesStructure: 64,
+};
+
+/// Structures needing a longer monotone run than [boundedMemoryMonotoneRun].
+///
+/// `openSockets` is read every [openSocketCheckpointCadence] checkpoints, so
+/// five consecutive readings is **two and a half minutes** rather than
+/// twenty-five seconds. Both thirty-five-minute runs measured the same healthy
+/// shape — `plantWide/openSockets: last=30 median=42 peak=62 worstRun=5` — a
+/// count that **ended the run below its own median**, which is the opposite of
+/// a leak: the storm opens and closes proxied sockets and the number follows it
+/// up and down.
+///
+/// **Ten: twice the run both healthy arms reached**, and five minutes of a
+/// descriptor count that only ever grew at that cadence. A socket leak is a
+/// sustained climb and clears ten without difficulty; this is not a loosening
+/// of M but a translation of it into the units this one series is sampled in.
+const Map<String, int> boundedMemoryMonotoneOverrides = <String, int>{
+  openSocketsStructure: 10,
+};
+
 /// Judged checkpoints per minute below which this checker's green is not
 /// evidence.
 ///
