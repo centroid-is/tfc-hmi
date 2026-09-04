@@ -275,7 +275,11 @@ final class BoundedLogsWindow {
   final List<(Duration at, int complaints)> _readings =
       <(Duration, int)>[];
 
-  /// The most recent complaint count.
+  /// The most recent complaint count, **summed across every incarnation of
+  /// this panel's client**.
+  ///
+  /// See [push]. Not the live client's list length: that is reset by a redial,
+  /// and this invariant is about the run.
   int last = 0;
 
   /// The highest per-minute rate this panel ever reached.
@@ -298,10 +302,40 @@ final class BoundedLogsWindow {
   /// every checkpoint until the log's two hundred slots were gone.
   bool overReported = false;
 
+  /// What the CURRENT client incarnation had already contributed to [last].
+  ///
+  /// Reset to zero when the reading drops, which is the only signal a redial
+  /// leaves: `ResyncEngine.complaints` only ever grows within one client.
+  int _incarnationBase = 0;
+
   /// Records one reading and ages out everything past [width].
+  ///
+  /// **The reading is accumulated across incarnations rather than stored**,
+  /// and that is not book-keeping — it is what makes this window measure the
+  /// run. `SoakLogSource.panelLogs` reads the LIVE `RemoteStateMan`
+  /// (`soak_driver.dart:2144`), and `GateBFixture.redial` replaces it outright
+  /// on every `TokenRestore` (`:1889`), so the raw count drops to zero
+  /// mid-run. `reestablishments` does not — `_health[i]` is created once at
+  /// `start()` — so storing the raw count let the anti-vacuity gate survive a
+  /// reset that destroyed the quantity being judged. That asymmetry is what
+  /// made it a defect rather than noise.
+  ///
+  /// Two arms depended on the difference. The **ceiling**: a forty-complaint
+  /// flood followed by a redial gives `last - oldest` a negative value, so
+  /// `rate <= ceilingPerMinute` holds, `overReported` is cleared, and the
+  /// window still counts toward `judgedSamples` — a flood erased and a green
+  /// rate reported over a judged window. The **backstop**: "a list growing
+  /// steadily, slowly and for ever" is its stated purpose, and it cannot be
+  /// seen across a redial if the run's total is never held anywhere.
+  ///
+  /// A total that only ever increases also makes [ratePerMinute] a rate. A
+  /// negative one was never a rate; it was the instrument being replaced
+  /// mid-measurement.
   void push(Duration at, int complaints) {
-    last = complaints;
-    _readings.add((at, complaints));
+    if (complaints < _incarnationBase) _incarnationBase = 0;
+    last += complaints - _incarnationBase;
+    _incarnationBase = complaints;
+    _readings.add((at, last));
     while (_readings.length > 1 && at - _readings.first.$1 > width) {
       _readings.removeAt(0);
     }
@@ -311,7 +345,7 @@ final class BoundedLogsWindow {
   Duration get span =>
       _readings.isEmpty ? Duration.zero : _readings.last.$1 - _readings.first.$1;
 
-  /// The complaint count at the far end of the window.
+  /// The run total at the far end of the window. See [push].
   int get oldest => _readings.isEmpty ? 0 : _readings.first.$2;
 
   /// Complaints a minute across the retained window, or null if it is empty.
@@ -323,7 +357,8 @@ final class BoundedLogsWindow {
 
   @override
   String toString() =>
-      '$panel: $last complaints, worst ${worstRate.toStringAsFixed(1)}/min at '
+      '$panel: $last complaints across every incarnation, worst '
+      '${worstRate.toStringAsFixed(1)}/min at '
       '${formatSoakOffset(worstAt)} over $judged judged windows, '
       '$reestablishments rebuilds';
 }

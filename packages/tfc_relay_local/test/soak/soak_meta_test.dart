@@ -1826,6 +1826,73 @@ void main() {
       }
     });
 
+    test('a flood is still a flood when a redial resets the panel\'s counter',
+        () {
+      // **The reading this checker takes is off the LIVE client, and
+      // `GateBFixture.redial` replaces it outright.** `_LivePanelLogView`
+      // (`soak_driver.dart:2144`) is `_client.complaints.length`, and
+      // `TokenRestore` calls `redial` (`:1889`), which disposes the old
+      // `RemoteStateMan` and installs a new one. So `complaints` drops to 0
+      // mid-run — while `reestablishments` does NOT, because `_health[i]` is
+      // created once at `start()`. The anti-vacuity gate survives the reset
+      // that destroys the quantity being judged, and that asymmetry is what
+      // makes this a defect rather than noise.
+      //
+      // What it costs, concretely: a forty-complaint flood inside one minute,
+      // then a redial before the next checkpoint. `last - oldest` goes
+      // NEGATIVE, `rate` is negative, `rate <= ceilingPerMinute` holds,
+      // `overReported` is cleared — and the window still counts toward
+      // `judgedSamples`. The flood is erased and the verdict block reports a
+      // green rate over a judged window.
+      final source = _LogSource(panels: 3);
+      final checker = BoundedLogsChecker(source, ceilingPerMinute: 30);
+
+      // Sixty complaints across a full sixty-second window: 60/min against a
+      // ceiling of 30. The window is exactly `boundedLogsRateWindow` wide by
+      // the end, so the next reading slides it and the oldest retained count
+      // is no longer zero — which is what makes the reset produce a NEGATIVE
+      // rate rather than a merely flat one.
+      for (var i = 0; i <= 12; i++) {
+        source.panel(1).complaints = i * 5;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      expect(checker.violations, hasLength(1),
+          reason: 'the flood itself, before any redial — this half is the '
+              'control for the half below');
+
+      // The redial: a new `RemoteStateMan`, a new empty complaint list.
+      source.panel(1).complaints = 0;
+      checker.sample(_at(const Duration(seconds: 65)));
+
+      final panel = checker.windows[1]!;
+      expect(panel.ratePerMinute, isNotNull);
+      expect(panel.ratePerMinute! >= 0, isTrue,
+          reason: 'the retained window still holds 5 complaints at its far '
+              'end and the live client now reports 0, so `last - oldest` is '
+              '-5 and the rate is NEGATIVE. That is not a rate — it is the '
+              'instrument being replaced mid-measurement — and it is what '
+              'clears overReported and launders the flood, while the window '
+              'still counts toward judgedSamples');
+
+      // And the panel goes on producing complaints from zero.
+      for (var i = 14; i <= 18; i++) {
+        source.panel(1).complaints = (i - 13) * 5;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+
+      expect(checker.violations, hasLength(1),
+          reason: 'the flood is a fact about the run and a redial is not a '
+              'retraction of it. Two violations would mean the post-redial '
+              'climb was read as a fresh flood; ZERO would mean the reset '
+              'erased the first');
+      expect(panel.last, 85,
+          reason: 'sixty complaints on the first incarnation and twenty-five '
+              'on the second. The run total is the only number the backstop '
+              'can be asked about — "a list growing steadily, slowly and for '
+              'ever", the arm\'s stated purpose, cannot be seen across a '
+              'redial if the run total is never held anywhere');
+    });
+
     test('a panel under the ceiling is not a violation', () {
       final source = _LogSource(panels: 3);
       final checker = BoundedLogsChecker(source, ceilingPerMinute: 60);
