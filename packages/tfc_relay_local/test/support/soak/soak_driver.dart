@@ -481,7 +481,8 @@ final class SoakDriver
         SoakFreshnessSource,
         SoakWriteSource,
         SoakStructureSource,
-        SoakLogSource {
+        SoakLogSource,
+        SoakResyncSource {
   SoakDriver({
     required this.seed,
     required this.duration,
@@ -518,6 +519,7 @@ final class SoakDriver
 
   /// Where `metrics.jsonl`, `events.jsonl`, `repro.log` and any trip records
   /// land.
+  @override
   final String journalPath;
 
   /// How many panels, control included.
@@ -644,6 +646,83 @@ final class SoakDriver
 
   @override
   Duration get freshnessBudget => soakFreshnessBudget;
+
+  // ----------------------------------------------------- what invariant 3 reads
+
+  /// Every panel's convergence surface, control first.
+  ///
+  /// Rebuilt per call for [panelViews]' reason, with one addition: the
+  /// gateway-side rebuild counter is read through the session whose identity
+  /// names this panel, and a panel with no live session carries its last known
+  /// count rather than reporting zero. Reporting zero would make every
+  /// disconnection look like the page having been rebuilt back to the
+  /// beginning, which is the one reading the `lostPush` detector must not get
+  /// wrong.
+  @override
+  List<SoakPanelResyncView> get panelResyncViews => <SoakPanelResyncView>[
+        for (var i = 0; i < fixture.panels.length; i++)
+          _LivePanelResyncView(
+              i, fixture.panels[i].client, _pageRebuildsFor(soakPanelName(i))),
+      ];
+
+  @override
+  List<StableWindow> get stableWindows => timeline.stableWindows;
+
+  @override
+  Duration get plantSweepPeriod => soakSweepPeriod;
+
+  @override
+  Set<String> get epochBumpedAliases => Set<String>.unmodifiable(_epochBumped);
+
+  final Set<String> _epochBumped = <String>{};
+
+  /// The keys a `PlantMutate` has pinned, and to what.
+  ///
+  /// **The soak's own record of what it told the plant to do.** `overrideRaw`
+  /// files the value inside `GateBPlantDriver`'s private map, so the only way
+  /// to read plant truth back would be to ask the client — which is the one
+  /// thing invariant 3 must not do, because it would be comparing a cache with
+  /// itself. Recorded here at the instant the lever is pulled, which is also
+  /// the instant the timeline says it happened.
+  final Map<String, Object?> _plantOverrides = <String, Object?>{};
+
+  /// What the plant is publishing for [key] right now.
+  ///
+  /// Two shapes — see [SoakPlantTruth]. An overridden key answers with the
+  /// value the soak scripted; every other key answers with the sweep counter,
+  /// because `GateBPlantDriver` writes one monotonically increasing integer to
+  /// every clean key of every link on every cycle.
+  @override
+  SoakPlantTruth? plantTruthFor(String key) {
+    final alias = key.split('.').first;
+    if (!soakAliases.contains(alias)) return null;
+    if (_plantOverrides.containsKey(key)) {
+      return SoakPlantTruth(value: _plantOverrides[key], overridden: true);
+    }
+    final latest = fixture.driver.latest;
+    if (latest == null) return null;
+    return SoakPlantTruth(value: latest, overridden: false, sweepIndex: latest);
+  }
+
+  /// The gateway's rebuild counter for one panel's page.
+  ///
+  /// `SubscriptionState.generation`, the reading `divergence_gate_test.dart`
+  /// takes as `_rebuildsServed` — one generation is minted per subscribe from a
+  /// gateway-wide counter, so it rises on every re-establishment and never
+  /// falls. Sessions are matched by `Identity.stationId`, which the soak's own
+  /// token file sets to the panel's name (`_writeTokenFile`).
+  int _pageRebuildsFor(String panel) {
+    if (_fixture == null) return 0;
+    for (final session in fixture.server.sessions.sessions) {
+      if (session.identity?.stationId != panel) continue;
+      final state = session.subscriptions.get(defaultPageSubscription);
+      if (state == null) continue;
+      return _lastRebuilds[panel] = state.generation;
+    }
+    return _lastRebuilds[panel] ?? 0;
+  }
+
+  final Map<String, int> _lastRebuilds = <String, int>{};
 
   /// How many plant-wide arms the storm has applied so far.
   ///
@@ -1697,6 +1776,11 @@ final class SoakDriver
         final link = fixture.linkFor(alias);
         final before = link.inner.epoch;
         link.inner.bumpEpoch();
+        // The one cause invariant 3's ledger excludes from residue needs to
+        // know the bump happened, and nothing else in the process records it:
+        // the epoch is opaque above `epoch.dart` and comparing two of them for
+        // recency is explicitly forbidden there.
+        _epochBumped.add(alias);
         return SoakApplyOutcome.fired(
             event.kind, 'FakeUpstreamLink.bumpEpoch',
             note: '$alias $before -> ${link.inner.epoch}');
@@ -1896,6 +1980,10 @@ final class SoakDriver
         // keeps reporting the new number until something changes it — and it
         // is what makes "plant truth" a thing invariant 3 can compare against.
         fixture.driver.overrideRaw(fixture.linkFor(alias), key, value);
+        // The soak's own record of plant truth, written where the lever is
+        // pulled. Invariant 3 compares against this and never against a second
+        // reading of the client — see [plantTruthFor].
+        _plantOverrides[key] = value;
         return SoakApplyOutcome.fired(
             event.kind, 'GateBPlantDriver.overrideRaw',
             note: '$key=$value from the next poll cycle on');
@@ -1957,6 +2045,44 @@ final class _LivePanelView implements SoakPanelView {
 
   @override
   DynamicValue? read(String key) => _client.read(key);
+}
+
+/// One real panel, seen through the members invariant 3 and the ledger use.
+///
+/// **A view and not a fake**, exactly as [_LivePanelView] is: the three
+/// inherited members forward to the shipping `RemoteStateMan`, and the three
+/// added ones are surfaces it already publishes — `isReady`, the complaint list
+/// itself, and the gateway's own generation counter for this panel's page. The
+/// ledger's attribution reads nothing this harness planted, which is what stops
+/// the taxonomy from being tunable.
+final class _LivePanelResyncView implements SoakPanelResyncView {
+  _LivePanelResyncView(this.index, this._client, this.pageRebuilds);
+
+  final RemoteStateMan _client;
+
+  @override
+  final int index;
+
+  @override
+  String get name => soakPanelName(index);
+
+  @override
+  bool get viewIsStale => _client.viewIsStale;
+
+  @override
+  bool get pageIsStale => _client.isSubscriptionStale(defaultPageSubscription);
+
+  @override
+  DynamicValue? read(String key) => _client.read(key);
+
+  @override
+  bool get established => _client.isReady;
+
+  @override
+  List<String> get complaints => _client.complaints;
+
+  @override
+  final int pageRebuilds;
 }
 
 /// One live panel's complaint surface, as invariant 5 reads it.
