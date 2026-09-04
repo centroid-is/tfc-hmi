@@ -120,12 +120,15 @@ List<ScheduledSoakEvent> _fillerEvents() => <ScheduledSoakEvent>[
       const ScheduledSoakEvent(_collisionOffset, GatewayRestart()),
     ]..sort((a, b) => a.offset.compareTo(b.offset));
 
-/// The stream labels of the entries sitting exactly on [_collisionOffset].
-List<String> _orderAtCollision(List<SoakTimelineEntry> merged) => <String>[
+/// The stream labels of the entries sitting exactly on [_collisionOffset],
+/// joined — because `List` has identity equality in Dart, and comparing two
+/// freshly-built lists with `==` is a comparison that can never be true. The
+/// first run of this case returned 0 of 100 for exactly that reason.
+String _orderAtCollision(List<SoakTimelineEntry> merged) => <String>[
       for (final entry in merged)
         if (entry.offset == _collisionOffset)
           SoakStreams.labelOf(entry.streamIndex),
-    ];
+    ].join(',');
 
 SoakTimeline _timeline({required int seed, required Duration duration}) =>
     buildTimeline(
@@ -661,10 +664,10 @@ void main() {
       final events = _fillerEvents();
       final reference = _orderAtCollision(mergeTotalOrder(linkBase, events));
 
-      expect(reference, hasLength(2),
+      expect(reference, 'link,event',
           reason: 'the fixture must put exactly one link entry and one event '
               'at $_collisionOffset, or this case is measuring nothing: '
-              '$reference');
+              '"$reference"');
 
       var agreed = 0;
       for (var extra = 1; extra <= _mergeTrials; extra++) {

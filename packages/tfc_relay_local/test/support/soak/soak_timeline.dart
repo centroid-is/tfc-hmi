@@ -133,7 +133,36 @@ const int quietFractionDenominator = 3;
 /// overlap and the last one always ends inside the run — proved by a case
 /// rather than left as an assertion here.
 List<StableWindow> computeStableWindows(Duration duration) {
-  throw UnimplementedError('computeStableWindows');
+  if (duration <= Duration.zero) return const <StableWindow>[];
+
+  final micros = duration.inMicroseconds;
+  var length = micros ~/ 18;
+  if (length < minStableWindow.inMicroseconds) {
+    length = minStableWindow.inMicroseconds;
+  }
+  if (length > maxStableWindow.inMicroseconds) {
+    length = maxStableWindow.inMicroseconds;
+  }
+
+  var cadence = micros ~/ 9;
+  if (cadence > maxWindowCadence.inMicroseconds) {
+    cadence = maxWindowCadence.inMicroseconds;
+  }
+  if (cadence <= 0) return const <StableWindow>[];
+
+  final byCadence = micros ~/ cadence - 1;
+  final byQuietFraction = (micros ~/ quietFractionDenominator) ~/ length;
+  final count = byCadence < byQuietFraction ? byCadence : byQuietFraction;
+  if (count <= 0) return const <StableWindow>[];
+
+  final spacing = micros ~/ (count + 1);
+  return List<StableWindow>.unmodifiable(<StableWindow>[
+    for (var k = 1; k <= count; k++)
+      StableWindow(
+        Duration(microseconds: spacing * k),
+        Duration(microseconds: spacing * k + length),
+      ),
+  ]);
 }
 
 // ------------------------------------------------------------------ the merge
@@ -215,7 +244,42 @@ List<SoakTimelineEntry> mergeTotalOrder(
   List<ScheduledSoakEvent> events, {
   List<ScheduledFault> quietClears = const <ScheduledFault>[],
 }) {
-  throw UnimplementedError('mergeTotalOrder');
+  final merged = <SoakTimelineEntry>[
+    for (var i = 0; i < link.length; i++)
+      SoakTimelineEntry(
+        offset: link[i].offset,
+        streamIndex: SoakStreams.link,
+        indexWithinStream: i,
+        payload: link[i].mutation,
+      ),
+    for (var i = 0; i < quietClears.length; i++)
+      SoakTimelineEntry(
+        offset: quietClears[i].offset,
+        streamIndex: SoakStreams.quietClear,
+        indexWithinStream: i,
+        payload: quietClears[i].mutation,
+      ),
+    for (var i = 0; i < events.length; i++)
+      SoakTimelineEntry(
+        offset: events[i].offset,
+        streamIndex: SoakStreams.event,
+        indexWithinStream: i,
+        payload: events[i].event,
+      ),
+  ];
+
+  // The third key is the one that matters, and it is the one a later reader
+  // will be tempted to delete: `List.sort` is not stable, so without it two
+  // entries at one offset are free to swap as soon as the list length changes.
+  merged.sort((a, b) {
+    final byOffset = a.offset.compareTo(b.offset);
+    if (byOffset != 0) return byOffset;
+    final byStream = a.streamIndex.compareTo(b.streamIndex);
+    if (byStream != 0) return byStream;
+    return a.indexWithinStream.compareTo(b.indexWithinStream);
+  });
+
+  return List<SoakTimelineEntry>.unmodifiable(merged);
 }
 
 // --------------------------------------------------------------- the timeline
@@ -324,7 +388,84 @@ SoakTimeline buildTimeline({
   required List<String> aliases,
   Iterable<String>? keys,
 }) {
-  throw UnimplementedError('buildTimeline');
+  // The link half, with `ScenarioSchedule`'s own defaults — §7.8's 1–10 s
+  // cadence and `ScenarioWeights.soak`'s five names. Generated ONCE and never
+  // regenerated: this list is the artifact `schedule_test.dart` describes.
+  final link = ScenarioSchedule.generate(seed: seed, duration: duration);
+
+  final windows = computeStableWindows(duration);
+
+  // The event half knows where the windows are, so it draws around them
+  // rather than being filtered afterwards — a suppressed draw is recorded as a
+  // suppression, where a filtered emission would just be missing.
+  final events = SoakEventSchedule.generate(
+    seed: seed,
+    duration: duration,
+    panels: panels,
+    aliases: aliases,
+    keys: keys,
+    quietWindows: windows,
+  );
+
+  // Walk the link half in order, closing each window as it is reached: emit a
+  // clear for every mode armed at that instant, and withhold the entries that
+  // fall inside. Withholding is what makes the window quiet; the clears are
+  // what make it quiet *when a fault was already armed going in*, which is the
+  // case an empty stretch cannot distinguish from silence.
+  final playedLink = <ScheduledFault>[];
+  final quietClears = <ScheduledFault>[];
+  // Insertion-ordered, and the order is load-bearing for the same reason
+  // `ScenarioSchedule.generate`'s `armed` set is: it decides the order the
+  // clears come out in, and a hash-ordered set would make a repro log depend
+  // on the hash of a string.
+  final armed = <String>{};
+  var windowIndex = 0;
+
+  void closeWindowsUpTo(Duration offset) {
+    while (windowIndex < windows.length &&
+        windows[windowIndex].start <= offset) {
+      final start = windows[windowIndex].start;
+      for (final mode in armed.toList()) {
+        quietClears.add(ScheduledFault(start, clearForMode(mode)));
+      }
+      armed.clear();
+      windowIndex++;
+    }
+  }
+
+  bool insideAWindow(Duration offset) {
+    for (final window in windows) {
+      if (window.contains(offset)) return true;
+    }
+    return false;
+  }
+
+  for (final entry in link) {
+    closeWindowsUpTo(entry.offset);
+    if (insideAWindow(entry.offset)) continue;
+    playedLink.add(entry);
+    if (entry.mutation.arms) {
+      armed.add(entry.mutation.mode);
+    } else {
+      armed.remove(entry.mutation.mode);
+    }
+  }
+  // Any window after the last link entry still needs its clears: a storm whose
+  // final arming draw precedes every remaining window would otherwise hold
+  // that fault through all of them.
+  closeWindowsUpTo(duration);
+
+  return SoakTimeline(
+    seed: seed,
+    duration: duration,
+    link: link,
+    events: events,
+    quietClears: quietClears,
+    merged: mergeTotalOrder(playedLink, events, quietClears: quietClears),
+    stableWindows: windows,
+    panels: panels,
+    aliases: aliases,
+  );
 }
 
 /// The mutation that switches [mode] off.
