@@ -94,6 +94,66 @@ import 'series_mapping_tally.dart';
 /// covered by the existing assertions instead of silently outside them.
 const Set<String> reservedPreferenceKeys = <String>{'key_mappings'};
 
+/// The `operate` gate, shared by the two sub-APIs that **refuse** rather than
+/// hide.
+///
+/// Two of the four decorators in this file gate on identity — preferences since
+/// 10-05, history views since 10-REVIEW CR-03 — and the predicate is one rule,
+/// not two copies of it. Factored here rather than copied a third time on the
+/// review's instruction: the copy was already twice in this file, and the way a
+/// permission hole gets in is one of the copies not being updated.
+///
+/// **Gating, not hiding.** Everywhere else in this file a refusal that names
+/// what it refused is the leak being closed. These two invert it, and for the
+/// same reason in both: their reads are all-visible, so the caller has already
+/// been told the thing exists and there is no existence left to conceal. The
+/// two facts a client acts on differently are "fix the name" (`unknownKey`)
+/// and "obtain the permission" (`forbidden`), and these are the second.
+mixin _OperateGate {
+  /// Who is asking, read **late** — the identity is minted by `_hello`, long
+  /// after this object is built.
+  Identity? Function() get identityOf;
+
+  /// Refuses [method] unless the asking station may actuate.
+  ///
+  /// [what] states what did *not* happen, in the caller's own vocabulary; it is
+  /// what turns a refusal into something an operator can act on.
+  ///
+  /// Null identity is refused too, by the same `identity != null` rule
+  /// [PolicyStateMan.canSee] and [PolicyStateMan.canWrite] answer by: a session
+  /// between `serve` and `hello` has no station for the policy to answer about,
+  /// and null means "nothing", not "everything". The state is unreachable from
+  /// the wire — the handshake gate refuses every method before `hello` — but
+  /// that is a property of today's gate rather than of this mixin.
+  void requireOperate(String method, String what) {
+    final identity = identityOf();
+    if (identity != null && identity.role == Role.operate) return;
+    throw rpc.RpcException(
+        ServerErrorCodes.forbidden,
+        'this station may read but may not write, so "$method" was refused. '
+        '$what: nothing was changed, so this call definitively had no effect. '
+        'Do not retry — the session is fine and reading continues; what is '
+        'missing is a permission, and permissions change in the gateway\'s '
+        'token file rather than on the next attempt',
+        data: substitutedRequest(method));
+  }
+}
+
+/// A refusal's `data`, pre-substituted.
+///
+/// Copied from `value_handlers.dart` and `data_handlers.dart` rather than
+/// shared across packages, for the reason those two carry:
+/// `RpcException.serialize` fills an empty `data` with the offending
+/// **request**, and one request carrying `1e999` then makes the error itself
+/// unencodable — at which point the peer drops it and a caller with no deadline
+/// waits forever.
+Map<String, Object?> substitutedRequest(String method) => <String, Object?>{
+      'method': method,
+      'request': 'omitted: echoing a request that may carry a non-finite '
+          'number is what makes the error itself unencodable, and an '
+          'unencodable error on a path with no deadline is a hang',
+    };
+
 /// The shared source, seen through one session's policy.
 ///
 /// Implements [StateManApi] and **adds no interface members**, which is how
@@ -268,7 +328,7 @@ final class PolicyStateMan implements StateManApi {
 
   @override
   HistoryViewApi get historyViews =>
-      _PolicyHistoryViews(source.historyViews, canSee);
+      _PolicyHistoryViews(source.historyViews, canSee, identityOf);
 
   @override
   PreferencesApi get preferences =>
@@ -611,20 +671,39 @@ final class _PolicyTimeseries implements TimeseriesApi {
 /// [getHistoryViewKeys] and [getHistoryViewKeyNames], which are the two
 /// methods that do filter.
 ///
+/// ## And since 10-REVIEW CR-03 it also **gates**
+///
+/// The three rules above are about hiding, and hiding was all this class did:
+/// it filtered keys out of views and consulted no identity at all, so a
+/// `view`-role wall display could delete every saved chart in the plant while
+/// being refused a theme setting by the file's other decorator. The four
+/// destructive members — [updateHistoryView], [deleteHistoryView],
+/// [addHistoryViewPeriod], [deleteHistoryViewPeriod] — now take
+/// [_OperateGate.requireOperate], the same predicate and the same pre-effect
+/// discipline `_PolicyPreferences` uses. [createHistoryView] does not, and
+/// [deleteHistoryView] carries the argument for why the line is drawn there.
+///
 /// Written as explicit member-by-member delegation like everything else in
 /// this file — **never `noSuchMethod`**: a forwarder would absorb an interface
-/// member added later and serve it unfiltered.
+/// member added later and serve it unfiltered *and* ungated, which is now two
+/// jobs it would be skipping rather than one.
 ///
-/// Under the shipped [AllVisibleOperatorWrites] this whole class is a no-op,
-/// which is why the two history-view contract checks are unchanged by it.
-final class _PolicyHistoryViews implements HistoryViewApi {
-  const _PolicyHistoryViews(this._source, this._canSee);
+/// Under the shipped [AllVisibleOperatorWrites] and the shipped
+/// `PermissiveTokenValidator` this whole class is a no-op, which is why the two
+/// history-view contract checks are unchanged by it.
+final class _PolicyHistoryViews with _OperateGate implements HistoryViewApi {
+  const _PolicyHistoryViews(this._source, this._canSee, this.identityOf);
 
   final HistoryViewApi _source;
 
   /// [PolicyStateMan.canSee], passed as a function rather than as the whole
   /// decorator so this class cannot reach anything else on it.
   final bool Function(String key) _canSee;
+
+  /// [PolicyStateMan.identityOf], for the four destructive members. See
+  /// [deleteHistoryView].
+  @override
+  final Identity? Function() identityOf;
 
   /// The keys of [keys] this station may see.
   ///
@@ -665,10 +744,13 @@ final class _PolicyHistoryViews implements HistoryViewApi {
         name, visible, _visibleConfigs(keyConfigs), graphConfigs);
   }
 
+  /// **Gated** (10-REVIEW CR-03): overwriting a view is overwriting somebody
+  /// else's work. See [deleteHistoryView] for the whole argument.
   @override
   Future<void> updateHistoryView(int id, String name, List<String> keys,
       [Map<String, HistoryViewKeyRecord>? keyConfigs,
       Map<int, HistoryViewGraphRecord>? graphConfigs]) {
+    requireOperate('history.updateView', 'view $id is unchanged');
     final visible = _visibleKeys(keys);
     return _source.updateHistoryView(
         id, name, visible, _visibleConfigs(keyConfigs), graphConfigs);
@@ -688,8 +770,48 @@ final class _PolicyHistoryViews implements HistoryViewApi {
     };
   }
 
+  /// **Gated** (10-REVIEW CR-03), and this is where the argument lives.
+  ///
+  /// Until the review, `_PolicyHistoryViews` filtered *keys* and gated
+  /// *nothing*: all five mutators delegated straight through with no identity
+  /// consulted, and the handlers above them added no check either. The only
+  /// thing between the wire and this DELETE was `RelaySession`'s handshake
+  /// gate, which asks whether a station said `hello` — not what it may do.
+  ///
+  /// The asymmetry that settles it, in one file: a `view`-role wall display was
+  /// **refused** `preferences.setBool('svn.theme.dark', true)` and could
+  /// **delete every saved history view in the plant**, one
+  /// `history.deleteView{id: n}` at a time. The rows are not the gateway's —
+  /// `history_view_store.dart:56-59` records them as "four small configuration
+  /// tables the application's HMI has always written", so the target is shared
+  /// plant data an engineer built by hand and that no other surface can
+  /// restore. There is no idempotency id, no three-state outcome and no audit
+  /// trail, and because `_viewId` deliberately accepts any int without bounding
+  /// it (`data_handlers.dart:968-978`), enumeration of live ids by delete was
+  /// free.
+  ///
+  /// 10-04 recorded the absence as deliberate, per 10-CONTEXT's "chart
+  /// configuration, not plant state". **That reasoning holds for
+  /// [createHistoryView] and it does not hold here.** Creating a view of your
+  /// own costs nobody anything; deleting one destroys work that was not yours,
+  /// and no reading of "not plant state" makes that a read.
+  ///
+  /// So the four destructive members take the gate and [createHistoryView] does
+  /// not. The reads — [selectHistoryViews], [getHistoryViewKeys],
+  /// [getHistoryViewGraphs], [getHistoryViewKeyNames],
+  /// [listHistoryViewPeriods] and [getGlobalRetentionHorizon] — stay ungated by
+  /// design; they are bounded instead, which is the other half of the review's
+  /// finding (WR-05).
+  ///
+  /// Under the shipped `PermissiveTokenValidator`, which mints `operate` for
+  /// every station it accepts, this gate is a no-op — which is why the two
+  /// history-view contract checks are unchanged by it, and is the acceptance
+  /// shape 06-08 established.
   @override
-  Future<void> deleteHistoryView(int id) => _source.deleteHistoryView(id);
+  Future<void> deleteHistoryView(int id) {
+    requireOperate('history.deleteView', 'view $id is still saved');
+    return _source.deleteHistoryView(id);
+  }
 
   /// Delegates. See the class doc: there are no keys on a
   /// [HistoryViewRecord] to filter, and the view itself is never hidden.
@@ -720,14 +842,23 @@ final class _PolicyHistoryViews implements HistoryViewApi {
   Future<List<String>> getHistoryViewKeyNames(int viewId) async =>
       _visibleKeys(await _source.getHistoryViewKeyNames(viewId));
 
+  /// **Gated** (10-REVIEW CR-03). A period is a row on somebody else's view,
+  /// and with no gate and no quota it is also an unbounded row factory in a
+  /// shared table — which is what makes [listHistoryViewPeriods] a
+  /// caller-grown response (WR-05).
   @override
   Future<int> addHistoryViewPeriod(
-          int viewId, String name, DateTime start, DateTime end) =>
-      _source.addHistoryViewPeriod(viewId, name, start, end);
+      int viewId, String name, DateTime start, DateTime end) {
+    requireOperate( 'history.addPeriod', 'no window was added to view $viewId');
+    return _source.addHistoryViewPeriod(viewId, name, start, end);
+  }
 
+  /// **Gated** (10-REVIEW CR-03). See [deleteHistoryView].
   @override
-  Future<void> deleteHistoryViewPeriod(int id) =>
-      _source.deleteHistoryViewPeriod(id);
+  Future<void> deleteHistoryViewPeriod(int id) {
+    requireOperate('history.deletePeriod', 'window $id is still saved');
+    return _source.deleteHistoryViewPeriod(id);
+  }
 
   @override
   Future<List<HistoryViewPeriodRecord>> listHistoryViewPeriods(int viewId) =>
@@ -810,8 +941,8 @@ final class _PolicyHistoryViews implements HistoryViewApi {
 /// every station it accepts, this class is a no-op — which is why both
 /// preference contract checks pass through it unchanged, and is the acceptance
 /// shape 06-08 established.
-final class _PolicyPreferences implements PreferencesApi {
-  const _PolicyPreferences(this._source, this._identityOf);
+final class _PolicyPreferences with _OperateGate implements PreferencesApi {
+  const _PolicyPreferences(this._source, this.identityOf);
 
   final PreferencesApi _source;
 
@@ -819,45 +950,12 @@ final class _PolicyPreferences implements PreferencesApi {
   /// decorator so this class cannot reach anything else on it.
   ///
   /// The identity itself rather than a `canWrite`-shaped predicate, because
-  /// there is no key to ask about: the comparison below **is** the rule, and it
-  /// is made once so there are not seven copies of it to keep in step.
-  final Identity? Function() _identityOf;
+  /// there is no key to ask about: the comparison in [_OperateGate] **is** the
+  /// rule, and it is made once so there are not seven copies of it to keep in
+  /// step — nor, since 10-REVIEW CR-03, two copies in two decorators.
+  @override
+  final Identity? Function() identityOf;
 
-  /// Refuses [method] unless the asking station may actuate.
-  ///
-  /// Null identity is refused too, by the same `identity != null` rule
-  /// [PolicyStateMan.canSee] and [PolicyStateMan.canWrite] answer by: a session
-  /// between `serve` and `hello` has no station for the policy to answer about,
-  /// and null means "nothing", not "everything". The state is unreachable from
-  /// the wire — the handshake gate refuses every method before `hello` — but
-  /// that is a property of today's gate rather than of this class.
-  void _requireOperate(String method, String what) {
-    final identity = _identityOf();
-    if (identity != null && identity.role == Role.operate) return;
-    throw rpc.RpcException(
-        ServerErrorCodes.forbidden,
-        'this station may read preferences but may not write them, so '
-        '"$method" was refused. $what: the preference store was not touched, '
-        'so this call definitively had no effect. Do not retry — the session '
-        'is fine and reading continues; what is missing is a permission, and '
-        'permissions change in the gateway\'s token file rather than on the '
-        'next attempt',
-        data: _substitute(method));
-  }
-
-  /// A refusal's `data`, pre-substituted.
-  ///
-  /// Copied from `value_handlers.dart` and `data_handlers.dart` rather than
-  /// shared, for the reason those two carry: `RpcException.serialize` fills an
-  /// empty `data` with the offending **request**, and one request carrying
-  /// `1e999` then makes the error itself unencodable — at which point the peer
-  /// drops it and a caller with no deadline waits forever.
-  static Map<String, Object?> _substitute(String method) => {
-        'method': method,
-        'request': 'omitted: echoing a request that may carry a non-finite '
-            'number is what makes the error itself unencodable, and an '
-            'unencodable error on a path with no deadline is a hang',
-      };
 
   @override
   Future<Set<String>> getKeys({Set<String>? allowList}) =>
@@ -891,19 +989,19 @@ final class _PolicyPreferences implements PreferencesApi {
 
   @override
   Future<void> setBool(String key, bool value) {
-    _requireOperate('preferences.setBool', 'nothing was stored under "$key"');
+    requireOperate('preferences.setBool', 'nothing was stored under "$key"');
     return _source.setBool(key, value);
   }
 
   @override
   Future<void> setInt(String key, int value) {
-    _requireOperate('preferences.setInt', 'nothing was stored under "$key"');
+    requireOperate('preferences.setInt', 'nothing was stored under "$key"');
     return _source.setInt(key, value);
   }
 
   @override
   Future<void> setDouble(String key, double value) {
-    _requireOperate('preferences.setDouble', 'nothing was stored under "$key"');
+    requireOperate('preferences.setDouble', 'nothing was stored under "$key"');
     return _source.setDouble(key, value);
   }
 
@@ -911,26 +1009,27 @@ final class _PolicyPreferences implements PreferencesApi {
   Future<void> setString(String key, String value) {
     // The one this ruling is about: `key_mappings` is a string, and it is the
     // gateway's own routing configuration.
-    _requireOperate('preferences.setString', 'nothing was stored under "$key"');
+    requireOperate('preferences.setString', 'nothing was stored under "$key"');
     return _source.setString(key, value);
   }
 
   @override
   Future<void> setStringList(String key, List<String> value) {
-    _requireOperate(
+    requireOperate(
         'preferences.setStringList', 'nothing was stored under "$key"');
     return _source.setStringList(key, value);
   }
 
   @override
   Future<void> remove(String key) {
-    _requireOperate('preferences.remove', '"$key" is still stored');
+    requireOperate('preferences.remove', '"$key" is still stored');
     return _source.remove(key);
   }
 
   /// **An unrestricted clear is refused** (10-REVIEW CR-02).
   ///
-  /// The gate above this line is [_requireOperate], the same predicate
+  /// The gate above this line is [_OperateGate.requireOperate], the same
+  /// predicate
   /// `setBool` uses — and that is the whole problem. Under the shipped
   /// `PermissiveTokenValidator`, which mints `operate` for every station it
   /// accepts (`token_validator.dart:145`), the permission needed to wipe the
@@ -971,7 +1070,7 @@ final class _PolicyPreferences implements PreferencesApi {
   /// (the 02-05 hang).
   @override
   Future<void> clear({Set<String>? allowList}) {
-    _requireOperate('preferences.clear', 'nothing was removed');
+    requireOperate('preferences.clear', 'nothing was removed');
     if (allowList != null) return _source.clear(allowList: allowList);
     throw rpc.RpcException(
         ServerErrorCodes.forbidden,
@@ -983,7 +1082,7 @@ final class _PolicyPreferences implements PreferencesApi {
         'Nothing was removed, so this call definitively had no effect. Do not '
         'retry it unchanged: name the keys to clear in "allowList", which is '
         'the same call without the blast radius',
-        data: _substitute('preferences.clear'));
+        data: substitutedRequest('preferences.clear'));
   }
 
   @override

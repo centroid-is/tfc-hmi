@@ -1479,6 +1479,199 @@ void main() {
     });
   });
 
+  // -----------------------------------------------------------------------
+  // 10-REVIEW CR-03: the destructive history-view mutators take a role.
+  //
+  // The group above is about hiding, and hiding was all this seam did. Until
+  // the review, `_PolicyHistoryViews` consulted no identity anywhere: create,
+  // update, delete, addPeriod and deletePeriod all delegated straight
+  // through, and the handlers above them added no check either. The only
+  // thing between the wire and the DELETE was the handshake gate, which asks
+  // whether a station said `hello`.
+  //
+  // The asymmetry that makes it a hole rather than a scope decision is
+  // visible in one file: a `view`-role wall display was refused
+  // `preferences.setBool('svn.theme.dark', true)` and could delete every
+  // saved chart in the plant, one `history.deleteView{id: n}` at a time —
+  // over rows the plant's own HMI owns and no other surface can restore.
+  //
+  // Over a real socket, deliberately. The gate has to hold where a station
+  // actually reaches it, and `_display` is a real `view` identity minted by
+  // the same validator seam a token file drives.
+  // -----------------------------------------------------------------------
+  group('deleting somebody else\'s saved chart takes the role a setpoint takes',
+      () {
+    /// The five mutators, as a name and a request against view [id].
+    Map<String, ({String method, Map<String, Object?> params})> mutators(
+            int id) =>
+        <String, ({String method, Map<String, Object?> params})>{
+          'createView': (
+            method: DataServiceMethods.historyCreateView,
+            params: <String, Object?>{'name': 'Vaktir', 'keys': <String>[_key]},
+          ),
+          'updateView': (
+            method: DataServiceMethods.historyUpdateView,
+            params: <String, Object?>{
+              'id': id,
+              'name': 'Endurskírt',
+              'keys': <String>[_key],
+            },
+          ),
+          'deleteView': (
+            method: DataServiceMethods.historyDeleteView,
+            params: <String, Object?>{'id': id},
+          ),
+          'addPeriod': (
+            method: DataServiceMethods.historyAddPeriod,
+            params: <String, Object?>{
+              'viewId': id,
+              'name': 'Vakt 1',
+              'start': _ms(_tsBase),
+              'end': _ms(_tsBase.add(const Duration(hours: 8))),
+            },
+          ),
+          'deletePeriod': (
+            method: DataServiceMethods.historyDeletePeriod,
+            // Any int: `_viewId` deliberately does not bound it, which is
+            // itself part of why the gate matters — enumeration of live ids by
+            // delete was free.
+            params: <String, Object?>{'id': 1},
+          ),
+        };
+
+    /// The names of every view the **unpoliced** store holds.
+    ///
+    /// Read off the source rather than over the wire, because "the view is
+    /// still there" is a claim about the rows and a read-side filter could
+    /// make a deleted view and a hidden one look the same.
+    Future<List<String>> storedViews(_Gateway gateway) async => [
+          for (final view in await gateway.plant.historyViews
+              .selectHistoryViews())
+            view.name,
+        ];
+
+    test('an operate station may do all five, and the store records them',
+        () async {
+      // **The anti-vacuity companion, and it goes first.** Every arm below
+      // asserts a refusal; without this one they would all pass against a
+      // gateway whose history views were broken for everybody, which is
+      // exactly the failure a wall display would report as "the charts are
+      // gone".
+      final gateway = await _Gateway.start(identity: _panel);
+      final station = await gateway.station();
+
+      final id = (await station.request(DataServiceMethods.historyCreateView,
+          params: const {'name': 'Vaktir', 'keys': <String>[_key]},
+          what: 'an operate station saving a view'))! as int;
+      final periodId = (await station.request(
+          DataServiceMethods.historyAddPeriod,
+          params: {
+            'viewId': id,
+            'name': 'Vakt 1',
+            'start': _ms(_tsBase),
+            'end': _ms(_tsBase.add(const Duration(hours: 8))),
+          },
+          what: 'an operate station saving a window'))! as int;
+      await station.request(DataServiceMethods.historyUpdateView,
+          params: {'id': id, 'name': 'Endurskírt', 'keys': <String>[_key]},
+          what: 'an operate station renaming its view');
+      await station.request(DataServiceMethods.historyDeletePeriod,
+          params: {'id': periodId},
+          what: 'an operate station removing the window');
+      await station.request(DataServiceMethods.historyDeleteView,
+          params: {'id': id}, what: 'an operate station removing the view');
+
+      expect(await storedViews(gateway), isEmpty,
+          reason: 'all five reached the store. If this fails, every refusal '
+              'below is passing because history views do not work rather than '
+              'because a gate ran');
+    });
+
+    for (final name in const [
+      'updateView',
+      'deleteView',
+      'addPeriod',
+      'deletePeriod',
+    ]) {
+      test('a view station\'s $name is refused, pre-effect', () async {
+        final gateway = await _Gateway.start(identity: _display);
+        // Seeded through the **unpoliced** source: this case is about a
+        // station destroying work it did not do, so the work has to exist
+        // before the station connects and must not itself be a gated call.
+        final id = await gateway.plant.historyViews
+            .createHistoryView('Vaktir', [_key]);
+        await gateway.plant.historyViews
+            .addHistoryViewPeriod(id, 'Vakt 1', _tsBase, _tsBase.add(
+                const Duration(hours: 8)));
+        final station = await gateway.station();
+
+        final call = mutators(id)[name]!;
+        final refusal = await station.refusal(call.method,
+            params: call.params, what: '$name from a view station');
+
+        expect(refusal.code, ServerErrorCodes.forbidden,
+            reason: 'the same code and the same argument as the preference '
+                'gate: reads here are all-visible, so the station has already '
+                'been told the view exists and there is no existence left to '
+                'conceal. What it needs is a permission, and `forbidden` is '
+                'the one answer it can act on');
+        expect(refusal.message, contains('history.'),
+            reason: 'a refusal that does not name the call it refused is one '
+                'an engineer cannot act on');
+
+        expect(await storedViews(gateway), ['Vaktir'],
+            reason: 'pre-effect: the view is another engineer\'s work and it '
+                'has to still be there. A gate that fired after the DELETE '
+                'would be a report, not a gate — and unlike a preference '
+                'there is nothing that can put this row back');
+        expect(
+            await gateway.plant.historyViews.listHistoryViewPeriods(id),
+            hasLength(1),
+            reason: 'and so does its saved window, which the cascade would '
+                'have taken with the view');
+      });
+    }
+
+    test('a view station may still save a chart of its own', () async {
+      // The line 10-04 drew, kept. "Chart configuration, not plant state"
+      // holds for creating one — it costs nobody anything and a wall display
+      // that cannot save a view is a wall display nobody can set up. What it
+      // does not hold for is destroying somebody else's, which is the four
+      // arms above.
+      final gateway = await _Gateway.start(identity: _display);
+      final station = await gateway.station();
+
+      final id = await station.request(DataServiceMethods.historyCreateView,
+          params: const {'name': 'Vaktir', 'keys': <String>[_key]},
+          what: 'a view station saving a chart of its own');
+
+      expect(id, isA<int>());
+      expect(await storedViews(gateway), ['Vaktir']);
+    });
+
+    test('the reads stay open to a view station', () async {
+      // The other half of the line: gating a read would leave a wall display
+      // showing an empty picker, which is the failure the gate is supposed to
+      // prevent arriving from the other side.
+      final gateway = await _Gateway.start(identity: _display);
+      final id = await gateway.plant.historyViews
+          .createHistoryView('Vaktir', [_key]);
+      final station = await gateway.station();
+
+      final listed = (await station.request(
+          DataServiceMethods.historySelectViews,
+          params: const <String, Object?>{},
+          what: 'the picker, on a wall display'))! as List<Object?>;
+      expect(listed, hasLength(1));
+      expect(
+          await station.request(DataServiceMethods.historyGetKeyNames,
+              params: {'viewId': id}, what: 'the keys of a view'),
+          [_key]);
+      await station.request(DataServiceMethods.historyListPeriods,
+          params: {'viewId': id}, what: 'the windows of a view');
+    });
+  });
+
   // **Preferences: reads for everyone, writes for `operate`** (10-05,
   // 10-CONTEXT ruling 1, T-10-17).
   //
