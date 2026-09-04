@@ -1136,6 +1136,101 @@ void main() {
               'not advance — 11-01\'s third sabotage in one assertion');
     });
 
+    test('a structure filling toward its construction cap is not a leak', () {
+      // Measured at thirty-five minutes, twice, identically:
+      // `panel-1/writeStatusQueries: last=64 median=64 peak=64 worstRun=5`.
+      // The list is RemoteStateMan._debugHistory, trimmed to 64 at
+      // `remote_state_man.dart:1108`, and on a panel the storm rebuilt 234
+      // times it fills slowly enough to cross M. Growth below a declared cap is
+      // the container filling; the ninety-second lane never gets this ring past
+      // single digits, which is why M=5 survived derivation.
+      final source = _StructureSource(panels: 2);
+      final checker = BoundedMemoryChecker(source);
+      for (var i = 0; i <= 40; i++) {
+        source.panel(1)[writeStatusQueriesStructure] =
+            i < 64 ? i : 64; // climbs to the cap, then sits on it
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+
+      expect(checker.violations, isEmpty,
+          reason: 'a ring filling to the size it is built to hold is the cap '
+              'working, and a slope rule that calls it a leak is a rule that '
+              'fires on every long run');
+    });
+
+    test('a structure ABOVE its construction cap is a violation naming the cap',
+        () {
+      // What is worth asking of a capped structure, and it is a stronger
+      // question than any slope: the cap breaking means the code enforcing it
+      // stopped running. That is the reason this structure was picked.
+      final source = _StructureSource(panels: 2);
+      final checker = BoundedMemoryChecker(source);
+      for (var i = 0; i <= 6; i++) {
+        source.panel(1)[writeStatusQueriesStructure] = i < 4 ? 64 : 70;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+
+      expect(checker.violations, isNotEmpty,
+          reason: 'seventy entries in a list trimmed to sixty-four means the '
+              'trim stopped running');
+      final first = checker.violations.first.toString();
+      expect(first, contains(writeStatusQueriesStructure));
+      expect(first, contains('64'));
+      expect(first, contains('cap'));
+    });
+
+    test('the construction cap matches the product constant it duplicates', () {
+      // The cap is RemoteStateMan._debugHistory. Duplicated here because the
+      // checkers depend on soak_observables.dart and nothing else, and pinned
+      // because a duplicated constant with nothing holding it to its original
+      // is a checker that exempts at the wrong threshold the day somebody
+      // raises the ring — silently, since no assertion reads the product's
+      // number. Same idiom as the _tickResyncComplained pin in invariant 5.
+      final client =
+          File('../tfc_relay_client/lib/src/remote_state_man.dart');
+      expect(client.existsSync(), isTrue,
+          reason: 'the pin is worthless if the path rots: ${client.path}');
+      expect(client.readAsStringSync(),
+          contains('static const int _debugHistory = '
+              '${boundedMemoryConstructionCaps[writeStatusQueriesStructure]}'),
+          reason: 'boundedMemoryConstructionCaps and _debugHistory are the '
+              'same number in two files, and this is the line that fails when '
+              'they stop being');
+    });
+
+    test('openSockets needs a longer monotone run than the rest', () {
+      // Measured at thirty-five minutes, twice, identically:
+      // `plantWide/openSockets: last=30 median=42 peak=62 worstRun=5` — a count
+      // that ENDS BOTH RUNS BELOW ITS OWN MEDIAN, which is the opposite of a
+      // leak. It is read every openSocketCheckpointCadence checkpoints, so five
+      // consecutive readings is two and a half minutes rather than
+      // twenty-five seconds, and the descriptor count oscillates while the
+      // storm opens and closes proxied sockets.
+      final source = _StructureSource(panels: 2);
+      final checker = BoundedMemoryChecker(source);
+      for (var i = 0; i <= 8; i++) {
+        source.plantWide[openSocketsStructure] = 30 + i;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      expect(checker.violations, isEmpty,
+          reason: 'five consecutive increases at this structure\'s cadence is '
+              'ordinary storm churn, and both healthy thirty-five-minute arms '
+              'reached exactly that');
+
+      // Ten does have to bite, or the override is an exemption wearing a
+      // number.
+      for (var i = 9; i <= 14; i++) {
+        source.plantWide[openSocketsStructure] = 30 + i;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      expect(checker.violations, isNotEmpty,
+          reason: 'a descriptor count that only ever grew for ten readings is '
+              'five minutes of a socket leak at this cadence, and no healthy '
+              'arm has come near it');
+      expect(checker.violations.first.toString(),
+          contains(openSocketsStructure));
+    });
+
     test('a carried-forward structure is a row entry and not a reading', () {
       // The descriptor count is read every sixth checkpoint because a
       // synchronous lsof stops the isolate for ~50 ms, and a soak about
