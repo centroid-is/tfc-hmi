@@ -63,6 +63,29 @@ const List<String> _panels = <String>[
 /// The plant's aliases, in the shape the SVN topology actually has.
 const List<String> _aliases = <String>['ST101', 'ST201', 'ST301', 'BAADER'];
 
+/// The salt, written down here rather than read off the constant it audits.
+///
+/// The second copy is the whole point — `gate_manifest_test.dart:44-50`'s
+/// argument, inherited through 11-01: a sweep that derives both sides of its
+/// comparison from one source asserts nothing.
+const int _declaredEventStreamSalt = 0x50AC;
+
+/// Seed 11's storm, as it stood when this line was written.
+///
+/// Seed 11 is the lane's fixed default (11-CONTEXT ruling 4), so this is the
+/// storm whose `(seed, schedule log)` pairs end up in issues. See the case for
+/// what to do when it fails.
+const int _seed11EntryCount = 96;
+const List<String> _seed11Head = <String>[
+  '[00:23.829] keymapping reload',
+  '[01:01.386] panel-3 query BAADER.CN02.run over 1m',
+  '[01:34.367] panel-4 query ST101.CN03.run over 1m',
+  '[01:54.769] panel-4 query BAADER.CN01.run over 5m',
+  '[02:22.987] panel-1 query ST301.CN02.run over 15m',
+];
+const String _seed11Tail =
+    '[34:51.867] panel-3 subscribe ST201.CN03.run+ST301.CN02.run';
+
 void main() {
   group('SoakEvent — the sealed vocabulary', () {
     test('every arm reports a kind the registry declares, and the registry '
@@ -323,6 +346,53 @@ void main() {
           reason: 'a storm able to draw a bare TokenRestore could restore a '
               'credential it never revoked, and rule 2 stops being '
               'structural: $thrown');
+    });
+
+    test('the salt is the declared one, written down in this file', () {
+      // `SeededScenarioRandom`'s own doc states the rule this pin makes
+      // mechanical: *"any change to the constants below invalidates every
+      // schedule log ever printed"*. Nothing enforced that for the salt — the
+      // salt sabotage (11-02 SUMMARY) moves the event stream for 20 of 20
+      // seeds and every case in this file still passed, because they all
+      // compare two generations of the SAME build. The number is written down
+      // here rather than read off the constant it audits, which is
+      // `gate_manifest_test.dart:44-50`'s rule and 11-01's.
+      expect(SoakEventSchedule.eventStreamSalt, _declaredEventStreamSalt,
+          reason: 'the event stream salt moved. Every event repro log ever '
+              'printed describes a storm that no longer happens for its seed, '
+              'and nothing else in this suite can see that — a same-seed '
+              'comparison inside one build agrees with any salt at all');
+    });
+
+    test('seed 11 still generates the storm it generated when this line was '
+        'written', () {
+      // The golden, and it is deliberately the FIXED default seed
+      // (11-CONTEXT ruling 4) at the FULL duration, because that is the storm
+      // whose repro logs will actually be pasted into issues. It catches
+      // every silent way reproduction can break at once: the salt, the
+      // weights, the gap band, the order of the draws inside a case arm, an
+      // extra draw inserted into the middle of the generator. None of those
+      // is visible to a same-seed comparison.
+      //
+      // **This case is SUPPOSED to fail when the generator changes on
+      // purpose.** The right response is to update the expectation in the
+      // same commit and to say in that commit's message that every event
+      // repro log printed before it is now void — not to loosen the case.
+      final events = SoakEventSchedule.generate(
+        seed: 11,
+        duration: _fullSoak,
+        panels: _panels,
+        aliases: _aliases,
+      );
+
+      expect(events.length, _seed11EntryCount,
+          reason: 'seed 11 at ${_fullSoak.inMinutes} min now generates '
+              '${events.length} events rather than $_seed11EntryCount');
+      expect(events.take(_seed11Head.length).map((e) => e.toString()).toList(),
+          equals(_seed11Head),
+          reason: 'the storm seed 11 describes has changed. Read the note '
+              'above this case before touching the expectation');
+      expect(events.last.toString(), _seed11Tail);
     });
 
     test('the default profile weights every drawable kind and nothing else',
