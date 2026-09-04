@@ -1127,6 +1127,54 @@ void main() {
           hasLength(1));
     });
 
+    test('the plant applying an UNKNOWN command twice is a violation', () {
+      // **The one population where a duplicate application is plausible, and
+      // the arm structurally excluded it.** `_consume` returns before
+      // `_terminal[cmd] = ...` for `unknown` — correctly, because `unknown` is
+      // not an established outcome — so a reconciliation that walked
+      // `_terminal.keys` never asked the ledger about a command that stayed
+      // unknown for the whole run.
+      //
+      // That is exactly the shape §7.8 and CLAUDE.md name: the link breaks
+      // mid-round-trip, the client is told `unknown` and keeps the cmd
+      // re-queryable, and the gateway or the upstream applies it a second time
+      // across the reconnect. `_checkTheDistribution` REQUIRES `unknown > 0`,
+      // so this population exists on every run — 2 to 5 per ninety-second lane
+      // run, measured — and nothing was looking at it.
+      //
+      // The case above duplicates `cmd-a`, which is `applied`, which is why
+      // the gap was invisible.
+      final source = _WriteSource()
+        ..settled('cmd-a', 'applied')
+        ..settled('cmd-b', 'rejected')
+        ..issue('cmd-c', panel: 'panel-4', key: 'BAADER.CN02.MOT03.setpoint',
+            value: 9)
+        ..direct('cmd-c', 'unknown', reachedASocket: true)
+        ..stillUnresolved('cmd-c');
+      source.appliedWrites
+        ..attribute('cmd-c', 'panel-4')
+        ..recordApplied(
+            key: 'BAADER.CN02.MOT03.setpoint', value: 9, cmd: 'cmd-c')
+        ..recordApplied(
+            key: 'BAADER.CN02.MOT03.setpoint', value: 9, cmd: 'cmd-c');
+      final checker = TerminalStateChecker(source);
+      checker.sample(_at(Duration.zero));
+      checker.finish();
+
+      final duplicates = checker.violations
+          .where((one) => one.toString().contains('the plant applied'))
+          .toList();
+      expect(duplicates, hasLength(1),
+          reason: 'one button press moved the machine twice and the write was '
+              'never established, so nothing else in this run will ever '
+              'notice. An unknown that was applied twice is the worst case '
+              'the three-state contract has: the operator is told "I cannot '
+              'say", and the answer is "twice"');
+      expect(duplicates.single.toString(), contains('panel-4'),
+          reason: 'the violation is attributed from _issued, which holds the '
+              'panel and key for every command the run made');
+    });
+
     test('a truncated ledger is reported rather than read as an answer', () {
       final source = _WriteSource(ledgerCapacity: 1)
         ..settled('cmd-a', 'applied')

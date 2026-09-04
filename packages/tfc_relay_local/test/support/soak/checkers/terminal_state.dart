@@ -377,7 +377,19 @@ final class TerminalStateChecker
       );
       return;
     }
-    for (final cmd in _terminal.keys) {
+    // **`_issued`, not `_terminal`, and the difference is the whole arm.**
+    // `_consume` returns before filing an `unknown` into `_terminal` (:260) —
+    // correctly, because `unknown` is not an established outcome. Walking
+    // `_terminal` therefore skipped every command that stayed unknown for the
+    // run, which is the ONE population where a duplicate application is
+    // plausible: the link breaks mid-round-trip, the client is told "I cannot
+    // say" and keeps the cmd re-queryable, and the gateway or the upstream
+    // applies it again across the reconnect. `_checkTheDistribution` requires
+    // `unknown > 0`, so that population is on every run.
+    //
+    // `_issued` holds every command the run made, and `forCmd` is a filter
+    // over a bounded list, so this is strictly wider at no cost.
+    for (final cmd in _issued.keys) {
       final applications = ledger.forCmd(cmd);
       if (applications.length <= 1) continue;
       final issued = _issued[cmd];
