@@ -72,6 +72,8 @@ import 'dart:io';
 
 import 'package:tfc_dart/core/state_man.dart'
     show KeyMappingEntry, KeyMappings;
+import 'package:tfc_relay_client/tfc_relay_client.dart'
+    show RemoteStateMan, defaultPageSubscription;
 import 'package:tfc_relay_local/tfc_relay_local.dart' show UpstreamLinkState;
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_relay_server/tfc_relay_server.dart';
@@ -82,6 +84,7 @@ import '../keymap_fixtures.dart' show opcUaEntry;
 import 'invariant.dart';
 import 'soak_event.dart';
 import 'soak_journal.dart';
+import 'soak_observables.dart';
 import 'soak_timeline.dart';
 
 // ------------------------------------------------------------------ the herd
@@ -148,6 +151,41 @@ const int soakKeysPerAlias = 10;
 /// Slower than gate B's 100 ms for the same reason the page is narrower: this
 /// runs for thirty-five minutes rather than for one assertion.
 const Duration soakSweepPeriod = Duration(milliseconds: 250);
+
+/// How long a value may go unheard-of before the gateway must stop letting it
+/// claim to be current.
+///
+/// **Five seconds — `LocalStateMan`'s own default, and deliberately not gate
+/// B's thirty.** Gate B widened it because its rows hold a pipe still for one
+/// assertion and a five-second deadline would grey the page between two steps
+/// of a scripted scenario. The soak is the opposite shape: it runs for
+/// thirty-five minutes against a plant that moves every key four times a
+/// second, so the shipping number is both reachable and the one worth proving.
+///
+/// It is also what makes invariant 1 sharp. The freshness budget a checker
+/// holds a *fresh* verdict to is this plus the mechanics of noticing and
+/// delivering it ([soakFreshnessBudget]); at thirty seconds that budget would
+/// be forty and most of a ninety-second arm, which is a bound almost nothing
+/// could breach.
+const Duration soakStaleAfter = Duration(seconds: 5);
+
+/// How old a value may be while a panel still renders it as current.
+///
+/// Every term is somebody else's number and none of them is invented here:
+///
+///  * [soakStaleAfter] — the gateway's declared deadline for a plant value.
+///  * `staleAfter ~/ 4` — `FreshnessSweep.intervalFor`, so a value is reported
+///    stale within 125 % of its deadline rather than within 200 %.
+///  * three seconds — `ClientConfig.freshnessDeadline`, the longest the panel
+///    may go without a frame of any kind before it greys the view itself. It is
+///    the delivery half: the degrade the gateway staged still has to cross a
+///    tick and a socket.
+///  * two seconds of slack for the scheduler on a loaded hosted runner. Named
+///    rather than folded into one of the others, because it is the only term
+///    here that is a guess.
+const Duration soakFreshnessBudget = Duration(
+  milliseconds: 5000 + 1250 + 3000 + 2000,
+);
 
 // -------------------------------------------------------------- the cadences
 
@@ -381,7 +419,7 @@ final class SoakPanelHealth {
 /// population and proves all of that at 90 seconds — real evidence on its own,
 /// and the thing that must not bit-rot. 11-04, 11-05 and 11-06 then register
 /// against a driver that already works.
-final class SoakDriver {
+final class SoakDriver implements SoakFreshnessSource {
   SoakDriver({
     required this.seed,
     required this.duration,
@@ -399,11 +437,16 @@ final class SoakDriver {
 
   /// The run's seed. Both halves of the storm derive from it and nothing else
   /// does.
+  @override
   final int seed;
 
   /// What the run was *declared* to be. Every floor scales off this and never
   /// off measured elapsed time — `invariant.dart`'s rule.
   final Duration duration;
+
+  /// The same number, under the name the checkers' interface gives it.
+  @override
+  Duration get declaredDuration => duration;
 
   /// Where the panels dial.
   final SoakEndpoint endpoint;
@@ -499,6 +542,60 @@ final class SoakDriver {
   /// The control's connectivity.
   SoakPanelHealth get controlHealth => _health[soakControlPanelIndex]!;
 
+  // ------------------------------------------- what the checkers are given
+  //
+  // `SoakFreshnessSource` and `SoakWriteSource` are the two narrow views a
+  // checker gets. They are implemented here rather than exposed as a second
+  // object because everything they answer is already this class's — and
+  // because a control that needs to substitute one answer should be able to
+  // decorate one interface rather than stand up a parallel pipe.
+
+  /// Where the storm has got to. Public because a violation recorded by a
+  /// checker has to carry the timeline position, not just the wall offset.
+  @override
+  Duration get scheduleOffset => _playClock.elapsed;
+
+  @override
+  int get controlPanelIndex => soakControlPanelIndex;
+
+  /// Every panel, control first, as the operator-facing surface a freshness
+  /// checker reads.
+  ///
+  /// Rebuilt per call on purpose: [GateBFixture.redial] replaces a panel's
+  /// `RemoteStateMan` outright (Phase 6 ends a refused panel's reconnect loop
+  /// for good, so a restore is an application restart), and a view cached at
+  /// `start()` would go on reading a disposed client for the rest of the run.
+  @override
+  List<SoakPanelView> get panelViews => <SoakPanelView>[
+        for (var i = 0; i < fixture.panels.length; i++)
+          _LivePanelView(i, fixture.panels[i].client),
+      ];
+
+  /// Every key every panel subscribed, health keys included.
+  ///
+  /// Deliberately **not** filtered to [plantKeys]: the `PIPE.` exclusion is the
+  /// checker's, by prefix, and handing it a pre-filtered list would move the
+  /// decision here and leave the prefix arm proving nothing (08-PATTERNS
+  /// freeze 8).
+  @override
+  List<String> get freshnessKeys => fixture.keys.toList(growable: false);
+
+  @override
+  Duration get freshnessBudget => soakFreshnessBudget;
+
+  /// How many plant-wide arms the storm has applied so far.
+  ///
+  /// The control's freshness arm is written against the panel-TARGETED half of
+  /// the storm only, and this is the number that lets it be. `GatewayRestart`,
+  /// `KeymappingReload` and every upstream arm belong to everybody — the
+  /// control's property is *"the storm never AIMS at it"*, which
+  /// [_refuseIfTheStormCanReachTheControl] enforces, and not *"it is never
+  /// disturbed"*, which nothing could.
+  @override
+  int get plantWideArmsApplied => _plantWideArms;
+
+  int _plantWideArms = 0;
+
   /// How many panels are ready right now.
   int get connectedPanels => _fixture == null
       ? 0
@@ -564,6 +661,14 @@ final class SoakDriver {
             '${checker.minimumSamplesForAVerdict}, ticked every '
             '${registration.cadence.inMilliseconds} ms, '
             '${checker.violations.length} violations');
+        // A checker's own counters, when it has any worth reading. The two
+        // numbers that make invariant 1's green mean something — did anything
+        // ever go stale, did anything ever recover — are not on the interface
+        // and would otherwise print nowhere.
+        final own = checker.toString();
+        if (!own.startsWith('Instance of')) {
+          lines.add('                $own');
+        }
       }
     }
     lines.add('  violations  : ${violationLog.total} recorded '
@@ -640,6 +745,7 @@ final class SoakDriver {
       keysPerAlias: soakKeysPerAlias,
       proxyPerPanel: true,
       sweepPeriod: soakSweepPeriod,
+      staleAfter: soakStaleAfter,
       serverConfig: ServerConfig(
         tick: ServerConfig.minTick,
         auth: AuthConfig(tokenFilePath: _tokenFilePath!),
@@ -684,6 +790,35 @@ final class SoakDriver {
     // rather than a loop of awaits: every one of these already carries its own
     // catchError into the violation log, so none of them can throw here.
     await Future.wait(_inFlight);
+    _runEndPass();
+  }
+
+  /// Asks every checker the questions that can only be answered once.
+  ///
+  /// After the last entry and the last in-flight future, before the verdict
+  /// block is read — so a distribution failure prints in the same block as the
+  /// counters that explain it. A [SoakRunEndCheck] that throws is recorded here
+  /// rather than allowed out: [GuardedSampling] makes that true for `sample`,
+  /// and a run-end pass that took the whole verdict with it would be the same
+  /// failure one call later.
+  void _runEndPass() {
+    for (final registration in checkers) {
+      final checker = registration.checker;
+      if (checker is! SoakRunEndCheck) continue;
+      final endCheck = checker as SoakRunEndCheck;
+      try {
+        endCheck.finish();
+      } catch (error) {
+        _record(SoakViolation(
+          checker: checker.name,
+          monotonic: clock.elapsed,
+          scheduleOffset: _playClock.elapsed,
+          detail: 'the run-end pass threw, so this checker\'s whole-run '
+              'questions — its distribution and its control arms — went '
+              'unasked: $error',
+        ));
+      }
+    }
   }
 
   /// [start], then [play]. The whole run, minus the verdict, which the caller
@@ -1025,6 +1160,12 @@ final class SoakDriver {
     _applied.add(entry);
     _outcomes.add(outcome);
     _leversByKind.update(outcome.kind, (n) => n + 1, ifAbsent: () => 1);
+    final payload = entry.payload;
+    if (payload is SoakEvent && _panelNamedBy(payload) == null) {
+      // Counted whether or not it fired: a gateway restart that fizzled still
+      // took the pipe down and back on the way to finding out.
+      _plantWideArms++;
+    }
     if (!outcome.fired) _noteFizzle(entry.offset, outcome);
     journal.event(clock, <String, Object?>{
       'offsetMs': entry.offset.inMilliseconds,
@@ -1381,4 +1522,42 @@ final class SoakDriver {
     });
     _recoveries.add(timer);
   }
+}
+
+// -------------------------------------------------------------- the views
+
+/// One real panel, seen through the three members a freshness checker may use.
+///
+/// **A view and not a fake.** Every member below forwards to the shipping
+/// `RemoteStateMan` — `viewIsStale` is its watchdog's verdict, `pageIsStale` is
+/// the live per-subscription one (computed on read, so a saturated link
+/// delivering old frames cannot agree with itself for ever), and `read` is what
+/// a widget would render. The one thing this class adds is the subscription id,
+/// and it adds it because the fixture's shape decides it rather than the
+/// checker's.
+final class _LivePanelView implements SoakPanelView {
+  _LivePanelView(this.index, this._client);
+
+  final RemoteStateMan _client;
+
+  @override
+  final int index;
+
+  @override
+  String get name => soakPanelName(index);
+
+  @override
+  bool get viewIsStale => _client.viewIsStale;
+
+  /// **One page, and that is the fixture's doing.** `gate_b_fixture.dart`
+  /// constructs every panel with its whole key list, so every key is filed
+  /// under `defaultPageSubscription`; `RemoteStateMan.subscribe` then hands out
+  /// a view of a store node rather than opening a second wire subscription. A
+  /// checker that iterated a set of subscription ids would be iterating a set
+  /// of one and reading as though it were general.
+  @override
+  bool get pageIsStale => _client.isSubscriptionStale(defaultPageSubscription);
+
+  @override
+  DynamicValue? read(String key) => _client.read(key);
 }

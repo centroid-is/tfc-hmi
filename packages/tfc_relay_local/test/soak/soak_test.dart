@@ -43,9 +43,11 @@ import 'dart:math';
 
 import 'package:test/test.dart';
 
+import '../support/soak/checkers/freshness_honesty.dart';
 import '../support/soak/invariant.dart';
 import '../support/soak/soak_driver.dart';
 import '../support/soak/soak_journal.dart';
+import '../support/soak/soak_observables.dart';
 import '../support/soak/soak_timeline.dart';
 import 'soak_registry.dart';
 
@@ -119,14 +121,59 @@ int chosenSeed(Map<String, String> environment) {
 
 // ------------------------------------------------------------------- the run
 
-/// The checkers this run registers.
+/// The checkers this run registers, given the driver they will read.
 ///
-/// **Empty, and the call sites below still run.** 11-04, 11-05 and 11-06 each
-/// append one, against a driver and a run function that already work —
-/// `assertNoVacuousVerdict`'s own doc says an empty list passes deliberately,
-/// so that the next plan adds a checker instead of performing a refactor.
-List<SoakCheckerRegistration> soakCheckers() =>
-    const <SoakCheckerRegistration>[];
+/// **The driver arrives as a thunk because the two are mutually referential.**
+/// A checker reads the composed pipe and the driver ticks the checker, so one
+/// of the two references has to be late. It is this one, and the `late final`
+/// at the call site below is the whole of it: `soakCheckers` is called first,
+/// the driver is built with what it returns, and nothing dereferences the thunk
+/// until `start()` has composed the fixture and started the tickers.
+///
+/// 11-05 and 11-06 append theirs here. The cadence is the checker's own
+/// business — `SoakCheckerRegistration.fast` is 25 ms, `.checkpoint` is 5 s and
+/// `.perMinute` is a rate window — and the driver holds no opinion about what
+/// any of them measures.
+List<SoakCheckerRegistration> soakCheckers(SoakDriver Function() driver) =>
+    <SoakCheckerRegistration>[
+      SoakCheckerRegistration.fast(FreshnessHonestyChecker(_LateSource(driver))),
+    ];
+
+/// A [SoakFreshnessSource] that resolves its driver on every call.
+///
+/// One indirection and no state: a checker built before the driver exists still
+/// reads the live one, and the alternative — handing the checker a setter the
+/// driver calls at `start()` — is a second lifecycle to get wrong on the day
+/// somebody adds a third registration.
+final class _LateSource implements SoakFreshnessSource {
+  const _LateSource(this._driver);
+
+  final SoakDriver Function() _driver;
+
+  @override
+  int get seed => _driver().seed;
+
+  @override
+  Duration get declaredDuration => _driver().declaredDuration;
+
+  @override
+  Duration get scheduleOffset => _driver().scheduleOffset;
+
+  @override
+  List<SoakPanelView> get panelViews => _driver().panelViews;
+
+  @override
+  List<String> get freshnessKeys => _driver().freshnessKeys;
+
+  @override
+  int get controlPanelIndex => _driver().controlPanelIndex;
+
+  @override
+  int get plantWideArmsApplied => _driver().plantWideArmsApplied;
+
+  @override
+  Duration get freshnessBudget => _driver().freshnessBudget;
+}
 
 /// One run. The only difference between the lane and RES-03 is [duration].
 Future<SoakDriver> _runSoak(
@@ -140,8 +187,9 @@ Future<SoakDriver> _runSoak(
   // one that cannot.
   announceSoakSeed(seed, declaredDuration: duration);
 
-  final checkers = soakCheckers();
-  final driver = SoakDriver(
+  late final SoakDriver driver;
+  final checkers = soakCheckers(() => driver);
+  driver = SoakDriver(
     seed: seed,
     duration: duration,
     checkers: checkers,
@@ -169,13 +217,28 @@ Future<SoakDriver> _runSoak(
           'storm it played is not the storm its repro log '
           'describes:\n${driver.divergenceReport}');
 
+  // Every violation the run recorded, the driver's own and every checker's.
+  //
+  // **The checkers' logs are asserted here and not only printed.** 11-03 landed
+  // this call site with no checkers registered, so `driver.violations` was the
+  // whole of it; a checker's log rendered into the verdict block and never
+  // compared to `isEmpty` would be a breach that prints and passes — which is
+  // the same failure the vacuity gate exists for, one layer out.
+  final recorded = <SoakViolation>[
+    ...driver.violations,
+    for (final one in registered) ...one.violations,
+  ];
+  final total = driver.violationLog.total +
+      registered.fold<int>(0, (sum, one) => sum + one.violations.length);
+
   // The first violation quoted in full, and the rest counted. Two hundred
   // renderings in a failure message is a message nobody reads to the end, and
   // the first occurrence is the diagnostic — `ViolationLog` keeps the first
   // rather than the last for exactly this.
-  expect(driver.violations, isEmpty,
-      reason: 'the soak recorded ${driver.violationLog.total} violations. The '
-          'first, in full:\n\n  ${driver.violations.isEmpty ? '(none)' : driver.violations.first}\n\n'
+  expect(recorded, isEmpty,
+      reason: 'the soak recorded $total violations across the driver and '
+          '${registered.length} checkers. The first, in full:\n\n  '
+          '${recorded.isEmpty ? '(none)' : recorded.first}\n\n'
           'The rest are in ${driver.journalPath}/, one trip record each, with '
           'the twenty checkpoints before them and the command that reproduces '
           'the run.\n\n${driver.verdictBlock}');
@@ -263,22 +326,49 @@ void main() {
             'same storm, the line is decoration');
   });
 
-  test('the vacuity gate is called with the empty checker list, and the seam '
-      'holds', () {
-    expect(soakCheckers(), isEmpty,
-        reason: 'this plan registers none; 11-04, 11-05 and 11-06 each add '
-            'one to soakCheckers()');
+  test('every registered checker is declared, and each is ticked at its own '
+      'cadence', () {
+    // Built against a driver that is never started: registration itself must
+    // not dereference the thunk, which is the property that lets
+    // `soakCheckers` be called before the driver exists.
+    late final SoakDriver unstarted;
+    final registrations = soakCheckers(() => unstarted);
+    unstarted = SoakDriver(seed: 1, duration: shortArm, herdSize: 3);
+    final checkers = <InvariantChecker>[
+      for (final one in registrations) one.checker,
+    ];
+
+    expect(checkers.map((one) => one.name), contains(freshnessHonesty),
+        reason: '11-04 registers invariant 1; 11-05 and 11-06 append theirs to '
+            'the same list');
     expect(
-        () => assertNoVacuousVerdict(
-            <InvariantChecker>[for (final one in soakCheckers()) one.checker]),
-        returnsNormally,
-        reason: 'the call site exists and is exercised empty, so the next '
-            'plan adds a checker rather than performing a refactor');
-    expect(
-        () => assertEveryCheckerIsDeclared(
-            <InvariantChecker>[for (final one in soakCheckers()) one.checker],
-            declaredCheckers),
+        () => assertEveryCheckerIsDeclared(checkers, declaredCheckers),
         returnsNormally);
+    expect(
+        registrations
+            .firstWhere((one) => one.checker.name == freshnessHonesty)
+            .cadence,
+        fastCheckerCadence,
+        reason: 'the freshness verdict is sampled at 25 ms because a sampler '
+            'that took one reading per up-window could miss the flicker a '
+            'one-second flap half produces (flap_gate_test.dart:55-160)');
+  });
+
+  test('a registered checker\'s floor scales with the arm that is running',
+      () {
+    late final SoakDriver lane;
+    late final SoakDriver full;
+    final short = soakCheckers(() => lane).single.checker;
+    final long = soakCheckers(() => full).single.checker;
+    lane = SoakDriver(seed: 1, duration: shortArm, herdSize: 3);
+    full = SoakDriver(seed: 1, duration: fullArm, herdSize: 3);
+
+    expect(long.minimumSamplesForAVerdict,
+        greaterThan(short.minimumSamplesForAVerdict),
+        reason: 'a floor that did not scale would be one the short arm could '
+            'not reach and one the long arm passed in its first minute — '
+            'invariant.dart\'s rule, applied at the registration site where '
+            'the declared duration is finally known');
   });
 
   test('the seed reaches stdout before anything is composed', () async {
