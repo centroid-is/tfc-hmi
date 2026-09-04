@@ -846,8 +846,14 @@ final class _Shape {
   /// The catalogue's `data_type`, kept rather than reduced to a flag: the
   /// downsampler's aggregability question and the 1/0 question are different
   /// questions about it, and a second one arrived in 10-10.
+  ///
+  /// **There is deliberately no `isBoolean` here** (10-REVIEW IN-02, 10-07's
+  /// nit before it). One was written and never read: `_numeric` decides the
+  /// 1/0 treatment from `raw is bool` — the *value's* own runtime type, which
+  /// is the honest question on a path where a column can be retyped under a
+  /// live table — and the shape's `dataType` answers the *catalogue's*
+  /// question for `_aggregatable` and `_numericTypes`. Two spellings of one
+  /// question is how they drift apart; the one that survives is the one with
+  /// a caller.
   final String dataType;
-
-  /// Whether a sample needs the 1/0 treatment on the way to the wire.
-  bool get isBoolean => dataType == 'boolean';
 }

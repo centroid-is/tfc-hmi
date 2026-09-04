@@ -633,28 +633,46 @@ final class DataHandlers {
   /// `TypeError` (`client_sub_apis.dart`'s `withTypedErrors`). A handler that
   /// caught it and answered null would render a settings page's *default* over
   /// a value that is really there, and nothing would say so.
-  Future<Object?> prefGetBool(rpc.Parameters params) =>
+  ///
+  /// **`async`, and the six below it are too** (10-REVIEW IN-01). A
+  /// non-`async` body evaluates `_prefKey` before the delegated future is
+  /// created, so a refusal throws *synchronously* out of a `Future`-returning
+  /// method rather than rejecting the returned future. That is the regression
+  /// 10-08 caught, arriving in a third place. It is defused on the wire —
+  /// `RelaySession._on` registers every handler as
+  /// `_answer(method, () async => handler(params))`, and the `() async =>`
+  /// converts the synchronous throw into a future error inside `_answer`'s
+  /// `try` — so the exposure is a direct caller using `.catchError` on the
+  /// returned future, which is exactly how the earlier instances were found.
+  /// One keyword each, and a future reader does not have to re-derive the
+  /// seam argument. `HistoryViewStore` states the same rule at its own
+  /// `_noHistorian`.
+  Future<Object?> prefGetBool(rpc.Parameters params) async =>
       source.preferences.getBool(_prefKey(params, DataServiceMethods.prefGetBool));
 
-  Future<Object?> prefGetInt(rpc.Parameters params) =>
+  Future<Object?> prefGetInt(rpc.Parameters params) async =>
       source.preferences.getInt(_prefKey(params, DataServiceMethods.prefGetInt));
 
-  Future<Object?> prefGetDouble(rpc.Parameters params) => source.preferences
-      .getDouble(_prefKey(params, DataServiceMethods.prefGetDouble));
+  Future<Object?> prefGetDouble(rpc.Parameters params) async =>
+      source.preferences
+          .getDouble(_prefKey(params, DataServiceMethods.prefGetDouble));
 
-  Future<Object?> prefGetString(rpc.Parameters params) => source.preferences
-      .getString(_prefKey(params, DataServiceMethods.prefGetString));
+  Future<Object?> prefGetString(rpc.Parameters params) async =>
+      source.preferences
+          .getString(_prefKey(params, DataServiceMethods.prefGetString));
 
-  Future<Object?> prefGetStringList(rpc.Parameters params) => source.preferences
-      .getStringList(_prefKey(params, DataServiceMethods.prefGetStringList));
+  Future<Object?> prefGetStringList(rpc.Parameters params) async =>
+      source.preferences
+          .getStringList(_prefKey(params, DataServiceMethods.prefGetStringList));
 
   /// Whether the store holds [key] at all.
   ///
   /// "Absent" and "set to null" are different answers and a settings page
   /// renders a default for one and a blank for the other, which is why this
   /// method exists beside the getters rather than being inferred from a null.
-  Future<Object?> prefContainsKey(rpc.Parameters params) => source.preferences
-      .containsKey(_prefKey(params, DataServiceMethods.prefContainsKey));
+  Future<Object?> prefContainsKey(rpc.Parameters params) async =>
+      source.preferences
+          .containsKey(_prefKey(params, DataServiceMethods.prefContainsKey));
 
   Future<Object?> prefSetBool(rpc.Parameters params) async {
     const method = DataServiceMethods.prefSetBool;

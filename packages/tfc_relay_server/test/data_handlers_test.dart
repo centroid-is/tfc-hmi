@@ -1469,6 +1469,68 @@ void main() {
               'is a shape a correct source can have');
     });
   });
+
+  // 10-REVIEW IN-01, and the third place this pattern has been caught (10-08
+  // found the first two). A `Future`-returning method whose body is not
+  // `async` evaluates its argument guards BEFORE the delegated future exists,
+  // so a refusal throws synchronously and a caller holding the future never
+  // sees it. Defused on the wire by `RelaySession._on`'s
+  // `() async => handler(params)` wrapper — which is why it is Info rather
+  // than a wire defect — but a direct caller is a caller too, and a direct
+  // caller is exactly how the earlier instances were found.
+  group('every handler rejects its future rather than throwing out of it', () {
+    /// Every guard-bearing handler whose body is one delegation, by name.
+    ///
+    /// The seven the review named plus the two `_viewId` ones beside them: the
+    /// argument is about the shape of the body, so the list is every body of
+    /// that shape rather than the ones that happened to be noticed.
+    Map<String, Future<Object?> Function(DataHandlers)> delegating() =>
+        <String, Future<Object?> Function(DataHandlers)>{
+          'prefGetBool': (h) =>
+              h.prefGetBool(_params(DataServiceMethods.prefGetBool, {})),
+          'prefGetInt': (h) =>
+              h.prefGetInt(_params(DataServiceMethods.prefGetInt, {})),
+          'prefGetDouble': (h) =>
+              h.prefGetDouble(_params(DataServiceMethods.prefGetDouble, {})),
+          'prefGetString': (h) =>
+              h.prefGetString(_params(DataServiceMethods.prefGetString, {})),
+          'prefGetStringList': (h) => h.prefGetStringList(
+              _params(DataServiceMethods.prefGetStringList, {})),
+          'prefContainsKey': (h) =>
+              h.prefContainsKey(_params(DataServiceMethods.prefContainsKey, {})),
+          'historyGetKeyNames': (h) => h.historyGetKeyNames(
+              _params(DataServiceMethods.historyGetKeyNames, {})),
+          'historyGetKeys': (h) =>
+              h.historyGetKeys(_params(DataServiceMethods.historyGetKeys, {})),
+          'historyGetGraphs': (h) => h.historyGetGraphs(
+              _params(DataServiceMethods.historyGetGraphs, {})),
+        };
+
+    for (final entry in delegating().entries) {
+      test('${entry.key} refuses through the future it returned', () async {
+        final kit = _kit();
+
+        // **The call is NOT inside a try.** That is the whole case: a
+        // synchronous throw fails here, on this line, which is what a caller
+        // using `.catchError` experiences — the refusal arriving somewhere it
+        // cannot be caught.
+        final pending = entry.value(kit.handlers);
+
+        Object? caught;
+        await pending.then<void>((_) {}, onError: (Object error) {
+          caught = error;
+        });
+
+        expect(caught, isA<rpc.RpcException>(),
+            reason: 'the missing parameter has to come back as a rejected '
+                'future. Wrapped by RelaySession._on it reaches the wire '
+                'either way, so what this defends is a direct caller — a unit '
+                'test or an embedder — and the fact that the next handler '
+                'added here will be copied from one of these bodies');
+        expect((caught! as rpc.RpcException).code, rpc_error.INVALID_PARAMS);
+      });
+    }
+  });
 }
 
 /// A store that declares it has no change stream at all.
