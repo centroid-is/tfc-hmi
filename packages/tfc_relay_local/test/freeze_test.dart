@@ -57,6 +57,10 @@ final Directory testRoot = Directory('test');
 /// sweep, because that is where 8b-02's flush machinery will live.
 final Directory libCollect = Directory('lib/src/collect');
 
+/// The soak's two trees (11-01, 11-02) — the scope of freeze 9.
+final Directory testSoak = Directory('test/soak');
+final Directory testSoakSupport = Directory('test/support/soak');
+
 // ------------------------------------------------------------- the allow-lists
 
 /// Files permitted to hold a `Timer.periodic(`, each naming the plan that
@@ -151,6 +155,32 @@ const Map<String, String> retainedTimerAllowList = <String, String>{
 /// **Empty, and it should stay that way.** Two worktrees must be able to run
 /// this suite at once.
 const Map<String, String> literalPortAllowList = <String, String>{};
+
+/// Files under the soak trees permitted to reach a wall clock or an unseeded
+/// random, each naming why.
+///
+/// **Two, and both are output rather than decision.** The rule freeze 9
+/// enforces is that nothing which influences *which* fault happens or *when*
+/// may read anything but the seed; a file that only records what already
+/// happened is on the other side of that line. Anything else added here needs
+/// the same argument in the same words, and the case below refuses an entry
+/// whose file no longer contains what it was exempted for — a stale exemption
+/// silently widens the sweep.
+const Map<String, String> soakDeterminismAllowList = <String, String>{
+  // 11-01, task 3. The journal writes BOTH clocks at every checkpoint, which
+  // is 09-review WR-01's evidence half: the monotonic and wall readings agree
+  // under every lever CI can pull and diverge exactly under a VM-snapshot
+  // stun, so a run where they drift apart has to be visible in the artifact
+  // rather than invisible by construction. The journal is output; no decision
+  // in the soak reads it.
+  'soak_journal.dart': '11-01 — both clocks at every checkpoint (WR-01)',
+  // 11-01, task 2's own falsification fixture, plus the needle of the
+  // wall-clock sweep that lives in that file. A sweep for a token cannot
+  // avoid spelling the token, and a fixture that plants one is the only thing
+  // proving the sweep bites.
+  'soak_manifest_test.dart':
+      '11-01 — the wall-clock sweep\'s needle and its planted fixture',
+};
 
 // ----------------------------------------------------------- the pinned counts
 
@@ -520,6 +550,7 @@ void main() {
       expect(unimplementedMemberSites(empty), isEmpty);
       expect(forwarderSites(empty), isEmpty);
       expect(harnessLeverSites(empty), isEmpty);
+      expect(soakDeterminismOffenders(empty), isEmpty);
       expect(literalPortLines(empty), isEmpty,
           reason: 'pointed at an empty directory a sweep that reports an '
               'occurrence is inventing rather than measuring, and nothing it '
@@ -880,6 +911,109 @@ void main() {
               'the socket what it got; TcpProxy already defaults that way');
     });
   });
+
+  group('freeze 9: the soak trees cannot reach an unseeded random or a wall '
+      'clock (11-02)', () {
+    test('the two soak scopes exist and hold dart files', () {
+      // First, and for the reason at the top of this file: the sweep below is
+      // trivially satisfied by reading nothing, and these two paths are new.
+      for (final scope in <Directory>[testSoak, testSoakSupport]) {
+        expect(scope.existsSync(), isTrue,
+            reason: 'no directory at "${scope.path}", so freeze 9 has been '
+                'passing against nothing');
+        expect(dartFilesIn(scope), isNotEmpty,
+            reason: '"${scope.path}" holds no .dart file');
+      }
+    });
+
+    test('no file under test/soak/ or test/support/soak/ reaches one', () {
+      expect(
+          <String>[
+            ...soakDeterminismOffenders(testSoak),
+            ...soakDeterminismOffenders(testSoakSupport),
+          ],
+          isEmpty,
+          reason: 'the whole soak is a pure function of its seed, and a '
+              'single stray `Random(` or `DateTime.now()` in a checker or a '
+              'generator breaks reproduction in the way that is hardest to '
+              'notice: the seed is right, the repro log is right, the log '
+              'still prints, and the run diverges anyway. Nothing in the '
+              'artifact says so, and the reproduction attempt produces a '
+              'different storm that looks like the failure not reproducing. '
+              'Seed a SeededScenarioRandom, or take the clock from SoakClock; '
+              'if the line genuinely records rather than decides, it needs an '
+              'entry in soakDeterminismAllowList with its argument');
+    });
+
+    test('the sweep bites a file that does reach one — three tokens, three '
+        'fixtures', () {
+      // A sweep for an ABSENT token passes over an empty file, so the arm
+      // above is decoration until something proves it counts. One fixture per
+      // forbidden spelling, fed through the real directory sweep rather than
+      // through the line matcher, so the file walk and the allow-list are
+      // exercised too.
+      for (final (name, line) in <(String, String)>[
+        ('bare_random.dart', '  final r = Random(7);'),
+        ('secure_random.dart', '  final r = Random.secure();'),
+        ('wall_clock.dart', '  final at = DateTime.now();'),
+      ]) {
+        final planted = _plant(name, line);
+        final hits = soakDeterminismOffenders(planted);
+        expect(hits, hasLength(1),
+            reason: 'the sweep did not catch "$line" in $name, so the arm '
+                'above would pass on the day somebody writes it: $hits');
+        expect(hits.single, contains(name));
+      }
+    });
+
+    test('and it does NOT bite a file that only names one in a comment', () {
+      // The repo's own experience: `grep -c` counts comments, and a header
+      // paragraph explaining why `DateTime.now()` is forbidden would make the
+      // sweep self-invalidating. `invariant.dart:88` already names
+      // `Random.secure` in a doc comment for a good reason.
+      final planted = _plant(
+        'commentary.dart',
+        '/// Never use Random(7) or DateTime.now() here.\n'
+        '// Random.secure() is worse.\n'
+        'void nothing() {}',
+      );
+      expect(soakDeterminismOffenders(planted), isEmpty,
+          reason: 'a file that merely explains the rule was reported as '
+              'breaking it, so the sweep cannot coexist with its own '
+              'documentation');
+    });
+
+    test('every allow-list entry still earns its place', () {
+      // The other direction, and the one nobody checks: an exemption for a
+      // file that no longer contains what it was exempted for is a hole in
+      // the sweep that reads as a rule.
+      for (final entry in soakDeterminismAllowList.entries) {
+        final matches = <File>[
+          for (final scope in <Directory>[testSoak, testSoakSupport])
+            ...dartFilesIn(scope)
+                .where((f) => f.uri.pathSegments.last == entry.key),
+        ];
+        expect(matches, hasLength(1),
+            reason: 'soakDeterminismAllowList exempts "${entry.key}" '
+                '(${entry.value}) and the soak trees hold '
+                '${matches.length} files by that name');
+        expect(nonDeterministicLines(matches.single.readAsStringSync()),
+            isNotEmpty,
+            reason: '"${entry.key}" is exempted from freeze 9 and no longer '
+                'contains anything the sweep would have caught. The entry is '
+                'now a standing exemption for a file nobody is watching — '
+                'delete it');
+      }
+    });
+  });
+}
+
+/// Writes [contents] to [name] in a fresh temp directory, cleaned up after.
+Directory _plant(String name, String contents) {
+  final directory = Directory.systemTemp.createTempSync('relay-soak-freeze-');
+  addTearDown(() => directory.deleteSync(recursive: true));
+  File('${directory.path}/$name').writeAsStringSync(contents);
+  return directory;
 }
 
 // ---------------------------------------------------------------- the sweeps
@@ -1231,6 +1365,50 @@ List<String> unhandledFireAndForgetSites(Directory directory) {
     }
   }
   return sites;
+}
+
+/// A bare `Random(`, not the tail of a longer name.
+///
+/// The negative lookbehind is load-bearing: `SeededScenarioRandom(seed)` — the
+/// generator the soak is REQUIRED to use — ends in `Random(`, so a plain
+/// `contains` would report every correct call site as a violation and the
+/// sweep would have to be deleted within a day.
+final RegExp _bareRandom = RegExp(r'(?<![A-Za-z0-9_$])Random\(');
+
+/// Every non-comment line of [source] that reaches an unseeded random or a
+/// wall clock.
+///
+/// Comment lines are skipped, and that is not optional: `invariant.dart:88`
+/// names `Random.secure` in a doc comment explaining why the soak does the
+/// opposite, and this file's own allow-list argues about `DateTime.now()`. A
+/// sweep that a paragraph about the rule can break is a sweep that gets
+/// deleted rather than obeyed.
+List<String> nonDeterministicLines(String source) {
+  final lines = source.split('\n');
+  return <String>[
+    for (var i = 0; i < lines.length; i++)
+      if (!_isAnyComment(lines[i]) &&
+          (_bareRandom.hasMatch(lines[i]) ||
+              lines[i].contains('Random.secure') ||
+              lines[i].contains('DateTime.now()')))
+        'line ${i + 1}: ${lines[i].trim()}',
+  ];
+}
+
+/// Every file under [directory] that reaches one, outside the allow-list.
+///
+/// Reported as `path:line: text`, so a failure names the file and the line
+/// rather than only the count — the reader's next action is to open it.
+List<String> soakDeterminismOffenders(Directory directory) {
+  final offenders = <String>[];
+  for (final file in dartFilesIn(directory)) {
+    final name = file.uri.pathSegments.last;
+    if (soakDeterminismAllowList.containsKey(name)) continue;
+    for (final hit in nonDeterministicLines(file.readAsStringSync())) {
+      offenders.add('${file.path}:${hit.replaceFirst('line ', '')}');
+    }
+  }
+  return offenders;
 }
 
 /// A four- or five-digit integer that is not part of a longer identifier.
