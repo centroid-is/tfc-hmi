@@ -46,6 +46,24 @@ tags:
   meta:
     # Cases that test the surface itself: freeze tests, structural sweeps, and
     # the arms that prove a check bites a deliberately broken implementation.
+  soak:
+    # The chaos soak: one seeded fault storm driven against a composed pipe,
+    # with five invariants sampled continuously and a journal written to
+    # build/soak/. Its own lane because of its duration, not its subject —
+    # the full arm is 35 minutes behind RELAY_SOAK, and this package runs
+    # `concurrency: 1`, so a soak file discovered by a plain `dart test`
+    # serialises every other suite in the package behind it. The ordinary CI
+    # step therefore runs `--exclude-tags "db || soak"` and the 90-second arm
+    # runs as its own step with its own duration.
+    #
+    # No `timeout:` here on purpose. The soak's timeout is a library
+    # annotation on soak_test.dart, sized against the longest arm; two places
+    # to change one number is one place too many, and the place that loses
+    # the race is always the one further from the code.
+    #
+    # Declared for the same reason as every tag above it: an undeclared tag
+    # does not select, it warns — so `--tags soakk` would run all 790 cases
+    # of the ordinary lane and report a green soak.
   db:
     # Legs that need a REAL TimescaleDB: the sink adapter against a live
     # server, the advisory lock, and the two-writer isolation proof.
