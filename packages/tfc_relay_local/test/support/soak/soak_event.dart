@@ -53,6 +53,8 @@ library;
 
 import 'dart:math';
 
+import 'package:tfc_stateman_contract/faults.dart';
+
 // ---------------------------------------------------------------- the vocabulary
 
 /// One thing the storm does to the world outside the proxy, and when.
@@ -561,6 +563,13 @@ abstract final class SoakExclusivityRules {
   /// (or its recovery) would have reached into a generated quiet window.
   static const String quietWindow = 'quietWindow';
 
+  /// Counted apart from [quietWindow] on purpose. A draw whose recovery would
+  /// have run past the **end of the run** is suppressed by the same
+  /// arithmetic, and lumping the two together would report a quiet-window
+  /// suppression count that is non-zero for a timeline with no windows in it
+  /// — which is exactly the kind of number somebody reads once and trusts.
+  static const String runTail = 'runTail';
+
   /// Not one of the four either: a draw that would have fired into nothing —
   /// a second link-down on an alias already down, an unsubscribe from a panel
   /// holding no subscription. An event that applies to nothing does not fail;
@@ -573,6 +582,7 @@ abstract final class SoakExclusivityRules {
     bumpOnDownAlias,
     writeInFlight,
     quietWindow,
+    runTail,
     noOp,
   ];
 }
@@ -883,9 +893,311 @@ abstract final class SoakEventSchedule {
     Iterable<String>? keys,
     List<StableWindow> quietWindows = const <StableWindow>[],
   }) {
-    throw UnimplementedError('SoakEventSchedule.generateReport');
+    if (duration <= Duration.zero) {
+      throw ArgumentError.value(
+          duration,
+          'duration',
+          'a storm needs a positive duration; zero generates no events and '
+              'would pass every invariant a soak checks');
+    }
+    if (minGap <= Duration.zero) {
+      throw ArgumentError.value(
+          minGap,
+          'minGap',
+          'a zero gap is not a fast storm — it is an unbounded number of '
+              'entries at offset zero, all applied in one turn of the event '
+              'loop');
+    }
+    if (maxGap < minGap) {
+      throw ArgumentError.value(
+          maxGap, 'maxGap', 'the gap band is empty: minGap is $minGap');
+    }
+    if (panels.isEmpty) {
+      throw ArgumentError.value(
+          panels,
+          'panels',
+          'a storm with no panels to target draws panel events that name '
+              'nobody, so every per-panel invariant passes vacuously. The '
+              'never-faulted control is excluded by not being in this list, '
+              'which means an all-control population is a caller error');
+    }
+    if (aliases.isEmpty) {
+      throw ArgumentError.value(aliases, 'aliases',
+          'a storm with no upstream aliases can break nothing upstream');
+    }
+    weights.validate();
+
+    final keyPool = List<String>.unmodifiable(keys ?? defaultKeysFor(aliases));
+    if (keyPool.isEmpty) {
+      throw ArgumentError.value(keys, 'keys', 'the key pool is empty');
+    }
+
+    final random = SeededScenarioRandom(eventSeedFor(seed));
+    final events = <ScheduledSoakEvent>[];
+    final skips = <String, int>{
+      for (final rule in SoakExclusivityRules.all) rule: 0,
+    };
+    final draws = <String, int>{
+      for (final kind in SoakEventKinds.drawable) kind: 0,
+    };
+
+    // Recoveries drawn ahead of the events that follow them, held in offset
+    // order and flushed in place. This is why the monotonicity arm exists: an
+    // implementation that appended them at the end would produce a list whose
+    // offsets go backwards, and playback would apply half the storm at once.
+    final pending = <ScheduledSoakEvent>[];
+    final downAliases = <String>{};
+    final revokedStations = <String>{};
+    final subscribed = <String, Set<String>>{
+      for (final panel in panels) panel: <String>{},
+    };
+    final lastWriteAt = <String, Duration>{};
+    Duration? lastRestartAt;
+
+    // Sorted window starts, so "the next window" is a scan rather than a sort
+    // inside the loop.
+    final windows = List<StableWindow>.of(quietWindows)
+      ..sort((a, b) => a.start.compareTo(b.start));
+
+    StableWindow? windowContaining(Duration offset) {
+      for (final window in windows) {
+        if (window.contains(offset)) return window;
+      }
+      return null;
+    }
+
+    /// Where the storm has to stop reaching, from [offset], and which of the
+    /// two barriers it ran into. The reason travels with the limit so a
+    /// suppression is counted under what actually caused it.
+    ({Duration limit, String reason}) barrierAfter(Duration offset) {
+      for (final window in windows) {
+        if (window.start > offset) {
+          return (
+            limit: window.start - windowGuard,
+            reason: SoakExclusivityRules.quietWindow
+          );
+        }
+      }
+      return (limit: duration, reason: SoakExclusivityRules.runTail);
+    }
+
+    void flushPendingUpTo(Duration offset) {
+      while (pending.isNotEmpty && pending.first.offset <= offset) {
+        final entry = pending.removeAt(0);
+        switch (entry.event) {
+          case UpstreamLinkUp(:final alias):
+            downAliases.remove(alias);
+          case TokenRestore(:final stationId):
+            revokedStations.remove(stationId);
+          default:
+            break;
+        }
+        events.add(entry);
+      }
+    }
+
+    void schedulePending(ScheduledSoakEvent entry) {
+      var index = pending.length;
+      while (index > 0 && pending[index - 1].offset > entry.offset) {
+        index--;
+      }
+      pending.insert(index, entry);
+    }
+
+    String pick(List<String> from) => from[random.nextInt(from.length)];
+
+    Duration between(Duration low, Duration high) {
+      final spread = (high - low).inMicroseconds;
+      return low +
+          Duration(microseconds: spread <= 0 ? 0 : random.nextInt(spread + 1));
+    }
+
+    final gapSpread = (maxGap - minGap).inMicroseconds;
+    var offset = Duration.zero;
+
+    while (true) {
+      offset += minGap +
+          Duration(
+              microseconds: gapSpread == 0 ? 0 : random.nextInt(gapSpread + 1));
+      if (offset >= duration) break;
+
+      flushPendingUpTo(offset);
+
+      final inside = windowContaining(offset);
+      if (inside != null) {
+        // Resume drawing after the window rather than inside it. The window is
+        // where invariant 3 requires convergence; an event in it turns a
+        // required convergence into an optional one.
+        skips[SoakExclusivityRules.quietWindow] =
+            skips[SoakExclusivityRules.quietWindow]! + 1;
+        offset = inside.end;
+        continue;
+      }
+
+      final kind = weights.draw(random);
+      draws[kind] = draws[kind]! + 1;
+
+      final barrier = barrierAfter(offset);
+      final floor = barrier.limit;
+
+      void skip(String rule) => skips[rule] = skips[rule]! + 1;
+
+      if (offset + recoverySpanOf(kind) > floor) {
+        skip(barrier.reason);
+        continue;
+      }
+
+      switch (kind) {
+        case SoakEventKinds.upstreamLinkDown:
+          final alias = pick(aliases);
+          if (downAliases.contains(alias)) {
+            // `disconnectUpstream` returns early when the link is already
+            // down (fake_upstream_link.dart:397), so a second one would be a
+            // log line describing nothing.
+            skip(SoakExclusivityRules.noOp);
+            continue;
+          }
+          final latest = floor;
+          if (offset + linkOutageMin > latest) {
+            skip(barrier.reason);
+            continue;
+          }
+          final recoverAt = between(
+            offset + linkOutageMin,
+            _earlier(offset + linkOutageMax, latest),
+          );
+          events.add(ScheduledSoakEvent(offset, UpstreamLinkDown(alias)));
+          schedulePending(
+              ScheduledSoakEvent(recoverAt, UpstreamLinkUp(alias)));
+          downAliases.add(alias);
+
+        case SoakEventKinds.upstreamEpochBump:
+          final alias = pick(aliases);
+          if (downAliases.contains(alias)) {
+            skip(SoakExclusivityRules.bumpOnDownAlias);
+            continue;
+          }
+          events.add(ScheduledSoakEvent(offset, UpstreamEpochBump(alias)));
+
+        case SoakEventKinds.upstreamMassDegrade:
+          events.add(
+              ScheduledSoakEvent(offset, UpstreamMassDegrade(pick(aliases))));
+
+        case SoakEventKinds.upstreamSlowResolve:
+          final alias = pick(aliases);
+          final latency = between(const Duration(milliseconds: 100),
+              const Duration(milliseconds: 2000));
+          events
+              .add(ScheduledSoakEvent(offset, UpstreamSlowResolve(alias, latency)));
+
+        case SoakEventKinds.gatewayRestart:
+          final since = lastRestartAt;
+          if (since != null && offset - since < restartSeparation) {
+            skip(SoakExclusivityRules.restartSeparation);
+            continue;
+          }
+          events.add(ScheduledSoakEvent(offset, const GatewayRestart()));
+          lastRestartAt = offset;
+
+        case SoakEventKinds.tokenRevocation:
+          final station = pick(panels);
+          if (revokedStations.contains(station)) {
+            skip(SoakExclusivityRules.revocationPairing);
+            continue;
+          }
+          final latest = _earlier(offset + tokenRestoreWindow, floor);
+          if (offset + tokenRestoreMin > latest) {
+            // No room to restore before the next quiet window opens. Emitting
+            // the revocation anyway would either leave the panel gone or put
+            // its redial inside the window; refusing the draw is the only
+            // option that keeps both properties.
+            skip(SoakExclusivityRules.revocationPairing);
+            continue;
+          }
+          final restoreAt = between(offset + tokenRestoreMin, latest);
+          events.add(ScheduledSoakEvent(offset, TokenRevocation(station)));
+          schedulePending(
+              ScheduledSoakEvent(restoreAt, TokenRestore(station)));
+          revokedStations.add(station);
+
+        case SoakEventKinds.keymappingReload:
+          events.add(ScheduledSoakEvent(offset, const KeymappingReload()));
+
+        case SoakEventKinds.panelSubscribe:
+          final panel = pick(panels);
+          final count = 1 + random.nextInt(3);
+          final chosen = <String>[];
+          for (var i = 0; i < count; i++) {
+            final key = pick(keyPool);
+            if (!chosen.contains(key)) chosen.add(key);
+          }
+          events.add(ScheduledSoakEvent(offset, PanelSubscribe(panel, chosen)));
+          subscribed[panel]!.addAll(chosen);
+
+        case SoakEventKinds.panelUnsubscribe:
+          final panel = pick(panels);
+          final held = subscribed[panel]!;
+          if (held.isEmpty) {
+            skip(SoakExclusivityRules.noOp);
+            continue;
+          }
+          final key = held.elementAt(random.nextInt(held.length));
+          events.add(ScheduledSoakEvent(
+              offset, PanelUnsubscribe(panel, <String>[key])));
+          held.remove(key);
+
+        case SoakEventKinds.panelWrite:
+          final panel = pick(panels);
+          final previous = lastWriteAt[panel];
+          if (previous != null && offset - previous < writeFlightWindow) {
+            skip(SoakExclusivityRules.writeInFlight);
+            continue;
+          }
+          events.add(ScheduledSoakEvent(
+              offset, PanelWrite(panel, pick(keyPool), random.nextInt(1000))));
+          lastWriteAt[panel] = offset;
+
+        case SoakEventKinds.panelQuery:
+          events.add(ScheduledSoakEvent(
+              offset,
+              PanelQuery(pick(panels), pick(keyPool),
+                  _queryWindows[random.nextInt(_queryWindows.length)])));
+
+        case SoakEventKinds.plantMutate:
+          events.add(ScheduledSoakEvent(
+              offset, PlantMutate(pick(keyPool), random.nextInt(1000))));
+
+        default:
+          throw StateError('drew "$kind", which no arm of the generator '
+              'emits. A drawable kind with no emission is a lever the storm '
+              'weights and never pulls');
+      }
+    }
+
+    // Every pending recovery was clamped inside the run when it was drawn, so
+    // this flush is what puts the tail of the storm in the log rather than a
+    // set of disruptions with no matching recovery.
+    flushPendingUpTo(duration);
+
+    return SoakEventGeneration(
+      events: events,
+      skipsByRule: skips,
+      drawsByKind: draws,
+      draws: draws.values.fold(0, (sum, count) => sum + count),
+    );
   }
+
+  /// The history windows a panel asks for. Fixed rather than drawn as a
+  /// continuous range, so a repro log reads `over 5m` instead of
+  /// `over 4m 51.203s`.
+  static const List<Duration> _queryWindows = <Duration>[
+    Duration(minutes: 1),
+    Duration(minutes: 5),
+    Duration(minutes: 15),
+  ];
 }
+
+Duration _earlier(Duration a, Duration b) => a <= b ? a : b;
 
 /// `mm:ss.mmm`, so a log column lines up and a reader can scan offsets.
 ///
