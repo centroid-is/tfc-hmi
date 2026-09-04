@@ -1565,13 +1565,54 @@ void main() {
         checker.sample(_at(Duration(seconds: 5 * i)));
       }
 
-      expect(checker.violations, isNotEmpty,
-          reason: 'seventy entries in a list trimmed to sixty-four means the '
-              'trim stopped running');
+      // **A COUNT, not `isNotEmpty`.** The loop breaches on i=4, 5 and 6 — one
+      // defect observed at three checkpoints — and an `isNotEmpty` here cannot
+      // tell those apart. That mattered: unlatched, a structure stuck above
+      // its cap records once per checkpoint per panel, which on the
+      // thirty-five-minute arm is 420 checkpoints x up to 4 stormed panels,
+      // about 1,600 violations for one defect. `ViolationLog` retains 200
+      // (`invariant.dart:171`), so one finding fills the log and pushes every
+      // other checker's FIRST occurrence into overflow — precisely what 11-06
+      // measured on invariant 1 and named a prerequisite for reading anything
+      // else in the log.
+      expect(checker.violations, hasLength(1),
+          reason: 'seventy entries in a list trimmed to sixty-four is ONE '
+              'finding — the trim stopped running — however many checkpoints '
+              'observe it. Three violations here is the missing latch, and '
+              'the cap rule was the last bounded-memory rule without one '
+              '(the ratio rule latches at :527, the monotone rule resets at '
+              ':509, invariant 5 has overReported, invariant 1 got its '
+              'episode latch in 11-07)');
       final first = checker.violations.first.toString();
       expect(first, contains(writeStatusQueriesStructure));
       expect(first, contains('64'));
       expect(first, contains('cap'));
+      // Grouping, not under-reporting: the repeats the latch swallowed are
+      // still counted, so a reader can tell one checkpoint from four hundred.
+      expect(checker.capRepeatsSuppressed, 2,
+          reason: 'i=5 and i=6 observed the same unbroken cap; a latch that '
+              'dropped them without counting them would be the checker going '
+              'quiet rather than grouping');
+    });
+
+    test('a capped structure that comes back under the cap and breaches again '
+        'reports twice', () {
+      // The other half of a latch, and the half that makes it a latch rather
+      // than a mute. Two separate breaches with a healthy reading between them
+      // are two findings; only an unbroken run is one.
+      final source = _StructureSource(panels: 2);
+      final checker = BoundedMemoryChecker(source);
+      const readings = <int>[64, 64, 64, 64, 70, 70, 64, 64, 70, 70];
+      for (var i = 0; i < readings.length; i++) {
+        source.panel(1)[writeStatusQueriesStructure] = readings[i];
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+
+      expect(checker.violations, hasLength(2),
+          reason: 'the trim came back and then stopped again — two episodes, '
+              'and a latch that never cleared would report one');
+      expect(checker.capRepeatsSuppressed, 2,
+          reason: 'one suppressed repeat inside each of the two episodes');
     });
 
     test('the construction cap matches the product constant it duplicates', () {
