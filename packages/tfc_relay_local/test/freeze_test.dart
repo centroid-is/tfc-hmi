@@ -180,6 +180,14 @@ const Map<String, String> soakDeterminismAllowList = <String, String>{
   // proving the sweep bites.
   'soak_manifest_test.dart':
       '11-01 — the wall-clock sweep\'s needle and its planted fixture',
+  // 11-03, task 2. `RELAY_SOAK_SEED=random` draws the run's seed, and drawing
+  // is the one place in the soak where an unseeded source is the point rather
+  // than the bug this sweep exists for. Everything downstream of the draw is
+  // seeded from it, and the number is printed on line one before anything is
+  // composed and fed back through RELAY_SOAK_SEED to reproduce — so it decides
+  // nothing that is not immediately recorded. One line, `_drawSeed`, at the
+  // bottom of the file.
+  'soak_test.dart': '11-03 — RELAY_SOAK_SEED=random draws the run\'s seed',
 };
 
 // ----------------------------------------------------------- the pinned counts
