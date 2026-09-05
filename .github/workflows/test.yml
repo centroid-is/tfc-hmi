@@ -476,17 +476,27 @@ jobs:
         loading=$( { grep -o '"name":"loading ' soak-report.json || true; } | wc -l)
         ran=$((total - loading))
         echo "soak-tagged tests reported: $ran"
-        # MEASURED 93 at 11-03, by this exact arithmetic (91 cases plus the two
-        # setUpAll/tearDownAll starts the reporter also counts). The floor is
-        # 75 — 19% under, the same proportion 8b-02 and 10-11 chose, and for
-        # the same reason: adding a case only ever raises this number, so a
-        # floor never trips on an addition, while one pinned at the count would
-        # have to be edited by every plan that retires a single case. 75 still
-        # catches the two failures worth catching — the tag selecting nothing
-        # at all (0), and the phase's largest file dropping out
-        # (soak_schedule_test.dart is 34 of the 91, so losing it lands at ~59).
-        if [ "$ran" -lt 75 ]; then
-          echo "::error::the soak lane ran only $ran soak-tagged tests, expected ~93 — the soak tag is not selecting what it used to"
+        # MEASURED 225 at 11-09, by this exact arithmetic (231 testStart minus
+        # 6 "loading" suites). The previous floor of 75 was measured against 93
+        # at 11-03 and was left behind by four waves of cases: by 11-09 it sat
+        # 67% under, and losing soak_meta_test.dart ENTIRELY — all six positive
+        # controls, the only evidence any checker can fire at all — landed at
+        # ~95 and passed green.
+        #
+        # 180 is 20% under, the margin 8b-02 and 10-11 chose, and for their
+        # reason: adding a case only ever raises this number, so a floor never
+        # trips on an addition, while one pinned at the count would be edited
+        # by every plan that retires a single case.
+        #
+        # What it catches, stated honestly rather than inherited: the tag
+        # selecting nothing at all (0), and soak_meta_test.dart dropping out
+        # (130 of the 225, landing at ~95). What it does NOT catch is losing a
+        # mid-sized file — soak_schedule_test.dart is 34, and 191 clears 180.
+        # Catching that would need a 15% margin, which is tight enough to trip
+        # on a legitimate retirement. The old comment claimed the largest-file
+        # case and had stopped being true.
+        if [ "$ran" -lt 180 ]; then
+          echo "::error::the soak lane ran only $ran soak-tagged tests, expected ~225 — the soak tag is not selecting what it used to"
           exit 1
         fi
 
@@ -614,13 +624,14 @@ jobs:
         loading=$( { grep -o '"name":"loading ' soak-report.json || true; } | wc -l)
         ran=$((total - loading))
         echo "soak-tagged tests reported: $ran"
-        # Same floor and the same 19% margin as the 90-second step's, against
-        # the same selection: this job runs the identical files with a longer
+        # Same floor and the same margin as the 90-second step's, against the
+        # same selection: this job runs the identical files with a longer
         # window, so the COUNT is the lane's count and only the duration
         # differs. That is the point of F2c's precedent — the long arm is
-        # literally the same function with a longer window.
-        if [ "$ran" -lt 75 ]; then
-          echo "::error::the soak lane ran only $ran soak-tagged tests, expected ~93 — the soak tag is not selecting what it used to"
+        # literally the same function with a longer window. The two steps must
+        # move together; 11-09 raised both from 75 after measuring 225.
+        if [ "$ran" -lt 180 ]; then
+          echo "::error::the soak lane ran only $ran soak-tagged tests, expected ~225 — the soak tag is not selecting what it used to"
           exit 1
         fi
 
@@ -644,7 +655,44 @@ jobs:
         RELAY_SOAK: "1"
       run: |
         dart pub get
-        dart test test/gate --tags gate -r expanded
+        dart test test/gate --tags gate -r expanded --file-reporter "json:gate-report.json"
+        # The same count floor as the soak step 150 lines above, and for the
+        # identical reason: `dart test --tags gate` that selects NOTHING exits
+        # GREEN. `gate` is declared (tfc_relay_client/dart_test.yaml:39), so a
+        # renamed tag, a split test/gate/ whose new files miss the annotation,
+        # or a file that stops matching *_test.dart all select less silently.
+        # A MISSPELLED selector is the case the exit code already covers —
+        # 11-01 measured `--tags soakk` exiting 79 — and this covers the other
+        # one. It matters here more than anywhere: this is the ONLY `--tags
+        # gate` invocation in the workflow, and the job's own comment above
+        # claims it produces two pieces of evidence nothing else runs at
+        # length. Selecting nothing would go on reporting that evidence while
+        # running none of it.
+        [ -f gate-report.json ] || { echo "::error::no gate-report.json — the gate step never produced a report"; exit 1; }
+        # `|| true` on both greps: `shell: bash` is `bash -eo pipefail` and
+        # `grep -o` exits 1 on no match, so without it the one input this floor
+        # exists for — a report with no testStart in it — aborts the step
+        # before the message prints, and a lane that selected nothing reads as
+        # a shell error instead. 11-03 verified this both ways.
+        total=$( { grep -o '"type":"testStart"' gate-report.json || true; } | wc -l)
+        loading=$( { grep -o '"name":"loading ' gate-report.json || true; } | wc -l)
+        ran=$((total - loading))
+        echo "gate-tagged tests reported: $ran"
+        # MEASURED 95 at 11-09 (112 testStart minus 17 loading; 92 passed and
+        # 3 skipped on macOS, 4m27s). NOTE the count is the same with and
+        # without RELAY_SOAK: the env var swaps which arm of a paired
+        # short/long ternary is skipped, and package:test emits testStart for
+        # a skipped test too. So this floor is measurable without paying for
+        # the ten-minute long-outage arm.
+        #
+        # 76 is 19% under, the margin the soak steps and 8b-02 use. The
+        # carry-forward's "gate 65" is STALE — it predates several waves — and
+        # a floor set from it would have passed a lane that had lost a third
+        # of its rows.
+        if [ "$ran" -lt 76 ]; then
+          echo "::error::the gate lane ran only $ran gate-tagged tests, expected ~95 — the gate tag is not selecting what it used to"
+          exit 1
+        fi
 
     # **The forensics, and `if: always()` is the whole point of the step.**
     # An invariant trips at minute 23: what has to already be on disk for that
