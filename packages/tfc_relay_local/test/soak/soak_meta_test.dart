@@ -27,6 +27,7 @@
 @Timeout(Duration(minutes: 4))
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:test/test.dart';
@@ -3070,6 +3071,65 @@ void main() {
               'a threshold');
       expect(ledger.keyframesNotNeeded, isFalse);
       expect(ledger.verdictBlock, contains('needed, evidence above'));
+    });
+
+    test('an OVERFLOWED ledger still streams every event to divergences.jsonl',
+        () async {
+      // **The doc and the verdict block both promise this and neither was
+      // true.** `takeReading` streams `for (i = _streamed; i < _entries.length;
+      // i++)`, and `_retain` stops appending to `_entries` at `capacity`. So
+      // once the ledger overflows, `_entries.length` is pinned, `_streamed`
+      // catches up to it, and the guard `if (_streamed >= _entries.length)
+      // return` makes every later tick a no-op. The events past the cap reach
+      // NEITHER the retained list nor the file.
+      //
+      // The doc directly above `takeReading` says "**Streamed rather than
+      // accumulated**, so a thirty-five-minute run whose ledger overflowed
+      // still has every event on disk", and the verdict block tells the reader
+      // the overflowed events are "counted above and in divergences.jsonl
+      // ONLY". On the one run where the keyframe decision flips and the
+      // per-event record IS the evidence, the reader follows that instruction
+      // and gets nothing after event #200.
+      final dir = _tempJournal();
+      final source = _ResyncSource()..journalPath = dir;
+      final ledger = DivergenceLedger(source, capacity: 3);
+      // Ticked between events, the way the driver ticks it: the first few are
+      // streamed, and then the ledger overflows and every later tick is a
+      // no-op because the cursor has caught up with a list that stopped
+      // growing.
+      for (var i = 1; i <= 10; i++) {
+        ledger.record(_event(i, DivergenceCause.unattributed));
+        ledger.takeReading(_at(Duration(seconds: i)));
+      }
+      await ledger.flushStream();
+
+      final file = File('$dir/$divergenceFileName');
+      final lines = file
+          .readAsLinesSync()
+          .where((one) => one.trim().isNotEmpty)
+          .toList();
+      expect(lines, hasLength(10),
+          reason: 'ten events were recorded and the file is THE record — the '
+              'retained list is only what the verdict block prints. Three '
+              'lines here is the ledger silently forgetting seven events it '
+              'told the reader to look for in this file');
+      expect(ledger.overflow, 7);
+      expect(ledger.total, 10);
+      // Every line a whole JSON object: two append sinks open on one file can
+      // interleave mid-line, and a corrupted record in the artifact whose
+      // whole job is to be machine-readable is worse than a short one.
+      for (final line in lines) {
+        expect(() => jsonDecode(line), returnsNormally,
+            reason: 'unparseable line in $divergenceFileName: $line');
+      }
+      expect(
+          <int>[
+            for (final line in lines)
+              (jsonDecode(line) as Map<String, Object?>)['nth']! as int,
+          ],
+          <int>[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+          reason: 'in order, once each — a cursor advanced before the flush '
+              'loses lines and a sink reopened per tick can duplicate them');
     });
 
     test('the verdict is written to verdict.txt and matches stdout', () {
