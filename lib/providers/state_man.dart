@@ -11,7 +11,9 @@ import 'package:tfc_dart/core/modbus_device_client.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/preferences.dart';
+import '../core/gateway_state_man.dart';
 import 'access.dart';
+import 'gateway.dart';
 import 'access_policy.dart';
 import 'preferences.dart';
 import 'collector.dart';
@@ -110,17 +112,45 @@ Future<StateMan> stateMan(Ref ref) async {
     },
   );
 
+  // Which pipe this station runs on. Device-local, read once here, and
+  // deliberately `ref.read` rather than `ref.watch` for the same reason the
+  // preferences above are: this provider is `keepAlive` and holds every
+  // connection on the panel, so a live re-read would tear OPC UA sessions and
+  // the Postgres pool down under widgets holding subscriptions. Switching
+  // transport is restart-to-apply, which matches the rest of the config-watch
+  // behaviour on this codebase.
+  final gateway = await ref.read(gatewayConfigProvider.future);
+
   try {
-    final m2400Clients = createM2400DeviceClients(config.jbtm);
-    final modbusClients = buildModbusDeviceClients(config.modbus, keyMappings);
-    final deviceClients = [...m2400Clients, ...modbusClients];
-    final stateMan = await ref.read(stateManFactoryProvider)(
+    final StateMan stateMan;
+    if (gateway.isGateway) {
+      // One WebSocket and nothing else: no device clients, no collector. The
+      // gateway owns the upstream sessions and does the historising; a panel
+      // that also collected would write a second copy of every sample.
+      final refusal = gateway.validationError;
+      if (refusal != null) {
+        throw StateError('Gateway mode is selected but the configuration '
+            'cannot be dialled: $refusal');
+      }
+      stateMan = await GatewayStateMan.create(
+        uri: gateway.uri,
+        clientConfig: await gateway.toClientConfig(),
         config: config,
         keyMappings: keyMappings,
-        deviceClients: deviceClients);
+      );
+    } else {
+      final m2400Clients = createM2400DeviceClients(config.jbtm);
+      final modbusClients =
+          buildModbusDeviceClients(config.modbus, keyMappings);
+      final deviceClients = [...m2400Clients, ...modbusClients];
+      stateMan = await ref.read(stateManFactoryProvider)(
+          config: config,
+          keyMappings: keyMappings,
+          deviceClients: deviceClients);
 
-    // Initialize collector
-    ref.read(collectorProvider.future);
+      // Initialize collector
+      ref.read(collectorProvider.future);
+    }
 
     // The **inner** instance, exactly once. Closing through the decorator
     // would forward to the same call and add nothing but a second path to get
