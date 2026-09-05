@@ -470,6 +470,28 @@ final class RemoteStateMan implements StateManApi {
   Set<String> get debugStaleSubscriptionsAtLastTick =>
       _supervisor.watchdog.staleSubscriptions;
 
+  /// Whether this panel has a gateway-clock anchor yet.
+  ///
+  /// **The precondition under every subscription-staleness assertion, and the
+  /// one nothing else can observe.** [staleSubscriptions] ages `evaluatedAt`
+  /// against `FreshnessWatchdog.serverNowMs`, which is null until a tick frame
+  /// has given it something to anchor on — and a panel with no anchor reports
+  /// *nothing* stale, for ever, because there is no clock to be late against.
+  /// That is the right behaviour: a guess about the gateway's clock is worse
+  /// than an admission of ignorance.
+  ///
+  /// It is also indistinguishable, from outside, from a panel that has an
+  /// anchor and judges everything fresh. A case that starves a link before the
+  /// first tick has landed therefore waits for a verdict that can never come,
+  /// and fails on its own budget having never reached the state it is named
+  /// for. Values and ticks are separate frames, so "a value arrived" does not
+  /// establish it.
+  ///
+  /// `debug` for the same reason [debugStaleSubscriptionsAtLastTick] is: it is
+  /// a precondition a test establishes, never a thing a screen renders.
+  bool get debugHasServerClock =>
+      _supervisor.watchdog.serverNowMs != null;
+
   /// How far this panel's clock sits from the gateway's, captured at the last
   /// handshake.
   ///

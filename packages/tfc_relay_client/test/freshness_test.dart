@@ -651,6 +651,26 @@ void main() {
           () => fixture.client.read(scenarioKey)?.value == 7,
           budget: const Duration(seconds: 5));
 
+      // **The precondition, established rather than assumed.** The verdict
+      // below ages `evaluatedAt` against the gateway clock this panel
+      // estimates from tick frames, and a panel with no such estimate reports
+      // nothing stale at all — correctly, because there is no clock for
+      // anything to be late against. From outside that is indistinguishable
+      // from a panel that has an anchor and judges everything fresh, so a case
+      // that starves the link first waits five seconds for a verdict that can
+      // never arrive and fails having never reached the state it is named for.
+      //
+      // A value having arrived does not establish it: values ride `u` frames
+      // and the clock sample comes from `tick`, which are separate frames. On
+      // an unloaded machine the tick has always landed by now; that is luck,
+      // not a guarantee, and this is the shape of the failure this case showed
+      // on windows-latest. Split out so the two failures read differently —
+      // this one says the panel never got a clock, the one below says it got
+      // one and did not use it.
+      await until('the panel to take a gateway-clock sample from a tick frame',
+          () => fixture.client.debugHasServerClock,
+          budget: const Duration(seconds: 5));
+
       // Nothing crosses the proxy in either direction from here. No close, no
       // reset: the panel's socket stays open and readyState goes on saying so
       // (CLAUDE.md's known-bugs list — `readyState` lies).
