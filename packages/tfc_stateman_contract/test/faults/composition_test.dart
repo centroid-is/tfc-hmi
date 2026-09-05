@@ -49,6 +49,29 @@ const _rateTolerance = 0.05;
 /// cap dominates the reading.
 const _rateWindow = Duration(seconds: 3);
 
+/// Bytes delivered before the rate window opens.
+///
+/// One second of traffic at the configured rate, which is exactly the token
+/// bucket's burst cap: `_accrue` clamps `_tokens` to `rate`, so a line that has
+/// been idle can hand out at most [_rate] bytes faster than [_rate]. Spending
+/// that many bytes therefore empties the bank whatever was in it, and the
+/// window that opens next is steady state by construction rather than by luck.
+///
+/// **This is not slack, and it is not a settling delay.** It is the difference
+/// between measuring a rate and measuring a rate plus a burst. This arm arms
+/// the throttle *before* the client connects — the modes are set on the proxy,
+/// not on a live connection, which is the whole point of a composition test —
+/// so by the time the firehose starts, connect and the latency probe have let
+/// the bucket bank about 200 ms of budget. `throttle_test.dart` never sees this
+/// because it sets the lever on an open connection immediately before the go
+/// byte, and the setter re-bases the bucket to zero.
+///
+/// Measured: with the bank released as ten separate 250-byte slices and only
+/// the first excluded, a 3 s window reads 13 273 B/s against 12 500 —
+/// +6.2 %, and CI measured +6.1 %, +6.2 % and +6.4 % on three runs across two
+/// platforms. See the replay arm below, which reproduces it without a socket.
+const _warmUpBytes = _rate;
+
 /// The up half of the compose arm's flap.
 ///
 /// Long enough to hold a connect, a latency probe and a full rate window with
@@ -129,6 +152,65 @@ void main() {
           'the exact result a table of levers cannot distinguish from three',
     );
   }, timeout: const Timeout(Duration(seconds: 60)));
+
+  group('the rate window', () {
+    // The bank the compose arm's connect-and-probe lets the bucket accrue:
+    // measured at 2500 bytes, which is the 200 ms between the line opening and
+    // the firehose reaching it, at 12 500 B/s.
+    const banked = 2500;
+
+    test('reads the same rate whatever size the peer delivers in', () {
+      for (final chunk in <int>[250, banked, _blockBytes]) {
+        final measured =
+            _replay(chunkBytes: chunk, warmUpBytes: _warmUpBytes, bank: banked);
+        print('replay: $chunk-byte reads, warm-up $_warmUpBytes B, bank '
+            '$banked B: ${measured.round()} B/s against $_rate');
+        expect(
+          measured,
+          inInclusiveRange(
+              _rate * (1 - _rateTolerance), _rate * (1 + _rateTolerance)),
+          reason: 'the same stream delivered in $chunk-byte reads measured '
+              '${measured.round()} B/s. Chunk boundaries are the peer\'s '
+              'kernel, not the throttle: loopback coalesces on macOS and does '
+              'not on the Linux and Windows runners, and an estimator that '
+              'reads the two differently is measuring which runner it is on',
+        );
+      }
+    });
+
+    test('a warm-up of one byte is the bug CI found', () {
+      // `warmUpBytes: 1` is exactly the rule this file used to carry — open the
+      // window at the first chunk, and do not count that chunk. It is written
+      // as a warm-up here so the sabotage is one parameter away from the fix
+      // rather than a reimplementation that could drift from it.
+      final coalesced =
+          _replay(chunkBytes: banked, warmUpBytes: 1, bank: banked);
+      expect(
+        coalesced,
+        inInclusiveRange(
+            _rate * (1 - _rateTolerance), _rate * (1 + _rateTolerance)),
+        reason: 'with the bank arriving as one read the old rule swallowed the '
+            'whole burst and measured ${coalesced.round()} B/s. This is the '
+            'arm that passed on a developer Mac for the length of the phase, '
+            'and it is here so the next reader knows the green was luck',
+      );
+
+      final sliced = _replay(chunkBytes: 250, warmUpBytes: 1, bank: banked);
+      print('replay: the old rule read ${coalesced.round()} B/s from a '
+          'coalesced bank and ${sliced.round()} B/s from a sliced one, '
+          'against $_rate');
+      expect(
+        sliced,
+        greaterThan(_rate * (1 + _rateTolerance)),
+        reason: 'the same bank arriving as ten 250-byte reads has nine of them '
+            'counted inside the window and measures ${sliced.round()} B/s '
+            'against $_rate. If this stops being out of band the warm-up above '
+            'has stopped being load-bearing and can be deleted — but it does '
+            'not stop by itself, because the burst cap is a documented '
+            'property of the bucket',
+      );
+    });
+  });
 
   group('what cannot coexist', () {
     var cases = 0;
@@ -270,6 +352,90 @@ Future<void> _setMode(FaultProxy proxy, String mode) {
   return Future<void>.value();
 }
 
+/// Drives a [_RateWindow] with a synthetic throttled stream and returns what
+/// it measured.
+///
+/// The stream is the one the compose arm sees: [bank] bytes released at line
+/// speed the instant the firehose starts — the budget the token bucket accrued
+/// while the connection was idle — and then a steady [_rate], handed out in the
+/// throttle's own 20 ms slices. [chunkBytes] is the size the peer's reads come
+/// out in, which is what varies between platforms and must not vary the answer.
+double _replay(
+    {required int chunkBytes, required int warmUpBytes, required int bank}) {
+  final window =
+      _RateWindow(warmUpBytes: warmUpBytes, window: _rateWindow);
+  const sliceBytes = _rate ~/ 50;
+  const sliceMicros = Duration.microsecondsPerSecond ~/ 50;
+  // The peer's reads, as (byte count, arrival) pairs. The bank arrives at one
+  // instant however many reads it takes; the steady stream one slice per slice
+  // interval after it.
+  var at = 200 * Duration.microsecondsPerMillisecond;
+  double? measured;
+  void deliver(int bytes, int atMicros) {
+    for (var sent = 0; sent < bytes && measured == null; sent += chunkBytes) {
+      final size = sent + chunkBytes <= bytes ? chunkBytes : bytes - sent;
+      measured ??= window.add(size, atMicros);
+    }
+  }
+
+  deliver(bank, at);
+  // Ten seconds of steady traffic: enough for any warm-up plus any window this
+  // file configures, and the loop stops at the first reading anyway.
+  for (var slice = 0; slice < 500 && measured == null; slice++) {
+    at += sliceMicros;
+    deliver(sliceBytes, at);
+  }
+  if (measured == null) {
+    fail('the replay ran out of stream before the window closed, so the '
+        'reading below would be of nothing');
+  }
+  return measured!;
+}
+
+/// Bytes per second, read over a window that opens after a warm-up.
+///
+/// Separated from [_Client] so the estimator can be driven from a synthetic
+/// stream — the replay arm above feeds it the burst that broke it on CI, which
+/// is not a thing a loopback socket can be asked to produce on demand.
+///
+/// **Chunk boundaries must not change the answer.** A byte stream delivered as
+/// one 2500-byte read and the same stream delivered as ten 250-byte reads are
+/// the same stream; an estimator that reads them differently is measuring the
+/// peer's kernel. That is what the old rule here did — it opened the window at
+/// the first chunk and discarded exactly that chunk, so how much of the bucket's
+/// banked burst escaped the discard depended on whether loopback coalesced it.
+final class _RateWindow {
+  _RateWindow({required this.warmUpBytes, required this.window});
+
+  /// Bytes that must be delivered before the window opens. Their time is not
+  /// counted either — the window starts at the arrival that completes them.
+  final int warmUpBytes;
+
+  final Duration window;
+
+  int _warmedUp = 0;
+  int? _openedAtMicros;
+  int _bytes = 0;
+
+  /// Feeds one delivered chunk; returns the rate once the window has closed.
+  ///
+  /// Null until then. Called with the arrival instant rather than reading a
+  /// clock of its own, so the byte count and the elapsed time always describe
+  /// the same instant.
+  double? add(int bytes, int atMicros) {
+    final openedAt = _openedAtMicros;
+    if (openedAt == null) {
+      _warmedUp += bytes;
+      if (_warmedUp >= warmUpBytes) _openedAtMicros = atMicros;
+      return null;
+    }
+    _bytes += bytes;
+    final elapsed = atMicros - openedAt;
+    if (elapsed < window.inMicroseconds) return null;
+    return _bytes * Duration.microsecondsPerSecond / elapsed;
+  }
+}
+
 /// A client that can measure a round trip, then a rate, then a dropout.
 final class _Client {
   _Client._(this._socket) {
@@ -285,9 +451,7 @@ final class _Client {
   int _probeBytesSeen = 0;
 
   Completer<double>? _rateDone;
-  Stopwatch? _delivery;
-  int _delivered = 0;
-  Duration _window = Duration.zero;
+  _RateWindow? _rateWindow;
 
   final Completer<Duration> _dropped = Completer<Duration>();
 
@@ -310,14 +474,16 @@ final class _Client {
   }
 
   /// Asks the upstream for a firehose and measures bytes per second over
-  /// [window], timed from the first byte delivered.
+  /// [window], timed from the end of a [_warmUpBytes] warm-up.
   ///
-  /// From the first byte and not from the request, because everything before
-  /// it — the command crossing the link, the first chunk waiting out the
-  /// latency, the bucket filling its first slice — is dead time that drags the
-  /// measured rate down and lets a throttle running fast pass.
+  /// Not from the request, because everything before the first byte — the
+  /// command crossing the link, the first chunk waiting out the latency — is
+  /// dead time that drags the measured rate down and lets a throttle running
+  /// fast pass. Not from the first byte either, because the first bytes are the
+  /// bucket's banked burst leaving at line speed, which drags it *up*; see
+  /// [_warmUpBytes].
   Future<double> rateOver(Duration window) {
-    _window = window;
+    _rateWindow = _RateWindow(warmUpBytes: _warmUpBytes, window: window);
     final done = _rateDone = Completer<double>();
     _socket.add(<int>[_firehose]);
     unawaited(_socket.flush());
@@ -336,21 +502,10 @@ final class _Client {
       return;
     }
     final rate = _rateDone;
-    if (rate == null || rate.isCompleted) return;
-    final delivery = _delivery;
-    if (delivery == null) {
-      // The chunk that starts the clock is not counted. It can only bias the
-      // measurement downward, so a throttle delivering too fast cannot hide
-      // behind it.
-      _delivery = Stopwatch()..start();
-      return;
-    }
-    _delivered += data.length;
-    if (delivery.elapsed < _window) return;
-    delivery.stop();
-    rate.complete(_delivered *
-        Duration.microsecondsPerSecond /
-        delivery.elapsed.inMicroseconds);
+    final window = _rateWindow;
+    if (rate == null || window == null || rate.isCompleted) return;
+    final measured = window.add(data.length, _run.elapsedMicroseconds);
+    if (measured != null) rate.complete(measured);
   }
 
   void _onEnd() {
