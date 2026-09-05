@@ -17,9 +17,11 @@ import 'package:test/test.dart';
 import 'package:tfc_stateman_contract/faults.dart';
 
 import '../support/gate_b_fixture.dart' show untilSocketsSettle;
+import '../support/soak/checkers/terminal_state.dart';
 import '../support/soak/invariant.dart';
 import '../support/soak/soak_driver.dart';
 import '../support/soak/soak_event.dart';
+import '../support/soak/soak_observables.dart';
 import '../support/soak/soak_timeline.dart';
 
 /// One specimen of every arm of the sealed type, keyed by its kind.
@@ -645,5 +647,86 @@ void main() {
           reason: 'a journal closed before its buffers flushed leaves an '
               'empty artifact, which is the one thing a failed run has');
     }, skip: canCountOpenSockets ? null : openSocketCountSkipReason);
+  });
+
+  group('a write the redial orphaned', () {
+    test('is not reported as silently lost, because the retired client still '
+        'holds it', () async {
+      // **The instrument defect behind 11-07's four `terminalStateWrites`
+      // violations, at seconds scale.** The 35-minute arm at seed 11 reported
+      // writes #103, #108, #110 and #400 as "reached a socket and is in
+      // NEITHER the terminal map nor the client's unresolved set". All four
+      // were on panel-2 and panel-4 — the only two panels the run ever
+      // redialed — and all four were issued before their panel's redial.
+      //
+      // Nothing lost them. Each is still in the `_unresolved` set of the
+      // `RemoteStateMan` that `GateBFixture.redial` replaced: `dispose()` does
+      // not clear that set, so a retired client still answers
+      // `debugUnresolvedCmds` with what was in flight. What the run-end arm
+      // read was `SoakDriver.unresolvedCmds`, a union over the CURRENT clients
+      // only — so the write was invisible from both sides for a reason that
+      // was about the harness and not about the pipe.
+      //
+      // This case is the whole mechanism in three steps and thirty seconds:
+      // take the alias down so the gateway can only answer `unknown`, write,
+      // then replace the client under it.
+      const key = 'ST301.CN01.MOT01.setpoint';
+      const duration = Duration(seconds: 30);
+      final driver = _driver(
+        duration: duration,
+        timeline: _handTimeline(const <SoakTimelineEntry>[],
+            duration: duration),
+      );
+      await driver.start();
+
+      // The write has to cross while its own alias is down. That is what makes
+      // the gateway answer a non-established outcome, and an `unknown` that
+      // was dispatched is the one verdict the client KEEPS — re-queryable, by
+      // design, for the next entry to `ready`.
+      expect(
+          (await driver.apply(const UpstreamLinkDown('ST301'))).fired, isTrue);
+      await driver.issueWrite(
+          panelIndex: 3, key: key, value: 4321, probe: false);
+
+      final cmd = driver.writeRecords
+          .lastWhere((record) => record.stage == SoakWriteStage.issued)
+          .cmd;
+
+      // **The precondition, asserted rather than assumed.** If the gateway
+      // answered something established here, this case would pass for the
+      // wrong reason — there would be no orphan to lose, and the arm below
+      // would be judging nothing. Failing here says the setup is wrong;
+      // failing below says the harness is.
+      expect(driver.unresolvedCmds, contains(cmd),
+          reason: 'the write was supposed to come back `unknown` and stay '
+              're-queryable on panel-3, which is the only state a redial can '
+              'orphan. It is not in the unresolved set, so this case is no '
+              'longer exercising what it was written for');
+
+      // The pair the timeline always draws together, and the only thing in the
+      // storm that replaces a client (`GateBFixture.redial`).
+      expect((await driver.apply(const TokenRevocation('panel-3'))).fired,
+          isTrue);
+      expect(
+          (await driver.apply(const TokenRestore('panel-3'))).fired, isTrue);
+      await Future<void>.delayed(const Duration(seconds: 3));
+
+      // Declared under `distributionArmFloor` on purpose: this case is about
+      // the run-end placement arm, and a thirty-second run has no business
+      // being asked whether the storm produced all three outcomes.
+      final checker = TerminalStateChecker(driver, declared: duration);
+      checker.finish();
+
+      final lost = checker.violations
+          .where((one) => one.toString().contains('in NEITHER'))
+          .toList();
+      expect(lost, isEmpty,
+          reason: 'the cmd is still in the retired client\'s unresolved set — '
+              'the panel restarted, it did not lose the write. Reporting it as '
+              'silently lost is the harness asserting continuity across the '
+              'one event it models as a discontinuity, and it is what made the '
+              '35-minute arm red on a pipe that was behaving:\n'
+              '${lost.join('\n')}');
+    });
   });
 }
