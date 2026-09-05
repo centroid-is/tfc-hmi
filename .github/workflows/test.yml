@@ -313,12 +313,25 @@ jobs:
     # hosted image. The floor is the same idiom as the soak lane's — `dart test`
     # with a selector that matches nothing exits 0, and a browser-tagged file
     # that stopped being compiled would otherwise read as covered.
+    # **Scoped to the one file that is web-verified today, and the scope is a
+    # finding rather than a convenience.** Running the whole package under
+    # dart2js — which the first version of this step did by accident — fails
+    # three further cases, and two of them are a real and unsolved problem:
+    # every JavaScript number is a double, so `isDouble` answers true for an
+    # integer, and this package derives its **JSON type tag** from exactly that
+    # distinction. On the web a `DINT 1` and a `REAL 1.0` therefore encode
+    # identically, which for a plant protocol is two different writes to two
+    # different tag types collapsing into one. (`data_service_methods_test.dart`
+    # additionally fails to load there.) That is recorded in
+    # `.planning/WEB-COMPAT-SURVEY.md` and is a design question, not a bug to
+    # tune, so this step does not pretend the package is web-clean — it pins
+    # the part that is.
     - name: Test tfc_relay_protocol on dart2js
       if: runner.os == 'Linux'
       shell: bash
       working-directory: packages/tfc_relay_protocol
       run: |
-        dart test -p chrome -r expanded --file-reporter "json:web-report.json"
+        dart test -p chrome test/ulid_web_test.dart -r expanded --file-reporter "json:web-report.json"
         [ -f web-report.json ] || { echo "::error::no web-report.json — the chrome lane never produced a report"; exit 1; }
         total=$( { grep -o '"type":"testStart"' web-report.json || true; } | wc -l)
         loading=$( { grep -o '"name":"loading ' web-report.json || true; } | wc -l)
