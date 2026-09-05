@@ -16,6 +16,7 @@ import 'option_variable.dart';
 import 'text.dart';
 import 'beckhoff.dart';
 import 'advantys_stb.dart';
+import 'festo.dart';
 import 'schneider.dart';
 import 'icon.dart';
 import 'image.dart';
@@ -80,6 +81,7 @@ class AssetRegistry {
     BeckhoffPS2001Config: BeckhoffPS2001Config.fromJson,
     BeckhoffCU2508Config: BeckhoffCU2508Config.fromJson,
     BeckhoffEPBoxConfig: BeckhoffEPBoxConfig.fromJson,
+    FestoVTUGConfig: FestoVTUGConfig.fromJson,
     STBDDI3725Config: STBDDI3725Config.fromJson,
     STBDDO3705Config: STBDDO3705Config.fromJson,
     STBNIP2311Config: STBNIP2311Config.fromJson,
@@ -139,6 +141,7 @@ class AssetRegistry {
     BeckhoffPS2001Config: BeckhoffPS2001Config.preview,
     BeckhoffCU2508Config: BeckhoffCU2508Config.preview,
     BeckhoffEPBoxConfig: BeckhoffEPBoxConfig.preview,
+    FestoVTUGConfig: FestoVTUGConfig.preview,
     STBDDI3725Config: STBDDI3725Config.preview,
     STBDDO3705Config: STBDDO3705Config.preview,
     STBNIP2311Config: STBNIP2311Config.preview,
