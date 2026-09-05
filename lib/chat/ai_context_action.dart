@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/feature_flags.dart';
 import '../providers/chat.dart';
-import '../providers/mcp_bridge.dart' show isMcpChatAvailable;
 import 'chat_overlay.dart';
 
 /// Describes a single item in an AI context menu.
@@ -102,7 +102,7 @@ class AiContextAction {
   /// appended automatically.
   ///
   /// Steps:
-  /// 1. Check [isMcpChatAvailable] -- return early if not available
+  /// 1. Check [kChatEnabled] -- return early if chat is compiled out
   /// 2. Create a NEW conversation via [ChatNotifier.newConversation]
   /// 3. Set [chatPrefillProvider] with the text
   /// 4. Optionally set [chatContextProvider] with hidden context
@@ -112,7 +112,7 @@ class AiContextAction {
     required String prefillText,
     ChatContext? context,
   }) async {
-    if (!isMcpChatAvailable()) return false;
+    if (!kChatEnabled) return false;
 
     // IMPORTANT: Set chatVisibleProvider FIRST so the lifecycle listener
     // connects the MCP bridge. Then yield a microtask so loadConversations()
@@ -137,7 +137,7 @@ class AiContextAction {
     required WidgetRef ref,
     required String message,
   }) async {
-    if (!isMcpChatAvailable()) return false;
+    if (!kChatEnabled) return false;
 
     // IMPORTANT: Set chatVisibleProvider FIRST so the lifecycle listener
     // runs loadConversations() and connects the MCP bridge. Then create
@@ -172,7 +172,7 @@ class AiContextAction {
     required Offset position,
     required List<AiMenuItem> menuItems,
   }) async {
-    if (!isMcpChatAvailable()) return false;
+    if (!kChatEnabled) return false;
     if (menuItems.isEmpty) return false;
 
     final result = await showMenu<int>(
@@ -236,7 +236,7 @@ class AiContextAction {
 
 /// Wraps a child widget with right-click AI context menu support.
 ///
-/// Only shows the context menu when [isMcpChatAvailable] returns true.
+/// Only shows the context menu when [kChatEnabled] is true.
 /// When the user right-clicks, a popup menu with [menuItems] is shown.
 /// Selecting an item opens the chat overlay with a new conversation.
 ///
@@ -264,7 +264,7 @@ class AiContextMenuWrapper extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (!isMcpChatAvailable()) return child;
+    if (!kChatEnabled) return child;
 
     return GestureDetector(
       onSecondaryTapUp: (details) {

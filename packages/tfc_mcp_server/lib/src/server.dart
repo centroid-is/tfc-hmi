@@ -5,7 +5,6 @@ import 'package:mcp_dart/mcp_dart.dart';
 import 'package:tfc_dart/tfc_dart_core.dart' show McpDatabase;
 
 import 'audit/audit_log_service.dart';
-import 'identity/operator_identity.dart';
 import 'interfaces/alarm_reader.dart';
 import 'interfaces/drawing_index.dart';
 import 'interfaces/plc_code_index.dart';
@@ -23,6 +22,7 @@ import 'resources/history_resource.dart';
 import 'resources/plc_code_index_resource.dart';
 import 'resources/knowledge_resource.dart';
 import 'resources/tech_docs_resource.dart';
+import 'services/access_template_service.dart';
 import 'services/alarm_context_service.dart';
 import 'services/alarm_service.dart';
 import 'services/config_service.dart';
@@ -37,6 +37,7 @@ import 'expression/expression_validator.dart';
 import 'safety/elicitation_risk_gate.dart';
 import 'services/proposal_feedback_bus.dart';
 import 'services/proposal_service.dart';
+import 'tools/access_template_tools.dart';
 import 'tools/alarm_tools.dart';
 import 'tools/alarm_tree_tools.dart';
 import 'tools/alarm_write_tools.dart';
@@ -62,8 +63,7 @@ import 'server_instructions.dart';
 /// The TFC MCP Server wrapping [McpServer] from mcp_dart.
 ///
 /// This server communicates over stdio using [StdioServerTransport].
-/// Every tool call is gated by [OperatorIdentity] validation and creates
-/// an audit trail via [AuditLogService].
+/// Every tool call creates an audit trail via [AuditLogService].
 ///
 /// **Subprocess contract:** This binary expects SIGTERM for clean shutdown.
 /// It will close database connections and flush logs before exiting.
@@ -71,7 +71,6 @@ import 'server_instructions.dart';
 /// and sends SIGTERM when the chat widget is disposed.
 class TfcMcpServer {
   TfcMcpServer({
-    required OperatorIdentity identity,
     required McpDatabase database,
     required StateReader stateReader,
     required AlarmReader alarmReader,
@@ -130,10 +129,9 @@ class TfcMcpServer {
     // Create audit service from database
     final auditService = AuditLogService(_database);
 
-    // Create tool registry with identity + audit middleware
+    // Create tool registry with audit middleware
     final registry = ToolRegistry(
       mcpServer: _mcpServer,
-      identity: identity,
       auditLogService: auditService,
     );
 
@@ -154,6 +152,7 @@ class TfcMcpServer {
         : null;
 
     // Create trend and context services (Phase 7)
+    final accessTemplateService = AccessTemplateService(_database);
     final trendService = TrendService(_database);
     final alarmContextService = AlarmContextService(
       alarmService: alarmService,
@@ -183,6 +182,15 @@ class TfcMcpServer {
     if (toggles.configEnabled) {
       registerConfigTools(registry, configService);
       registerAssetTypeCatalogTools(registry);
+      // Templates are configuration to *read* and authorization to *change*,
+      // so the two halves are gated differently: the reads ride with the
+      // other config reads here, and the four proposal tools land under
+      // `proposalsEnabled` below.
+      registerAccessTemplateTools(
+        registry: registry,
+        service: accessTemplateService,
+        configService: configService,
+      );
     }
     if (toggles.drawingsEnabled) {
       registerDrawingTools(registry, drawingService);
@@ -235,6 +243,16 @@ class TfcMcpServer {
         );
       }
       if (toggles.configEnabled) {
+        // Beside the other write tools and under the same pairing
+        // registerAlarmWriteTools uses: the proposals toggle carries it, and
+        // configEnabled is what put the read half -- which these validate
+        // against -- on the registry in the first place.
+        registerAccessTemplateWriteTools(
+          registry: registry,
+          service: accessTemplateService,
+          riskGate: riskGate,
+          proposalService: proposalService,
+        );
         registerKeyMappingWriteTools(
           registry,
           configService: configService,
@@ -263,7 +281,8 @@ class TfcMcpServer {
       }
     }
 
-    // Resources (registered directly on McpServer, no identity/audit gate)
+    // Resources (registered directly on McpServer, outside the audit
+    // middleware)
     if (toggles.configEnabled) {
       registerConfigSnapshotResource(_mcpServer, configService);
     }
@@ -276,7 +295,8 @@ class TfcMcpServer {
     registerPlcCodeIndexResource(_mcpServer, plcCodeService);
     registerTechDocsResource(_mcpServer, techDocService);
 
-    // Prompts (registered directly on McpServer, no identity/audit gate)
+    // Prompts (registered directly on McpServer, outside the audit
+    // middleware)
     if (toggles.alarmsEnabled) {
       registerExplainAlarmPrompt(_mcpServer, alarmContextService);
       registerShiftHandoverPrompt(_mcpServer, alarmService, tagService);
@@ -297,7 +317,7 @@ class TfcMcpServer {
       );
     }
 
-    _logger.i('TFC MCP Server initialized with identity gate and audit trail');
+    _logger.i('TFC MCP Server initialized with audit trail');
   }
 
   final McpServer _mcpServer;

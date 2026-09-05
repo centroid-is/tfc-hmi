@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:mcp_dart/mcp_dart.dart';
 
 import '../audit/audit_log_service.dart';
-import '../identity/operator_identity.dart';
 import '../safety/proposal_declined_exception.dart';
 
 /// A counting semaphore that limits concurrent async operations.
@@ -47,49 +46,51 @@ class Semaphore {
   }
 }
 
-/// Central tool registration with identity + audit middleware.
+/// Central tool registration with audit middleware.
 ///
 /// Every tool registered through [ToolRegistry] is automatically wrapped
-/// with identity validation, audit trail creation, and concurrency limiting.
-/// Tool implementations do not need to handle these concerns -- the
-/// middleware is transparent.
+/// with audit trail creation and concurrency limiting. Tool implementations
+/// do not need to handle these concerns -- the middleware is transparent.
 ///
 /// Pipeline per tool call:
 /// 1. Acquire concurrency slot (max 3 concurrent tool handlers)
-/// 2. Validate operator identity via [OperatorIdentity.validate()]
-/// 3. Log intent via [AuditLogService.executeWithAudit()]
-/// 4. Execute the tool handler
-/// 5. Update audit outcome (success/failed)
-/// 6. Release concurrency slot
+/// 2. Log intent via [AuditLogService.executeWithAudit()]
+/// 3. Execute the tool handler
+/// 4. Update audit outcome (success/failed)
+/// 5. Release concurrency slot
+///
+/// **There is no identity step, and its absence is a decision rather than an
+/// omission.** Every tool registered here either reads, or returns a proposal
+/// that a human must approve in the app through an access-gated store
+/// (`lib/src/tools/access_template_tools.dart:28`: "they return a proposal").
+/// Authorization and attribution both live at that approval, so a caller
+/// identity here would authorize nothing and attribute nothing. The audit row
+/// records provenance instead, under [kMcpAuditOperator], whose doc comment
+/// carries the full reasoning.
 class ToolRegistry {
   /// Creates a [ToolRegistry] that wraps tool registrations on [mcpServer]
-  /// with [identity] validation, [auditLogService] audit trail, and
-  /// concurrency limiting.
+  /// with an [auditLogService] audit trail and concurrency limiting.
   ///
   /// The [maxConcurrency] parameter controls how many tool handlers can
   /// execute simultaneously (default 3). This prevents parallel LLM tool
   /// calls from overwhelming the database connection pool.
   ToolRegistry({
     required McpServer mcpServer,
-    required OperatorIdentity identity,
     required AuditLogService auditLogService,
     int maxConcurrency = 3,
   })  : _mcpServer = mcpServer,
-        _identity = identity,
         _auditLogService = auditLogService,
         _semaphore = Semaphore(maxConcurrency);
 
   final McpServer _mcpServer;
-  final OperatorIdentity _identity;
   final AuditLogService _auditLogService;
   final Semaphore _semaphore;
 
-  /// Register a tool with identity + audit + concurrency middleware.
+  /// Register a tool with audit + concurrency middleware.
   ///
   /// The [handler] receives the tool arguments and [RequestHandlerExtra]
   /// from the MCP protocol. It should focus only on business logic --
-  /// identity validation, audit logging, and concurrency limiting are
-  /// handled transparently.
+  /// audit logging and concurrency limiting are handled transparently.
   ///
   /// [metered] excludes the tool from the concurrency semaphore. The
   /// semaphore holds its slot for the handler's entire duration, which is
@@ -102,9 +103,6 @@ class ToolRegistry {
   /// timer and record no intent -- `await_proposal_feedback` re-arms once a
   /// minute forever, and an audit row per call would bury the rows that
   /// describe something someone actually did.
-  ///
-  /// Identity validation happens for every tool regardless, and outside the
-  /// semaphore, so an unauthenticated call never consumes a slot.
   void registerTool({
     required String name,
     required String description,
@@ -120,27 +118,14 @@ class ToolRegistry {
       description: description,
       inputSchema: inputSchema,
       callback: (Map<String, dynamic> args, RequestHandlerExtra extra) async {
-        // Step 1: Validate operator identity (per-call, not cached)
-        // Done OUTSIDE the semaphore so auth failures don't consume a slot.
-        try {
-          await _identity.validate();
-        } on OperatorNotAuthenticatedError catch (e) {
-          // Return error to the client without creating an audit record.
-          // No audit record because we don't have a valid operator to log.
-          return CallToolResult(
-            content: [TextContent(text: e.message)],
-            isError: true,
-          );
-        }
-
-        // Step 2: Acquire concurrency slot, then execute with audit trail
+        // Acquire concurrency slot, then execute with audit trail
         Future<CallToolResult> execute() async {
           try {
             if (!audited) {
               return await handler(args, extra);
             }
             return await _auditLogService.executeWithAudit<CallToolResult>(
-              operatorId: _identity.operatorId,
+              operatorId: kMcpAuditOperator,
               tool: name,
               arguments: args,
               handler: () => handler(args, extra),

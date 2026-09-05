@@ -110,6 +110,151 @@ Future<void> activateConnectionResilient(
   }
 }
 
+/// Sections whose contents `GetSettings` blanks out, and which therefore have
+/// to be fetched separately before any read-modify-write of a profile.
+///
+/// NetworkManager's `Update` replaces the profile wholesale, and `GetSettings`
+/// never returns secrets — so `update(await getSettings())`, the obvious
+/// shape, silently wipes the wifi PSK or the 802.1X keys. Renaming a wifi
+/// profile would knock the station off the network.
+const secretBearingSettings = {
+  '802-11-wireless-security',
+  '802-1x',
+  'vpn',
+  'pppoe',
+  'gsm',
+  'cdma',
+  'wireguard',
+};
+
+/// Re-attaches the secrets `GetSettings` stripped, so [settings] is safe to
+/// hand to `Update`.
+///
+/// Best-effort by design: `GetSecrets` is separately authorised, and a
+/// profile whose secrets we may not read is still one whose name we may
+/// change. Failing the rename because the PSK was unreadable would be worse
+/// than leaving that section as NetworkManager already has it.
+Future<Map<String, Map<String, DBusValue>>> withSecrets(
+  NetworkManagerSettingsConnection connection,
+  Map<String, Map<String, DBusValue>> settings,
+) async {
+  final merged = {
+    for (final entry in settings.entries)
+      entry.key: Map<String, DBusValue>.from(entry.value),
+  };
+  for (final name in settings.keys.toList()) {
+    if (!secretBearingSettings.contains(name)) continue;
+    try {
+      final secrets = await connection.getSecrets(name);
+      final section = secrets[name];
+      if (section != null) merged[name]?.addAll(section);
+    } catch (_) {
+      // Not readable — leave the section as GetSettings returned it.
+    }
+  }
+  return merged;
+}
+
+/// Why [name] is not usable as a connection id, or null when it is.
+///
+/// NetworkManager itself permits duplicates and almost any string; the
+/// stricter rule here is for the operator's benefit, since the id is the only
+/// thing distinguishing two profiles in a list.
+String? validateConnectionName(
+  String name, {
+  String currentId = '',
+  Iterable<String> existingIds = const [],
+}) {
+  final trimmed = name.trim();
+  if (trimmed.isEmpty) return 'Name cannot be empty';
+  if (trimmed.length > 63) return 'Name is too long';
+  if (trimmed == currentId) return null;
+  if (existingIds.contains(trimmed)) {
+    return 'Another connection is already called "$trimmed"';
+  }
+  return null;
+}
+
+/// Renames a saved profile, changing **only** its `connection.id`.
+///
+/// The id is the profile's label. `interface-name` — the kernel device it
+/// binds to — is deliberately untouched: renaming bond0's profile to
+/// something an operator recognises must not detach it from the bond0
+/// interface, which is what makes this a distinct operation from editing the
+/// connection.
+Future<void> renameConnection(
+  NetworkManagerSettingsConnection connection,
+  String newId,
+) async {
+  final trimmed = newId.trim();
+  if (trimmed.isEmpty) {
+    throw ArgumentError.value(newId, 'newId', 'Name cannot be empty');
+  }
+  final settings = await withSecrets(connection, await connection.getSettings());
+  final section = Map<String, DBusValue>.from(settings['connection'] ?? {});
+  section['id'] = DBusString(trimmed);
+  settings['connection'] = section;
+  await connection.update(settings);
+}
+
+/// The profiles that deleting [connection] should take with it.
+///
+/// A bond master is not deletable on its own in any useful sense: its members
+/// carry `master: <bond>` and would be left enslaved to a bond that no longer
+/// exists, so NetworkManager leaves the ports down. The returned list always
+/// starts with [connection] itself.
+Future<List<NetworkManagerSettingsConnection>> connectionsRemovedWith(
+  NetworkManagerClient client,
+  NetworkManagerSettingsConnection connection,
+) async {
+  final removed = <NetworkManagerSettingsConnection>[connection];
+
+  Map<String, Map<String, DBusValue>> settings;
+  try {
+    settings = await connection.getSettings();
+  } catch (_) {
+    return removed;
+  }
+  if (connectionField(settings, 'type') != 'bond') return removed;
+
+  // Members name their master by interface, or by the master's uuid.
+  final interfaceName = connectionField(settings, 'interface-name');
+  final uuid = connectionField(settings, 'uuid');
+
+  for (final other in client.settings.connections) {
+    if (identical(other, connection)) continue;
+    try {
+      final otherSettings = await other.getSettings();
+      final master = connectionField(otherSettings, 'master');
+      if (master.isEmpty) continue;
+      if (master == interfaceName || (uuid.isNotEmpty && master == uuid)) {
+        removed.add(other);
+      }
+    } catch (_) {
+      // Deleted mid-walk.
+    }
+  }
+  return removed;
+}
+
+/// Deletes [connections], continuing past individual failures.
+///
+/// Returns the profiles that could not be removed, so the caller can say
+/// which ones are still there rather than claiming a clean sweep.
+Future<List<NetworkManagerSettingsConnection>> deleteConnections(
+  Iterable<NetworkManagerSettingsConnection> connections,
+) async {
+  final failed = <NetworkManagerSettingsConnection>[];
+  for (final connection in connections) {
+    try {
+      await connection.delete();
+    } catch (_) {
+      failed.add(connection);
+    }
+  }
+  return failed;
+}
+
 /// A saved profile resolved into the fields the page renders, so the widget
 /// tree stays synchronous over an API that is async all the way down.
 class SavedConnection {

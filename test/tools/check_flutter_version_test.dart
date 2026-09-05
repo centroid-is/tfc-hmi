@@ -153,21 +153,21 @@ HUMAN
       expect(r.stderr, contains('WARNING'));
     });
 
-    test('TFC_ALLOW_FLUTTER_SKEW=1 downgrades it to a warning', () {
+    test('CENTROIDX_ALLOW_FLUTTER_SKEW=1 downgrades it to a warning', () {
       installFakeFlutter(version: '3.41.9');
       final r = run(
         ['--version-file', pinFile('3.44.9\n')],
-        env: {'TFC_ALLOW_FLUTTER_SKEW': '1'},
+        env: {'CENTROIDX_ALLOW_FLUTTER_SKEW': '1'},
       );
       expect(r.exitCode, _match);
       expect(r.stderr, contains('WARNING'));
     });
 
-    test('TFC_ALLOW_FLUTTER_SKEW=0 does not', () {
+    test('CENTROIDX_ALLOW_FLUTTER_SKEW=0 does not', () {
       installFakeFlutter(version: '3.41.9');
       final r = run(
         ['--version-file', pinFile('3.44.9\n')],
-        env: {'TFC_ALLOW_FLUTTER_SKEW': '0'},
+        env: {'CENTROIDX_ALLOW_FLUTTER_SKEW': '0'},
       );
       expect(r.exitCode, _mismatch);
       expect(r.stderr, contains('ERROR'));
@@ -245,7 +245,7 @@ HUMAN
     final r = run(['--help']);
     expect(r.exitCode, _match);
     expect(r.stdout, contains('--warn-only'));
-    expect(r.stdout, contains('TFC_ALLOW_FLUTTER_SKEW'));
+    expect(r.stdout, contains('CENTROIDX_ALLOW_FLUTTER_SKEW'));
   });
 
   test('finds the repo .flutter-version with no arguments', () {

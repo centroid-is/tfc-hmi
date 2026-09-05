@@ -5,9 +5,9 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/beckhoff.dart';
 import 'package:tfc/page_creator/assets/ep_box.dart';
 import 'package:tfc/painter/beckhoff/ep_box.dart'
-    show EPBoxWidget, epBoxSocketCount;
+    show EPBoxWidget, epBoxBodyColor, epBoxSocketCount;
 import 'package:tfc/painter/beckhoff/io8.dart'
-    show IOState, bodyColor, twinSafeBodyColor;
+    show IOState, twinSafeBodyColor;
 import 'package:tfc/providers/state_man.dart' show stateManProvider;
 import 'package:tfc/widgets/panes/side_pane.dart';
 import 'package:tfc_dart/core/state_man.dart' show StateMan;
@@ -54,9 +54,12 @@ void main() {
       expect(EPBoxVariant.ep1918.isLive, isFalse);
     });
 
-    test('the TwinSAFE box is yellow and the combi box is not', () {
+    test('the TwinSAFE box is yellow and the combi box is anthracite', () {
       expect(EPBoxVariant.ep1918.housingColor, twinSafeBodyColor);
-      expect(EPBoxVariant.ep2338.housingColor, bodyColor);
+      // Not the EL terminals' light grey: an EtherCAT Box is a die-cast IP67
+      // part and wears its own colour, so a page carrying both does not read
+      // as one family of hardware.
+      expect(EPBoxVariant.ep2338.housingColor, epBoxBodyColor);
     });
   });
 
@@ -96,19 +99,20 @@ void main() {
   });
 
   group('epBoxChannelLabel', () {
-    test('pairs the eight channels onto four plugs, A then B', () {
-      // The M12 plugs carry two channels each. 'Socket 5' would send an
-      // electrician looking for a fifth plug that is not on the box.
-      expect(epBoxChannelLabel(1), 'Plug 1 A');
-      expect(epBoxChannelLabel(2), 'Plug 1 B');
-      expect(epBoxChannelLabel(3), 'Plug 2 A');
-      expect(epBoxChannelLabel(8), 'Plug 4 B');
+    test('names the eight points the way the PLC struct does', () {
+      // `ST_EP2338_0002` numbers its members from zero, so channel 1 is I0.
+      // This page is read beside a variable list, not beside the box, and
+      // the caption has to be a string that can be found in that list.
+      expect(epBoxChannelLabel(1), 'I0');
+      expect(epBoxChannelLabel(2), 'I1');
+      expect(epBoxChannelLabel(3), 'I2');
+      expect(epBoxChannelLabel(8), 'I7');
     });
 
-    test('never names a plug the box does not have', () {
+    test('never names a member the struct does not carry', () {
       for (int channel = 1; channel <= 8; channel++) {
-        final plug = int.parse(epBoxChannelLabel(channel).split(' ')[1]);
-        expect(plug, inInclusiveRange(1, epBoxSocketCount));
+        final label = epBoxChannelLabel(channel);
+        expect(label, matches(RegExp(r'^I[0-7]$')));
       }
     });
   });
@@ -374,11 +378,13 @@ void main() {
 
       expect(find.text('Erector jam photocell'), findsOneWidget);
       expect(find.text('Erector ready'), findsOneWidget);
-      // The six nobody named fall back to where they land on the box, not to
-      // a socket number the box does not have.
-      expect(find.text('Plug 2 A'), findsOneWidget);
-      expect(find.text('Plug 1 A'), findsNothing);
+      // Every point keeps its PLC name in the gutter, named or not — the
+      // description is a second column beside it, not a replacement for it.
+      expect(find.text('I0'), findsOneWidget);
+      expect(find.text('I2'), findsOneWidget);
+      expect(find.text('I7'), findsOneWidget);
       expect(find.textContaining('Socket'), findsNothing);
+      expect(find.textContaining('Plug 1 A'), findsNothing);
     });
 
     testWidgets('an EP1918 pane explains itself instead of showing lamps',

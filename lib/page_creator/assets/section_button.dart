@@ -17,6 +17,7 @@ import '../../widgets/memo_stream_builder.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
 import '../../widgets/panes/standard_dialog.dart';
+import '../../widgets/tag_access_guard.dart' show guardTagWrite, writeTag;
 
 part 'section_button.g.dart';
 
@@ -1166,7 +1167,15 @@ class _SectionButtonState extends ConsumerState<SectionButton> {
       final next = DynamicValue.from(current);
       next[field] = true;
       try {
-        await stateMan.write(refs[i].key.trim(), next);
+        // `field` is the member: a section struct carries the status bits an
+        // operator has to keep reading, so a template locking `p_cmd_Start`
+        // must not lock the reading of `p_stat_xEnabled` beside it.
+        //
+        // Per section, and deliberately: the sections in a group can be bound
+        // to different templates, so one refused member does not make the
+        // press a no-op for the others. That matches the mode guard directly
+        // above it, which is also per section.
+        await writeTag(ref, stateMan, refs[i].key.trim(), next, member: field);
       } catch (e, st) {
         // A command that silently fails to reach the PLC is indistinguishable
         // from a section that refused to start.
@@ -1195,7 +1204,9 @@ class _SectionButtonState extends ConsumerState<SectionButton> {
     final next = DynamicValue.from(current);
     next[field] = true;
     try {
-      await stateMan.write(refs[index].key.trim(), next);
+      // The member again, same argument as the fan-out.
+      await writeTag(ref, stateMan, refs[index].key.trim(), next,
+          member: field);
     } catch (e, st) {
       _log.e('section ${refs[index].key}: writing $field failed',
           error: e, stackTrace: st);
@@ -1294,14 +1305,33 @@ class _SectionButtonState extends ConsumerState<SectionButton> {
 
     final stateMan = await ref.read(stateManProvider.future);
 
+    // Ask for the whole plan before any of it is written. Each leg is gated
+    // again at its own write below, but a hand-over that stopped the
+    // alternatives and was only then refused on the start would leave the
+    // line stopped with nothing running -- worse than refusing outright.
+    // Stopping at the first refusal keeps that to one denial row rather than
+    // one per section, and `guardTagWrite` has already told the operator, so
+    // `notOffered` returns quietly rather than stacking a second dialog on
+    // top of the prompt.
+    for (final i in plan.stop) {
+      if (!await guardTagWrite(ref, refs[i].key.trim(),
+          member: kSectionCmdStop, stateMan: stateMan)) {
+        return SectionSwitchOutcome.notOffered;
+      }
+    }
+    if (!await guardTagWrite(ref, refs[target].key.trim(),
+        member: kSectionCmdStart, stateMan: stateMan)) {
+      return SectionSwitchOutcome.notOffered;
+    }
+
     Future<bool> write(int index, String field) async {
       final current = index < values.length ? values[index] : null;
       if (current == null) return false;
       final next = DynamicValue.from(current);
       next[field] = true;
       try {
-        await stateMan.write(refs[index].key.trim(), next);
-        return true;
+        return await writeTag(ref, stateMan, refs[index].key.trim(), next,
+            member: field);
       } catch (e, st) {
         _log.e('section ${refs[index].key}: writing $field failed',
             error: e, stackTrace: st);
@@ -1336,7 +1366,10 @@ class _SectionButtonState extends ConsumerState<SectionButton> {
     final next = DynamicValue.from(current);
     next[kSectionCmdStart] = true;
     try {
-      await stateMan.write(refs[target].key.trim(), next);
+      if (!await writeTag(ref, stateMan, refs[target].key.trim(), next,
+          member: kSectionCmdStart)) {
+        return SectionSwitchOutcome.writeFailed;
+      }
     } catch (e, st) {
       _log.e('section ${refs[target].key}: writing $kSectionCmdStart failed',
           error: e, stackTrace: st);

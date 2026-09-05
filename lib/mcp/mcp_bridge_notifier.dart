@@ -11,7 +11,6 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         McpDatabase,
         StateReader,
         AlarmReader,
-        OperatorIdentity,
         DrawingIndex,
         PlcCodeIndex,
         TechDocIndex,
@@ -28,6 +27,16 @@ import 'mcp_sse_server.dart';
 ///
 /// Re-exported from [McpConfig.kPrefKey] for convenience.
 const kMcpConfigKey = McpConfig.kPrefKey;
+
+/// Environment variable overriding the path to the MCP server binary for a
+/// spawned subprocess.
+///
+/// The developer knob: [McpBridgeNotifier.resolveServerPath] consults it
+/// before falling back to the platform-specific location under
+/// `packages/tfc_mcp_server/build/cli/`. Renamed rather than deleted when the
+/// legacy acronym was retired — unlike the operator variable that used to
+/// travel alongside it, this one still has a job. Spelled once, here.
+const kMcpServerPathEnvVar = 'CENTROIDX_MCP_SERVER_PATH';
 
 /// Connection state for the MCP bridge.
 enum McpConnectionState {
@@ -218,7 +227,6 @@ class McpBridgeNotifier extends ChangeNotifier {
   /// avoids subprocess overhead and enables live data access via
   /// StateManStateReader and AlarmManAlarmReader.
   ///
-  /// [identity] is the operator identity for audit/auth gating.
   /// [database] is the server database for queries and audit logging.
   /// [stateReader] provides live tag values from StateMan subscriptions.
   /// [alarmReader] provides alarm configs from AlarmMan.
@@ -226,7 +234,6 @@ class McpBridgeNotifier extends ChangeNotifier {
   /// [drawingIndex] provides optional drawing search capability.
   /// [plcCodeIndex] provides optional PLC code search capability.
   Future<void> connectInProcess({
-    required OperatorIdentity identity,
     required McpDatabase database,
     required StateReader stateReader,
     required AlarmReader alarmReader,
@@ -266,7 +273,6 @@ class McpBridgeNotifier extends ChangeNotifier {
 
       // Create the in-process MCP server with real readers
       _server = TfcMcpServer(
-        identity: identity,
         database: database,
         stateReader: stateReader,
         alarmReader: alarmReader,
@@ -328,12 +334,17 @@ class McpBridgeNotifier extends ChangeNotifier {
   /// Resolves the server binary path, spawns the process with the correct
   /// environment variables, and initializes the MCP client connection.
   ///
-  /// [operatorId] is the TFC_USER identity for the subprocess.
+  /// The subprocess inherits [dbEnv] and nothing else. It carries no
+  /// operator identity, because MCP tools do not write: they return
+  /// proposals that a human approves in the app, under their own name and
+  /// against their own permissions. See `kMcpAuditOperator` in
+  /// `packages/tfc_mcp_server/lib/src/audit/audit_log_service.dart` for the
+  /// full reasoning and for what an MCP audit row therefore records.
+  ///
   /// [dbEnv] contains CENTROID_PG* database connection variables.
   /// [llmProvider] is optionally wired to handle sampling requests.
   /// [envProvider] is injectable for testing (defaults to Platform.environment).
   Future<void> connect({
-    required String operatorId,
     required Map<String, String> dbEnv,
     LlmProvider? llmProvider,
     String Function(String)? envProvider,
@@ -347,15 +358,11 @@ class McpBridgeNotifier extends ChangeNotifier {
 
     try {
       final serverPath = resolveServerPath(envProvider: envProvider);
-      final environment = buildEnvironment(
-        operatorId: operatorId,
-        dbEnv: dbEnv,
-      );
 
       final params = StdioServerParameters(
         command: serverPath,
         args: [],
-        environment: environment,
+        environment: dbEnv,
       );
 
       _transport = StdioClientTransport(params);
@@ -529,15 +536,15 @@ class McpBridgeNotifier extends ChangeNotifier {
 
   /// Resolve the path to the MCP server binary.
   ///
-  /// Checks TFC_MCP_SERVER_PATH environment variable first, then falls back
-  /// to the platform-specific default path under packages/tfc_mcp_server/build/.
+  /// Checks [kMcpServerPathEnvVar] first, then falls back to the
+  /// platform-specific default path under packages/tfc_mcp_server/build/.
   ///
   /// [envProvider] is injectable for testing (avoids depending on Platform.environment).
   static String resolveServerPath({
     String? Function(String)? envProvider,
   }) {
     final env = envProvider ?? (key) => io.Platform.environment[key];
-    final envPath = env('TFC_MCP_SERVER_PATH');
+    final envPath = env(kMcpServerPathEnvVar);
     if (envPath != null && envPath.isNotEmpty) {
       return envPath;
     }
@@ -545,17 +552,6 @@ class McpBridgeNotifier extends ChangeNotifier {
     // Platform-specific fallback
     final platform = _currentPlatform();
     return 'packages/tfc_mcp_server/build/cli/$platform/bundle/bin/tfc_mcp_server';
-  }
-
-  /// Build the environment map for the MCP server subprocess.
-  static Map<String, String> buildEnvironment({
-    required String operatorId,
-    required Map<String, String> dbEnv,
-  }) {
-    return {
-      'TFC_USER': operatorId,
-      ...dbEnv,
-    };
   }
 
   /// Returns the current platform identifier for server binary resolution.
@@ -579,7 +575,6 @@ class McpBridgeNotifier extends ChangeNotifier {
     required StateReader stateReader,
     required AlarmReader alarmReader,
     required McpDatabase database,
-    required OperatorIdentity identity,
     McpToolToggles toggles = McpToolToggles.allEnabled,
     DrawingIndex? drawingIndex,
     PlcCodeIndex? plcCodeIndex,
@@ -596,7 +591,6 @@ class McpBridgeNotifier extends ChangeNotifier {
         stateReader: stateReader,
         alarmReader: alarmReader,
         database: database,
-        identity: identity,
         toggles: toggles,
         drawingIndex: drawingIndex,
         plcCodeIndex: plcCodeIndex,

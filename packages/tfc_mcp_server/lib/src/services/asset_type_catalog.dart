@@ -840,6 +840,37 @@ class AssetTypeCatalog {
       ],
     ),
     AssetTypeInfo(
+      assetName: 'EtherCatLinkConfig',
+      displayName: 'EtherCAT Link',
+      category: 'Beckhoff',
+      description:
+          'One EtherCAT cable, drawn as a run between two devices\' ports '
+          'rather than placed as a box. Its ends belong to the assets it '
+          'plugs into, so moving a terminal moves the cable; corners are '
+          'dragged on the canvas, not typed. Bound to an '
+          'ST_EtherCATLink_HMI struct it also reports how long the link has '
+          'held, how many times it has reconnected, and whether it is '
+          'erroring while still up.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'key',
+            type: 'String',
+            description: 'Tag key of the ST_EtherCATLink_HMI struct. Leave '
+                'empty to draw the cable without diagnostics.'),
+        AssetPropertyInfo(
+            name: 'run',
+            type: 'Object',
+            description: 'The run: {from, to} endpoints as '
+                '{assetId, port, x, y}, a list of waypoints, and a radius. '
+                'Endpoints name other assets by id.'),
+        AssetPropertyInfo(
+            name: 'thickness',
+            type: 'double',
+            description: 'Stroke width as a fraction of the canvas shortest '
+                'side'),
+      ],
+    ),
+    AssetTypeInfo(
       assetName: 'ElevatorConfig',
       displayName: 'Elevator',
       category: 'Visualization',
@@ -1149,7 +1180,10 @@ class AssetTypeCatalog {
         AssetPropertyInfo(
             name: 'label',
             type: 'String',
-            description: 'Display label for the drive'),
+            description: 'Display label drawn on the drive body. At most two '
+                'lines of 14 characters are shown; a newline breaks the label '
+                'explicitly (e.g. "CN01\\nFD01" stacks CN01 over FD01), '
+                'otherwise it is wrapped on spaces.'),
         AssetPropertyInfo(
             name: 'hmisKey',
             type: 'String',
@@ -1201,6 +1235,41 @@ class AssetTypeCatalog {
             name: 'forceValuesKey',
             type: 'String',
             description: 'Tag key for channel force values'),
+      ],
+    ),
+    AssetTypeInfo(
+      assetName: 'FestoVTUGConfig',
+      displayName: 'Festo VTUG-14 (8 valves)',
+      category: 'Festo Devices',
+      description:
+          'Festo VTUG-14 valve terminal with a CTEU-EC bus node: eight valve '
+          'positions on a VAEM-L1-S-8-PT interface, up to sixteen solenoid '
+          'coils. As ordered it carries five VUVG-B14-M52 (5/2 monostable) '
+          'and three VUVG-B14-P53C (5/3 closed centre). The drawing gives '
+          'each position a lamp per pilot solenoid; the side pane gives each '
+          'one an ISO 1219 schematic showing where the spool is, a latch '
+          '(port 4 / centre / port 2) and a momentary push per coil. What is '
+          'fitted at each position is set on the page, not read from a key -- '
+          'a blanking plate publishes nothing to discover it by.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'nameOrId',
+            type: 'String',
+            description: 'Terminal name or node id, printed on the end plate'),
+        AssetPropertyInfo(
+            name: 'stateKey',
+            type: 'String',
+            description:
+                'Tag key for the ST_VTUG_16 struct (p_stat_Coils, '
+                'p_stat_Forced, p_cmd_Force, p_cmd_Value)'),
+        AssetPropertyInfo(
+            name: 'slices',
+            type: 'List',
+            description:
+                'The eight valve positions, position 1 first. Each entry is '
+                '{kind, name}, where kind is blank, valve52Mono, '
+                'valve52Bistable or valve53Closed. A 5/3 and a bistable 5/2 '
+                'both have two coils; only the 5/3 has a commandable centre.'),
       ],
     ),
     AssetTypeInfo(

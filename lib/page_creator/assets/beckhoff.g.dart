@@ -10,6 +10,7 @@ BeckhoffCX5010Config _$BeckhoffCX5010ConfigFromJson(
         Map<String, dynamic> json) =>
     BeckhoffCX5010Config()
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -18,12 +19,14 @@ BeckhoffCX5010Config _$BeckhoffCX5010ConfigFromJson(
       ..techDocId = (json['techDocId'] as num?)?.toInt()
       ..plcAssetKey = json['plcAssetKey'] as String?
       ..subdevices =
-          const AssetListConverter().fromJson(json['subdevices'] as List);
+          const AssetListConverter().fromJson(json['subdevices'] as List)
+      ..nameOrId = json['nameOrId'] as String? ?? '';
 
 Map<String, dynamic> _$BeckhoffCX5010ConfigToJson(
         BeckhoffCX5010Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
@@ -31,6 +34,7 @@ Map<String, dynamic> _$BeckhoffCX5010ConfigToJson(
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
       'subdevices': const AssetListConverter().toJson(instance.subdevices),
+      'nameOrId': instance.nameOrId,
     };
 
 const _$TextPosEnumMap = {
@@ -45,6 +49,7 @@ BeckhoffCX5340Config _$BeckhoffCX5340ConfigFromJson(
         Map<String, dynamic> json) =>
     BeckhoffCX5340Config()
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -53,12 +58,14 @@ BeckhoffCX5340Config _$BeckhoffCX5340ConfigFromJson(
       ..techDocId = (json['techDocId'] as num?)?.toInt()
       ..plcAssetKey = json['plcAssetKey'] as String?
       ..subdevices =
-          const AssetListConverter().fromJson(json['subdevices'] as List);
+          const AssetListConverter().fromJson(json['subdevices'] as List)
+      ..nameOrId = json['nameOrId'] as String? ?? '';
 
 Map<String, dynamic> _$BeckhoffCX5340ConfigToJson(
         BeckhoffCX5340Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
@@ -66,12 +73,14 @@ Map<String, dynamic> _$BeckhoffCX5340ConfigToJson(
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
       'subdevices': const AssetListConverter().toJson(instance.subdevices),
+      'nameOrId': instance.nameOrId,
     };
 
 BeckhoffEK1100Config _$BeckhoffEK1100ConfigFromJson(
         Map<String, dynamic> json) =>
     BeckhoffEK1100Config()
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -80,12 +89,14 @@ BeckhoffEK1100Config _$BeckhoffEK1100ConfigFromJson(
       ..techDocId = (json['techDocId'] as num?)?.toInt()
       ..plcAssetKey = json['plcAssetKey'] as String?
       ..subdevices =
-          const AssetListConverter().fromJson(json['subdevices'] as List);
+          const AssetListConverter().fromJson(json['subdevices'] as List)
+      ..nameOrId = json['nameOrId'] as String? ?? '';
 
 Map<String, dynamic> _$BeckhoffEK1100ConfigToJson(
         BeckhoffEK1100Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
@@ -93,6 +104,7 @@ Map<String, dynamic> _$BeckhoffEK1100ConfigToJson(
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
       'subdevices': const AssetListConverter().toJson(instance.subdevices),
+      'nameOrId': instance.nameOrId,
     };
 
 BeckhoffEL1008Config _$BeckhoffEL1008ConfigFromJson(
@@ -105,8 +117,12 @@ BeckhoffEL1008Config _$BeckhoffEL1008ConfigFromJson(
       forceValuesKey: json['forceValuesKey'] as String?,
       onFiltersKey: json['onFiltersKey'] as String?,
       offFiltersKey: json['offFiltersKey'] as String?,
+      channelDescriptions: (json['channel_descriptions'] as List<dynamic>?)
+          ?.map((e) => e as String)
+          .toList(),
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -119,6 +135,7 @@ Map<String, dynamic> _$BeckhoffEL1008ConfigToJson(
         BeckhoffEL1008Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
@@ -132,6 +149,7 @@ Map<String, dynamic> _$BeckhoffEL1008ConfigToJson(
       'forceValuesKey': instance.forceValuesKey,
       'onFiltersKey': instance.onFiltersKey,
       'offFiltersKey': instance.offFiltersKey,
+      'channel_descriptions': instance.channelDescriptions,
     };
 
 BeckhoffEL2008Config _$BeckhoffEL2008ConfigFromJson(
@@ -141,8 +159,12 @@ BeckhoffEL2008Config _$BeckhoffEL2008ConfigFromJson(
       descriptionsKey: json['descriptionsKey'] as String?,
       rawStateKey: json['rawStateKey'] as String?,
       forceValuesKey: json['forceValuesKey'] as String?,
+      channelDescriptions: (json['channel_descriptions'] as List<dynamic>?)
+          ?.map((e) => e as String)
+          .toList(),
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -155,6 +177,7 @@ Map<String, dynamic> _$BeckhoffEL2008ConfigToJson(
         BeckhoffEL2008Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
@@ -165,6 +188,7 @@ Map<String, dynamic> _$BeckhoffEL2008ConfigToJson(
       'descriptionsKey': instance.descriptionsKey,
       'rawStateKey': instance.rawStateKey,
       'forceValuesKey': instance.forceValuesKey,
+      'channel_descriptions': instance.channelDescriptions,
     };
 
 BeckhoffEL9222Config _$BeckhoffEL9222ConfigFromJson(
@@ -175,6 +199,7 @@ BeckhoffEL9222Config _$BeckhoffEL9222ConfigFromJson(
       descriptionsKey: json['descriptionsKey'] as String?,
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -187,6 +212,7 @@ Map<String, dynamic> _$BeckhoffEL9222ConfigToJson(
         BeckhoffEL9222Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
@@ -202,30 +228,35 @@ BeckhoffEL9187Config _$BeckhoffEL9187ConfigFromJson(
         Map<String, dynamic> json) =>
     BeckhoffEL9187Config()
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
       ..text = json['text'] as String?
       ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
       ..techDocId = (json['techDocId'] as num?)?.toInt()
-      ..plcAssetKey = json['plcAssetKey'] as String?;
+      ..plcAssetKey = json['plcAssetKey'] as String?
+      ..nameOrId = json['nameOrId'] as String? ?? '';
 
 Map<String, dynamic> _$BeckhoffEL9187ConfigToJson(
         BeckhoffEL9187Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
+      'nameOrId': instance.nameOrId,
     };
 
 BeckhoffEL9186Config _$BeckhoffEL9186ConfigFromJson(
         Map<String, dynamic> json) =>
     BeckhoffEL9186Config()
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -238,6 +269,7 @@ Map<String, dynamic> _$BeckhoffEL9186ConfigToJson(
         BeckhoffEL9186Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
@@ -255,6 +287,7 @@ BeckhoffEL3054Config _$BeckhoffEL3054ConfigFromJson(
       errorsKey: json['errorsKey'] as String?,
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -267,6 +300,7 @@ Map<String, dynamic> _$BeckhoffEL3054ConfigToJson(
         BeckhoffEL3054Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
@@ -288,6 +322,7 @@ BeckhoffEL2912Config _$BeckhoffEL2912ConfigFromJson(
       descriptionKey: json['descriptionKey'] as String?,
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -300,6 +335,7 @@ Map<String, dynamic> _$BeckhoffEL2912ConfigToJson(
         BeckhoffEL2912Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
@@ -321,6 +357,7 @@ BeckhoffPS2001Config _$BeckhoffPS2001ConfigFromJson(
       trend: json['trend'] as bool? ?? false,
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -333,6 +370,7 @@ Map<String, dynamic> _$BeckhoffPS2001ConfigToJson(
         BeckhoffPS2001Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
@@ -349,48 +387,56 @@ BeckhoffEL6070Config _$BeckhoffEL6070ConfigFromJson(
         Map<String, dynamic> json) =>
     BeckhoffEL6070Config()
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
       ..text = json['text'] as String?
       ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
       ..techDocId = (json['techDocId'] as num?)?.toInt()
-      ..plcAssetKey = json['plcAssetKey'] as String?;
+      ..plcAssetKey = json['plcAssetKey'] as String?
+      ..nameOrId = json['nameOrId'] as String? ?? '';
 
 Map<String, dynamic> _$BeckhoffEL6070ConfigToJson(
         BeckhoffEL6070Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
+      'nameOrId': instance.nameOrId,
     };
 
 BeckhoffEK1110Config _$BeckhoffEK1110ConfigFromJson(
         Map<String, dynamic> json) =>
     BeckhoffEK1110Config()
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
       ..text = json['text'] as String?
       ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
       ..techDocId = (json['techDocId'] as num?)?.toInt()
-      ..plcAssetKey = json['plcAssetKey'] as String?;
+      ..plcAssetKey = json['plcAssetKey'] as String?
+      ..nameOrId = json['nameOrId'] as String? ?? '';
 
 Map<String, dynamic> _$BeckhoffEK1110ConfigToJson(
         BeckhoffEK1110Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
+      'nameOrId': instance.nameOrId,
     };
 
 BeckhoffCU2508Config _$BeckhoffCU2508ConfigFromJson(
@@ -399,6 +445,7 @@ BeckhoffCU2508Config _$BeckhoffCU2508ConfigFromJson(
       nameOrId: json['nameOrId'] as String,
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -411,6 +458,7 @@ Map<String, dynamic> _$BeckhoffCU2508ConfigToJson(
         BeckhoffCU2508Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
@@ -426,8 +474,12 @@ BeckhoffEPBoxConfig _$BeckhoffEPBoxConfigFromJson(Map<String, dynamic> json) =>
       nameOrId: json['nameOrId'] as String,
       stateKey: json['stateKey'] as String?,
       descriptionsKey: json['descriptionsKey'] as String?,
+      channelDescriptions: (json['channel_descriptions'] as List<dynamic>?)
+          ?.map((e) => e as String)
+          .toList(),
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -440,6 +492,7 @@ Map<String, dynamic> _$BeckhoffEPBoxConfigToJson(
         BeckhoffEPBoxConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
@@ -450,6 +503,7 @@ Map<String, dynamic> _$BeckhoffEPBoxConfigToJson(
       'nameOrId': instance.nameOrId,
       'stateKey': instance.stateKey,
       'descriptionsKey': instance.descriptionsKey,
+      'channel_descriptions': instance.channelDescriptions,
     };
 
 const _$EPBoxVariantEnumMap = {

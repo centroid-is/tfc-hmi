@@ -28,6 +28,15 @@ dependencies:
   args: ^2.4.2
   tfc_dart:
     path: ../tfc_dart
+  # Already in this package's graph transitively (tfc_dart -> tfc_access);
+  # named here because `access_template_service.dart` and
+  # `access_template_tools.dart` import it directly, and
+  # `depend_on_referenced_packages` is right to object to reaching through
+  # tfc_dart for it. Workspace-local and pure Dart -- no registry install, and
+  # the one-way rule tfc_access's own pubspec states is unaffected: this is
+  # another package depending *on* it.
+  tfc_access:
+    path: ../tfc_access
   rxdart: ^0.28.0
   uuid: ^4.5.1
   petitparser: ^7.0.0

@@ -113,9 +113,6 @@ notifications/initialized -> tools/call, carrying the `mcp-session-id` header
 from the first response on every subsequent request. Replies arrive as SSE
 `data:` lines. Restarting the app kills the session — re-initialize.
 
-The app's environment must have TFC_USER set or every call returns
-OperatorNotAuthenticatedError.
-
 Tool concurrency is 3. Fanning out more than three calls just makes them
 queue, so batch instead of parallelising. (await_proposal_feedback and
 get_proposal_feedback are exempt — parking one does not block other tools.)

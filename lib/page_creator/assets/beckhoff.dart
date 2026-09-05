@@ -19,6 +19,7 @@ import 'package:tfc_dart/core/state_man.dart';
 import '../../providers/state_man.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
+import '../../widgets/tag_access_guard.dart' show writeTag;
 import 'el2912.dart';
 import 'el9222.dart';
 import 'ep_box.dart';
@@ -76,6 +77,23 @@ abstract class BeckhoffCXConfig extends BaseAsset {
   @AssetListConverter()
   List<Asset> subdevices = [];
 
+  /// Operator-facing label, worn as a marker tag on the drawing the way the
+  /// EL terminals wear theirs — a page carrying several racks wants to
+  /// say which is which, and the tag is where the plant writes it.
+  ///
+  /// The model name stays where it was printed. Empty draws no tag at all,
+  /// which is what every page saved before the field existed deserialises
+  /// to, so those drawings are unchanged.
+  @JsonKey(defaultValue: '')
+  String nameOrId = '';
+
+  // The slices are child assets: a pane opened from one slice marks that
+  // slice on the mimic, not the whole rack. Excluded from JSON like the
+  // BaseAsset getter it overrides — `subdevices` is the serialized field.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<Asset> get childAssets => subdevices;
+
   @override
   List<String> get allKeys {
     final keys = <String>{};
@@ -111,16 +129,23 @@ abstract class BeckhoffCXConfig extends BaseAsset {
               size: cxNativeSize,
               painter: CXxxxx(
                 name: model,
+                markerLabel: nameOrId,
                 pwrColor: Colors.green,
                 tcColor: Colors.green,
               ),
             ),
-            // Subdevices to the right, normalized to match CX height
+            // Subdevices to the right, normalized to match CX height.
+            // Each in its own SubdeviceSubject so a tap on a slice opens a
+            // pane about that slice, and the open-pane mark rings the slice
+            // rather than the whole rack.
             if (subdevices.isNotEmpty) ...[
               for (final sub in subdevices)
-                _SubdeviceNormalized(
-                  child: sub.build(context),
-                  targetHeight: cxNativeSize.height,
+                SubdeviceSubject(
+                  subdevice: sub,
+                  child: _SubdeviceNormalized(
+                    child: sub.build(context),
+                    targetHeight: cxNativeSize.height,
+                  ),
                 ),
             ],
           ],
@@ -231,6 +256,15 @@ class _CXxxxxConfigContentState extends State<_CXxxxxConfigContent> {
                   initialValue: widget.config.coordinates,
                   onChanged: (c) => widget.config.coordinates = c,
                   enableAngle: true,
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  decoration: const InputDecoration(
+                    labelText: 'Name or ID',
+                    border: OutlineInputBorder(),
+                  ),
+                  initialValue: widget.config.nameOrId,
+                  onChanged: (value) => widget.config.nameOrId = value,
                 ),
               ],
             ),
@@ -360,6 +394,23 @@ class BeckhoffEK1100Config extends BaseAsset {
 
   @AssetListConverter()
   List<Asset> subdevices = [];
+
+  // Same contract as [BeckhoffCXConfig.childAssets]: ring the tapped slice,
+  // not the whole rack.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<Asset> get childAssets => subdevices;
+
+  /// Operator-facing label, worn as a marker tag on the drawing the way the
+  /// EL terminals wear theirs — a page carrying several couplers wants to
+  /// say which is which, and the tag is where the plant writes it.
+  ///
+  /// The model name stays where it was printed. Empty draws no tag at all,
+  /// which is what every page saved before the field existed deserialises
+  /// to, so those drawings are unchanged.
+  @JsonKey(defaultValue: '')
+  String nameOrId = '';
+
   BeckhoffEK1100Config();
 
   /// Native painter size for the EK1100 drawing (keeps 44:100 aspect).
@@ -386,14 +437,20 @@ class BeckhoffEK1100Config extends BaseAsset {
               size: _ekNativeSize,
               painter: EK1100(
                 name: "EK1100",
+                markerLabel: nameOrId,
               ),
             ),
-            // Subdevices to the right, normalized to match EK height
+            // Subdevices to the right, normalized to match EK height.
+            // Wrapped like the CX rack's: the pane and its mark belong to
+            // the tapped slice, not the block.
             if (subdevices.isNotEmpty) ...[
               for (final sub in subdevices)
-                _SubdeviceNormalized(
-                  child: sub.build(context),
-                  targetHeight: _ekNativeSize.height,
+                SubdeviceSubject(
+                  subdevice: sub,
+                  child: _SubdeviceNormalized(
+                    child: sub.build(context),
+                    targetHeight: _ekNativeSize.height,
+                  ),
                 ),
             ],
           ],
@@ -453,6 +510,15 @@ class _EK1100ConfigContentState extends State<_EK1100ConfigContent> {
                   initialValue: widget.config.coordinates,
                   onChanged: (c) => widget.config.coordinates = c,
                   enableAngle: true,
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  decoration: const InputDecoration(
+                    labelText: 'Name or ID',
+                    border: OutlineInputBorder(),
+                  ),
+                  initialValue: widget.config.nameOrId,
+                  onChanged: (value) => widget.config.nameOrId = value,
                 ),
               ],
             ),
@@ -588,6 +654,12 @@ class BeckhoffEL1008Config extends BaseAsset {
   String? onFiltersKey;
   String? offFiltersKey;
 
+  /// Optional per-channel descriptions carried by the asset itself, channel
+  /// I1 first. A non-empty entry outranks the descriptions key for that
+  /// channel; empty or missing entries fall through to it.
+  @JsonKey(name: 'channel_descriptions')
+  List<String>? channelDescriptions;
+
   BeckhoffEL1008Config({
     required this.nameOrId,
     this.descriptionsKey,
@@ -596,6 +668,7 @@ class BeckhoffEL1008Config extends BaseAsset {
     this.forceValuesKey,
     this.onFiltersKey,
     this.offFiltersKey,
+    this.channelDescriptions,
   });
 
   @override
@@ -619,6 +692,7 @@ class BeckhoffEL1008Config extends BaseAsset {
         forceValuesKey = null,
         onFiltersKey = null,
         offFiltersKey = null,
+        channelDescriptions = null,
         super();
 
   factory BeckhoffEL1008Config.fromJson(Map<String, dynamic> json) =>
@@ -698,6 +772,12 @@ class _EL1008ConfigContentState extends State<_EL1008ConfigContent> {
           onChanged: (value) => widget.config.offFiltersKey = value,
           label: 'Off Filters Key',
         ),
+        const SizedBox(height: 16),
+        _ChannelDescriptionsFields(
+          channelLabels: const ['I1', 'I2', 'I3', 'I4', 'I5', 'I6', 'I7', 'I8'],
+          initialValue: widget.config.channelDescriptions,
+          onChanged: (value) => widget.config.channelDescriptions = value,
+        ),
       ],
     );
   }
@@ -715,11 +795,18 @@ class BeckhoffEL2008Config extends BaseAsset {
   String? rawStateKey;
   String? forceValuesKey;
 
+  /// Optional per-channel descriptions carried by the asset itself, channel
+  /// O1 first. A non-empty entry outranks the descriptions key for that
+  /// channel; empty or missing entries fall through to it.
+  @JsonKey(name: 'channel_descriptions')
+  List<String>? channelDescriptions;
+
   BeckhoffEL2008Config({
     required this.nameOrId,
     this.descriptionsKey,
     this.rawStateKey,
     this.forceValuesKey,
+    this.channelDescriptions,
   });
 
   @override
@@ -740,6 +827,7 @@ class BeckhoffEL2008Config extends BaseAsset {
         descriptionsKey = null,
         rawStateKey = null,
         forceValuesKey = null,
+        channelDescriptions = null,
         super();
 
   factory BeckhoffEL2008Config.fromJson(Map<String, dynamic> json) =>
@@ -801,6 +889,12 @@ class _EL2008ConfigContentState extends State<_EL2008ConfigContent> {
           onChanged: (value) => widget.config.forceValuesKey = value,
           label: 'Force Values Key',
         ),
+        const SizedBox(height: 16),
+        _ChannelDescriptionsFields(
+          channelLabels: const ['O1', 'O2', 'O3', 'O4', 'O5', 'O6', 'O7', 'O8'],
+          initialValue: widget.config.channelDescriptions,
+          onChanged: (value) => widget.config.channelDescriptions = value,
+        ),
       ],
     );
   }
@@ -830,6 +924,7 @@ class _BeckhoffEL2008 extends ConsumerWidget {
           return IO8Widget(
             ledStates: leds,
             name: name,
+            markerLabel: config.nameOrId,
             animation: animation,
             ioLabels: const ['O1', 'O2', 'O3', 'O4', 'O5', 'O6', 'O7', 'O8'],
           );
@@ -867,17 +962,18 @@ class _BeckhoffEL2008 extends ConsumerWidget {
                       LinkedHashMap.fromEntries([
                         MapEntry("raw", config.rawStateKey),
                         MapEntry("force", config.forceValuesKey),
+                        MapEntry("descriptions", config.descriptionsKey),
                       ]),
                       ref,
                     ),
                     statesOf: (data) => data == null
                         ? List.filled(8, IOState.low)
                         : _ledStates(data),
-                    gridSummary: 'Force and descriptions for all 8 channels',
-                    gridSize: const Size(940, 460),
-                    gridBuilder: (_) => IoGridViewport(
-                      child: _channelGrid(context, ref, stateMan),
-                    ),
+                    // ST_EL2008 numbers its members from one.
+                    channelName: (i) => 'O${i + 1}',
+                    descriptionOf: (data, i) => beckhoffChannelDescription(
+                        config.channelDescriptions, data?["descriptions"], i),
+                    isOutput: true,
                   );
                 },
                 child: buildBody(data),
@@ -889,67 +985,6 @@ class _BeckhoffEL2008 extends ConsumerWidget {
     );
   }
 
-  /// The per-channel grid, lifted out of the `AlertDialog` this used to be.
-  /// Force writes and descriptions are unchanged — only the host moved.
-  Widget _channelGrid(
-      BuildContext context, WidgetRef ref, StateMan stateMan) {
-    return MemoStreamBuilder<Map<String, DynamicValue>>(
-      keys: [stateMan, config],
-      stream: _combinedStream(
-        LinkedHashMap.fromEntries([
-          MapEntry("raw", config.rawStateKey),
-          MapEntry("force", config.forceValuesKey),
-          MapEntry("descriptions", config.descriptionsKey),
-        ]),
-        ref,
-      ),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData || snapshot.hasError) {
-          return const SizedBox.shrink();
-        }
-        final map = snapshot.data!;
-        List<bool>? rawStates = map["raw"] != null
-            ? List.generate(8, (i) => (map["raw"]!.asInt & (1 << i)) != 0)
-            : null;
-
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (int i = 0; i < 8; i = i + 2)
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  RowIOView(
-                    leftRaw: rawStates?[i] ?? false,
-                    rightRaw: rawStates?[i + 1] ?? false,
-                    leftProcessed: null,
-                    rightProcessed: null,
-                    leftSelected: map["force"]?[i].asInt ?? 0,
-                    rightSelected: map["force"]?[i + 1].asInt ?? 0,
-                    animationValue: animation,
-                    leftOnChanged: (value) async {
-                      map["force"]![i].value = value;
-                      await stateMan.write(
-                          config.forceValuesKey!, map["force"]!);
-                    },
-                    rightOnChanged: (value) async {
-                      map["force"]![i + 1].value = value;
-                      await stateMan.write(
-                          config.forceValuesKey!, map["force"]!);
-                    },
-                    leftDescription: map["descriptions"]?[i].asString,
-                    rightDescription: map["descriptions"]?[i + 1].asString,
-                    leftFilterEdit: null,
-                    rightFilterEdit: null,
-                  ),
-                  const SizedBox(height: 6),
-                ],
-              ),
-          ],
-        );
-      },
-    );
-  }
 }
 
 @JsonSerializable(explicitToJson: true)
@@ -1123,8 +1158,21 @@ class _BeckhoffEL9222 extends ConsumerWidget {
   /// would never be acknowledged. A clear that fails is reported rather than
   /// swallowed for the same reason — it is a real maintenance condition, not
   /// a cosmetic one.
+  ///
+  /// The one write in this file that names a struct member: `p_cmd_Reset` is
+  /// a member of the terminal's status struct, so the permission question is
+  /// asked about that member rather than about the whole key. A template
+  /// binding the struct can therefore lock the reset while leaving the rest
+  /// of it readable and writable.
+  ///
+  /// **A refused rise sends no fall.** `set` answers false when the write was
+  /// refused, and the rising edge returning false skips the pulse and the
+  /// falling edge with it. Without that, one refused press would produce two
+  /// refusals, two audit rows and — on a key whose binding changed mid-pulse
+  /// — a lone falling edge the terminal never saw the rise of.
   Future<void> _reset(
     BuildContext context,
+    WidgetRef ref,
     StateMan stateMan,
     int channel,
   ) async {
@@ -1138,32 +1186,41 @@ class _BeckhoffEL9222 extends ConsumerWidget {
     // with.
     const readTimeout = Duration(seconds: 5);
 
-    Future<void> set(bool level) async {
+    Future<bool> set(bool level) async {
       final latest = await stateMan.read(key).timeout(readTimeout);
       final next = DynamicValue.from(latest);
       next[member] = level;
-      await stateMan.write(key, next);
+      return writeTag(ref, stateMan, key, next, member: member);
     }
 
+    // Refused and failed are not the same thing, and the falling edge is
+    // where they part. A refusal means nothing was written, so there is
+    // nothing to clear; a failure may have left the bit high, which is the
+    // latched switch the `finally` exists for. A bare `return` would have
+    // run the `finally` anyway and sent the fall of an edge that never rose.
+    var refused = false;
     try {
-      await set(true);
+      refused = !await set(true);
+      if (refused) return;
       await Future<void>.delayed(kEl9222ResetPulse);
     } catch (e) {
       messenger?.showSnackBar(
         SnackBar(content: Text('Reset of channel $channel failed: $e')),
       );
     } finally {
-      try {
-        await set(false);
-      } catch (e) {
-        messenger?.showSnackBar(
-          SnackBar(
-            content: Text(
-              'Channel $channel reset is stuck on — clear it before the next '
-              'trip: $e',
+      if (!refused) {
+        try {
+          await set(false);
+        } catch (e) {
+          messenger?.showSnackBar(
+            SnackBar(
+              content: Text(
+                'Channel $channel reset is stuck on — clear it before the '
+                'next trip: $e',
+              ),
             ),
-          ),
-        );
+          );
+        }
       }
     }
   }
@@ -1205,12 +1262,14 @@ class _BeckhoffEL9222 extends ConsumerWidget {
                     id: _paneId,
                     title: config.nameOrId,
                     stream: _paneStream(stateMan),
-                    onReset: (channel) => _reset(context, stateMan, channel),
+                    onReset: (channel) =>
+                        _reset(context, ref, stateMan, channel),
                   );
                 },
                 child: IO8Widget(
                   ledStates: el9222FaceLeds(channels[0], channels[1]),
                   name: name,
+                  markerLabel: config.nameOrId,
                   // The `!` on the face is the honest answer to "is this
                   // terminal telling me anything?" — six dark lamps are not,
                   // since dark is also what a healthy switched-off channel
@@ -1244,6 +1303,16 @@ class BeckhoffEL9187Config extends BaseAsset {
   String get displayName => 'Beckhoff EL9187';
   @override
   String get category => 'Beckhoff Devices';
+
+  /// Operator-facing label, worn as a marker tag on the drawing the way the
+  /// EL terminals wear theirs — a page carrying several terminals wants to
+  /// say which is which, and the tag is where the plant writes it.
+  ///
+  /// The model name stays where it was printed. Empty draws no tag at all,
+  /// which is what every page saved before the field existed deserialises
+  /// to, so those drawings are unchanged.
+  @JsonKey(defaultValue: '')
+  String nameOrId = '';
 
   BeckhoffEL9187Config();
 
@@ -1294,6 +1363,15 @@ class _EL9187ConfigContentState extends State<_EL9187ConfigContent> {
           onChanged: (coordinates) => widget.config.coordinates = coordinates,
           enableAngle: false,
         ),
+        const SizedBox(height: 16),
+        TextFormField(
+          decoration: const InputDecoration(
+            labelText: 'Name or ID',
+            border: OutlineInputBorder(),
+          ),
+          initialValue: widget.config.nameOrId,
+          onChanged: (value) => widget.config.nameOrId = value,
+        ),
       ],
     );
   }
@@ -1312,6 +1390,7 @@ class _BeckhoffEL9187 extends StatelessWidget {
     return IO8Widget(
       ledStates: leds,
       name: name,
+      markerLabel: config.nameOrId,
       animation: const AlwaysStoppedAnimation(0),
       ioLabels: const ['OV', 'OV', 'OV', 'OV', 'OV', 'OV', 'OV', 'OV'],
       ioLabelColors: const [
@@ -1466,15 +1545,87 @@ CombineLatestStream<DynamicValue, Map<String, DynamicValue>> _combinedStream(
   });
 }
 
+/// Reads one direction's eight channels out of a generated terminal struct.
+///
+/// The GVL generator's `struct_digital` writes BOOL members `<prefix><n>`,
+/// and the two families it generates number them differently: the EL
+/// terminals from one (`ST_EL1008` `I1..I8`, `ST_EL2008` `O1..O8`), the
+/// EP2338 field boxes from zero (`ST_EP2338_0002` `I0..I7` *and* `O0..O7` in
+/// the same struct — every M8 port is one physical point carrying both). The
+/// base is detected from which first member the struct carries, and channel
+/// list index 0 is `<prefix>0` on a zero-based struct, `<prefix>1` on a
+/// one-based one.
+///
+/// `null` when [value] is not a struct or carries no members under [prefix]
+/// at all — for a combi box, call once per direction.
+List<bool>? beckhoffStructChannels(DynamicValue? value, String prefix) {
+  if (value == null || !value.isObject) return null;
+  final int base;
+  if (value.contains('${prefix}0')) {
+    base = 0;
+  } else if (value.contains('${prefix}1')) {
+    base = 1;
+  } else {
+    return null;
+  }
+  return List.generate(8, (i) {
+    final member = '$prefix${i + base}';
+    return value.contains(member) && value[member].asBool;
+  });
+}
+
+/// Decodes an 8-channel terminal state into per-channel booleans.
+///
+/// The canonical shape is the generated struct — see
+/// [beckhoffStructChannels]; either prefix is accepted on either terminal
+/// type, so an input terminal keeps working even if a generator ever labels
+/// its members the other way around. A plain integer still decodes as the
+/// packed byte the PLC used to publish (bit `i` is channel `i + 1`) — a
+/// zero-cost fallback for stations not yet regenerated.
+///
+/// Anything else — including no value at all — is `null`: unknown, which the
+/// callers render as dark channels rather than eight confident lows.
+List<bool>? beckhoffChannelStates(DynamicValue? value) {
+  if (value == null) return null;
+  final struct =
+      beckhoffStructChannels(value, 'I') ?? beckhoffStructChannels(value, 'O');
+  if (struct != null) return struct;
+  if (value.isInteger) {
+    final bits = value.asInt;
+    return List.generate(8, (i) => (bits & (1 << i)) != 0);
+  }
+  return null;
+}
+
+/// The description to show for channel [index] (0-based): the one configured
+/// on the asset when non-empty, else the one delivered over the descriptions
+/// key, else `null` — the caller's default channel label.
+///
+/// Both lists may be missing, short, or padded with empties; a channel they
+/// do not cover simply falls through.
+String? beckhoffChannelDescription(
+    List<String>? configured, DynamicValue? fromKey, int index) {
+  if (configured != null && index < configured.length) {
+    final text = configured[index].trim();
+    if (text.isNotEmpty) return text;
+  }
+  if (fromKey != null && fromKey.isArray && index < fromKey.asArray.length) {
+    final text = fromKey[index].asString.trim();
+    if (text.isNotEmpty) return text;
+  }
+  return null;
+}
+
 List<IOState> _ledStates(Map<String, DynamicValue> data) {
+  final raw = beckhoffChannelStates(data["raw"]);
   return List.generate(8, (i) {
     final forceValue = data["force"]?.asInt;
     if (forceValue == 1) return IOState.forcedLow;
     if (forceValue == 2) return IOState.forcedHigh;
-    if (data["raw"]?.asInt == null) {
+    if (raw == null) {
       return IOState.low;
     }
-    return (data["raw"]!.asInt & (1 << i)) != 0 ? IOState.high : IOState.low;
+    return raw[i] ? IOState.high : IOState.low;
   });
 }
 
@@ -1499,7 +1650,12 @@ class _BeckhoffEL1008 extends ConsumerWidget {
         Widget buildBody(Map<String, DynamicValue>? data) {
           final leds =
               (data == null) ? List.filled(8, IOState.low) : _ledStates(data);
-          return IO8Widget(ledStates: leds, name: name, animation: animation);
+          return IO8Widget(
+            ledStates: leds,
+            name: name,
+            markerLabel: config.nameOrId,
+            animation: animation,
+          );
         }
 
         return MemoStreamBuilder<Map<String, DynamicValue>>(
@@ -1534,17 +1690,17 @@ class _BeckhoffEL1008 extends ConsumerWidget {
                       LinkedHashMap.fromEntries([
                         MapEntry("raw", config.rawStateKey),
                         MapEntry("force", config.forceValuesKey),
+                        MapEntry("descriptions", config.descriptionsKey),
                       ]),
                       ref,
                     ),
                     statesOf: (data) => data == null
                         ? List.filled(8, IOState.low)
                         : _ledStates(data),
-                    gridSummary: 'Force and descriptions for all 8 channels',
-                    gridSize: const Size(940, 460),
-                    gridBuilder: (_) => IoGridViewport(
-                      child: _channelGrid(context, ref, stateMan),
-                    ),
+                    // ST_EL1008 numbers its members from one.
+                    channelName: (i) => 'I${i + 1}',
+                    descriptionOf: (data, i) => beckhoffChannelDescription(
+                        config.channelDescriptions, data?["descriptions"], i),
                   );
                 },
                 child: buildBody(data),
@@ -1556,102 +1712,6 @@ class _BeckhoffEL1008 extends ConsumerWidget {
     );
   }
 
-  /// The per-channel grid, lifted out of the `AlertDialog` this used to be.
-  /// Force writes and descriptions are unchanged — only the host moved.
-  Widget _channelGrid(
-      BuildContext context, WidgetRef ref, StateMan stateMan) {
-    return MemoStreamBuilder<Map<String, DynamicValue>>(
-      keys: [stateMan, config],
-      stream: _combinedStream(
-        LinkedHashMap.fromEntries([
-          MapEntry("raw", config.rawStateKey),
-          MapEntry("processed", config.processedStateKey),
-          MapEntry("force", config.forceValuesKey),
-          MapEntry("descriptions", config.descriptionsKey),
-          MapEntry("on_filters", config.onFiltersKey),
-          MapEntry("off_filters", config.offFiltersKey),
-        ]),
-        ref,
-      ),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData || snapshot.hasError) {
-          return const SizedBox.shrink();
-        }
-        final map = snapshot.data!;
-        List<bool>? rawStates = map["raw"] != null
-            ? List.generate(8, (i) => (map["raw"]!.asInt & (1 << i)) != 0)
-            : null;
-        List<bool>? processedStates = map["processed"] != null
-            ? List.generate(8, (i) => (map["processed"]!.asInt & (1 << i)) != 0)
-            : null;
-
-        return Column(
-          children: [
-            for (int i = 0; i < 8; i = i + 2)
-              Padding(
-                padding: EdgeInsets.only(
-                    bottom: i < 6
-                        ? 2.0
-                        : 0.0), // Reduced spacing, no padding on last item
-                child: RowIOView(
-                  leftRaw: rawStates?[i] ?? false,
-                  rightRaw: rawStates?[i + 1] ?? false,
-                  leftProcessed: null,
-                  rightProcessed: null,
-                  leftSelected: map["force"]?[i].asInt ?? 0,
-                  rightSelected: map["force"]?[i + 1].asInt ?? 0,
-                  animationValue: animation,
-                  leftOnChanged: (value) async {
-                    map["force"]![i].value = value;
-                    await stateMan.write(config.forceValuesKey!, map["force"]!);
-                  },
-                  rightOnChanged: (value) async {
-                    map["force"]![i + 1].value = value;
-                    await stateMan.write(config.forceValuesKey!, map["force"]!);
-                  },
-                  leftDescription: map["descriptions"]?[i].asString,
-                  rightDescription: map["descriptions"]?[i + 1].asString,
-                  leftFilterEdit: map.containsKey("on_filters") &&
-                          map.containsKey("off_filters")
-                      ? FilterEdit(
-                          onFilter: map["on_filters"]?[i].asInt ?? 0,
-                          offFilter: map["off_filters"]?[i].asInt ?? 0,
-                          onChangedOnFilter: (value) async {
-                            map["on_filters"]![i].value = value;
-                            await stateMan.write(
-                                config.onFiltersKey!, map["on_filters"]!);
-                          },
-                          onChangedOffFilter: (value) async {
-                            map["off_filters"]![i].value = value;
-                            await stateMan.write(
-                                config.offFiltersKey!, map["off_filters"]!);
-                          },
-                        )
-                      : null,
-                  rightFilterEdit: map.containsKey("on_filters") &&
-                          map.containsKey("off_filters")
-                      ? FilterEdit(
-                          onFilter: map["on_filters"]?[i + 1].asInt ?? 0,
-                          offFilter: map["off_filters"]?[i + 1].asInt ?? 0,
-                          onChangedOnFilter: (value) async {
-                            map["on_filters"]![i + 1].value = value;
-                            await stateMan.write(
-                                config.onFiltersKey!, map["on_filters"]!);
-                          },
-                          onChangedOffFilter: (value) async {
-                            map["off_filters"]![i + 1].value = value;
-                            await stateMan.write(
-                                config.offFiltersKey!, map["off_filters"]!);
-                          },
-                        )
-                      : null,
-                ),
-              ),
-          ],
-        );
-      },
-    );
-  }
 }
 
 class IOForceButton extends StatelessWidget {
@@ -2075,6 +2135,7 @@ class _BeckhoffEL3054 extends ConsumerWidget {
           return IO8Widget(
             ledStates: leds,
             name: name,
+            markerLabel: config.nameOrId,
             animation: animation,
             ioLabels: const ['+', '+', 'I1', 'I2', 'I3', 'I4', '+', '+'],
             ioLabelColors: const [
@@ -2425,6 +2486,7 @@ class _BeckhoffEL2912 extends ConsumerWidget {
                 child: IO8Widget(
                   ledStates: el2912FaceLeds(status),
                   name: name,
+                  markerLabel: config.nameOrId,
                   // Beckhoff paints its safety hardware yellow, and on a rack
                   // that colour is how an electrician picks the TwinSAFE
                   // terminal out from across the room.
@@ -2715,6 +2777,16 @@ class BeckhoffEL6070Config extends BaseAsset {
   @override
   List<String> get searchKeywords => const ['licence', 'license', 'twincat'];
 
+  /// Operator-facing label, worn as a marker tag on the drawing the way the
+  /// EL terminals wear theirs — a page carrying several terminals wants to
+  /// say which is which, and the tag is where the plant writes it.
+  ///
+  /// The model name stays where it was printed. Empty draws no tag at all,
+  /// which is what every page saved before the field existed deserialises
+  /// to, so those drawings are unchanged.
+  @JsonKey(defaultValue: '')
+  String nameOrId = '';
+
   BeckhoffEL6070Config();
 
   @override
@@ -2724,6 +2796,7 @@ class BeckhoffEL6070Config extends BaseAsset {
       child: IO8Widget(
         ledStates: List.filled(8, IOState.low),
         name: 'EL6070',
+        markerLabel: nameOrId,
         animation: const AlwaysStoppedAnimation(0),
         ioLabels: const ['', '', '', '', '', '', '', ''],
         ioLabelColors: List.filled(8, const Color(0xFFE0E0E0)),
@@ -2732,8 +2805,13 @@ class BeckhoffEL6070Config extends BaseAsset {
   }
 
   @override
-  Widget configure(BuildContext context) =>
-      _beckhoffConfigureShell(context, _PlacementOnlyConfig(config: this));
+  Widget configure(BuildContext context) => _beckhoffConfigureShell(
+      context,
+      _NamedPlacementConfig(
+        config: this,
+        nameOrId: () => nameOrId,
+        onNameOrIdChanged: (value) => nameOrId = value,
+      ));
 
   BeckhoffEL6070Config.preview() : super();
 
@@ -2758,19 +2836,34 @@ class BeckhoffEK1110Config extends BaseAsset {
   @override
   List<String> get searchKeywords => const ['ethercat', 'extension'];
 
+  /// Operator-facing label, worn as a marker tag on the drawing the way the
+  /// EL terminals wear theirs — a page carrying several extensions wants to
+  /// say which is which, and the tag is where the plant writes it.
+  ///
+  /// The model name stays where it was printed. Empty draws no tag at all,
+  /// which is what every page saved before the field existed deserialises
+  /// to, so those drawings are unchanged.
+  @JsonKey(defaultValue: '')
+  String nameOrId = '';
+
   BeckhoffEK1110Config();
 
   @override
   Widget build(BuildContext context) {
-    return const FittedBox(
+    return FittedBox(
       fit: BoxFit.contain,
-      child: EK1110Widget(name: 'EK1110'),
+      child: EK1110Widget(name: 'EK1110', markerLabel: nameOrId),
     );
   }
 
   @override
-  Widget configure(BuildContext context) =>
-      _beckhoffConfigureShell(context, _PlacementOnlyConfig(config: this));
+  Widget configure(BuildContext context) => _beckhoffConfigureShell(
+      context,
+      _NamedPlacementConfig(
+        config: this,
+        nameOrId: () => nameOrId,
+        onNameOrIdChanged: (value) => nameOrId = value,
+      ));
 
   BeckhoffEK1110Config.preview() : super();
 
@@ -2900,11 +2993,20 @@ class BeckhoffEPBoxConfig extends BaseAsset {
   /// Optional array naming what each of the eight sockets is wired to.
   String? descriptionsKey;
 
+  /// Optional per-port descriptions carried by the asset itself — exactly
+  /// one entry per physical M8 port, channel 1 (`Plug 1 A`) first. A port is
+  /// one physical point whose `I<n>` and `O<n>` both live on the same pin,
+  /// so one description covers both directions. A non-empty entry outranks
+  /// the descriptions key for that port.
+  @JsonKey(name: 'channel_descriptions')
+  List<String>? channelDescriptions;
+
   BeckhoffEPBoxConfig({
     required this.variantModel,
     required this.nameOrId,
     this.stateKey,
     this.descriptionsKey,
+    this.channelDescriptions,
   });
 
   @override
@@ -2924,6 +3026,7 @@ class BeckhoffEPBoxConfig extends BaseAsset {
         nameOrId = "RM01",
         stateKey = null,
         descriptionsKey = null,
+        channelDescriptions = null,
         super();
 
   factory BeckhoffEPBoxConfig.fromJson(Map<String, dynamic> json) =>
@@ -3003,6 +3106,17 @@ class _EPBoxConfigContentState extends State<_EPBoxConfigContent> {
             onChanged: (value) => config.descriptionsKey = value,
             label: 'Descriptions Key',
           ),
+          const SizedBox(height: 16),
+          // One field per physical port: I<n> and O<n> are the same M8
+          // connector, so a port gets one name, not one per direction.
+          _ChannelDescriptionsFields(
+            channelLabels: [
+              for (var c = 1; c <= epBoxChannelCount; c++)
+                epBoxChannelLabel(c),
+            ],
+            initialValue: config.channelDescriptions,
+            onChanged: (value) => config.channelDescriptions = value,
+          ),
         ] else ...[
           const SizedBox(height: 16),
           Text(
@@ -3032,14 +3146,18 @@ class _BeckhoffEPBox extends ConsumerWidget {
 
   bool get _isLive => config.variantModel.isLive && config.stateKey != null;
 
-  static ({List<EpBoxChannel> channels, List<String> descriptions}) _decode(
+  ({List<EpBoxChannel> channels, List<String> descriptions}) _decode(
       Map<String, DynamicValue> data) {
-    final descriptions = data["descriptions"];
     return (
       channels: epBoxChannelsOf(data["state"]),
-      descriptions: (descriptions != null && descriptions.isArray)
-          ? descriptions.asArray.map((d) => d.asString).toList()
-          : const <String>[],
+      // Per port, the description configured on the asset wins over the one
+      // off the key; an empty slot leaves the pane's own plug label.
+      descriptions: [
+        for (var c = 0; c < epBoxChannelCount; c++)
+          beckhoffChannelDescription(
+                  config.channelDescriptions, data["descriptions"], c) ??
+              '',
+      ],
     );
   }
 
@@ -3130,18 +3248,104 @@ Widget _beckhoffConfigureShell(BuildContext context, Widget content) {
   );
 }
 
-/// The configure form for a device with nothing to configure but where it
-/// sits — the passive parts that publish no data and take no name.
-class _PlacementOnlyConfig extends StatefulWidget {
-  final BaseAsset config;
+/// Eight optional per-channel description fields for the terminals that can
+/// carry their channel names on the asset itself.
+///
+/// One text field per channel, pre-filled from the config; an empty field is
+/// no description, and a config where every field is empty is stored as no
+/// list at all. What is entered here outranks a descriptions key — the wiring
+/// is the page author's to name, the key is the PLC's.
+class _ChannelDescriptionsFields extends StatefulWidget {
+  /// Label of channel `i`, e.g. `I1` or `Plug 1 A` — whatever the terminal
+  /// prints beside the channel.
+  final List<String> channelLabels;
 
-  const _PlacementOnlyConfig({required this.config});
+  final List<String>? initialValue;
+  final ValueChanged<List<String>?> onChanged;
+
+  const _ChannelDescriptionsFields({
+    required this.channelLabels,
+    required this.initialValue,
+    required this.onChanged,
+  });
 
   @override
-  State<_PlacementOnlyConfig> createState() => _PlacementOnlyConfigState();
+  State<_ChannelDescriptionsFields> createState() =>
+      _ChannelDescriptionsFieldsState();
 }
 
-class _PlacementOnlyConfigState extends State<_PlacementOnlyConfig> {
+class _ChannelDescriptionsFieldsState
+    extends State<_ChannelDescriptionsFields> {
+  late final List<String> _descriptions;
+
+  @override
+  void initState() {
+    super.initState();
+    _descriptions = List.generate(
+      widget.channelLabels.length,
+      (i) => (widget.initialValue != null && i < widget.initialValue!.length)
+          ? widget.initialValue![i]
+          : '',
+    );
+  }
+
+  void _update(int index, String value) {
+    _descriptions[index] = value;
+    widget.onChanged(_descriptions.every((d) => d.trim().isEmpty)
+        ? null
+        : List.of(_descriptions));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Channel descriptions',
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        for (var i = 0; i < widget.channelLabels.length; i++) ...[
+          const SizedBox(height: 12),
+          TextFormField(
+            key: ValueKey('channel-description-$i'),
+            decoration: InputDecoration(
+              labelText: widget.channelLabels[i],
+              hintText: 'What this channel is wired to (optional)',
+              border: const OutlineInputBorder(),
+            ),
+            initialValue: _descriptions[i],
+            onChanged: (value) => _update(i, value),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// The configure form for a device that publishes nothing — the only
+/// settings are where it sits and what it is called.
+///
+/// The name is read and written through callbacks rather than off a shared
+/// base class: the passive assets have no common supertype beyond
+/// [BaseAsset], and one form beats a near-identical copy per model.
+class _NamedPlacementConfig extends StatefulWidget {
+  final BaseAsset config;
+  final String Function() nameOrId;
+  final ValueChanged<String> onNameOrIdChanged;
+
+  const _NamedPlacementConfig({
+    required this.config,
+    required this.nameOrId,
+    required this.onNameOrIdChanged,
+  });
+
+  @override
+  State<_NamedPlacementConfig> createState() => _NamedPlacementConfigState();
+}
+
+class _NamedPlacementConfigState extends State<_NamedPlacementConfig> {
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -3157,6 +3361,15 @@ class _PlacementOnlyConfigState extends State<_PlacementOnlyConfig> {
           initialValue: widget.config.coordinates,
           onChanged: (coordinates) => widget.config.coordinates = coordinates,
           enableAngle: false,
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          decoration: const InputDecoration(
+            labelText: 'Name or ID',
+            border: OutlineInputBorder(),
+          ),
+          initialValue: widget.nameOrId(),
+          onChanged: widget.onNameOrIdChanged,
         ),
       ],
     );

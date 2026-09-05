@@ -4,9 +4,11 @@ import 'dart:convert';
 import 'package:drift/drift.dart' hide isNull;
 import 'package:test/test.dart';
 import 'package:postgres/postgres.dart';
+import 'package:tfc_dart/core/alarm.dart' show alarmHistoryOverlaps;
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/database_drift.dart';
 import 'docker_compose.dart';
+import 'eventually.dart';
 
 // docker exec -it test-db /bin/ash -c "psql -d testdb --user testuser -c 'select * from test_timeseries;'"
 
@@ -96,7 +98,33 @@ void main() {
       expect(await database.db.isOpen, true);
     });
 
-    setUp(() async {});
+    setUp(() async {
+      // Start every test from tables that do not exist.
+      //
+      // The tearDown below already drops them, but it is best-effort: it
+      // swallows every error and gives the DROP five seconds. When that
+      // silently fails the next test inherits the last one's rows, and the
+      // assertions go wrong in ways that read like logic bugs — CI has failed
+      // here expecting min=8.0 and getting 42.0, a value written by a
+      // different test in the same group.
+      //
+      // Flush *before* dropping, and the order matters. The write buffer is
+      // shared by every test in this file, so a row still sitting in it when
+      // the table is dropped is not discarded — it is written into whatever
+      // table exists when the buffer next drains, which is the next test's
+      // freshly recreated one. Flushing first sends those stragglers to the
+      // table that is about to be destroyed, where they belong.
+      try {
+        await database.flush().timeout(const Duration(seconds: 10));
+      } catch (_) {/* a failed flush must not fail the test that follows */}
+      for (final t in [testTableName, testTableName2]) {
+        try {
+          await database.db
+              .customStatement('DROP TABLE IF EXISTS "$t" CASCADE')
+              .timeout(const Duration(seconds: 10));
+        } catch (_) {/* the test recreates what it needs */}
+      }
+    });
 
     tearDown(() async {
       // Flush any pending writes before dropping tables
@@ -1105,6 +1133,121 @@ void main() {
       // else on a pool of one.
     });
 
+    // The Downtime view is the only reader that bounds `alarm_history` by a
+    // window, and it was the only thing broken by drift rewriting datetime
+    // comparisons into `JULIANDAY(...)` — a function Postgres does not have.
+    // A sqlite-only test cannot see that, so this one runs the real query
+    // against the real server. See `alarmHistoryOverlaps`.
+    group('Alarm history window', () {
+      /// A closed activation, written the way `AlarmMan._addToDb` writes one:
+      /// raw SQL through a `::timestamp` cast, which Postgres stores back as
+      /// its own `2026-08-29 10:00:00` text rather than ISO-8601.
+      Future<void> insertLikeAlarmMan(
+          String uid, DateTime start, DateTime? end) async {
+        await database.db.customInsert(
+          r'INSERT INTO alarm (uid, title, description, rules) '
+          r'VALUES ($1, $2, $3, $4) ON CONFLICT (uid) DO NOTHING',
+          variables: [
+            Variable.withString(uid),
+            Variable.withString(uid),
+            Variable.withString(uid),
+            Variable.withString('[]'),
+          ],
+        );
+        await database.db.customInsert(
+          r'INSERT INTO alarm_history (alarm_uid, alarm_title, '
+          r'alarm_description, alarm_level, expression, active, pending_ack, '
+          r'created_at, deactivated_at) '
+          r'VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamp, $9::timestamp)',
+          variables: [
+            Variable.withString(uid),
+            Variable.withString(uid),
+            Variable.withString(uid),
+            Variable.withString('error'),
+            Variable.withString('a'),
+            Variable.withBool(false),
+            Variable.withBool(false),
+            Variable.withString(start.toIso8601String()),
+            // NULL for a standing alarm; `_addToDb` only ever writes closed ones.
+            Variable<String>(end?.toIso8601String()),
+          ],
+        );
+      }
+
+      Future<List<String>> inWindow({DateTime? from, DateTime? to}) async {
+        final query = database.db.select(database.db.alarmHistory)
+          ..where((t) => alarmHistoryOverlaps(t, from: from, to: to));
+        final rows = await query.get();
+        return rows.map((r) => r.alarmUid).toList()..sort();
+      }
+
+      final day = DateTime(2026, 8, 29);
+      DateTime at(int hour) => day.add(Duration(hours: hour));
+
+      setUp(() async {
+        await database.db.customStatement('DELETE FROM alarm_history');
+        await database.db.customStatement('DELETE FROM alarm');
+        await insertLikeAlarmMan('before', at(2), at(4));
+        await insertLikeAlarmMan('straddles-start', at(6), at(9));
+        await insertLikeAlarmMan('inside', at(10), at(11));
+        await insertLikeAlarmMan('after', at(20), at(22));
+        await insertLikeAlarmMan('standing', at(7), null);
+      });
+
+      tearDown(() async {
+        try {
+          await database.db.customStatement('DELETE FROM alarm_history');
+          await database.db.customStatement('DELETE FROM alarm');
+        } catch (_) {}
+      });
+
+      test('a bounded window runs at all', () async {
+        // Before the fix this threw
+        // `function julianday(text) does not exist` and the Downtime tab
+        // showed the error instead of a timeline.
+        expect(await inWindow(from: at(8), to: at(16)),
+            ['inside', 'standing', 'straddles-start']);
+      });
+
+      test('an unbounded query is unaffected', () async {
+        expect(await inWindow(), hasLength(5));
+      });
+
+      test('an open-ended window bounds only the side it names', () async {
+        expect(await inWindow(to: at(5)), ['before']);
+        expect(await inWindow(from: at(21)), ['after', 'standing']);
+      });
+
+      test('rows drift itself inserted compare the same', () async {
+        // drift stores ISO-8601 in the same text column; `::timestamp` has to
+        // parse both spellings or half the history sorts wrong.
+        await database.db.into(database.db.alarm).insert(
+              AlarmCompanion.insert(
+                  uid: 'drift-written',
+                  title: 'drift-written',
+                  description: 'drift-written',
+                  rules: '[]'),
+            );
+        await database.db.into(database.db.alarmHistory).insert(
+              AlarmHistoryCompanion.insert(
+                alarmUid: 'drift-written',
+                alarmTitle: 'drift-written',
+                alarmDescription: 'drift-written',
+                alarmLevel: 'error',
+                expression: const Value('a'),
+                active: false,
+                pendingAck: false,
+                createdAt: at(10),
+                deactivatedAt: Value(at(11)),
+              ),
+            );
+
+        expect(await inWindow(from: at(8), to: at(16)),
+            contains('drift-written'));
+        expect(await inWindow(to: at(5)), isNot(contains('drift-written')));
+      });
+    });
+
     group('Error Handling', () {
       test('should handle invalid table names', () async {
         expect(
@@ -1180,6 +1323,12 @@ void main() {
       const mvName = 'mv_join_test';
 
       setUp(() async {
+        // The outer setUp has already dropped both base tables, so the view
+        // below spans only what this test writes. That matters here more than
+        // anywhere else in the file: `all_times` is a UNION over the base
+        // tables, so one leftover row becomes one extra view row — this test
+        // has failed on CI with four rows as well as with two.
+
         // Make sure base tables exist as hypertables
         await database.registerRetentionPolicy(
           testTableName,
@@ -1213,6 +1362,25 @@ void main() {
         await database.insertTimeseriesData(testTableName2, t1, 200);
         await database.insertTimeseriesData(testTableName2, t2, 300);
         await database.flush();
+
+        // Both base tables must hold exactly what this test wrote before the
+        // view is built over them.
+        //
+        // `CREATE MATERIALIZED VIEW` snapshots the base tables at that
+        // instant, so a row still sitting in the write buffer is a row the
+        // view will never have — which is how this failed on CI with two rows
+        // instead of three. flush() ought to be enough; asserting that it was
+        // costs one query and turns "the view is short" into "the insert had
+        // not landed", which is a different bug with a different fix.
+        for (final t in [testTableName, testTableName2]) {
+          await eventually(
+            () => database.queryTimeseriesData(
+                t, base.subtract(const Duration(minutes: 1))),
+            hasLength(2),
+            reason: 'base table "$t" must hold its two rows before the view '
+                'is created over it',
+          );
+        }
 
         // Create MV with columns {table: column}
         await database.createView(mvName, {

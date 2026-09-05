@@ -9,7 +9,7 @@ import 'tool_registry.dart';
 /// - **list_tags** (Level 1): Browse available tags with optional fuzzy search
 /// - **get_tag_value** (Level 2): Get the current value of a specific tag
 ///
-/// Both tools go through the identity + audit middleware provided by
+/// Both tools go through the audit middleware provided by
 /// [ToolRegistry], so tool handlers focus only on business logic.
 void registerTagTools(ToolRegistry registry, TagService tagService) {
   _registerListTags(registry, tagService);

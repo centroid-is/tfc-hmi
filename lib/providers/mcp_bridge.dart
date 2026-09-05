@@ -2,12 +2,12 @@ import 'dart:async';
 import 'dart:io' as io;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:tfc_access/tfc_access.dart' show AccessDenied;
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
     show
         AlarmReader,
         DriftDrawingIndex,
         DriftTechDocIndex,
-        EnvOperatorIdentity,
         McpConfig,
         McpDatabase,
         NodeBrowser,
@@ -15,7 +15,6 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         migrateMcpConfigToDeviceLocal,
         readMcpConfigFromPreferences;
 
-import '../core/feature_flags.dart';
 import '../mcp/alarm_man_alarm_reader.dart';
 import '../mcp/app_screen_capturer.dart';
 import '../mcp/mcp_lifecycle_state.dart';
@@ -27,7 +26,8 @@ import 'alarm.dart';
 import 'database.dart' show databaseProvider;
 import 'page_manager.dart' show pageManagerProvider;
 import 'plc.dart' show plcCodeIndexProvider;
-import 'preferences.dart' show localPreferencesProvider, preferencesProvider;
+import 'preferences.dart'
+    show localPreferencesProvider, systemPreferencesProvider;
 import 'proposal.dart' show describeProposalFeedback;
 import 'proposal_state.dart'
     show
@@ -69,30 +69,6 @@ Map<String, String> getMcpServerEnv() {
   };
 }
 
-/// Returns the operator identity from TFC_USER environment variable.
-String getMcpOperatorId() {
-  return io.Platform.environment['TFC_USER'] ?? 'operator';
-}
-
-/// Whether an operator identity is present (TFC_USER environment variable).
-///
-/// This gates write-style operations that need an attributable operator —
-/// e.g. tech-doc upload/rename/delete. It is independent of [kChatEnabled]:
-/// disabling the chat build flag must not revoke write permissions.
-bool isMcpWriteEnabled() {
-  return io.Platform.environment.containsKey('TFC_USER');
-}
-
-/// Whether the MCP chat feature is available.
-///
-/// Requires both the [kChatEnabled] build flag and an operator identity.
-/// Call sites that pull in chat widgets should guard with
-/// `kChatEnabled && isMcpChatAvailable()` so the chat code tree-shakes
-/// out of flag-off builds.
-bool isMcpChatAvailable() {
-  return kChatEnabled && io.Platform.environment.containsKey('TFC_USER');
-}
-
 /// Mutable state for the MCP server lifecycle provider.
 final _serverLifecycle = McpLifecycleState();
 
@@ -109,15 +85,46 @@ final mcpConfigMigrationProvider = FutureProvider<void>((ref) async {
     // into the device store — the migration must re-run at that moment
     // to delete the stale mcp.config row before the next sync. It is
     // idempotent, so re-running on every reconnect is safe.
+    // systemPreferencesProvider watches preferencesProvider, so this keeps
+    // that property rather than trading it for the escape.
     //
     // The timeout keeps the device-local MCP config independent of
     // database health: if preferencesProvider stalls (e.g. a half-open
     // connection), the config loads anyway and the migration re-runs
     // when the provider eventually emits.
+    //
+    // The **system** view of the shared store, not the ordinary one. This
+    // runs at boot with nobody signed in and calls `shared.remove(...)` once
+    // for `mcp.config` and once for each legacy key, all of which need
+    // `administer` under the `mcp.` prefix rule. Through the checked path
+    // every one of those is refused, the `catch` below swallows it, and the
+    // stale shared row this migration exists to delete survives forever —
+    // behind a log line that reads like a database outage. `systemWrites`
+    // skips the denial, not the audit: each removal still lands in the trail
+    // marked `origin: 'system'`.
+    //
+    // `local` stays `localPreferencesProvider` and stays unguarded. Widening
+    // that store into the guard to make the two sides symmetric would put an
+    // audit row on every `poke()` — one per pointer-down, per plan 01-07's
+    // note — which is a conversation about throttling the persist, not a
+    // change to make in passing.
     final shared = await ref
-        .watch(preferencesProvider.future)
+        .watch(systemPreferencesProvider.future)
         .timeout(const Duration(seconds: 15));
     await migrateMcpConfigToDeviceLocal(shared: shared, local: local);
+  } on AccessDenied catch (e) {
+    // Not an outage. Reaching here means the migration was routed back
+    // through the checked path, and no session at boot can satisfy
+    // `administer` — so the stale shared row will never be deleted and the
+    // device config will be overwritten by it on the next sync. That is a
+    // defect in this app's access policy wiring, and it is deliberately not
+    // phrased like the sentence below.
+    io.stderr.writeln(
+        'MCP config migration REFUSED: writing "${e.itemKey}" needs the '
+        '${e.required.name} group, and nobody is signed in at boot. '
+        'This is a defect in the access policy wiring, not a database '
+        'outage: the migration must take systemPreferencesProvider. The '
+        'stale shared mcp.config row has NOT been removed.');
   } catch (e) {
     // Shared preferences unavailable — the local store is authoritative
     // anyway; migration re-runs when preferencesProvider recovers.
@@ -222,7 +229,6 @@ Future<void> _startServer(McpBridgeNotifier bridge, int port,
     throw StateError('Database not connected');
   }
   final McpDatabase database = dbWrapper.db;
-  final identity = EnvOperatorIdentity();
 
   final config = await ref.read(mcpConfigProvider.future);
 
@@ -241,7 +247,6 @@ Future<void> _startServer(McpBridgeNotifier bridge, int port,
     stateReader: stateReader,
     alarmReader: alarmReader,
     database: database,
-    identity: identity,
     toggles: config.toggles,
     nodeBrowser: nodeBrowser,
     drawingIndex: DriftDrawingIndex(database),
@@ -308,10 +313,11 @@ final proposalFeedbackRelayProvider = Provider<void>((ref) {
 /// Deliberately NOT hung off `chatLifecycleProvider`, for the same reason as
 /// [proposalFeedbackRelayProvider] below it. That provider only runs when the
 /// in-app chat bubble is enabled, and every deployment build is compiled with
-/// `--dart-define=TFC_CHAT=false`; the case this path exists for is precisely
-/// the one where an external client proposes over HTTP and no in-app chat is
-/// involved. The inbound half and the outbound half of the same conversation
-/// with the operator now hang off the same thing: the MCP server's lifecycle.
+/// `--dart-define=CENTROIDX_CHAT=false`; the case this path exists for is
+/// precisely the one where an external client proposes over HTTP and no
+/// in-app chat is involved. The inbound half and the outbound half of the
+/// same conversation with the operator now hang off the same thing: the MCP
+/// server's lifecycle.
 ///
 /// When chat IS on -- development builds, where it defaults to on -- both
 /// listeners stage the same proposal from the same broadcast stream. That is

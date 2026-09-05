@@ -1,15 +1,15 @@
 /// The navigation menu's shape, separated from `main.dart` so it can be
 /// tested without booting the app: which built-ins sit at the top level,
-/// what god mode reveals under Advanced, and where `/` falls back to when
-/// the Home page has been deleted.
+/// why the Advanced menu is unconditional and the route gate decides access,
+/// and where `/` falls back to when the Home page has been deleted.
 library;
-
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import 'package:tfc/core/feature_flags.dart';
+
+export 'package:tfc/core/startup_url.dart' show resolveStartupPath;
 import 'package:tfc/models/menu_item.dart';
 import 'package:tfc/routes.dart';
 
@@ -41,15 +41,24 @@ List<MenuItem> builtinTopLevelMenuItems({required bool historyAtTopLevel}) => [
 /// built-ins, then Advanced pinned last. The persisted top-level order is
 /// applied afterwards by `PageManager.sortTopLevel` on the registry.
 ///
-/// God mode (`TFC_GOD=true`) only controls menu visibility — the gated
-/// entries' routes stay registered either way, matching how the Page Editor
-/// has always been gated. Server Config stays visible without god mode:
-/// commissioning a Windows HMI (pointing it at a PLC) must not require an
-/// environment variable, and on non-Linux non-god installs it is the only
-/// thing keeping Advanced alive. Key Repository surfaces stored secrets, so
-/// it is god-gated.
+/// Every Advanced child is listed unconditionally. `kRaisedRoutes` in
+/// `lib/access_routes.dart` and `AccessLockBadge` decide who may open one, so
+/// a raised entry stays *visible and locked*, never hidden — a hidden entry
+/// is a page nobody knows to ask for, and the lock badge built for these
+/// routes would never appear on the station that needs it. That reasoning was
+/// first recorded per-entry for the three entries never hidden: commissioning
+/// a Windows HMI (pointing it at a PLC) must not require an environment
+/// variable; the audit trail surfaces no secret, because no constructor on an
+/// audit record takes a password and the trail withholds values on auth rows
+/// on purpose; and the access screen is the *commissioning-critical* one —
+/// the deployment doc's order is "create roles, then users, then the
+/// first-user window closes", which cannot be followed from a station where
+/// the entry is invisible — with a user list of username, role, created and
+/// last login, `passwordHash` and `salt` never reaching the widget layer. It
+/// now governs the whole function. The icons follow from it: Access carries a
+/// people glyph rather than a lock or a shield, because a lock is what
+/// `AccessLockBadge` draws over an entry the session cannot open.
 List<MenuItem> buildTopLevelMenuItems({
-  required bool god,
   required bool isLinux,
   required List<MenuItem> pageMenuItems,
   bool historyAtTopLevel = false,
@@ -57,14 +66,16 @@ List<MenuItem> buildTopLevelMenuItems({
   final advancedChildren = <MenuItem>[
     if (isLinux) MenuItem(label: 'IP Settings', path: '/advanced/ip-settings', icon: Icons.settings_ethernet),
     if (isLinux) MenuItem(label: 'About Linux', path: '/advanced/about-linux', icon: Icons.info),
-    if (god) MenuItem(label: 'Page Editor', path: '/advanced/page-editor', icon: Icons.edit),
-    if (god) MenuItem(label: 'Preferences', path: '/advanced/preferences', icon: Icons.settings),
-    if (god) MenuItem(label: 'Alarm Editor', path: '/advanced/alarm-editor', icon: Icons.alarm),
+    MenuItem(label: 'Page Editor', path: '/advanced/page-editor', icon: Icons.edit),
+    MenuItem(label: 'Preferences', path: '/advanced/preferences', icon: Icons.settings),
+    MenuItem(label: 'Alarm Editor', path: '/advanced/alarm-editor', icon: Icons.alarm),
     // History View's default home (its pre-#154 spot). The operator can
     // promote it to the top level from the page editor.
     if (!historyAtTopLevel) historyViewMenuItem,
     MenuItem(label: 'Server Config', path: '/advanced/server-config', icon: FontAwesomeIcons.server.data),
-    if (god) MenuItem(label: 'Key Repository', path: '/advanced/key-repository', icon: FontAwesomeIcons.key.data),
+    MenuItem(label: 'Key Repository', path: '/advanced/key-repository', icon: FontAwesomeIcons.key.data),
+    MenuItem(label: 'Audit Trail', path: '/advanced/audit-trail', icon: Icons.receipt_long),
+    MenuItem(label: 'Access', path: '/advanced/access', icon: Icons.manage_accounts),
     if (kKnowledgeEnabled)
       MenuItem(label: 'Knowledge Base', path: '/advanced/knowledge-base', icon: Icons.library_books),
   ];
@@ -83,9 +94,6 @@ List<MenuItem> buildTopLevelMenuItems({
   ];
 }
 
-/// Whether this process runs in god mode.
-bool get environmentVariableIsGod => Platform.environment['TFC_GOD'] == 'true';
-
 /// Resolves this station's stored startup URL against the assembled menu.
 ///
 /// The stored path only wins while it is still a routable destination:
@@ -93,19 +101,6 @@ bool get environmentVariableIsGod => Platform.environment['TFC_GOD'] == 'true';
 /// or unpublished since the operator picked it must not strand the app on
 /// "not found" at boot. Everything else falls back to `/`, which always
 /// routes — Home, or the RouteRedirect stub standing in for a deleted Home.
-String resolveStartupPath(String stored, {required List<MenuItem> menuItems}) {
-  if (stored == '/') return '/';
-  return _menuHasRoutablePath(menuItems, stored) ? stored : '/';
-}
-
-bool _menuHasRoutablePath(List<MenuItem> items, String path) {
-  for (final item in items) {
-    if (item.path == path && !item.isNavigationSection) return true;
-    if (_menuHasRoutablePath(item.children, path)) return true;
-  }
-  return false;
-}
-
 /// Depth-first first path in [items] — where `/` and refused pages fall back
 /// to when the Home page itself is gone. Null when no page is reachable at
 /// all.

@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:tfc_access/tfc_access.dart';
 import 'models/menu_item.dart';
 
 class RouteRegistry {
   static final RouteRegistry _instance = RouteRegistry._internal();
   final Map<String, WidgetBuilder> _routes = {};
+  final Map<String, AccessGroup> _routeGroups = {};
   final List<MenuItem> menuItems = [];
 
   RouteRegistry._internal();
@@ -12,8 +14,60 @@ class RouteRegistry {
     return _instance;
   }
 
-  void registerRoute(String path, WidgetBuilder builder) {
+  /// Registers a builder, and optionally the access group the route needs.
+  ///
+  /// [group] is optional and named so that every existing two-argument call
+  /// keeps compiling untouched. A null [group] leaves any existing
+  /// declaration alone: it neither writes `operate` nor erases a group
+  /// declared earlier, so registering a builder can never silently unlock a
+  /// route somebody else raised.
+  void registerRoute(String path, WidgetBuilder builder, {AccessGroup? group}) {
     _routes[path] = builder;
+    if (group != null) {
+      declareRouteGroup(path, group);
+    }
+  }
+
+  /// Declares the group a path needs without registering a builder for it.
+  ///
+  /// The single write path for [_routeGroups]; [registerRoute] delegates
+  /// here. This exists because the nine routes this app raises live in
+  /// Beamer's table rather than in this registry — see [groupForRoute].
+  void declareRouteGroup(String path, AccessGroup group) {
+    _routeGroups[path] = group;
+  }
+
+  /// The group a path needs. A path nobody declared answers
+  /// [AccessGroup.operate].
+  ///
+  /// **Why the default is `operate` and not something stricter.** `operate`
+  /// is exactly what an anonymous session holds, so a route that declares
+  /// nothing behaves precisely as it did before route gating existed. That is
+  /// what makes gating shippable with no cutover: only the routes that name a
+  /// group change at all. It is the deliberate opposite of the config-key
+  /// default in `docs/access-control-spec.md` §7, which fails *closed* on
+  /// `administer` — a wrongly-open route is a nuisance, a wrongly-open config
+  /// write is a broken plant. Both defaults are choices, not oversights.
+  ///
+  /// Never returns null and never throws, including for an unknown or null
+  /// path, so callers can ask about any path they hold.
+  ///
+  /// **The live route table is not this registry.** The app routes through
+  /// Beamer's `RoutesLocationBuilder` in `centroid-hmi/lib/main.dart`;
+  /// `registerRoute` currently has no call sites anywhere in the repo. The
+  /// `group:` parameter exists because the spec puts the declaration on
+  /// `registerRoute` and because pages registered through the registry later
+  /// need somewhere to say it. The nine routes raised today are declared
+  /// through [declareRouteGroup] from `lib/access_routes.dart`.
+  AccessGroup groupForRoute(String? path) {
+    return _routeGroups[path] ?? AccessGroup.operate;
+  }
+
+  /// Drops every group declaration, the way `menuItems.clear()` drops the
+  /// menu — the singleton outlives a test, so a test needs a known state.
+  @visibleForTesting
+  void clearRouteGroups() {
+    _routeGroups.clear();
   }
 
   WidgetBuilder? getBuilder(String path) {

@@ -16,6 +16,7 @@ import '../../providers/state_man.dart';
 import 'package:tfc/converter/color_converter.dart'
     show AssetColor, AssetColorConverter, ColorConverter, OptionalColorConverter;
 import '../../widgets/memo_stream_builder.dart';
+import '../../widgets/tag_access_guard.dart' show writeTag;
 
 part 'button.g.dart';
 
@@ -267,6 +268,87 @@ class ButtonConfig extends BaseAsset {
     return keys.toList();
   }
 
+  /// Shape, behaviour and colours. Neither the write key nor the interlock
+  /// key is here — a bank of buttons sharing one write key is a page that
+  /// starts the wrong motor.
+  ///
+  /// [disabledPolarity] is offered even though [disabledKey] is not: setting
+  /// it on a selection whose keys are already configured is exactly the
+  /// tidy-up the row is for, and on a selection with no keys it changes
+  /// nothing an operator can see.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<BulkProperty> get bulkProperties => [
+        ...super.bulkProperties,
+        ChoiceBulkProperty<ButtonType>(
+          id: 'ButtonConfig.buttonType',
+          label: 'Shape',
+          group: _bulkGroup,
+          options: ButtonType.values,
+          optionLabel: (value) => BaseAsset.bulkEnumLabel(value.name),
+          read: () => buttonType,
+          apply: (value) => buttonType = value,
+        ),
+        BoolBulkProperty(
+          id: 'ButtonConfig.isToggle',
+          label: 'Toggles',
+          group: _bulkGroup,
+          read: () => isToggle,
+          apply: (value) => isToggle = value,
+        ),
+        BoolBulkProperty(
+          id: 'ButtonConfig.serverWritesLow',
+          label: 'Server writes low',
+          group: _bulkGroup,
+          read: () => serverWritesLow,
+          apply: (value) => serverWritesLow = value,
+        ),
+        ChoiceBulkProperty<DisabledPolarity>(
+          id: 'ButtonConfig.disabledPolarity',
+          label: 'Disable when',
+          group: _bulkGroup,
+          options: DisabledPolarity.values,
+          optionLabel: (value) =>
+              value == DisabledPolarity.disableWhenTrue ? 'True' : 'False',
+          read: () => disabledPolarity,
+          apply: (value) => disabledPolarity = value,
+        ),
+        AssetColorBulkProperty(
+          id: 'ButtonConfig.outwardColor',
+          label: 'Outward colour',
+          group: _bulkGroup,
+          read: () => outwardColor,
+          apply: (value) => outwardColor = value,
+        ),
+        AssetColorBulkProperty(
+          id: 'ButtonConfig.inwardColor',
+          label: 'Inward colour',
+          group: _bulkGroup,
+          read: () => inwardColor,
+          apply: (value) => inwardColor = value,
+        ),
+        ColorBulkProperty(
+          id: 'ButtonConfig.disabledColor',
+          label: 'Disabled colour',
+          group: _bulkGroup,
+          read: () => disabledColor,
+          apply: (value) => disabledColor = value ?? disabledColor,
+        ),
+        ColorBulkProperty(
+          id: 'ButtonConfig.textColor',
+          label: 'Text colour',
+          group: _bulkGroup,
+          // The editor's Default/Custom toggle is derived from this being
+          // null, so clearing has to stay reachable or a bulk edit could
+          // strand a selection on Custom.
+          nullable: true,
+          read: () => textColor,
+          apply: (value) => textColor = value,
+        ),
+      ];
+
+  static const String _bulkGroup = 'Button';
+
   factory ButtonConfig.fromJson(Map<String, dynamic> json) =>
       _$ButtonConfigFromJson(json);
   Map<String, dynamic> toJson() => _$ButtonConfigToJson(this);
@@ -299,6 +381,19 @@ class _ButtonState extends ConsumerState<Button> {
   bool _isToggled = false; // Add toggle state
   bool _disabled = false; // Current resolved disabled state (key + polarity)
 
+  /// Whether the press half of the current gesture was issued.
+  ///
+  /// A tap delivers `onTapDown` and `onTapUp` in the same frame, so this is a
+  /// **future assigned synchronously** rather than a bool set after the first
+  /// `await`: a flag written when the write resolves would still be false
+  /// when the release reads it, and every press would look refused.
+  ///
+  /// The release waits on it and sends nothing when it answers false. The PLC
+  /// never saw the rising edge of a refused press, so a falling edge would be
+  /// a command it did not ask for — and a second refusal, a second audit row
+  /// and a second prompt for one gesture.
+  Future<bool>? _pressOutcome;
+
   @override
   void dispose() {
     _pressedController.close();
@@ -310,6 +405,53 @@ class _ButtonState extends ConsumerState<Button> {
     if (_isPressed != value) {
       setState(() => _isPressed = value);
       _pressedController.add(value);
+    }
+  }
+
+  /// The press, resolved before it is issued. True when the write went out
+  /// or when it failed on the wire; false only when the session may not
+  /// write this key.
+  ///
+  /// **A comms failure answers true on purpose.** It is not a refusal: the
+  /// rising edge may well have reached the PLC, and a button that then
+  /// withheld its falling edge would leave a momentary command latched on.
+  /// The refusal is the one case where nothing was sent and nothing has to
+  /// be undone.
+  ///
+  /// Total by construction — the provider resolve is inside the `try` — so
+  /// the future this returns never completes with an error, and a release
+  /// that never runs cannot leave an unhandled one behind.
+  Future<bool> _writePress() async {
+    try {
+      final client = await ref.read(stateManProvider.future);
+      final issued = await writeTag(ref, client, widget.config.key,
+          DynamicValue(value: true, typeId: NodeId.boolean));
+      if (issued) {
+        _log.d('Button ${widget.config.key} pressed');
+      }
+      return issued;
+    } catch (e) {
+      _log.e('Error writing button press', error: e);
+      return true;
+    }
+  }
+
+  /// The falling edge, sent only when the rising one was.
+  ///
+  /// [what] and [failure] keep the two callers' log lines exactly as they
+  /// were: a release and a cancelled tap write the same `false` but are worth
+  /// telling apart in a log.
+  Future<void> _writeRelease(String what, String failure) async {
+    final pressed = await (_pressOutcome ?? Future<bool>.value(true));
+    _pressOutcome = null;
+    if (!pressed) return;
+    try {
+      final client = await ref.read(stateManProvider.future);
+      await writeTag(ref, client, widget.config.key,
+          DynamicValue(value: false, typeId: NodeId.boolean));
+      _log.d('Button ${widget.config.key} $what');
+    } catch (e) {
+      _log.e('Error writing button $failure', error: e);
     }
   }
 
@@ -400,25 +542,21 @@ class _ButtonState extends ConsumerState<Button> {
             : const RoundedRectangleBorder(),
         onTapDown: disabled
             ? null
-            : (_) async {
+            : (_) {
                 if (!widget.config.isToggle) {
                   _setPressed(true);
                 }
                 if (isPreview) return;
 
                 if (widget.config.isToggle) {
-                  // For toggle buttons, just handle the toggle
+                  // For toggle buttons, just handle the toggle. Nothing is
+                  // written, so there is nothing to resolve.
                   _handleToggle();
                 } else {
-                  // For regular buttons, write true
-                  final client = await ref.read(stateManProvider.future);
-                  try {
-                    await client.write(widget.config.key,
-                        DynamicValue(value: true, typeId: NodeId.boolean));
-                    _log.d('Button ${widget.config.key} pressed');
-                  } catch (e) {
-                    _log.e('Error writing button press', error: e);
-                  }
+                  // For regular buttons, write true. Not `async`: the future
+                  // is stored synchronously so the release, which arrives in
+                  // the same frame, has something to wait on.
+                  _pressOutcome = _writePress();
                 }
               },
         onTapUp: disabled
@@ -430,17 +568,16 @@ class _ButtonState extends ConsumerState<Button> {
                 if (isPreview) return;
 
                 if (!widget.config.isToggle) {
-                  // For regular buttons, write false
-                  try {
-                    if (!widget.config.serverWritesLow) {
-                      final client = await ref.read(stateManProvider.future);
-                      await client.write(widget.config.key,
-                          DynamicValue(value: false, typeId: NodeId.boolean));
-                      _log.d('Button ${widget.config.key} released');
-                    }
-                  } catch (e) {
-                    _log.e('Error writing button release', error: e);
+                  // For regular buttons, write false. `serverWritesLow` means
+                  // the PLC clears the bit itself, but the press still has to
+                  // be awaited so its outcome is not left for the next
+                  // gesture to read.
+                  if (widget.config.serverWritesLow) {
+                    await (_pressOutcome ?? Future<bool>.value(true));
+                    _pressOutcome = null;
+                    return;
                   }
+                  await _writeRelease('released', 'release');
                 }
               },
         onTapCancel: disabled
@@ -452,15 +589,8 @@ class _ButtonState extends ConsumerState<Button> {
                 if (isPreview) return;
 
                 if (!widget.config.isToggle) {
-                  // For regular buttons, write false
-                  final client = await ref.read(stateManProvider.future);
-                  try {
-                    await client.write(widget.config.key,
-                        DynamicValue(value: false, typeId: NodeId.boolean));
-                    _log.d('Button ${widget.config.key} tap cancelled');
-                  } catch (e) {
-                    _log.e('Error writing button cancel', error: e);
-                  }
+                  // For regular buttons, write false.
+                  await _writeRelease('tap cancelled', 'cancel');
                 }
               },
         child: Stack(

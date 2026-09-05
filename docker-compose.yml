@@ -16,6 +16,13 @@ services:
     container_name: weston
     user: root
     privileged: true
+    # ~30 fds per VNC client against the default 1024 soft limit is the real
+    # ceiling under many viewers; fd exhaustion kills weston's internal clients
+    # and the compositor with them. Measured on hq-skjar, 2026-09-02.
+    ulimits:
+      nofile:
+        soft: 16384
+        hard: 16384
     volumes:
       - ./wayland-socket/user:/run/user
       - ./seatd-socket:/run
@@ -132,7 +139,6 @@ services:
       - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
       - /var/lib/dbus/machine-id:/var/lib/dbus/machine-id:ro
     environment:
-      # TFC_GOD: true
       XDG_RUNTIME_DIR: /run/user/1000
       WAYLAND_DISPLAY: wayland-1
       SECRET_BACKEND: file

@@ -6,12 +6,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:beamer/beamer.dart';
 import 'package:dbus/dbus.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:amplify_secure_storage_dart/amplify_secure_storage_dart.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:upgrader/upgrader.dart';
 import 'package:centroidx_upgrader/centroidx_upgrader.dart';
 
+import 'package:tfc/access_routes.dart';
 import 'package:tfc/core/startup_url.dart';
 import 'package:tfc/core/update_channel.dart';
 import 'package:tfc/core/update_launch.dart';
@@ -32,15 +32,21 @@ import 'package:tfc/pages/server_config.dart';
 import 'package:tfc/pages/key_repository.dart';
 import 'package:tfc/pages/about_linux.dart';
 import 'package:tfc/pages/tech_doc_library.dart';
+import 'package:tfc/pages/first_user.dart';
+import 'package:tfc/pages/audit_trail.dart';
+import 'package:tfc/pages/access_admin.dart';
 import 'package:tfc/transition_delegate.dart';
 import 'package:tfc/providers/theme.dart';
 import 'package:tfc/core/feature_flags.dart';
-import 'package:tfc/core/preferences.dart';
+import 'package:tfc/providers/preferences.dart'
+    show createDeviceLocalPreferences;
 import 'package:tfc/page_creator/page.dart';
 
 import 'package:tfc/theme.dart';
 import 'package:tfc/page_creator/assets/registry.dart';
-import 'package:tfc/widgets/base_scaffold.dart';
+import 'package:tfc/core/system_clock.dart';
+import 'package:tfc/widgets/access_gate.dart';
+import 'package:tfc/widgets/dbus_gate.dart';
 import 'package:tfc/widgets/nav_dropdown.dart';
 import 'package:mcp_dart/mcp_dart.dart' show ElicitResult;
 import 'package:tfc/chat/chat_overlay.dart';
@@ -264,9 +270,31 @@ Future<void> _startApp([bool debugMode = false]) async {
   final registry = RouteRegistry();
 
   // This is not ideal, if a second HMI adds a page, we will need to restart the app twice
-  final prefs = SharedPreferencesWrapper(SharedPreferencesAsync());
+  // Before `runApp`, so there is no `ProviderScope` to read
+  // `localPreferencesProvider` from — the factory is the one construction
+  // point spec §6 asks for, enforced by
+  // `scripts/check-preferences-construction.sh`.
+  final prefs = createDeviceLocalPreferences();
   final pageManager = PageManager(pages: {}, prefs: prefs);
   await pageManager.load();
+
+  // systemd forgets runtime NTP servers on every restart and offers no way
+  // to persist them over D-Bus, so the HMI is what carries the operator's
+  // choice across a reboot. Fire-and-forget: a station without the polkit
+  // rule will be refused, and that must not hold up or break startup.
+  if (Platform.isLinux) {
+    unawaited(applyStoredNtpServers(
+      prefs: prefs,
+      connect: () => DBusTimeSync(DBusClient.system()),
+    ).then((applied) {
+      if (applied != null) {
+        logger.i('Re-applied ${applied.length} stored NTP server(s)');
+      }
+    }).catchError((Object e) {
+      logger.w('Could not re-apply stored NTP servers: $e');
+      return null;
+    }));
+  }
 
   final extraMenuItems = pageManager.getRootMenuItems();
 
@@ -275,7 +303,6 @@ Future<void> _startApp([bool debugMode = false]) async {
   // Built-ins (Alarm View, History View) and the pages share one persisted
   // top-level order, editable in the page editor's Pages dialog.
   final topLevelMenuItems = buildTopLevelMenuItems(
-    god: environmentVariableIsGod,
     isLinux: Platform.isLinux,
     pageMenuItems: extraMenuItems,
     // History View sits under Advanced unless the operator promoted it to
@@ -417,6 +444,87 @@ RoutesLocationBuilder createLocationBuilder(
   List<MenuItem> extraMenuItems, {
   Iterable<String> pagePaths = const [],
 }) {
+  // Declare the raised routes before anything can read them. The navigation
+  // menu resolves a path's group through RouteRegistry, and this is the one
+  // function every boot passes through before a menu is rendered, so the menu
+  // and the route table cannot disagree about which entries are locked.
+  installRaisedRoutes();
+
+  // Then layer the groups the operator published pages and sections for, which
+  // resolves section inheritance as it walks. AFTER installRaisedRoutes, never
+  // before: declaring is idempotent and last-writer-wins, and a customer page
+  // must be able to raise its own path while a page that declares nothing
+  // leaves a built-in route's group exactly as installRaisedRoutes left it.
+  declareMenuRouteGroups(RouteRegistry().menuItems);
+
+  // Wraps a raised route's child in its gate. Two things here are deliberate:
+  //
+  //  - The `!`. A path missing from kRaisedRoutes throws when the route is
+  //    built, rather than resolving to `operate` and quietly leaving the route
+  //    open. A loud failure at boot beats a silent open door.
+  //  - routeAllowedWhenRepositoryUnavailable(path), not a boolean at each call
+  //    site. The menu badge asks the same function, so the one route that stays
+  //    open while the access repository is unavailable cannot drift into a lock
+  //    icon on a page that opens, or the reverse. Exactly one place knows which
+  //    route that is, and it is lib/access_routes.dart.
+  Widget gated(String path, String title, Widget child) => AccessGate(
+        group: kRaisedRoutes[path]!,
+        title: title,
+        allowWhenRepositoryUnavailable: routeAllowedWhenRepositoryUnavailable(path),
+        child: child,
+      );
+
+  // Nine routes are gated, and only nine. Two of them sit at `users`.
+  // '/advanced/audit-trail' is raised for what it *displays* rather than what
+  // it writes: the trail is every write anybody ever made, with old and new
+  // values, so it sits beside the roles that govern it. '/advanced/access'
+  // reads and writes the role table and the account list, which is the
+  // definition of `users`-grade — and its store gates the writes but leaves the
+  // reads ungated on purpose, so this gate is the whole of the enforcement for
+  // reading it. Left open on purpose:
+  //
+  //  - '/advanced/about-linux' reads system information and changes nothing.
+  //  - '/advanced/history-view', AppRoutes.historyView and
+  //    AppRoutes.alarmView are read surfaces, and read permissions are
+  //    explicitly out of scope (docs/access-control-spec.md §Scope, §11).
+  //
+  //    '/advanced/knowledge-base' was on that list until 2026-08-30 and is
+  //    now gated at `configure`.
+  //    docs/access-control-write-path-sweep.md §3.1 found three raw-Drift
+  //    index classes behind that page — twenty-six statements — and a caller
+  //    that rewrites `page_editor_data`, the key the configure-gated page
+  //    editor saves, so it was never the read surface this comment called it.
+  //    The cost was accepted deliberately and is not softened here: an
+  //    anonymous operator can no longer read a technical document or browse
+  //    PLC code at the panel, which on a plant floor means finding somebody
+  //    with a `configure` account or walking. It was chosen over leaving a
+  //    write path around the page editor's gate. The drawings overlay below
+  //    (:763-781) is a different surface — not this route, read-only — so a
+  //    drawing is still available on the page an operator is standing at.
+  //    Note that '/advanced/history-view' had to be corrected in this same
+  //    comment for the same reason: both were called read surfaces because
+  //    the menu label was read instead of the call sites.
+  //
+  //    One caveat, so this comment is not read as a clean bill of health:
+  //    the history view is not purely a read surface. It deletes directly
+  //    through Drift, in two places with two different accessors —
+  //    lib/pages/history_view.dart:1108 `adb.deleteHistoryView(v.id)` from the
+  //    button at :722, and :1165 `dbWrap.db.deleteHistoryViewPeriod(p.id)`
+  //    from the button at :1074 — so an anonymous session can delete a saved
+  //    view or a period. Grepping for one does not find the other.
+  //
+  //    Phase 3 will not catch them: it wraps StateMan.write and
+  //    PreferencesApi.set*, and these are neither. They are now the fourth
+  //    entry in docs/access-control-spec.md §6's bypass list, which said
+  //    three until 2026-08-29. Gating the *route* is the wrong fix — it would
+  //    block reading history, which is operate-level work; the fix belongs at
+  //    the controls. Undecided.
+  //  - AppRoutes.firstUser. Gating commissioning behind a sign-in on a station
+  //    that has no users yet is the deadlock the first-user design exists to
+  //    avoid.
+  //  - Every page-manager page, which arrives through addRoute below and is
+  //    not gated: those are the plant's own pages and are `operate` by
+  //    definition. That sentence is what "nothing on the floor changes" means.
   final routes = {
     // '/': (context, state, args) => BeamPage(
     //       // this will be replaced most likely
@@ -433,89 +541,78 @@ RoutesLocationBuilder createLocationBuilder(
     '/advanced/ip-settings': (context, state, args) => BeamPage(
           key: const ValueKey('/advanced/ip-settings'),
           title: 'IP Settings',
-          child: Consumer(
-            builder: (context, ref, _) {
-              // I dont like this but lets continue
-              return FutureBuilder<DBusClient>(
-                future: dbusCompleter.future,
-                builder: (context, snapshot) {
-                  if (!snapshot.hasData) {
-                    return BaseScaffold(
-                      title: 'IP Settings',
-                      body: Center(
-                        child: LoginForm(
-                          onLoginSuccess: (newDbusClient) async {
-                            logger.i('Login successful');
-                            await Future.delayed(const Duration(milliseconds: 100));
-                            if (!dbusCompleter.isCompleted) {
-                              dbusCompleter.complete(newDbusClient);
-                            }
-                          },
-                        ),
-                      ),
-                    );
-                  }
-                  return IpSettingsPage(dbusClient: snapshot.data!);
-                },
-              );
-            },
+          // Main's DbusGate inside the access gate: the two are different
+          // questions in sequence — may this session open the page at all,
+          // and then has the D-Bus login happened. Gate first, so an operator
+          // without `administer` meets the lock rather than a login form for
+          // a page they cannot open.
+          child: gated(
+            '/advanced/ip-settings',
+            'IP Settings',
+            DbusGate(
+              title: 'IP Settings',
+              shared: dbusCompleter,
+              builder: (context, client, _) => IpSettingsPage(dbusClient: client),
+            ),
           ),
         ),
     '/advanced/about-linux': (context, state, args) => BeamPage(
           key: const ValueKey('/advanced/about-linux'),
           title: 'About Linux',
-          child: Consumer(
-            builder: (context, ref, _) {
-              // I dont like this but lets continue
-              return FutureBuilder<DBusClient>(
-                future: dbusCompleter.future,
-                builder: (context, snapshot) {
-                  if (!snapshot.hasData) {
-                    return BaseScaffold(
-                      title: 'About Linux',
-                      body: Center(
-                        child: LoginForm(
-                          onLoginSuccess: (newDbusClient) async {
-                            logger.i('Login successful');
-                            await Future.delayed(const Duration(milliseconds: 100));
-                            if (!dbusCompleter.isCompleted) {
-                              dbusCompleter.complete(newDbusClient);
-                            }
-                          },
-                        ),
-                      ),
-                    );
-                  }
-                  return AboutLinuxPage(dbusClient: snapshot.data!);
-                },
-              );
-            },
+          child: DbusGate(
+            title: 'About Linux',
+            shared: dbusCompleter,
+            builder: (context, client, switchConnection) => AboutLinuxPage(
+              dbusClient: client,
+              onSwitchConnection: switchConnection,
+            ),
           ),
         ),
     '/advanced/page-editor': (context, state, args) => BeamPage(
         key: const ValueKey('/advanced/page-editor'),
         title: 'Page Editor',
-        child: PageEditor(proposalData: args is String ? args : null)),
-    '/advanced/preferences': (context, state, args) =>
-        BeamPage(key: const ValueKey('/advanced/preferences'), title: 'Preferences', child: PreferencesPage()),
+        child: gated(
+            '/advanced/page-editor', 'Page Editor', PageEditor(proposalData: args is String ? args : null))),
+    '/advanced/preferences': (context, state, args) => BeamPage(
+        key: const ValueKey('/advanced/preferences'),
+        title: 'Preferences',
+        child: gated('/advanced/preferences', 'Preferences', PreferencesPage())),
     '/advanced/alarm-editor': (context, state, args) => BeamPage(
         key: const ValueKey('/advanced/alarm-editor'),
         title: 'Alarm Editor',
-        child: AlarmEditorPage(proposalData: args is String ? args : null)),
+        child: gated(
+            '/advanced/alarm-editor', 'Alarm Editor', AlarmEditorPage(proposalData: args is String ? args : null))),
     AppRoutes.historyView: (context, state, args) =>
         BeamPage(key: const ValueKey(AppRoutes.historyView), title: 'History View', child: HistoryViewPage()),
     // History View lives at the top level now; the old address keeps working
     // for bookmarks and pages that link to it.
     '/advanced/history-view': (context, state, args) =>
         BeamPage(key: const ValueKey('/advanced/history-view'), title: 'History View', child: HistoryViewPage()),
-    '/advanced/server-config': (context, state, args) =>
-        BeamPage(key: const ValueKey('/advanced/server-config'), title: 'Server Config', child: ServerConfigPage()),
+    '/advanced/server-config': (context, state, args) => BeamPage(
+        key: const ValueKey('/advanced/server-config'),
+        title: 'Server Config',
+        child: gated('/advanced/server-config', 'Server Config', ServerConfigPage())),
     '/advanced/key-repository': (context, state, args) => BeamPage(
         key: const ValueKey('/advanced/key-repository'),
         title: 'Key Repository',
-        child: KeyRepositoryPage(proposalData: args is String ? args : null)),
+        child: gated('/advanced/key-repository', 'Key Repository',
+            KeyRepositoryPage(proposalData: args is String ? args : null))),
     AppRoutes.alarmView: (context, state, args) =>
         BeamPage(key: const ValueKey('/alarm-view'), title: 'Alarm View', child: AlarmViewPage()),
+    // Registered unconditionally. The page itself decides whether the window
+    // is open (firstUserWindowOpenProvider); gating the *route* on a database
+    // read would 404 the address while the connection was still coming up,
+    // which is exactly when somebody is commissioning the station.
+    AppRoutes.firstUser: (context, state, args) =>
+        BeamPage(key: const ValueKey(AppRoutes.firstUser), title: 'First account', child: const FirstUserPage()),
+    '/advanced/audit-trail': (context, state, args) => BeamPage(
+        key: const ValueKey('/advanced/audit-trail'),
+        title: 'Audit Trail',
+        child: gated('/advanced/audit-trail', 'Audit Trail', const AuditTrailPage())),
+    '/advanced/access': (context, state, args) => BeamPage(
+        key: const ValueKey('/advanced/access'),
+        title: 'Access',
+        child: gated('/advanced/access', 'Access', const AccessAdminPage())),
   };
 
   // Statement-level const guard rather than a collection-if inside the map
@@ -523,7 +620,11 @@ RoutesLocationBuilder createLocationBuilder(
   // build drops TechDocLibraryPage and everything it pulls in.
   if (kKnowledgeEnabled) {
     routes['/advanced/knowledge-base'] = (context, state, args) => BeamPage(
-        key: const ValueKey('/advanced/knowledge-base'), title: 'Knowledge Base', child: const TechDocLibraryPage());
+        key: const ValueKey('/advanced/knowledge-base'),
+        title: 'Knowledge Base',
+        // Gated inside the `if`, not outside it, so a flag-off build still
+        // tree-shakes TechDocLibraryPage.
+        child: gated('/advanced/knowledge-base', 'Knowledge Base', const TechDocLibraryPage()));
   }
 
   addRoute(MenuItem menuItem) {

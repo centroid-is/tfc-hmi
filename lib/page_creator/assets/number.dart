@@ -16,6 +16,7 @@ import 'package:rxdart/rxdart.dart';
 
 import 'common.dart';
 import '../../providers/state_man.dart';
+import '../../widgets/tag_access_guard.dart';
 import 'package:tfc/converter/color_converter.dart';
 import 'graph.dart';
 
@@ -63,6 +64,66 @@ class NumberConfig extends BaseAsset {
         textColor = Colors.black,
         graphConfig = GraphAssetConfig.preview(),
         writable = false;
+
+  /// How the figure reads. The tag it reads from is not here: see
+  /// [AnalogBoxConfig.bulkProperties] for why keys stay in the per-asset form.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<BulkProperty> get bulkProperties => [
+        ...super.bulkProperties,
+        BoolBulkProperty(
+          id: 'NumberConfig.showDecimalPoint',
+          label: 'Show decimal point',
+          group: _bulkGroup,
+          read: () => showDecimalPoint,
+          apply: (value) => showDecimalPoint = value,
+        ),
+        NumberBulkProperty(
+          id: 'NumberConfig.decimalPlaces',
+          label: 'Decimal places',
+          group: _bulkGroup,
+          isInt: true,
+          decimals: 0,
+          min: 0,
+          max: 6,
+          read: () => decimalPlaces,
+          apply: (value) => decimalPlaces = (value ?? decimalPlaces).round(),
+        ),
+        NumberBulkProperty(
+          id: 'NumberConfig.scale',
+          label: 'Scale',
+          group: _bulkGroup,
+          decimals: 4,
+          // Null is "unscaled", which is not the same as x1 to every reader of
+          // the form, so clearing the field has to be able to say so.
+          nullable: true,
+          read: () => scale,
+          apply: (value) => scale = value?.toDouble(),
+        ),
+        TextBulkProperty(
+          id: 'NumberConfig.units',
+          label: 'Units',
+          group: _bulkGroup,
+          read: () => units,
+          apply: (value) => units = value,
+        ),
+        BoolBulkProperty(
+          id: 'NumberConfig.writable',
+          label: 'Writable',
+          group: _bulkGroup,
+          read: () => writable,
+          apply: (value) => writable = value,
+        ),
+        ColorBulkProperty(
+          id: 'NumberConfig.textColor',
+          label: 'Text colour',
+          group: _bulkGroup,
+          read: () => textColor,
+          apply: (value) => textColor = value ?? textColor,
+        ),
+      ];
+
+  static const String _bulkGroup = 'Number';
 
   factory NumberConfig.fromJson(Map<String, dynamic> json) =>
       _$NumberConfigFromJson(json);
@@ -470,7 +531,14 @@ class _NumberWriteDialogState extends ConsumerState<_NumberWriteDialog> {
     } else {
       dv.value = parsed as double;
     }
-    await sm.write(key, dv);
+    // No member: this writes the whole key, which is a scalar.
+    final wrote = await writeTag(ref, sm, key, dv);
+
+    // Refused: the prompt is already up, saying which permission is missing.
+    // The dialog stays open with the typed value still in the field, so
+    // signing in leaves the operator a field to press Enter in rather than a
+    // value that was already sent on their behalf.
+    if (!wrote) return;
 
     if (mounted) Navigator.of(context).pop();
   }

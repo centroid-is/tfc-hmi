@@ -10,7 +10,8 @@ library;
 import 'package:flutter/material.dart';
 
 import 'ek1100.dart' show EthernetPortPainter;
-import 'io8.dart' show bodyColor;
+import 'hardware.dart';
+import 'io8.dart' show bodyColor, ioLabelColor, ledOffColor;
 
 /// Whether the extension's outgoing segment is up, as far as the mimic knows.
 ///
@@ -23,12 +24,21 @@ enum EK1110Link { unknown, down, up }
 class EK1110Painter extends CustomPainter {
   EK1110Painter({
     this.name = 'EK1110',
+    this.markerLabel = '',
     this.link = EK1110Link.unknown,
     this.housingColor = bodyColor,
   });
 
   /// Printed above `BECKHOFF` at the foot of the terminal.
   final String name;
+
+  /// The extension's configured name or id, worn as a marker tag on the
+  /// terminal-marker band — the same tag an EL terminal beside it wears, at
+  /// the same height, so a rack row reads as one row.
+  ///
+  /// Empty draws nothing and leaves the lamps where they were, so an unnamed
+  /// EK1110 is the drawing it always was.
+  final String markerLabel;
 
   final EK1110Link link;
   final Color housingColor;
@@ -47,7 +57,8 @@ class EK1110Painter extends CustomPainter {
       Rect.fromLTWH(0, 0, size.width, size.height),
       Radius.circular(size.width * 0.06),
     );
-    canvas.drawRRect(fillRect, Paint()..color = housingColor);
+    canvas.drawRRect(
+        fillRect, housingPaint(fillRect.outerRect, housingColor));
     canvas.drawRRect(
       RRect.fromRectAndRadius(
         Rect.fromLTWH(0, 0, size.width - strokeWidth, size.height - strokeWidth),
@@ -58,13 +69,41 @@ class EK1110Painter extends CustomPainter {
 
     final pad = size.width * 0.05;
 
-    // Link lamps, side by side at the top where the EL terminals put theirs.
+    // The marker tag, when there is one, takes the band an EL terminal gives
+    // it and the lamps drop below — the same order as an EL: markers on top,
+    // then the lamp block.
+    // Matches [IO8Painter]: the band is the height the marker strip is on the
+    // hardware, named or not, so a rack row lines up across every device.
+    final labelH = size.height * 0.06;
+    final markerH = labelH;
+    double lampTop = pad;
+    if (markerLabel.isNotEmpty) {
+      final rect = Rect.fromLTWH(pad, pad, size.width - pad * 2, markerH);
+      paintMarkerTag(
+        canvas,
+        rect,
+        markerLabel,
+        color: ioLabelColor,
+        strokeWidth: strokeWidth,
+        minFontSize: labelH * 0.34,
+      );
+      lampTop = rect.bottom + pad * 0.6;
+    }
+
+    // Link lamps, side by side where the EL terminals put theirs.
     final lampH = size.height * 0.035;
     final lampW = (size.width - pad * 3) / 2;
     for (int i = 0; i < 2; i++) {
-      final rect = Rect.fromLTWH(pad + i * (lampW + pad), pad, lampW, lampH);
-      canvas.drawRect(rect, Paint()..color = _lampColor);
-      canvas.drawRect(rect, stroke);
+      final rect =
+          Rect.fromLTWH(pad + i * (lampW + pad), lampTop, lampW, lampH);
+      paintLed(
+        canvas,
+        RRect.fromRectAndRadius(rect, Radius.circular(lampH * 0.25)),
+        color: _lampColor,
+        lit: link == EK1110Link.up,
+        strokeWidth: strokeWidth,
+        border: stroke,
+      );
     }
 
     // The RJ45, centred on the upper third — where it sits on the real part.
@@ -111,13 +150,14 @@ class EK1110Painter extends CustomPainter {
 
   Color get _lampColor => switch (link) {
         EK1110Link.up => const Color(0xFF6CA545),
-        EK1110Link.down => const Color(0xFFCCCCCC),
-        EK1110Link.unknown => const Color(0xFFE8E8E8),
+        EK1110Link.down => ledOffColor,
+        EK1110Link.unknown => const Color(0xFF5C6462),
       };
 
   @override
   bool shouldRepaint(covariant EK1110Painter old) =>
       old.name != name ||
+      old.markerLabel != markerLabel ||
       old.link != link ||
       old.housingColor != housingColor;
 }
@@ -127,11 +167,13 @@ class EK1110Widget extends StatelessWidget {
   const EK1110Widget({
     super.key,
     this.name = 'EK1110',
+    this.markerLabel = '',
     this.link = EK1110Link.unknown,
     this.height = 300,
   });
 
   final String name;
+  final String markerLabel;
   final EK1110Link link;
   final double height;
 
@@ -140,7 +182,13 @@ class EK1110Widget extends StatelessWidget {
     return SizedBox(
       width: height / 6,
       height: height,
-      child: CustomPaint(painter: EK1110Painter(name: name, link: link)),
+      child: CustomPaint(
+        painter: EK1110Painter(
+          name: name,
+          markerLabel: markerLabel,
+          link: link,
+        ),
+      ),
     );
   }
 }

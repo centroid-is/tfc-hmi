@@ -6,16 +6,29 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rxdart/rxdart.dart';
 
+import 'package:tfc_dart/core/access/guarded_state_man.dart';
 import 'package:tfc_dart/core/modbus_device_client.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/preferences.dart';
+import 'access.dart';
+import 'access_policy.dart';
 import 'preferences.dart';
 import 'collector.dart';
 
 part 'state_man.g.dart';
 
-Future<KeyMappings> fetchKeyMappings(PreferencesApi prefs) async {
+/// Reads `key_mappings`, seeding a default when the station has none.
+///
+/// [systemWrites] is where the **seed** goes, and only the seed. It is
+/// optional and falls back to [prefs] so every existing caller and every
+/// existing test keeps working untouched; `stateManProvider` passes
+/// `systemPreferencesProvider` so that a station booting with an empty store
+/// and nobody signed in is not denied its own default (`key_mappings` is a
+/// `configure` key). An operator editing key mappings still goes through the
+/// guarded object, because that write is not this one.
+Future<KeyMappings> fetchKeyMappings(PreferencesApi prefs,
+    {Preferences? systemWrites}) async {
   var keyMappingsJson = await prefs.getString('key_mappings');
   if (keyMappingsJson == null) {
     final defaultKeyMappings = KeyMappings(nodes: {
@@ -23,10 +36,28 @@ Future<KeyMappings> fetchKeyMappings(PreferencesApi prefs) async {
           opcuaNode: OpcUANodeConfig(namespace: 42, identifier: "identifier"))
     });
     keyMappingsJson = jsonEncode(defaultKeyMappings.toJson());
-    await prefs.setString('key_mappings', keyMappingsJson);
+    await (systemWrites ?? prefs).setString('key_mappings', keyMappingsJson);
   }
   return KeyMappings.fromJson(jsonDecode(keyMappingsJson));
 }
+
+/// How the inner, unguarded [StateMan] is built.
+typedef StateManFactory = Future<StateMan> Function({
+  required StateManConfig config,
+  required KeyMappings keyMappings,
+  List<DeviceClient> deviceClients,
+});
+
+/// The seam through which [stateManProvider] constructs its inner [StateMan].
+///
+/// Production reads the default and nothing else overrides it. It exists so
+/// that `guard_wiring_test.dart` can prove the properties this provider is
+/// judged on — that a sign-in does not rebuild it, and that `close()` reaches
+/// the inner instance exactly once — without opening an OPC UA connection in a
+/// unit test. Those two properties have no other way to be observed, and both
+/// of them failing looks like nothing at all until it is a plant.
+final stateManFactoryProvider =
+    Provider<StateManFactory>((ref) => StateMan.create);
 
 @Riverpod(keepAlive: true)
 Future<StateMan> stateMan(Ref ref) async {
@@ -34,9 +65,14 @@ Future<StateMan> stateMan(Ref ref) async {
   // StateMan reads config once at init; DB reconnects should NOT cascade here
   // and destroy all OPC-UA connections/isolates.
   final prefs = await ref.read(preferencesProvider.future);
-  final config = await StateManConfig.fromPrefs(prefs);
+  // The app's own defaults, for the two writes below. Both fire on a station
+  // that has never been configured, with nobody signed in, against keys the
+  // policy classes as `configure` and `administer` — so on the guarded object
+  // they would be denials at boot.
+  final systemPrefs = await ref.read(systemPreferencesProvider.future);
+  final config = await StateManConfig.fromPrefs(systemPrefs);
 
-  final keyMappings = await fetchKeyMappings(prefs);
+  final keyMappings = await fetchKeyMappings(prefs, systemWrites: systemPrefs);
 
   // Watch for changes in specific preferences.
   //
@@ -56,8 +92,8 @@ Future<StateMan> stateMan(Ref ref) async {
           try {
             final stateMan = await ref.read(stateManProvider.future);
             final newPrefs = await ref.read(preferencesProvider.future);
-            final result =
-                stateMan.updateKeyMappings(await fetchKeyMappings(newPrefs));
+            final result = stateMan.updateKeyMappings(
+                await fetchKeyMappings(newPrefs, systemWrites: systemPrefs));
             if (result.requiresReload) {
               stderr.writeln('key_mappings: full reload required '
                   '(${result.reloadReasons.join('; ')})');
@@ -78,7 +114,7 @@ Future<StateMan> stateMan(Ref ref) async {
     final m2400Clients = createM2400DeviceClients(config.jbtm);
     final modbusClients = buildModbusDeviceClients(config.modbus, keyMappings);
     final deviceClients = [...m2400Clients, ...modbusClients];
-    final stateMan = await StateMan.create(
+    final stateMan = await ref.read(stateManFactoryProvider)(
         config: config,
         keyMappings: keyMappings,
         deviceClients: deviceClients);
@@ -86,11 +122,31 @@ Future<StateMan> stateMan(Ref ref) async {
     // Initialize collector
     ref.read(collectorProvider.future);
 
+    // The **inner** instance, exactly once. Closing through the decorator
+    // would forward to the same call and add nothing but a second path to get
+    // it wrong.
     ref.onDispose(() async {
       listener.cancel();
       await stateMan.close();
     });
-    return stateMan;
+
+    return GuardedStateMan(
+      inner: stateMan,
+      policy: ref.read(accessPolicyProvider),
+      // A callback, and never a watch on the session provider. This provider
+      // is `keepAlive` and holds every OPC UA connection on the panel; a watch
+      // would rebuild it — and drop every connection and every subscription —
+      // on each sign-in, sign-out and inactivity timeout. Pinned by
+      // `guard_wiring_test.dart`'s "signing in and out does not rebuild
+      // stateManProvider", which also greps this file for that mistake.
+      session: () => sessionInForce(ref),
+      audit: RefAuditSink(ref),
+      station: ref.read(stationNameProvider),
+      // So a whole-struct write becomes one row per member that actually
+      // moved, rather than two blobs.
+      readBaseline: (key) => stateMan.read(key),
+      onDenied: (denial) => reportAccessDenial(ref, denial),
+    );
   } catch (e) {
     listener.cancel();
     stderr.writeln('Error parsing key mappings: $e');

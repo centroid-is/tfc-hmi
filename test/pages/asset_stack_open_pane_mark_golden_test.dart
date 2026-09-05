@@ -30,7 +30,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 import 'package:tfc/page_creator/assets/analog_box.dart';
+import 'package:tfc/page_creator/assets/beckhoff.dart';
 import 'package:tfc/page_creator/assets/common.dart';
+import 'package:tfc/painter/beckhoff/io8.dart' show IO8Widget;
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/conveyor_gate.dart';
 import 'package:tfc/page_creator/assets/section_button.dart';
@@ -139,7 +141,10 @@ void main() {
         // (`!snapshot.hasData` in `Conveyor`), so there would be nothing to
         // mark — and its pane reads the drive struct member by member, so a
         // bare bool would throw the moment the pane opened.
-        ..pushValue('cn/drive', _runningDrive());
+        ..pushValue('cn/drive', _runningDrive())
+        // The rack slices: a couple of inputs high, nothing forced.
+        ..pushValue('el/raw', DynamicValue(value: 0x16))
+        ..pushValue('el/force', DynamicValue(value: 0));
       await tester.pumpWidget(ProviderScope(
         overrides: [stateManProvider.overrideWith((_) async => fake)],
         child: MaterialApp(
@@ -464,6 +469,48 @@ void main() {
       );
       await tapGlyph(tester, find.byType(SectionButton));
       await expectCanvas(tester, 'hit_boundary_section_button');
+    });
+
+    testWidgets('a rack slice: the tapped terminal, not the whole block',
+        (tester) async {
+      // A CX5010 heading three terminals, tapped on the middle one. The rack
+      // is one asset, but each slice is its own [SubdeviceSubject], so the
+      // ring must frame that slice alone — the whole-block ring is the
+      // regression this frame keeps out. The slices also wear their
+      // configured name or id as a marker tag above the LED block, the way
+      // the printed terminal markers sit on the real hardware.
+      await pump(
+        tester,
+        [
+          BeckhoffCX5010Config()
+            ..coordinates = Coordinates(x: 0.42, y: 0.5)
+            ..size = const RelativeSize(width: 0.6, height: 0.8)
+            ..subdevices = [
+              BeckhoffEL1008Config(
+                nameOrId: 'K1',
+                rawStateKey: 'el/raw',
+                forceValuesKey: 'el/force',
+              ),
+              BeckhoffEL2008Config(
+                nameOrId: 'K2',
+                rawStateKey: 'el/raw',
+                forceValuesKey: 'el/force',
+              ),
+              BeckhoffEL9222Config(nameOrId: 'K3'),
+            ],
+        ],
+        surface: const Size(800, 500),
+      );
+
+      // Straight onto the middle slice — no sweep: every slice answers a
+      // tap, and the point of the frame is which one was hit.
+      await tester.tap(find.byType(IO8Widget).at(1));
+      await tester.pump(const Duration(milliseconds: 16));
+      await tester.pump(const Duration(milliseconds: 16));
+      await tester.pump(const Duration(milliseconds: 400));
+      await markAtFullBreath(tester);
+
+      await expectCanvas(tester, 'hit_boundary_rack_slice');
     });
   });
 }

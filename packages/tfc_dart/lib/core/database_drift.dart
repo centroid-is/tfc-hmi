@@ -15,6 +15,9 @@ import 'package:drift_postgres/drift_postgres.dart';
 import 'package:path/path.dart' as p;
 import 'package:postgres/postgres.dart' as pg;
 import 'package:logger/logger.dart';
+// kSeedRoles is the single source of the seeded role names and group sets;
+// tfc_dart -> tfc_access, never the reverse.
+import 'package:tfc_access/tfc_access.dart' show kSeedRoles;
 
 import 'alarm.dart';
 import 'database.dart';
@@ -59,6 +62,225 @@ class FlutterPreferences extends Table {
   TextColumn get key => text()();
   TextColumn get value => text().nullable()();
   TextColumn get type => text()();
+}
+
+// ---------------------------------------------------------------------------
+// Access control tables (schema v6). See docs/access-control-spec.md §2.
+// ---------------------------------------------------------------------------
+
+/// A role: a name and the set of groups it grants.
+///
+/// [name] is the primary key rather than a surrogate integer **on purpose**:
+/// when OIDC lands, an incoming group claim of `"Shift Leader"` matches the
+/// role by name with no mapping table, exactly as Ignition and SIMATIC Logon
+/// do it. Do not replace it with an integer id.
+///
+/// The four rows written by the v6 seed migration are ordinary rows
+/// afterwards — editable and deletable — with `Operator` the sole exception,
+/// and that guard lives in the repository layer, not here.
+class AppRole extends Table {
+  @override
+  Set<Column> get primaryKey => {name};
+
+  TextColumn get name => text()();
+
+  /// JSON array of `AccessGroup` enum names, written by
+  /// `AccessRole.encodeGroups()` and read back by `AccessRole.decodeGroups()`.
+  ///
+  /// Keep it small: the backend config watcher fires on preference writes and
+  /// `pg_notify` has an 8000-byte cap, which errors the firing statement
+  /// rather than truncating it.
+  TextColumn get groups => text()();
+
+  /// True for the rows the v6 migration seeded. Informational only.
+  BoolColumn get seeded => boolean().withDefault(const Constant(false))();
+}
+
+/// A user: a name, a password hash, and exactly one role.
+///
+/// One role per user, not many — multi-role adds union semantics and an
+/// "effective permissions" inspector, and is not worth it at this size.
+class AppUser extends Table {
+  @override
+  Set<Column> get primaryKey => {username};
+
+  TextColumn get username => text()();
+
+  /// Matched to [AppRole.name] by name, never by id — see [AppRole].
+  TextColumn get roleName => text().references(AppRole, #name)();
+
+  /// Argon2id over the password with [salt], stored self-describing: the value
+  /// carries its own algorithm tag and cost parameters.
+  ///
+  /// This column and [salt] are the **only** place a credential is stored.
+  /// Never in `Preferences` or the `flutter_preferences` table: those are
+  /// synced between stations and read by the backend config watcher.
+  TextColumn get passwordHash => text()();
+
+  /// Per-user random salt, stored base64. See [passwordHash].
+  TextColumn get salt => text()();
+
+  DateTimeColumn get createdAt => dateTime()();
+  DateTimeColumn get lastLoginAt => dateTime().nullable()();
+
+  /// A station account's sessions never expire.
+  ///
+  /// The panel-PC flag — the freezer display signs in once as its area
+  /// account and lives signed in. On the USER rather than the station so a
+  /// human signing in on the same panel keeps the inactivity window. The
+  /// default is false: every account is a person until somebody says
+  /// otherwise, which is also what an account carried over from v5 gets.
+  BoolColumn get stationAccount =>
+      boolean().withDefault(const Constant(false))();
+}
+
+/// The human-action audit trail: append-only, never pruned.
+///
+/// **This is not [AuditLog].** `AuditLog` (`mcp_tables.dart`) records MCP tool
+/// invocations by the AI layer; `AuditEntry` records human writes and auth
+/// events. The two coexist and neither replaces the other.
+///
+/// Denials are recorded as well as successes ([allowed]) — a denied write is
+/// the more interesting audit line, and it is how a role configured too
+/// tightly gets found. One human action gets one [actionId] with N member rows
+/// beneath it, so a recipe apply reads as one action rather than N unrelated
+/// ones.
+class AuditEntry extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  DateTimeColumn get at => dateTime()();
+
+  /// Username, or `'anonymous'`.
+  TextColumn get who => text()();
+
+  /// Hostname of the station the action was made from.
+  TextColumn get station => text()();
+
+  TextColumn get roleName => text()();
+
+  /// `'tag' | 'pref' | 'route' | 'auth'`.
+  TextColumn get surface => text()();
+
+  TextColumn get itemKey => text()();
+
+  /// Dotted path within a struct write, e.g. `p_cfg.Freq`. Null for scalars.
+  TextColumn get member => text().nullable()();
+
+  TextColumn get oldValue => text().nullable()();
+  TextColumn get newValue => text().nullable()();
+  TextColumn get groupRequired => text()();
+
+  /// False rows are denials, and they are kept.
+  BoolColumn get allowed => boolean()();
+
+  /// Defaults to hand-made **on purpose**.
+  ///
+  /// Today every external caller of `stateMan.write` is a widget, but that
+  /// holds by accident rather than by construction. Defaulting to `'operator'`
+  /// means an unmarked future machine caller lands *in* the trail loudly
+  /// rather than escaping it silently; an absent audit row is the one defect
+  /// nobody ever notices.
+  TextColumn get origin => text().withDefault(const Constant('operator'))();
+
+  /// Correlation id: one human action, N rows.
+  TextColumn get actionId => text()();
+
+  /// Free-text justification, prompted for on the `configure` and `administer`
+  /// surfaces only. The column exists for every row.
+  TextColumn get reason => text().nullable()();
+}
+
+// ---------------------------------------------------------------------------
+// Access template tables (schema v6). See docs/access-control-spec.md §7b.
+// ---------------------------------------------------------------------------
+
+/// A named set of rules mapping a struct member — or the whole key — to an
+/// `AccessGroup`. Drift stores it as `access_template`.
+///
+/// Rules rather than one group per key, because one conveyor key carries both
+/// `p_cmd_JogFwd` and `p_cfg_ManualFreq` through a single
+/// `stateMan.write(key, wholeStruct)`: a group per *asset* cannot separate
+/// jogging from changing drive frequency, and a group per *member* can.
+///
+/// The repo ships **no** rows. The user creates the templates, and only four
+/// assets write structs at all — `conveyor`, `schneider`, `sensor`, `recipes`.
+class AccessTemplateTable extends Table {
+  /// Spelled out rather than derived. Drift does **not** strip a trailing
+  /// `Table` from the class name — `PlcCodeBlockTable` reads
+  /// `plc_code_block` because `mcp_tables.dart:40` overrides this getter, and
+  /// without the override the generated name here would be
+  /// `access_template_table`, which is not what the Postgres DDL below
+  /// creates. The `Table` suffix on the class stays: `AccessTemplate` is
+  /// `tfc_access`'s value type and this file imports that package.
+  @override
+  String get tableName => 'access_template';
+
+  @override
+  Set<Column> get primaryKey => {name};
+
+  /// The user-facing template name, and the value an
+  /// [AccessKeyBindingTable] row points at.
+  ///
+  /// The name is the primary key rather than a surrogate id for the same
+  /// reason [AppRole]'s is: it is what a person types into the key repository
+  /// and what the binding carries, so a rename is a visible operation rather
+  /// than an invisible one.
+  TextColumn get name => text()();
+
+  /// JSON object of member name -> `AccessGroup` name, written by
+  /// `AccessTemplate.encodeRules()` and read back by
+  /// `AccessTemplate.decodeRules()`. The member name `'*'` (`kWholeKeyMember`)
+  /// means the whole key — deliberately not a legal IEC 61131-3 identifier, so
+  /// it cannot collide with a real member.
+  ///
+  /// A member no rule mentions is **unrestricted** — tags fail open, which is
+  /// why the key repository has to make unbound keys findable at a glance:
+  /// visibility is what replaces enforcement here.
+  TextColumn get rules => text()();
+
+  DateTimeColumn get updatedAt => dateTime()();
+}
+
+/// One key bound to one template. Drift stores it as `access_key_binding`.
+///
+/// **This is deliberately not a field on `KeyMappingEntry`** (ruled
+/// 2026-08-30, reversing the shape spec §7b implies). `key_mappings` is
+/// classified `configure` by `kPrefAccessRules`, so a binding living in that
+/// blob would be authorization data behind a `configure` gate: anybody able to
+/// edit a page could re-scope who may write what, through the key repository's
+/// import card or the raw preferences editor. Templates are behind `users`
+/// precisely to prevent that, and the binding is the other half of the same
+/// decision — its own table makes the gate true of the data and not only of
+/// the button.
+///
+/// §7b's synchronous-resolution requirement survives the move: the prompt has
+/// to appear when a control is *tapped*, with no await, so these rows are
+/// loaded into the same in-memory snapshot the templates are.
+class AccessKeyBindingTable extends Table {
+  /// See [AccessTemplateTable.tableName]: explicit, because drift would
+  /// otherwise generate `access_key_binding_table`.
+  @override
+  String get tableName => 'access_key_binding';
+
+  @override
+  Set<Column> get primaryKey => {keyName};
+
+  /// The `keyMappings` key this binding is for, and the primary key — so a
+  /// key **cannot be bound twice**. "Explicit, per key, always" made
+  /// structural rather than left to a caller to uphold.
+  TextColumn get keyName => text()();
+
+  /// The [AccessTemplateTable.name] this key resolves through, matched by name
+  /// and carrying **no foreign key**.
+  ///
+  /// That is deliberate. The resolver treats a binding naming a missing
+  /// template as *unbound* and the key repository surfaces it, whereas a
+  /// database-level constraint would make a template delete fail with a driver
+  /// error rather than with `TemplateInUseException`'s named list of the keys
+  /// still bound — and on Postgres it would make the delete's outcome depend
+  /// on which station happened to run the migration.
+  TextColumn get templateName => text()();
+
+  DateTimeColumn get updatedAt => dateTime()();
 }
 
 /// Saved History Views (name + keys)
@@ -126,6 +348,13 @@ class HistoryViewPeriod extends Table {
   PlcVarRefTable,
   PlcFbInstanceTable,
   PlcBlockCallTable,
+  // Access control tables (schema v6):
+  AppRole,
+  AppUser,
+  AuditEntry,
+  // Access template tables (schema v6):
+  AccessTemplateTable,
+  AccessKeyBindingTable,
 ])
 class AppDatabase extends _$AppDatabase implements McpDatabase {
   final DatabaseConfig config;
@@ -232,12 +461,110 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
   }
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
+
+  /// The `audit_entry` indexes, created outside Drift because Drift's
+  /// `@TableIndex` cannot express `DESC` and every one of these is a
+  /// newest-first read.
+  ///
+  /// `IF NOT EXISTS` on both backends (SQLite 3.8+, Postgres 9.5+) for the
+  /// same reason the Postgres table DDL uses it: several SVN stations share
+  /// one database and each of them opens it.
+  ///
+  /// The `(item_key, at DESC)` index is the one that pays for itself: the
+  /// `AREAnn.DEVnn.SUBnn` key convention means a prefix filter on `item_key`
+  /// gives "everything on CN04" for free. Without these three the Phase 5
+  /// trail viewer degrades to a table scan, and a trail nobody can read is a
+  /// trail nobody reads.
+  static const List<String> _auditIndexStatements = [
+    'CREATE INDEX IF NOT EXISTS idx_audit_entry_at ON audit_entry (at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_audit_entry_item_key_at '
+        'ON audit_entry (item_key, at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_audit_entry_who_at '
+        'ON audit_entry (who, at DESC)',
+  ];
+
+  /// Create the [_auditIndexStatements] indexes.
+  ///
+  /// Called from both `onCreate` and the `from < 6` upgrade branch, and from
+  /// both the SQLite and the Postgres path of that branch — the statements are
+  /// identical on both backends, so they live in one place rather than being
+  /// copied into each arm.
+  Future<void> _createAuditIndexes(Migrator m) async {
+    for (final stmt in _auditIndexStatements) {
+      await m.database.customStatement(stmt);
+    }
+  }
+
+  /// The `access_key_binding` index.
+  ///
+  /// `keysBoundTo` runs on every template delete — it is what produces the
+  /// named key list a delete is blocked with — and again on every render of
+  /// the key repository's bound-key counts, which is a per-template query on
+  /// a page that lists every template. Without the index both are table scans.
+  ///
+  /// `IF NOT EXISTS` on both backends, for the same reason
+  /// [_auditIndexStatements] uses it: several SVN stations share one database
+  /// and each of them opens it.
+  static const List<String> _accessBindingIndexStatements = [
+    'CREATE INDEX IF NOT EXISTS idx_access_key_binding_template_name '
+        'ON access_key_binding (template_name)',
+  ];
+
+  /// Create the [_accessBindingIndexStatements] indexes.
+  ///
+  /// Called from `onCreate` and from the `from < 6` upgrade branch, on both
+  /// backends — the statements are identical on each, so they live in one
+  /// place rather than being copied into both arms.
+  Future<void> _createAccessBindingIndexes(Migrator m) async {
+    for (final stmt in _accessBindingIndexStatements) {
+      await m.database.customStatement(stmt);
+    }
+  }
+
+  /// Write the four roles from `kSeedRoles` into `app_role`.
+  ///
+  /// `onConflict: DoNothing()` emits `ON CONFLICT DO NOTHING`, which both
+  /// SQLite and Postgres accept — that is what makes a second station opening
+  /// the same database harmless, and what stops a re-run resetting an edited
+  /// `Operator` row back to `{operate}`. Deliberately not
+  /// `InsertMode.insertOrIgnore`, which is SQLite-only.
+  ///
+  /// These are ordinary rows once written: editable and deletable like any
+  /// other. `Operator` is the one exception, and its immutability is enforced
+  /// in the repository layer, not here — Postgres is reachable with `psql`, so
+  /// a database-level guard would be a guarantee this deployment cannot
+  /// actually make. It is an operational guard and it lives where operations
+  /// go through.
+  Future<void> _seedAccessRoles() async {
+    for (final role in kSeedRoles) {
+      await into(appRole).insert(
+        AppRoleCompanion.insert(
+          name: role.name,
+          groups: role.encodeGroups(),
+          seeded: const Value(true),
+        ),
+        onConflict: DoNothing(),
+      );
+    }
+  }
+
+  /// Re-run [_seedAccessRoles] from a test.
+  ///
+  /// Exists so the idempotency the shared-Postgres deployment depends on is
+  /// actually asserted rather than assumed: a second station opening the same
+  /// database runs the seed against rows that already exist. Drop
+  /// `onConflict: DoNothing()` and this throws.
+  @visibleForTesting
+  Future<void> seedAccessRolesForTest() => _seedAccessRoles();
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) async {
           await m.createAll();
+          await _createAuditIndexes(m);
+          await _createAccessBindingIndexes(m);
+          await _seedAccessRoles();
         },
         onUpgrade: (m, from, to) async {
           logger.i('Database onUpgrade: $from -> $to');
@@ -320,6 +647,77 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
               await m.database.customStatement(
                   'CREATE TABLE IF NOT EXISTS plc_block_call (id SERIAL PRIMARY KEY, caller_block_id INTEGER NOT NULL REFERENCES plc_code_block(id), callee_block_name TEXT NOT NULL, line_number INTEGER)');
             }
+          }
+          // Schema v6: access control — roles, users, the audit trail, the
+          // access templates and the bindings that point keys at them.
+          //
+          // **One arm for the whole milestone, on purpose.** It was developed
+          // as v6, v7 and v8 and squash-merged as one commit, so no database
+          // anywhere was ever left at 6 or 7: every station running a release
+          // build is at v5 and arrives here once. Keeping the three arms would
+          // have meant shipping two branches that can never execute, plus an
+          // `ADD COLUMN` whose only job was to reach a shape `createTable`
+          // already produces — which is exactly the duplicate-column abort
+          // that guard existed to dodge. A station that ran a pre-release
+          // build of this milestone is the one exception; see the note in the
+          // PR, and `__schema`/`user_version` can simply be set to 6.
+          //
+          // The tables go up together because there is no state in which one
+          // is useful without the others: a binding with no template table to
+          // read resolves to nothing, and a template nothing can bind to is
+          // inert.
+          if (from < 6) {
+            if (native) {
+              await m.createTable(appRole);
+              await m.createTable(appUser);
+              await m.createTable(auditEntry);
+              await m.createTable(accessTemplateTable);
+              await m.createTable(accessKeyBindingTable);
+            } else {
+              // PostgreSQL: raw `IF NOT EXISTS` DDL rather than
+              // `m.createTable`, following the v5 branch immediately above and
+              // not the spec's simplification that `m.createTable` covers both
+              // backends. Several SVN stations share one Postgres database and
+              // every one of them runs this branch when it opens, so it has to
+              // be safe to run twice — otherwise the second station aborts the
+              // migration and leaves the database half-upgraded.
+              //
+              // **No test executes this arm.** Not one in `test/core/`, which
+              // can only open SQLite, and none in `test/integration/` either.
+              // Phase 1 recorded that on 2026-08-28 in
+              // `.planning/phases/01-identity-and-audit/deferred-items.md` §1
+              // and it is still open. What stands behind these statements is a
+              // read against the drift tables and the source-derived
+              // column-parity tests in `access_schema_test.dart` and
+              // `access_key_binding_table_test.dart`, which compare these
+              // string literals against the table definitions and nothing
+              // more — they do not connect to Postgres and they cannot see a
+              // wrong type or a statement that fails at runtime. The first
+              // thing that will actually run this is a station.
+              //
+              // Datetimes are TEXT on both backends: this database sets
+              // `DriftDatabaseOptions(storeDateTimeAsText: true)` (see the
+              // `options` override) and the root `build.yaml` sets
+              // `store_date_time_values_as_text: true`.
+              //
+              // `template_name` has no `REFERENCES access_template(name)`, and
+              // that is the one place this DDL deliberately differs from what
+              // a reader would expect: see [AccessKeyBindingTable.templateName]
+              // for why a dangling binding has to be storable.
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS app_role (name TEXT PRIMARY KEY, groups TEXT NOT NULL, seeded BOOLEAN NOT NULL DEFAULT FALSE)');
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS app_user (username TEXT PRIMARY KEY, role_name TEXT NOT NULL REFERENCES app_role(name), password_hash TEXT NOT NULL, salt TEXT NOT NULL, created_at TEXT NOT NULL, last_login_at TEXT, station_account BOOLEAN NOT NULL DEFAULT FALSE)');
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS audit_entry (id SERIAL PRIMARY KEY, at TEXT NOT NULL, who TEXT NOT NULL, station TEXT NOT NULL, role_name TEXT NOT NULL, surface TEXT NOT NULL, item_key TEXT NOT NULL, member TEXT, old_value TEXT, new_value TEXT, group_required TEXT NOT NULL, allowed BOOLEAN NOT NULL, origin TEXT NOT NULL DEFAULT \'operator\', action_id TEXT NOT NULL, reason TEXT)');
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS access_template (name TEXT PRIMARY KEY, rules TEXT NOT NULL, updated_at TEXT NOT NULL)');
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS access_key_binding (key_name TEXT PRIMARY KEY, template_name TEXT NOT NULL, updated_at TEXT NOT NULL)');
+            }
+            await _createAuditIndexes(m);
+            await _createAccessBindingIndexes(m);
+            await _seedAccessRoles();
           }
         },
       );

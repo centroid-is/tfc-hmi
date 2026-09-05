@@ -76,10 +76,7 @@ void main() {
   setUp(() async {
     db = AppDatabase.inMemoryForTest();
     delivered = [];
-    final identity =
-        EnvOperatorIdentity(environmentProvider: () => {'TFC_USER': 'test-operator'});
     server = TfcMcpServer(
-      identity: identity,
       database: db,
       stateReader: _EmptyStateReader(),
       alarmReader: _EmptyAlarmReader(),

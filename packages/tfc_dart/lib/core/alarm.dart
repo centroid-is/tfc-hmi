@@ -9,8 +9,11 @@ import 'package:drift/drift.dart'
     show
         BooleanExpressionOperators,
         ComparableExpr,
+        GenerationContext,
         OrderingMode,
         OrderingTerm,
+        Precedence,
+        SqlDialect,
         Variable;
 // Prefixed: drift's `Expression` collides with this package's own.
 import 'package:drift/drift.dart' as drift show Constant, Expression;
@@ -213,10 +216,70 @@ drift.Expression<bool> alarmHistoryOverlaps(
 }) {
   final started = to == null
       ? const drift.Constant(true)
-      : t.createdAt.isSmallerOrEqualValue(to);
+      : _DateTimeBound(t.createdAt, '<=', to);
   if (from == null) return started;
   return started &
-      (t.deactivatedAt.isNull() | t.deactivatedAt.isBiggerOrEqualValue(from));
+      (t.deactivatedAt.isNull() | _DateTimeBound(t.deactivatedAt, '>=', from));
+}
+
+/// `column <op> value` on a datetime column, spelled so it survives both
+/// backends.
+///
+/// This database stores datetimes as text (`storeDateTimeAsText`), and drift
+/// then rewrites *every* comparison between two datetime expressions into
+/// `JULIANDAY(a) <op> JULIANDAY(b)`. That is right for sqlite — the stored
+/// text carries a UTC offset, so comparing it lexicographically would order
+/// `…+02:00` against `…Z` wrong — and fatal on Postgres, which has no
+/// `julianday()` at all:
+///
+/// ```
+/// ERROR: function julianday(text) does not exist
+/// ```
+///
+/// Only the Downtime view hit it, because it is the only caller that passes a
+/// window; every other read of `alarm_history` is unbounded and never builds a
+/// comparison.
+///
+/// Postgres therefore gets a plain comparison, with both sides cast to
+/// `timestamp` the way `AlarmMan._addToDb`'s insert casts what it writes.
+/// Both casts are needed: storing datetimes as text makes drift declare these
+/// columns `text` on Postgres too, and drift_postgres types a mapped `String`
+/// variable as `Type.text`, so without the casts neither side is a timestamp
+/// and the comparison is `text <= text` — lexicographic, and wrong the moment
+/// two rows were written in different formats. `alarm_history` holds both:
+/// `_addToDb` inserts through a `::timestamp` cast, which Postgres
+/// writes back out as `2026-08-29 10:00:00`, while drift's own insert stores
+/// ISO-8601. `::timestamp` parses either. On a database whose columns really
+/// are `timestamp` the cast is a no-op.
+class _DateTimeBound extends drift.Expression<bool> {
+  _DateTimeBound(this.column, this.op, this.value);
+
+  final drift.Expression<DateTime> column;
+
+  /// `<=` or `>=`.
+  final String op;
+
+  final DateTime value;
+
+  @override
+  Precedence get precedence => Precedence.comparison;
+
+  @override
+  void writeInto(GenerationContext context) {
+    if (context.dialect != SqlDialect.postgres) {
+      // Let drift do its julianday rewrite; on sqlite it is the correct one.
+      final drifted = op == '<='
+          ? column.isSmallerOrEqualValue(value)
+          : column.isBiggerOrEqualValue(value);
+      drifted.writeInto(context);
+      return;
+    }
+
+    writeInner(context, column);
+    context.buffer.write('::timestamp $op ');
+    writeInner(context, Variable<DateTime>(value));
+    context.buffer.write('::timestamp');
+  }
 }
 
 class AlarmMan {

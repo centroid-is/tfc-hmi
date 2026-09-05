@@ -42,6 +42,7 @@ IconConfig _$IconConfigFromJson(Map<String, dynamic> json) => IconConfig(
       iconData: const IconDataConverter().fromJson(json['iconData'] as String),
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -58,6 +59,7 @@ IconConfig _$IconConfigFromJson(Map<String, dynamic> json) => IconConfig(
 Map<String, dynamic> _$IconConfigToJson(IconConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,

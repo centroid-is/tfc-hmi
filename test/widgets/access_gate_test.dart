@@ -1,0 +1,1043 @@
+/// The route gate: the decision table, the locked page, and the three renders.
+///
+/// The decision half is a pure function, so most of this file needs no
+/// `WidgetTester` at all. That is deliberate — the repository-unavailable rule
+/// is the part of this phase that took three review rounds to get right, and a
+/// truth table is the only way to keep it honest as the phase grows.
+library;
+
+import 'dart:async';
+
+import 'package:beamer/beamer.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/models/menu_item.dart';
+import 'package:tfc/providers/access.dart';
+import 'package:tfc/route_registry.dart';
+import 'package:tfc/widgets/access_gate.dart';
+import 'package:tfc/widgets/access_sign_in_dialog.dart';
+import 'package:tfc/widgets/access_status_action.dart';
+import 'package:tfc/widgets/base_scaffold.dart';
+import 'package:tfc_access/tfc_access.dart';
+import 'package:tfc_dart/core/access/access_repository.dart';
+
+/// A repository that answers nothing. `resolveAccessGate` only ever asks
+/// whether one exists, so a stand-in with no behaviour is the whole surface
+/// the decision depends on.
+class _StubRepository extends Fake implements AccessRepository {}
+
+/// The five routes that stay locked when the repository is unavailable, in
+/// group terms: page editor / alarm editor / key repository are `configure`,
+/// IP settings and preferences are `administer`.
+const List<AccessGroup> _lockedRouteGroups = [
+  AccessGroup.configure,
+  AccessGroup.administer,
+];
+
+/// Every group except `operate`, which short-circuits before any of this.
+const List<AccessGroup> _raisableGroups = [
+  AccessGroup.setpoints,
+  AccessGroup.device,
+  AccessGroup.force,
+  AccessGroup.configure,
+  AccessGroup.administer,
+  AccessGroup.users,
+];
+
+AsyncValue<AccessRepository?> _repoPresent() =>
+    AsyncValue.data(_StubRepository());
+AsyncValue<AccessRepository?> _repoNull() =>
+    const AsyncValue<AccessRepository?>.data(null);
+AsyncValue<AccessRepository?> _repoLoading() =>
+    const AsyncValue<AccessRepository?>.loading();
+AsyncValue<AccessRepository?> _repoError() => AsyncValue<AccessRepository?>.error(
+      StateError('postgres will not answer'),
+      StackTrace.empty,
+    );
+
+/// The two ways a station ends up with no usable repository. The whole point
+/// of the ruling is that these two are indistinguishable to the gate, so every
+/// unavailable-repository test runs over both.
+Map<String, AsyncValue<AccessRepository?>> get _unavailableRepositories => {
+      'resolved null (never configured, or configured and unreachable)':
+          _repoNull(),
+      'AsyncError (the repository could not even be constructed)': _repoError(),
+    };
+
+AsyncValue<AccessSession> _anonymous() =>
+    AsyncValue.data(AccessSession.anonymous(const {AccessGroup.operate}));
+
+AsyncValue<AccessSession> _elevated(Set<AccessGroup> groups) =>
+    AsyncValue.data(AccessSession(
+      user: const AuthenticatedUser(
+        username: 'jon',
+        roleName: 'Engineering',
+        displayName: 'Jon B',
+      ),
+      groups: groups,
+      expiresAt: DateTime.utc(2026, 8, 29, 12),
+    ));
+
+AsyncValue<AccessSession> _sessionLoading() =>
+    const AsyncValue<AccessSession>.loading();
+
+AsyncValue<AccessSession> _sessionError() => AsyncValue<AccessSession>.error(
+      StateError('session could not be resolved'),
+      StackTrace.empty,
+    );
+
+void main() {
+  group('resolveAccessGate — operate', () {
+    test('operate is allowed even while every provider is loading', () {
+      expect(
+        resolveAccessGate(
+          group: AccessGroup.operate,
+          repository: _repoLoading(),
+          session: _sessionLoading(),
+          allowWhenRepositoryUnavailable: false,
+        ),
+        AccessGateState.allowed,
+      );
+    });
+
+    test('operate is allowed with no repository and no session', () {
+      for (final repository in _unavailableRepositories.values) {
+        expect(
+          resolveAccessGate(
+            group: AccessGroup.operate,
+            repository: repository,
+            session: _sessionError(),
+            allowWhenRepositoryUnavailable: false,
+          ),
+          AccessGateState.allowed,
+        );
+      }
+    });
+  });
+
+  group('resolveAccessGate — the repository, before the session', () {
+    test('repository loading is waiting, never allowed', () {
+      for (final flag in [true, false]) {
+        for (final group in _raisableGroups) {
+          expect(
+            resolveAccessGate(
+              group: group,
+              repository: _repoLoading(),
+              session: _anonymous(),
+              allowWhenRepositoryUnavailable: flag,
+            ),
+            AccessGateState.waiting,
+            reason: 'a slow connection must not be read as a missing one '
+                '($group, flag $flag)',
+          );
+        }
+      }
+    });
+
+    test('repository loading is waiting even for a session holding the group',
+        () {
+      expect(
+        resolveAccessGate(
+          group: AccessGroup.configure,
+          repository: _repoLoading(),
+          session: _elevated(const {AccessGroup.operate, AccessGroup.configure}),
+          allowWhenRepositoryUnavailable: false,
+        ),
+        AccessGateState.waiting,
+      );
+    });
+
+    test(
+        'repository unavailable with allowWhenRepositoryUnavailable: true is '
+        'allowed, in both causes, for every group', () {
+      _unavailableRepositories.forEach((cause, repository) {
+        for (final group in _raisableGroups) {
+          expect(
+            resolveAccessGate(
+              group: group,
+              repository: repository,
+              session: _anonymous(),
+              allowWhenRepositoryUnavailable: true,
+            ),
+            AccessGateState.allowed,
+            reason: '$group, $cause',
+          );
+        }
+      });
+    });
+
+    test(
+        'repository unavailable with allowWhenRepositoryUnavailable: false is '
+        'denied, in both causes, for every group including administer', () {
+      _unavailableRepositories.forEach((cause, repository) {
+        for (final group in _raisableGroups) {
+          expect(
+            resolveAccessGate(
+              group: group,
+              repository: repository,
+              session: _anonymous(),
+              allowWhenRepositoryUnavailable: false,
+            ),
+            AccessGateState.denied,
+            reason: '$group, $cause',
+          );
+        }
+      });
+    });
+
+    test(
+        'an unavailable repository denies even a session that claims the group',
+        () {
+      // A stale in-memory session must not carry authority the database is no
+      // longer there to back. The repository check runs first for exactly this.
+      _unavailableRepositories.forEach((cause, repository) {
+        expect(
+          resolveAccessGate(
+            group: AccessGroup.configure,
+            repository: repository,
+            session:
+                _elevated(const {AccessGroup.operate, AccessGroup.configure}),
+            allowWhenRepositoryUnavailable: false,
+          ),
+          AccessGateState.denied,
+          reason: cause,
+        );
+      });
+    });
+
+    test('AsyncError behaves exactly as resolved null, for both flag values',
+        () {
+      for (final flag in [true, false]) {
+        for (final group in _raisableGroups) {
+          expect(
+            resolveAccessGate(
+              group: group,
+              repository: _repoError(),
+              session: _anonymous(),
+              allowWhenRepositoryUnavailable: flag,
+            ),
+            resolveAccessGate(
+              group: group,
+              repository: _repoNull(),
+              session: _anonymous(),
+              allowWhenRepositoryUnavailable: flag,
+            ),
+            reason: 'the rule does not care why the repository is '
+                'unavailable ($group, flag $flag)',
+          );
+        }
+      }
+    });
+
+    test(
+        'the amendment: Server Config opens in BOTH unavailable states and the '
+        'other five stay locked in both', () {
+      _unavailableRepositories.forEach((cause, repository) {
+        // Server Config is the one route that passes the exemption true.
+        expect(
+          resolveAccessGate(
+            group: AccessGroup.administer,
+            repository: repository,
+            session: _anonymous(),
+            allowWhenRepositoryUnavailable: true,
+          ),
+          AccessGateState.allowed,
+          reason: 'server config must open — $cause',
+        );
+
+        // Page editor, alarm editor, key repository (configure) and IP
+        // settings, preferences (administer) pass it false.
+        for (final group in _lockedRouteGroups) {
+          expect(
+            resolveAccessGate(
+              group: group,
+              repository: repository,
+              session: _anonymous(),
+              allowWhenRepositoryUnavailable: false,
+            ),
+            AccessGateState.denied,
+            reason: 'the other five must stay locked — $group, $cause',
+          );
+        }
+      });
+    });
+  });
+
+  group('resolveAccessGate — the session, once a repository exists', () {
+    test('repository present and session loading is waiting', () {
+      expect(
+        resolveAccessGate(
+          group: AccessGroup.configure,
+          repository: _repoPresent(),
+          session: _sessionLoading(),
+          allowWhenRepositoryUnavailable: false,
+        ),
+        AccessGateState.waiting,
+      );
+    });
+
+    test('repository present and session in error is denied', () {
+      expect(
+        resolveAccessGate(
+          group: AccessGroup.configure,
+          repository: _repoPresent(),
+          session: _sessionError(),
+          allowWhenRepositoryUnavailable: false,
+        ),
+        AccessGateState.denied,
+      );
+    });
+
+    test('repository present and session holding the group is allowed', () {
+      expect(
+        resolveAccessGate(
+          group: AccessGroup.configure,
+          repository: _repoPresent(),
+          session:
+              _elevated(const {AccessGroup.operate, AccessGroup.configure}),
+          allowWhenRepositoryUnavailable: false,
+        ),
+        AccessGateState.allowed,
+      );
+    });
+
+    test('repository present and session lacking the group is denied', () {
+      expect(
+        resolveAccessGate(
+          group: AccessGroup.administer,
+          repository: _repoPresent(),
+          session:
+              _elevated(const {AccessGroup.operate, AccessGroup.configure}),
+          allowWhenRepositoryUnavailable: false,
+        ),
+        AccessGateState.denied,
+      );
+    });
+
+    test(
+        'the exemption goes inert the moment a repository exists: '
+        'allowWhenRepositoryUnavailable: true with an anonymous session is '
+        'denied', () {
+      for (final group in _raisableGroups) {
+        expect(
+          resolveAccessGate(
+            group: group,
+            repository: _repoPresent(),
+            session: _anonymous(),
+            allowWhenRepositoryUnavailable: true,
+          ),
+          AccessGateState.denied,
+          reason: 'server config is gated like everything else once the '
+              'database answers ($group)',
+        );
+      }
+    });
+
+    test('an elevated session lacking the group is denied like an anonymous one',
+        () {
+      final elevated = resolveAccessGate(
+        group: AccessGroup.administer,
+        repository: _repoPresent(),
+        session: _elevated(const {AccessGroup.operate}),
+        allowWhenRepositoryUnavailable: false,
+      );
+      final anonymous = resolveAccessGate(
+        group: AccessGroup.administer,
+        repository: _repoPresent(),
+        session: _anonymous(),
+        allowWhenRepositoryUnavailable: false,
+      );
+      expect(elevated, AccessGateState.denied);
+      expect(elevated, anonymous,
+          reason: 'being signed in is not the question; holding the group is');
+    });
+  });
+
+  group('AccessLockedBody', () {
+    testWidgets('names the missing group by its AccessGroup name',
+        (tester) async {
+      await tester.pumpWidget(_lockedBodyHost(group: AccessGroup.administer));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessLockedBodyKey), findsOneWidget);
+      expect(find.text(kAccessLockedGroupNote(AccessGroup.administer)),
+          findsOneWidget);
+      expect(kAccessLockedGroupNote(AccessGroup.administer),
+          contains(AccessGroup.administer.name));
+    });
+
+    testWidgets('anonymous: says a sign-in is needed and offers one',
+        (tester) async {
+      await tester.pumpWidget(_lockedBodyHost(group: AccessGroup.configure));
+      await tester.pumpAndSettle();
+
+      expect(find.text(kAccessLockedHeadline), findsOneWidget);
+      expect(find.byKey(kAccessLockedSignInKey), findsOneWidget);
+      // Nobody is signed in, so there is no role to talk about.
+      expect(find.textContaining('You are signed in as'), findsNothing);
+    });
+
+    testWidgets(
+        'elevated but insufficient: names who and their role, and still '
+        'offers a sign-in', (tester) async {
+      await tester.pumpWidget(_lockedBodyHost(
+        group: AccessGroup.administer,
+        session: _elevatedSession(const {AccessGroup.operate}),
+      ));
+      await tester.pumpAndSettle();
+
+      final note = kAccessLockedRoleNote(
+          'Jon B', 'Engineering', AccessGroup.administer);
+      expect(find.text(note), findsOneWidget);
+      expect(note, contains('Jon B'));
+      expect(note, contains('Engineering'));
+      expect(note, contains(AccessGroup.administer.name));
+
+      // Signing in as somebody else is still on offer.
+      expect(find.byKey(kAccessLockedSignInKey), findsOneWidget);
+    });
+
+    testWidgets('an unavailable repository adds the no-database line, in both '
+        'causes', (tester) async {
+      for (final repository in [_absentRepository, _throwingRepository]) {
+        await tester.pumpWidget(_lockedBodyHost(
+          group: AccessGroup.configure,
+          repository: repository,
+        ));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(kAccessLockedNoDatabaseKey), findsOneWidget);
+        expect(find.text(kAccessLockedNoDatabaseNote), findsOneWidget);
+      }
+    });
+
+    testWidgets('the no-database line is absent when a repository is present',
+        (tester) async {
+      await tester.pumpWidget(_lockedBodyHost(group: AccessGroup.configure));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessLockedNoDatabaseKey), findsNothing);
+      expect(find.text(kAccessLockedNoDatabaseNote), findsNothing);
+    });
+
+    testWidgets('the no-database line wraps rather than ellipsising',
+        (tester) async {
+      await tester.pumpWidget(_lockedBodyHost(
+        group: AccessGroup.configure,
+        repository: _absentRepository,
+      ));
+      await tester.pumpAndSettle();
+
+      _expectWrapsLegibly(tester, kAccessLockedNoDatabaseKey,
+          kAccessLockedNoDatabaseNote);
+    });
+
+    test('the no-database line states the consequence and the next step, '
+        'never a cause', () {
+      // Never configured and configured-but-down lead to the same next step
+      // now that Server Config opens in both, and a line that guessed wrong
+      // would send a commissioner and an operator hunting different wrong
+      // problems — the mistake `lib/pages/first_user.dart:55-64` documents.
+      expect(kAccessLockedNoDatabaseNote, isNot(contains('configured')));
+      expect(kAccessLockedNoDatabaseNote, isNot(contains('unreachable')));
+      expect(kAccessLockedNoDatabaseNote, contains('Server Config'));
+    });
+
+    testWidgets('carries the honesty line verbatim, wrapping rather than '
+        'ellipsising', (tester) async {
+      await tester.pumpWidget(_lockedBodyHost(group: AccessGroup.configure));
+      await tester.pumpAndSettle();
+
+      expect(find.text(kAccessSignInHonestyNote), findsOneWidget);
+      _expectWrapsLegibly(
+          tester, kAccessLockedHonestyKey, kAccessSignInHonestyNote);
+    });
+
+    testWidgets('the Sign in action calls the injected opener once per tap',
+        (tester) async {
+      final opener = _CountingOpener();
+      await tester.pumpWidget(_lockedBodyHost(
+        group: AccessGroup.configure,
+        openSignIn: opener.call,
+      ));
+      await tester.pumpAndSettle();
+
+      expect(opener.calls, 0, reason: 'a render must not open the dialog');
+      await tester.tap(find.byKey(kAccessLockedSignInKey));
+      await tester.pumpAndSettle();
+      expect(opener.calls, 1);
+      await tester.tap(find.byKey(kAccessLockedSignInKey));
+      await tester.pumpAndSettle();
+      expect(opener.calls, 2);
+    });
+
+    testWidgets('renders no error styling, in either repository state',
+        (tester) async {
+      for (final repository in [_presentRepository, _absentRepository]) {
+        await tester.pumpWidget(_lockedBodyHost(
+          group: AccessGroup.configure,
+          repository: repository,
+        ));
+        await tester.pumpAndSettle();
+
+        expect(find.byIcon(Icons.error), findsNothing);
+        expect(find.byIcon(Icons.error_outline), findsNothing);
+        expect(find.byIcon(Icons.warning), findsNothing);
+        expect(find.byIcon(Icons.warning_amber), findsNothing);
+        expect(find.textContaining('Exception'), findsNothing);
+        expect(find.textContaining('Error'), findsNothing);
+
+        final scheme = Theme.of(
+          tester.element(find.byKey(kAccessLockedBodyKey)),
+        ).colorScheme;
+        for (final text in tester.widgetList<Text>(find.byType(Text))) {
+          expect(text.style?.color, isNot(scheme.error),
+              reason: 'a lock is not a fault: "${text.data}"');
+        }
+        for (final icon in tester.widgetList<Icon>(find.byType(Icon))) {
+          expect(icon.color, isNot(scheme.error));
+        }
+      }
+    });
+
+    testWidgets('offers no go-back, retry or request-access affordance',
+        (tester) async {
+      await tester.pumpWidget(_lockedBodyHost(
+        group: AccessGroup.configure,
+        repository: _absentRepository,
+      ));
+      await tester.pumpAndSettle();
+
+      // Leaving is the app bar's and the navigation bar's job, and there is
+      // nobody in this build to request access from.
+      expect(find.textContaining('Back'), findsNothing);
+      expect(find.textContaining('Retry'), findsNothing);
+      expect(find.textContaining('Try again'), findsNothing);
+      expect(find.textContaining('Request'), findsNothing);
+      expect(find.byIcon(Icons.arrow_back), findsNothing);
+    });
+
+    testWidgets('nothing it renders is disabled, including with no repository',
+        (tester) async {
+      for (final repository in [
+        _presentRepository,
+        _absentRepository,
+        _throwingRepository,
+      ]) {
+        await tester.pumpWidget(_lockedBodyHost(
+          group: AccessGroup.configure,
+          repository: repository,
+        ));
+        await tester.pumpAndSettle();
+
+        final buttons = tester.widgetList<ButtonStyleButton>(
+          find.byWidgetPredicate((w) => w is ButtonStyleButton),
+        );
+        expect(buttons, isNotEmpty);
+        for (final button in buttons) {
+          expect(button.onPressed, isNotNull,
+              reason: 'a greyed control is the one thing the UI rules forbid');
+        }
+        for (final button in tester.widgetList<IconButton>(
+          find.byType(IconButton),
+        )) {
+          expect(button.onPressed, isNotNull);
+        }
+      }
+    });
+  });
+
+  group('AccessGate', () {
+    setUp(() {
+      _childInits = 0;
+      _registerAppMenu();
+    });
+    tearDown(() => RouteRegistry().menuItems.clear());
+
+    test('allowWhenRepositoryUnavailable defaults to false', () {
+      // A caller that forgets the flag gets the strict behaviour. The
+      // permissive direction has to be asked for, at the one route that needs
+      // it.
+      const gate = AccessGate(
+        group: AccessGroup.configure,
+        title: 'Page Editor',
+        child: SizedBox.shrink(),
+      );
+      expect(gate.allowWhenRepositoryUnavailable, isFalse);
+    });
+
+    test('group is required and has no default', () {
+      // Enforced by the compiler — `AccessGate(title: ..., child: ...)` does
+      // not analyse — because a gate that could be built without a group would
+      // fail open by omission. What a runtime test can add is that nothing
+      // substitutes a default behind the caller's back.
+      const gate = AccessGate(
+        group: AccessGroup.administer,
+        title: 'Server Config',
+        child: SizedBox.shrink(),
+      );
+      expect(gate.group, AccessGroup.administer);
+    });
+
+    testWidgets('allowed renders the child, and no scaffold of its own',
+        (tester) async {
+      final router = buildAccessGateRouter(const AccessGate(
+        group: AccessGroup.configure,
+        title: 'Page Editor',
+        child: _GatedPage(),
+      ));
+      await tester.pumpWidget(buildAccessGateShell(
+        router: router,
+        session: _FixedSession(
+            _elevatedSession(const {AccessGroup.operate, AccessGroup.configure})),
+        repository: _presentRepository,
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text(_kGatedChildText), findsOneWidget);
+      expect(find.byType(AccessLockedBody), findsNothing);
+      expect(find.byKey(kAccessGateWaitingKey), findsNothing);
+      // Exactly one — the page's own. The gate adds no chrome and no frame.
+      expect(find.byType(BaseScaffold), findsOneWidget);
+      expect(find.text('Page Editor'), findsNothing);
+    });
+
+    testWidgets(
+        'denied renders the locked body in a scaffold, so the operator can '
+        'leave', (tester) async {
+      final router = buildAccessGateRouter(const AccessGate(
+        group: AccessGroup.configure,
+        title: 'Page Editor',
+        child: _GatedPage(),
+      ));
+      await tester.pumpWidget(buildAccessGateShell(
+        router: router,
+        session: _FixedSession(
+            AccessSession.anonymous(const {AccessGroup.operate})),
+        repository: _presentRepository,
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AccessLockedBody), findsOneWidget);
+      expect(find.text(_kGatedChildText), findsNothing);
+      // The way out: the app bar with its own sign-in affordance, and the
+      // navigation bar.
+      expect(find.byType(BaseScaffold), findsOneWidget);
+      expect(find.byType(AccessStatusAction), findsOneWidget);
+      expect(find.byType(NavigationBar), findsOneWidget);
+    });
+
+    testWidgets('waiting renders a progress indicator, not the child and not '
+        'the lock', (tester) async {
+      final router = buildAccessGateRouter(const AccessGate(
+        group: AccessGroup.configure,
+        title: 'Page Editor',
+        child: _GatedPage(),
+      ));
+      await tester.pumpWidget(buildAccessGateShell(
+        router: router,
+        session: _FixedSession(
+            AccessSession.anonymous(const {AccessGroup.operate})),
+        repository: _hangingRepository,
+      ));
+      await tester.pump();
+
+      expect(find.byKey(kAccessGateWaitingKey), findsOneWidget);
+      expect(find.text(_kGatedChildText), findsNothing);
+      expect(find.byType(AccessLockedBody), findsNothing);
+      expect(find.byType(BaseScaffold), findsOneWidget);
+    });
+
+    testWidgets('the gate never opens the sign-in dialog by itself',
+        (tester) async {
+      final opener = _CountingOpener();
+      final router = buildAccessGateRouter(AccessGate(
+        group: AccessGroup.configure,
+        title: 'Page Editor',
+        openSignIn: opener.call,
+        child: const _GatedPage(),
+      ));
+      await tester.pumpWidget(buildAccessGateShell(
+        router: router,
+        session: _FixedSession(
+            AccessSession.anonymous(const {AccessGroup.operate})),
+        repository: _presentRepository,
+      ));
+      await tester.pumpAndSettle();
+
+      // A rebuild must not ambush the operator with a modal.
+      expect(find.byType(AccessLockedBody), findsOneWidget);
+      expect(opener.calls, 0);
+    });
+
+    testWidgets('the child is not built while denied', (tester) async {
+      final router = buildAccessGateRouter(const AccessGate(
+        group: AccessGroup.configure,
+        title: 'Page Editor',
+        child: _GatedPage(),
+      ));
+      await tester.pumpWidget(buildAccessGateShell(
+        router: router,
+        session: _FixedSession(
+            AccessSession.anonymous(const {AccessGroup.operate})),
+        repository: _presentRepository,
+      ));
+      await tester.pumpAndSettle();
+
+      // A page that ran its initState, its queries and its subscriptions
+      // behind a lock would leak exactly what the lock is for.
+      expect(_childInits, 0);
+    });
+
+    testWidgets('gaining the group reveals the child, with no navigation',
+        (tester) async {
+      final session = _MutableSession(
+          AccessSession.anonymous(const {AccessGroup.operate}));
+      final router = buildAccessGateRouter(const AccessGate(
+        group: AccessGroup.configure,
+        title: 'Page Editor',
+        child: _GatedPage(),
+      ));
+      await tester.pumpWidget(buildAccessGateShell(
+        router: router,
+        session: session,
+        repository: _presentRepository,
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AccessLockedBody), findsOneWidget);
+      final before = _currentPath(router);
+
+      session.become(
+          _elevatedSession(const {AccessGroup.operate, AccessGroup.configure}));
+      await tester.pumpAndSettle();
+
+      expect(find.text(_kGatedChildText), findsOneWidget);
+      expect(find.byType(AccessLockedBody), findsNothing);
+      expect(_childInits, 1, reason: 'the page runs once, on reveal');
+      // No beam, no push, no pop: the gate re-ran `build` and the child
+      // appeared where the operator already was.
+      expect(_currentPath(router), before);
+      expect(_currentPath(router), '/gated');
+    });
+
+    testWidgets('a gate on operate renders the child immediately, with no '
+        'waiting frame', (tester) async {
+      final router = buildAccessGateRouter(const AccessGate(
+        group: AccessGroup.operate,
+        title: 'Home',
+        child: _GatedPage(),
+      ));
+      await tester.pumpWidget(buildAccessGateShell(
+        router: router,
+        session: _HangingSession(),
+        repository: _hangingRepository,
+      ));
+      await tester.pump();
+
+      // Neither provider has resolved and neither ever will in this test: an
+      // unraised route must not cost a frame.
+      expect(find.text(_kGatedChildText), findsOneWidget);
+      expect(find.byKey(kAccessGateWaitingKey), findsNothing);
+      expect(find.byType(AccessLockedBody), findsNothing);
+    });
+
+    testWidgets(
+        'allowWhenRepositoryUnavailable: true renders the child with no '
+        'repository', (tester) async {
+      final router = buildAccessGateRouter(const AccessGate(
+        group: AccessGroup.administer,
+        title: 'Server Config',
+        allowWhenRepositoryUnavailable: true,
+        child: _GatedPage(),
+      ));
+      await tester.pumpWidget(buildAccessGateShell(
+        router: router,
+        session: _FixedSession(
+            AccessSession.anonymous(const {AccessGroup.operate})),
+        repository: _absentRepository,
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text(_kGatedChildText), findsOneWidget);
+      expect(find.byType(AccessLockedBody), findsNothing);
+    });
+
+    testWidgets(
+        'allowWhenRepositoryUnavailable: true renders the lock once a '
+        'repository exists', (tester) async {
+      // The exemption is inert the moment a repository answers — a second
+      // `pumpWidget` in the test above would tear the Beamer delegate down
+      // mid-flight, so this is its own case.
+      final router = buildAccessGateRouter(const AccessGate(
+        group: AccessGroup.administer,
+        title: 'Server Config',
+        allowWhenRepositoryUnavailable: true,
+        child: _GatedPage(),
+      ));
+      await tester.pumpWidget(buildAccessGateShell(
+        router: router,
+        session: _FixedSession(
+            AccessSession.anonymous(const {AccessGroup.operate})),
+        repository: _presentRepository,
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AccessLockedBody), findsOneWidget);
+      expect(find.text(_kGatedChildText), findsNothing);
+      expect(_childInits, 0);
+    });
+  });
+}
+
+/// A session that resolves immediately to whatever the test needs.
+///
+/// Overriding [build] is what keeps the frame chosen rather than raced: none of
+/// the real leaf providers — database, preferences, audit sink, inactivity
+/// monitor — is ever constructed, so there is no I/O to settle against and no
+/// timer to leak. Copied from `test/widgets/access_golden_test.dart`.
+class _FixedSession extends AccessSessionController {
+  _FixedSession(this._session);
+
+  final AccessSession _session;
+
+  @override
+  Future<AccessSession> build() async => _session;
+
+  @override
+  Future<AccessSignInResult> signIn(String username, String password) async =>
+      AccessSignInResult.ok;
+
+  @override
+  Future<void> signOut() async {}
+
+  @override
+  void poke() {}
+}
+
+/// The three repository states a widget test can be in. The gate's own decision
+/// is tested against `AsyncValue`s directly; these are for the widgets, which
+/// read the provider themselves.
+Future<AccessRepository?> _presentRepository() async => _StubRepository();
+Future<AccessRepository?> _absentRepository() async => null;
+Future<AccessRepository?> _throwingRepository() async =>
+    throw StateError('postgres will not answer');
+
+AccessSession _elevatedSession(Set<AccessGroup> groups) => AccessSession(
+      user: const AuthenticatedUser(
+        username: 'jon',
+        roleName: 'Engineering',
+        displayName: 'Jon B',
+      ),
+      groups: groups,
+      expiresAt: DateTime.utc(2026, 8, 29, 12),
+    );
+
+/// Counts the taps without standing up a dialog route.
+class _CountingOpener {
+  int calls = 0;
+
+  Future<void> call(BuildContext context, WidgetRef ref) async {
+    calls++;
+  }
+}
+
+/// [AccessLockedBody] under a bare `MaterialApp` — no Beamer, no router.
+///
+/// Both access providers are overridden, always: an unoverridden
+/// `accessRepositoryProvider` reaches `databaseProvider` and the keychain, and
+/// the test becomes a race.
+Widget _lockedBodyHost({
+  required AccessGroup group,
+  AccessSession? session,
+  Future<AccessRepository?> Function() repository = _presentRepository,
+  AccessSignInOpener? openSignIn,
+}) {
+  return ProviderScope(
+    overrides: [
+      accessSessionProvider.overrideWith(() => _FixedSession(
+          session ?? AccessSession.anonymous(const {AccessGroup.operate}))),
+      accessRepositoryProvider.overrideWith((ref) => repository()),
+    ],
+    child: MaterialApp(
+      home: Scaffold(
+        body: AccessLockedBody(
+          group: group,
+          openSignIn: openSignIn ?? _CountingOpener().call,
+        ),
+      ),
+    ),
+  );
+}
+
+/// A session that never resolves, for the frames the gate must not wait on.
+class _HangingSession extends AccessSessionController {
+  @override
+  Future<AccessSession> build() => Completer<AccessSession>().future;
+
+  @override
+  Future<void> signOut() async {}
+
+  @override
+  void poke() {}
+}
+
+/// A session a test can move from lacking the group to holding it, without
+/// re-pumping the tree — which is the whole point of the no-replay rule.
+class _MutableSession extends AccessSessionController {
+  _MutableSession(this._initial);
+
+  final AccessSession _initial;
+
+  @override
+  Future<AccessSession> build() async => _initial;
+
+  void become(AccessSession next) => state = AsyncData(next);
+
+  @override
+  Future<void> signOut() async {}
+
+  @override
+  void poke() {}
+}
+
+/// A repository that never resolves — the "still connecting" station.
+Future<AccessRepository?> _hangingRepository() =>
+    Completer<AccessRepository?>().future;
+
+/// How many times the gated page's body has run `initState`. Reset per test;
+/// the point of the counter is that a denied gate leaves it at zero.
+int _childInits = 0;
+
+const String _kGatedChildText = 'gated-child';
+
+/// The page behind the gate. Brings its own [BaseScaffold], the way every real
+/// page does, so a test can tell whether the gate added one of its own.
+class _GatedPage extends StatelessWidget {
+  const _GatedPage();
+
+  @override
+  Widget build(BuildContext context) => const BaseScaffold(
+        title: 'Gated page',
+        body: _CountingChild(),
+      );
+}
+
+class _CountingChild extends StatefulWidget {
+  const _CountingChild();
+
+  @override
+  State<_CountingChild> createState() => _CountingChildState();
+}
+
+class _CountingChildState extends State<_CountingChild> {
+  @override
+  void initState() {
+    super.initState();
+    _childInits++;
+  }
+
+  @override
+  Widget build(BuildContext context) => const Text(_kGatedChildText);
+}
+
+/// The top-level menu [BaseScaffold] renders its navigation bar from. Gated
+/// routes live under Advanced, the way the seven real ones do.
+void _registerAppMenu() {
+  final registry = RouteRegistry();
+  registry.menuItems.clear();
+  registry
+      .addMenuItem(const MenuItem(label: 'Home', path: '/', icon: Icons.home));
+  registry.addMenuItem(const MenuItem(
+    label: 'Advanced',
+    path: '/advanced',
+    icon: Icons.settings,
+    children: [
+      MenuItem(label: 'Gated', path: '/gated', icon: Icons.dns),
+    ],
+  ));
+}
+
+/// The router the gate shell needs: the gated route, plus a `/` to beam to, so
+/// a test can tell a rebuild apart from a navigation.
+BeamerDelegate buildAccessGateRouter(Widget gate) => BeamerDelegate(
+      initialPath: '/gated',
+      locationBuilder: RoutesLocationBuilder(routes: {
+        '/': (context, state, data) => const BeamPage(
+              key: ValueKey('/'),
+              title: 'Home',
+              child: BaseScaffold(title: 'Home', body: Text('home-body')),
+            ),
+        '/gated': (context, state, data) => BeamPage(
+              key: const ValueKey('/gated'),
+              title: 'Gated',
+              child: gate,
+            ),
+      }).call,
+    );
+
+/// The one-route Beamer shell every [AccessGate] widget test pumps.
+///
+/// A named top-level function rather than an inline closure because plan 02-05
+/// builds its own copy for the shell golden — golden files in this repo own
+/// their hosts — and this comment is what stops the copy drifting.
+///
+/// **Both access providers must be overridden, always:**
+///
+/// * `accessSessionProvider` — an unoverridden session runs the real controller
+///   chain, and a frame captured before it settles is `AsyncLoading`, in which
+///   `AccessStatusAction` renders `SizedBox.shrink()` and the app bar looks
+///   empty. That trap cost Phase 1 a re-render of eighteen baselines
+///   (01-08 summary, "The timing dependency").
+/// * `accessRepositoryProvider` — an unoverridden repository reaches
+///   `databaseProvider`, which reads `DatabaseConfig.fromPrefs()` and the
+///   station keychain. The test becomes a race against real I/O.
+///
+/// The Beamer wrapper is not optional either: [BaseScaffold] calls
+/// `context.currentBeamLocation` (`base_scaffold.dart:40` and `:382`), so it
+/// cannot be pumped without a router above it.
+Widget buildAccessGateShell({
+  required BeamerDelegate router,
+  required AccessSessionController session,
+  required Future<AccessRepository?> Function() repository,
+}) {
+  return ProviderScope(
+    overrides: [
+      accessSessionProvider.overrideWith(() => session),
+      accessRepositoryProvider.overrideWith((ref) => repository()),
+    ],
+    child: BeamerProvider(
+      routerDelegate: router,
+      child: MaterialApp.router(
+        routerDelegate: router,
+        routeInformationParser: BeamerParser(),
+      ),
+    ),
+  );
+}
+
+/// The path Beamer is currently showing, so a test can assert that revealing
+/// the child navigated nowhere.
+String? _currentPath(BeamerDelegate router) {
+  final state = router.currentBeamLocation.state;
+  return state is BeamState ? state.uri.path : null;
+}
+
+/// The Phase 1 lesson, copied deliberately: `find.text` passes on a string the
+/// painter has clipped to "…not a security bo…", which is how an ellipsised
+/// honesty line shipped past a green assertion. Pin the properties that decide
+/// legibility, then check the paragraph really is taller than one line at the
+/// width the page renders it at.
+void _expectWrapsLegibly(WidgetTester tester, Key key, String expected) {
+  final text = tester.widget<Text>(find.byKey(key));
+  expect(text.data, expected);
+  expect(text.maxLines, isNull);
+  expect(text.overflow, isNot(TextOverflow.ellipsis));
+
+  final rendered = tester.renderObject<RenderParagraph>(
+    find.descendant(of: find.byKey(key), matching: find.byType(RichText)),
+  );
+  expect(rendered.size.height, greaterThan(rendered.preferredLineHeight));
+}

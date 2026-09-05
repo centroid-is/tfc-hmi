@@ -50,6 +50,7 @@ import '../../painter/advantys_stb/nip2311.dart';
 import '../../painter/advantys_stb/pdt3100.dart';
 import '../../painter/beckhoff/io8.dart' show IOState;
 import '../../widgets/panes/side_pane.dart';
+import '../../widgets/tag_access_guard.dart' show writeTag;
 import 'io_pane.dart';
 
 part 'advantys_stb.g.dart';
@@ -457,7 +458,11 @@ void _showDDI3725DetailPane(
 /// Lifted verbatim out of the old `AlertDialog` so the force/filter write
 /// paths are byte-for-byte the ones the Plan 03/04 tests lock; only its host
 /// changed, from a modal dialog to a floating one.
-class _DDI3725ChannelGrid extends StatelessWidget {
+/// A `ConsumerWidget` rather than a `StatelessWidget`, and only because the
+/// force and filter writes go through [writeTag] — which needs a `WidgetRef`
+/// to resolve the permission before it issues anything. The grid is built
+/// into the pane's own subtree, so this is its ref and not the module's.
+class _DDI3725ChannelGrid extends ConsumerWidget {
   final STBDDI3725Config config;
   final StateMan stateMan;
   final Animation<int> animation;
@@ -469,10 +474,10 @@ class _DDI3725ChannelGrid extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) =>
-      IoGridViewport(child: _buildGrid(context));
+  Widget build(BuildContext context, WidgetRef ref) =>
+      IoGridViewport(child: _buildGrid(context, ref));
 
-  Widget _buildGrid(BuildContext context) {
+  Widget _buildGrid(BuildContext context, WidgetRef ref) {
     return StreamBuilder<Map<String, DynamicValue>>(
       stream: _combinedStream(
         LinkedHashMap<String, String?>.from(<String, String?>{
@@ -507,13 +512,20 @@ class _DDI3725ChannelGrid extends StatelessWidget {
                   leftSelected: map['force']?[r].asInt ?? 0,
                   rightSelected: map['force']?[r + 8].asInt ?? 0,
                   animationValue: animation,
+                  // No member on any of these six: `force`, `on_filters` and
+                  // `off_filters` are `int8[16]` arrays, not structs. The
+                  // channel is an index, and an index is not a member name a
+                  // template could ever have a rule for — so the question is
+                  // asked about the key as a whole, which is the honest one.
                   leftOnChanged: (value) async {
                     map['force']![r].value = value;
-                    await stateMan.write(config.forceValuesKey!, map['force']!);
+                    await writeTag(
+                        ref, stateMan, config.forceValuesKey!, map['force']!);
                   },
                   rightOnChanged: (value) async {
                     map['force']![r + 8].value = value;
-                    await stateMan.write(config.forceValuesKey!, map['force']!);
+                    await writeTag(
+                        ref, stateMan, config.forceValuesKey!, map['force']!);
                   },
                   leftDescription: map['descriptions']?[r].asString,
                   rightDescription: map['descriptions']?[r + 8].asString,
@@ -524,13 +536,13 @@ class _DDI3725ChannelGrid extends StatelessWidget {
                           offFilter: map['off_filters']?[r].asInt ?? 0,
                           onChangedOnFilter: (v) async {
                             map['on_filters']![r].value = v;
-                            await stateMan.write(
-                                config.onFiltersKey!, map['on_filters']!);
+                            await writeTag(ref, stateMan, config.onFiltersKey!,
+                                map['on_filters']!);
                           },
                           onChangedOffFilter: (v) async {
                             map['off_filters']![r].value = v;
-                            await stateMan.write(
-                                config.offFiltersKey!, map['off_filters']!);
+                            await writeTag(ref, stateMan, config.offFiltersKey!,
+                                map['off_filters']!);
                           },
                         )
                       : null,
@@ -541,13 +553,13 @@ class _DDI3725ChannelGrid extends StatelessWidget {
                           offFilter: map['off_filters']?[r + 8].asInt ?? 0,
                           onChangedOnFilter: (v) async {
                             map['on_filters']![r + 8].value = v;
-                            await stateMan.write(
-                                config.onFiltersKey!, map['on_filters']!);
+                            await writeTag(ref, stateMan, config.onFiltersKey!,
+                                map['on_filters']!);
                           },
                           onChangedOffFilter: (v) async {
                             map['off_filters']![r + 8].value = v;
-                            await stateMan.write(
-                                config.offFiltersKey!, map['off_filters']!);
+                            await writeTag(ref, stateMan, config.offFiltersKey!,
+                                map['off_filters']!);
                           },
                         )
                       : null,
@@ -840,8 +852,9 @@ class _STBDDO3705ConfigEditorState extends State<_STBDDO3705ConfigEditor> {
 //
 // Force-write path is genuine and operator-driven: SegmentedButton onChange
 // mutates the force DynamicValue in-place and writes the whole int8[16] back
-// via `stateMan.write(forceValuesKey, ...)`. The same StreamBuilder receives
-// the next emission and re-renders.
+// via `writeTag(ref, stateMan, forceValuesKey, ...)`, which resolves the
+// permission at the tap and issues nothing when it is refused (plan 04-11).
+// The same StreamBuilder receives the next emission and re-renders.
 // ---------------------------------------------------------------------------
 
 void _showDDO3705DetailPane(
@@ -884,7 +897,9 @@ void _showDDO3705DetailPane(
 ///
 /// Lifted verbatim out of the old `AlertDialog`: the force-write path is
 /// byte-for-byte the one the Plan 02 tests lock, only its host changed.
-class _DDO3705ChannelGrid extends StatelessWidget {
+/// A `ConsumerWidget` for the same reason as [_DDI3725ChannelGrid]: forcing an
+/// output resolves the permission before it writes.
+class _DDO3705ChannelGrid extends ConsumerWidget {
   final STBDDO3705Config config;
   final StateMan stateMan;
   final Animation<int> animation;
@@ -896,10 +911,10 @@ class _DDO3705ChannelGrid extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) =>
-      IoGridViewport(child: _buildGrid(context));
+  Widget build(BuildContext context, WidgetRef ref) =>
+      IoGridViewport(child: _buildGrid(context, ref));
 
-  Widget _buildGrid(BuildContext context) {
+  Widget _buildGrid(BuildContext context, WidgetRef ref) {
     return StreamBuilder<Map<String, DynamicValue>>(
       stream: _combinedStream(
         LinkedHashMap<String, String?>.from(<String, String?>{
@@ -932,17 +947,23 @@ class _DDO3705ChannelGrid extends StatelessWidget {
                   leftSelected: map['force']?[r].asInt ?? 0,
                   rightSelected: map['force']?[r + 8].asInt ?? 0,
                   animationValue: animation,
+                  // No member: the force array is an `int8[16]`, so the
+                  // channel is an index rather than a struct member and the
+                  // question is asked about the key as a whole.
                   leftOnChanged: (value) async {
                     // DDO-09: genuine operator-driven force write.
                     // Mutate the force DV in-place (matches the EL2008
-                    // pattern in beckhoff.dart:880-884), then write the
-                    // whole int8[16] back via StateMan.write.
+                    // pattern in beckhoff.dart), then write the whole
+                    // int8[16] back through `writeTag`, which resolves the
+                    // permission first and issues nothing when it is refused.
                     map['force']![r].value = value;
-                    await stateMan.write(config.forceValuesKey!, map['force']!);
+                    await writeTag(
+                        ref, stateMan, config.forceValuesKey!, map['force']!);
                   },
                   rightOnChanged: (value) async {
                     map['force']![r + 8].value = value;
-                    await stateMan.write(config.forceValuesKey!, map['force']!);
+                    await writeTag(
+                        ref, stateMan, config.forceValuesKey!, map['force']!);
                   },
                   leftDescription: map['descriptions']?[r].asString,
                   rightDescription: map['descriptions']?[r + 8].asString,

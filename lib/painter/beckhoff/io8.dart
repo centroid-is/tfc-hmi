@@ -1,7 +1,14 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 
-const bodyColor = Color(0xFFF7F5E6);
+import 'hardware.dart';
+
+/// The ELxxxx housing. Beckhoff moulds these in a light neutral grey, not the
+/// cream this drawing carried for years — put the mimic beside a photo of an
+/// EL1008 and the old colour was the most obviously wrong thing on the page.
+const bodyColor = Color(0xFFEAEAE6);
 
 /// The housing Beckhoff gives its TwinSAFE hardware — EL2912 in the rack,
 /// EP1918 out in the field. Safety terminals are yellow and everything else
@@ -9,7 +16,25 @@ const bodyColor = Color(0xFFF7F5E6);
 /// the room, so the mimic keeps the distinction.
 const twinSafeBodyColor = Color(0xFFF2C200);
 
-const ioLabelColor = Color(0xFFC0C040);
+/// The printed terminal markers — the yellow-green tags across the top of a
+/// terminal and beside each contact pair.
+const ioLabelColor = Color(0xFFC7D62E);
+
+/// The recess the indicator LEDs sit in. Dark, because it is on the real
+/// terminal: the window is a shadowed pocket and the lamps are the only
+/// bright thing in it. Drawing it light meant an unlit lamp had to be drawn
+/// lighter still, which is the opposite of what a dark LED looks like.
+const ledWindowColor = Color(0xFF6E7573);
+
+/// An unlit indicator: clear glass, drawn translucent so the dark recess
+/// behind it shows through.
+///
+/// A dead LED is not a dark tile any more than it is a white one — it is a
+/// colourless lens over an unlit die, and what you actually see is most of
+/// the pocket behind it. Painting it opaque, in either direction, is what
+/// made this look wrong; letting the recess read through the lens is what
+/// makes it look like glass.
+const ledOffColor = Color(0x8FE4EADF);
 
 enum IOState { low, high, forcedLow, forcedHigh, error }
 
@@ -23,6 +48,12 @@ class IO8Widget extends AnimatedWidget {
   final List<Color> ioLabelColors;
   final String name;
 
+  /// The slice's configured name or id, worn as a single marker tag above
+  /// the LED block — the same spot the printed terminal markers sit on the
+  /// real hardware. Empty draws nothing; [topLabels], when set, wins the
+  /// band.
+  final String markerLabel;
+
   /// Housing colour. Beckhoff's TwinSAFE terminals (EL2912, EP1918) are
   /// yellow rather than the cream every other EL terminal wears, and on a
   /// rack mimic that colour is the fastest way to tell a safety terminal
@@ -34,6 +65,7 @@ class IO8Widget extends AnimatedWidget {
     this.disconnected = false,
     this.selected = false,
     this.topLabels = ('', ''),
+    this.markerLabel = '',
     this.ioLabels = const ['I1', 'I2', 'I3', 'I4', 'I5', 'I6', 'I7', 'I8'],
     this.ioLabelColors = const [
       ioLabelColor,
@@ -63,6 +95,7 @@ class IO8Widget extends AnimatedWidget {
           disconnected: disconnected,
           selected: selected,
           topLabels: topLabels,
+          markerLabel: markerLabel,
           name: name,
           animation: animation,
           ioLabels: ioLabels,
@@ -86,6 +119,9 @@ class IO8Painter extends CustomPainter {
   final Animation<int> animation;
   final String name;
 
+  /// Single marker tag above the LED block — see [IO8Widget.markerLabel].
+  final String markerLabel;
+
   /// Housing colour — see [IO8Widget.housingColor].
   final Color housingColor;
   IO8Painter({
@@ -93,6 +129,7 @@ class IO8Painter extends CustomPainter {
     this.disconnected = false,
     this.selected = false,
     this.topLabels = ('', ''),
+    this.markerLabel = '',
     this.topLabelColors = (
       ioLabelColor,
       ioLabelColor,
@@ -126,9 +163,10 @@ class IO8Painter extends CustomPainter {
       ..color = Colors.grey.shade700
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth;
-    final fillPaint = Paint()..color = housingColor;
-
-    // Draw module body
+    // Draw module body. The fill runs the full box and the outline sits a
+    // stroke inside it, as it always did; what is new is that the fill is a
+    // moulding rather than a flat cream, so a rack row shows a seam at every
+    // join instead of merging into one slab.
     final moduleRect = RRect.fromRectAndRadius(
       Rect.fromLTWH(0, 0, size.width - strokeWidth, size.height - strokeWidth),
       Radius.circular(size.width * 0.06),
@@ -137,7 +175,7 @@ class IO8Painter extends CustomPainter {
       Rect.fromLTWH(0, 0, size.width, size.height),
       Radius.circular(size.width * 0.06),
     );
-    canvas.drawRRect(fillRect, fillPaint);
+    canvas.drawRRect(fillRect, housingPaint(fillRect.outerRect, housingColor));
     canvas.drawRRect(moduleRect, outerBorderPaint);
 
     // Draw exclamation mark if disconnected
@@ -199,7 +237,16 @@ class IO8Painter extends CustomPainter {
     }
 
     // --- Calculate heights for all elements ---
-    double topLabelsH = labelH + pad * 2;
+    // The marker band is the height the strip is on the real terminal, and it
+    // is that height on every device whether or not a name is set.
+    //
+    // A taller band for named terminals was tried, to give a plant id two
+    // lines instead of one shrunk line. It bought legibility and cost
+    // alignment: the band feeds `topLabelsH`, so a rack holding one named
+    // terminal beside one unnamed one had their LED blocks and contact rows
+    // at different heights. A mimic of a rack has to read as a rack first.
+    final markerH = labelH;
+    double topLabelsH = markerH + pad * 2;
     double ledBlockH = size.height * 0.22;
     double ledBlockY = topLabelsH;
     double ledBlockBottom = ledBlockY + ledBlockH;
@@ -238,6 +285,17 @@ class IO8Painter extends CustomPainter {
           labelH * 0.6,
         );
       }
+    } else if (markerLabel.isNotEmpty) {
+      // The slice's configured name or id, as one marker tag spanning the
+      // band the two printed terminal markers would occupy.
+      paintMarkerTag(
+        canvas,
+        Rect.fromLTWH(pad, pad, size.width - pad * 2, markerH),
+        markerLabel,
+        color: ioLabelColor,
+        strokeWidth: strokeWidth,
+        minFontSize: labelH * 0.34,
+      );
     }
 
     // --- Draw LED block ---
@@ -296,21 +354,19 @@ class IO8Painter extends CustomPainter {
         double gap = holeArea * 0.1;
         double vertPad = (holeArea - sqSize - crSize - gap) / 2;
 
-        // Square slot
+        // The two openings of a spring terminal point: the square actuator
+        // the screwdriver goes into, and the round bore the conductor goes
+        // into. Both are holes in a cream moulding on the real part, so both
+        // are drawn dark — they used to be lighter than the housing, which
+        // made the one feature an electrician aims at look like a sticker.
         double sqY = top + labelH + vertPad;
         Rect sq = Rect.fromLTWH(x + (labelW - sqSize) / 2, sqY, sqSize, sqSize);
-        canvas.drawRect(sq, Paint()..color = Colors.grey.shade300);
-        canvas.drawRect(sq, innerBorderPaint);
+        paintActuationSlot(canvas, sq, strokeWidth: strokeWidth);
 
-        // Round wire hole
         double crY = sqY + sqSize + gap;
         Offset crCenter = Offset(x + labelW / 2, crY + crSize / 2);
-        canvas.drawCircle(
-          crCenter,
-          crSize / 2,
-          Paint()..color = Colors.grey.shade300,
-        );
-        canvas.drawCircle(crCenter, crSize / 2, innerBorderPaint);
+        paintContactHole(canvas, crCenter, crSize / 2,
+            strokeWidth: strokeWidth);
       }
     }
 
@@ -367,6 +423,7 @@ class IO8Painter extends CustomPainter {
       old.disconnected != disconnected ||
       old.selected != selected ||
       old.topLabels != topLabels ||
+      old.markerLabel != markerLabel ||
       old.name != name ||
       old.animation.value != animation.value ||
       !listEquals(old.ioLabels, ioLabels) ||
@@ -389,7 +446,6 @@ abstract class BaseLedBlockPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     drawBackground(canvas, size);
-    drawBorder(canvas, size);
     drawLeds(canvas, size);
   }
 
@@ -397,52 +453,49 @@ abstract class BaseLedBlockPainter extends CustomPainter {
   // subclasses in other libraries (e.g. lib/painter/advantys_stb/io16.dart)
   // can override `drawLeds` and reuse `drawLed`. Treat as protected-by-
   // convention: external callers should still drive the painter via `paint()`.
+  /// The LED window is a pocket sunk into the housing, not a grey panel laid
+  /// on top of it, so it gets the shaded near wall and lit far wall that say
+  /// "recess" — and the unlit lamps inside it stop reading as tiles.
   void drawBackground(Canvas canvas, Size size) {
-    final backgroundColor = Color(0xFFDDDDDD);
     final blockRect = Rect.fromLTWH(0, 0, size.width, size.height);
-    canvas.drawRect(blockRect, Paint()..color = backgroundColor);
-  }
-
-  void drawBorder(Canvas canvas, Size size) {
-    final borderColor = Colors.grey.shade700;
-    final borderPaint = Paint()
-      ..color = borderColor
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = size.width * 0.03;
-
-    final blockRect = Rect.fromLTWH(0, 0, size.width, size.height);
-    canvas.drawRect(blockRect, borderPaint);
+    paintRecess(
+      canvas,
+      RRect.fromRectAndRadius(blockRect, Radius.circular(size.width * 0.03)),
+      face: ledWindowColor,
+      strokeWidth: size.width * 0.03,
+    );
   }
 
   void drawLed(Canvas canvas, Rect rect, IOState state, Paint borderPaint) {
-    final activeColor = Color(0xFF6CA545);
-    final inactiveTopColor = Color(0xFFF0F0F0);
-    final inactiveBottomColor = Color(0xFFCCCCCC);
+    const activeColor = Color(0xFF6CA545);
     const errorColor = Colors.red;
 
-    // Draw LED fill
-    if (state == IOState.error) {
-      canvas.drawRect(rect, Paint()..color = errorColor);
-    } else if (state == IOState.high || state == IOState.forcedHigh) {
-      canvas.drawRect(rect, Paint()..color = activeColor);
-    } else {
-      canvas.drawRect(
-        rect,
-        Paint()
-          ..shader = LinearGradient(
-            colors: [inactiveTopColor, inactiveBottomColor],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ).createShader(rect),
-      );
-    }
+    final lit = state == IOState.high ||
+        state == IOState.forcedHigh ||
+        state == IOState.error;
 
-    // Draw LED border
-    Paint thisBorder = Paint.from(borderPaint)
+    // The forced-state border still flashes red — that is the repo's override
+    // convention and the animation drives it.
+    final Paint border = Paint.from(borderPaint)
       ..color = state == IOState.forcedHigh || state == IOState.forcedLow
           ? Colors.red.withAlpha(animation.value)
           : borderPaint.color;
-    canvas.drawRect(rect, thisBorder);
+
+    paintLed(
+      canvas,
+      RRect.fromRectAndRadius(
+        rect,
+        Radius.circular(math.min(rect.width, rect.height) * 0.12),
+      ),
+      color: switch (state) {
+        IOState.error => errorColor,
+        IOState.high || IOState.forcedHigh => activeColor,
+        IOState.low || IOState.forcedLow => ledOffColor,
+      },
+      lit: lit,
+      strokeWidth: borderPaint.strokeWidth,
+      border: border,
+    );
   }
 
   // Abstract method that each subclass must implement. Library-public so

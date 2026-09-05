@@ -23,9 +23,10 @@ library;
 import 'package:flutter/material.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 
-import '../../painter/beckhoff/ep_box.dart' show epBoxChannelCount;
-import '../../painter/beckhoff/io8.dart'
-    show IOState, bodyColor, twinSafeBodyColor;
+import '../../painter/beckhoff/ep_box.dart'
+    show epBoxBodyColor, epBoxChannelCount;
+import 'io_pane.dart' show IoChannelEntry, IoChannelList;
+import '../../painter/beckhoff/io8.dart' show IOState, twinSafeBodyColor;
 import '../../theme.dart' show HmiStateColors;
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
@@ -46,7 +47,12 @@ enum EPBoxVariant {
 
   const EPBoxVariant(this.model, this.blurb, this.paneSubtitle);
 
-  /// Printed on the housing and used in the palette.
+  /// Printed on the housing, and used in the palette.
+  ///
+  /// Without the `-0002` variant suffix the real moulding carries. It is the
+  /// same on every box of a type, so on a 30 mm-wide drawing it is four
+  /// characters that never tell you anything, taking width from the tag that
+  /// does.
   final String model;
 
   /// The line beside the model in the configure form's picker, where there
@@ -65,19 +71,28 @@ enum EPBoxVariant {
   bool get isLive => this == EPBoxVariant.ep2338;
 
   /// Beckhoff paints TwinSAFE hardware yellow and everything else cream.
+  /// TwinSAFE boxes are yellow; every other EtherCAT Box is the anthracite
+  /// die-cast [epBoxBodyColor], not the EL terminals' light grey — they are a
+  /// different part in a different material and the photos are unambiguous.
   Color get housingColor =>
-      this == EPBoxVariant.ep1918 ? twinSafeBodyColor : bodyColor;
+      this == EPBoxVariant.ep1918 ? twinSafeBodyColor : epBoxBodyColor;
 }
 
-/// Where channel [channel] (1..8) lands on the front of the box, in the
-/// words printed there.
+/// What to call channel [channel] (1..8) — the PLC's own name for it.
 ///
-/// The M12 plugs carry two channels each — A on pin 4, B on pin 2 — so the
-/// eight channels live on four plugs. Numbering them 'Socket 1' through
-/// 'Socket 8' would send an electrician to a plug that is not on the box.
+/// `ST_EP2338_0002` numbers its members from zero, so channel 1 is `I0`. The
+/// box's moulding names the same point by plug and side ('Plug 1 A', pin 4),
+/// and that is the right name with the box in your hands — but this page is
+/// read beside a variable list, not beside the hardware, and a caption you
+/// cannot search for in that list is a caption that costs a lookup every
+/// time. `I0..I7` is the one string that works in both places, because it is
+/// what the generator wrote.
+///
+/// Each port carries an input and an output member on the same pin, so `I0`
+/// names the port, and the pane's two diodes say which direction is which.
 String epBoxChannelLabel(int channel) {
   assert(channel >= 1 && channel <= epBoxChannelCount);
-  return 'Plug ${(channel + 1) ~/ 2} ${channel.isOdd ? 'A' : 'B'}';
+  return 'I${channel - 1}';
 }
 
 /// One channel of an EP2338 as the box last reported it.
@@ -227,28 +242,36 @@ class EpBoxPaneBody extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
             children: [
-              for (final channel in channels)
-                PaneDetailRow(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  label: _descriptionFor(channel.channel) ??
-                      epBoxChannelLabel(channel.channel),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _diode(colors, channel.input, isOutput: false),
-                      const SizedBox(width: 8),
-                      _diode(colors, channel.output, isOutput: true),
-                    ],
-                  ),
-                ),
+              // The name and the description both, in fixed columns — the
+              // description used to replace the name, which left an operator
+              // reading 'Erector ready' with no way to tell which point it
+              // was without going back to the variable list.
+              IoChannelList(
+                channels: [
+                  for (final channel in channels)
+                    IoChannelEntry(
+                      name: epBoxChannelLabel(channel.channel),
+                      description: _descriptionFor(channel.channel),
+                      lamps: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _diode(colors, channel.input, isOutput: false),
+                          const SizedBox(width: 6),
+                          _diode(colors, channel.output, isOutput: true),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
               const SizedBox(height: 8),
               Text(
-                'The four M12 plugs carry two channels each, A on pin 4 and '
-                'B on pin 2. Every channel can be wired either way and the '
-                'terminal publishes both bits for all eight regardless: the '
-                'left diode is the channel read as an input, the right one is '
-                'the channel driven as an output. An unlit pair is a channel '
-                'that is wired but idle.',
+                'I0 to I7 are the PLC\'s names for the eight points; on the '
+                'moulding the same eight are four M12 plugs of two, A on pin '
+                '4 and B on pin 2. Every point can be wired either way and '
+                'the terminal publishes both bits for all eight regardless: '
+                'the round diode is the point read as an input, the square '
+                'one is the point driven as an output. An unlit pair is a '
+                'point that is wired but idle.',
                 style: theme.textTheme.bodySmall,
               ),
             ],

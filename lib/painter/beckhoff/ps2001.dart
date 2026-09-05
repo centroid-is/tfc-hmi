@@ -24,7 +24,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'ek1100.dart' show EthernetPortPainter;
-import 'io8.dart' show bodyColor;
+import 'hardware.dart';
+import 'io8.dart' show bodyColor, ledOffColor;
 
 /// The front face in mm — the housing is 48 wide by 124 high.
 const Size ps2001FaceMm = Size(48, 124);
@@ -102,8 +103,7 @@ class PS2001Painter extends CustomPainter {
       Rect.fromLTWH(0, 0, design.width, design.height),
       const Radius.circular(1.5),
     );
-    canvas.drawRRect(body, Paint()..color = housingColor);
-    canvas.drawRRect(body, stroke);
+    paintHousing(canvas, body, color: housingColor, strokeWidth: 0.4);
 
     void text(
       String value,
@@ -142,26 +142,60 @@ class PS2001Painter extends CustomPainter {
     text(name, const Offset(4, 25), fontSize: 4);
 
     // --- (D) DC-OK LED, and the mimic's own fault lamp beside it ---
-    void lamp(Offset at, String label, Color color) {
+    void lamp(Offset at, String label, Color color, {required bool lit}) {
       final rect = Rect.fromLTWH(at.dx, at.dy, 5, 3.2);
-      canvas.drawRect(rect, Paint()..color = color);
-      canvas.drawRect(rect, stroke);
+      paintLed(
+        canvas,
+        RRect.fromRectAndRadius(rect, const Radius.circular(0.6)),
+        color: color,
+        lit: lit,
+        strokeWidth: 0.4,
+        border: stroke,
+      );
       text(label, Offset(at.dx + 6.2, at.dy - 0.4), fontSize: 3.2);
     }
 
-    lamp(const Offset(4, 52), 'DC OK', _dcOkColor);
-    lamp(const Offset(4, 60), 'FAULT', _faultColor);
+    lamp(const Offset(4, 52), 'DC OK', _dcOkColor, lit: dcOk == true);
+    lamp(
+      const Offset(4, 60),
+      'FAULT',
+      _faultColor,
+      lit: state == Ps2001FaceState.faulted ||
+          state == Ps2001FaceState.undervoltage ||
+          state == Ps2001FaceState.warning,
+    );
 
     // --- (C) Output voltage potentiometer, factory set to 24.1 V ---
+    // A trimmer sunk into the front, with the slot cut into its head — the
+    // flat disc with a line across it read as a minus sign rather than a
+    // screwdriver adjustment.
     const potCentre = Offset(38, 57);
-    canvas.drawCircle(potCentre, 4.5, Paint()..color = Colors.grey.shade300);
-    canvas.drawCircle(potCentre, 4.5, stroke);
-    canvas.drawLine(
-      potCentre.translate(-2.6, 0),
-      potCentre.translate(2.6, 0),
+    const potBounds = Rect.fromLTRB(32.5, 51.5, 43.5, 62.5);
+    canvas.drawCircle(
+      potCentre,
+      5.5,
       Paint()
-        ..color = Colors.grey.shade800
-        ..strokeWidth = 1.0,
+        ..shader = const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF9A9A9A), Color(0xFFE2E2E2)],
+        ).createShader(potBounds),
+    );
+    canvas.drawCircle(potCentre, 5.5, stroke);
+    canvas.drawCircle(
+      potCentre,
+      4.0,
+      Paint()
+        ..shader = const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFFF0EFEA), Color(0xFFB8B6AE)],
+        ).createShader(potBounds),
+    );
+    canvas.drawCircle(potCentre, 4.0, stroke);
+    canvas.drawRect(
+      Rect.fromCenter(center: potCentre, width: 6.4, height: 1.1),
+      Paint()..color = const Color(0xFF3A3A3A),
     );
 
     // --- (E)/(F) EtherCAT X1 IN and X2 OUT ---
@@ -194,8 +228,8 @@ class PS2001Painter extends CustomPainter {
   /// while nothing has been published.
   Color get _dcOkColor => switch (dcOk) {
         true => const Color(0xFF6CA545),
-        false => const Color(0xFFCCCCCC),
-        null => const Color(0xFFE8E8E8),
+        false => ledOffColor,
+        null => const Color(0xFF5C6462),
       };
 
   /// The mimic's own addition, in the place the real housing puts its
@@ -215,10 +249,8 @@ class PS2001Painter extends CustomPainter {
         Ps2001FaceState.undervoltage ||
         Ps2001FaceState.warning =>
           const Color(0xFFE0A800),
-        Ps2001FaceState.healthy ||
-        Ps2001FaceState.down =>
-          const Color(0xFFCCCCCC),
-        Ps2001FaceState.unknown => const Color(0xFFE8E8E8),
+        Ps2001FaceState.healthy || Ps2001FaceState.down => ledOffColor,
+        Ps2001FaceState.unknown => const Color(0xFF5C6462),
       };
 
   @override

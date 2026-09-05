@@ -41,6 +41,12 @@ dependencies:
   modbus_client_tcp:
     path: ../modbus_client_tcp
 
+  # Access vocabulary (groups, roles, audit contract). One-way edge:
+  # tfc_dart -> tfc_access, never the reverse — tfc_access must stay pure Dart
+  # so the relay server does not inherit open62541 and native assets.
+  tfc_access:
+    path: ../tfc_access
+
   # Utilities
   collection: ^1.18.0
   path: ^1.9.1

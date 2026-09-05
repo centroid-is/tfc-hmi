@@ -2,17 +2,23 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc_dart/core/state_man.dart' show KeyMappings;
 import 'package:tfc_mcp_server/tfc_mcp_server.dart';
 
+import '../core/guarded_knowledge_stores.dart';
 import '../plc/plc_code_upload_service.dart';
+import 'access.dart' show stationNameProvider;
+import 'access_policy.dart'
+    show RefAuditSink, reportAccessDenial, sessionInForce;
 import 'server_database.dart';
 import 'state_man.dart';
 
+export '../core/guarded_knowledge_stores.dart' show PlcCodeIndexExtras;
+
 export 'package:tfc_mcp_server/tfc_mcp_server.dart' show PlcContextService, PlcContext;
 
-/// Cached [DriftPlcCodeIndex] instance.
+/// Cached [GuardedPlcCodeIndex] instance.
 ///
 /// Avoids creating a new instance on every provider read, which would cause
 /// downstream FutureProviders (plcAssetSummaryProvider) to re-query the DB.
-DriftPlcCodeIndex? _cachedPlcCodeIndex;
+GuardedPlcCodeIndex? _cachedPlcCodeIndex;
 McpDatabase? _plcCodeIndexDb;
 
 /// Cached [PlcCodeUploadService] instance.
@@ -46,10 +52,22 @@ final plcCodeUploadServiceProvider = Provider<PlcCodeUploadService?>((ref) {
   return _cachedUploadService;
 });
 
-/// Provider for the [DriftPlcCodeIndex] backed by the shared app database.
+/// Provider for the PLC code index backed by the shared app database.
 ///
 /// Returns null when no database connection is available.
 /// Caches the instance to avoid re-triggering downstream FutureProviders.
+///
+/// **What comes out is a [GuardedPlcCodeIndex], not a [DriftPlcCodeIndex].**
+/// The four writes — `indexAsset`, `deleteAssetIndex`, `renameAsset` and
+/// `reindexAsset` — ask for `configure` and leave an audit row; the reads are
+/// untouched. Anything type-testing what this provider returns must test
+/// [PlcCodeIndexExtras], never the concrete Drift class: see that interface's
+/// doc comment for the four read providers below that this broke.
+///
+/// The session is a callback and the sink is a [RefAuditSink] rather than an
+/// awaited value, both so that this provider never rebuilds. A rebuild here
+/// re-triggers every downstream `FutureProvider` on the Knowledge Base page —
+/// on every sign-in, and again when Postgres finally opens.
 final plcCodeIndexProvider = Provider<PlcCodeIndex?>((ref) {
   final db = ref.watch(mcpDatabaseProvider);
   if (db == null) {
@@ -62,7 +80,13 @@ final plcCodeIndexProvider = Provider<PlcCodeIndex?>((ref) {
     return _cachedPlcCodeIndex;
   }
   _plcCodeIndexDb = db;
-  _cachedPlcCodeIndex = DriftPlcCodeIndex(db);
+  _cachedPlcCodeIndex = GuardedPlcCodeIndex(
+    inner: DriftPlcCodeIndex(db),
+    session: () => sessionInForce(ref),
+    audit: RefAuditSink(ref),
+    station: ref.read(stationNameProvider),
+    onDenied: (denial) => reportAccessDenial(ref, denial),
+  );
   return _cachedPlcCodeIndex;
 });
 
@@ -206,7 +230,9 @@ final serverAliasesProvider = FutureProvider<List<String>>((ref) async {
 final plcVarRefsForBlockProvider =
     FutureProvider.family<List<PlcVarRefTableData>, int>((ref, blockId) async {
   final index = ref.watch(plcCodeIndexProvider);
-  if (index is! DriftPlcCodeIndex) return [];
+  // `PlcCodeIndexExtras`, not `DriftPlcCodeIndex`: `plcCodeIndexProvider`
+  // returns the guard, and a concrete-type test here answers `[]` silently.
+  if (index is! PlcCodeIndexExtras) return [];
   return index.getVarRefsForBlock(blockId);
 });
 
@@ -215,7 +241,9 @@ final plcFbInstancesProvider =
     FutureProvider.family<List<PlcFbInstanceTableData>, String>(
         (ref, assetKey) async {
   final index = ref.watch(plcCodeIndexProvider);
-  if (index is! DriftPlcCodeIndex) return [];
+  // `PlcCodeIndexExtras`, not `DriftPlcCodeIndex`: `plcCodeIndexProvider`
+  // returns the guard, and a concrete-type test here answers `[]` silently.
+  if (index is! PlcCodeIndexExtras) return [];
   return index.getFbInstances();
 });
 
@@ -224,7 +252,9 @@ final plcBlockCallsProvider =
     FutureProvider.family<List<PlcBlockCallTableData>, int>(
         (ref, blockId) async {
   final index = ref.watch(plcCodeIndexProvider);
-  if (index is! DriftPlcCodeIndex) return [];
+  // `PlcCodeIndexExtras`, not `DriftPlcCodeIndex`: `plcCodeIndexProvider`
+  // returns the guard, and a concrete-type test here answers `[]` silently.
+  if (index is! PlcCodeIndexExtras) return [];
   return index.getBlockCalls(blockId);
 });
 
@@ -233,7 +263,9 @@ final plcVarRefsProvider =
     FutureProvider.family<List<PlcVarRefTableData>, String>(
         (ref, variablePath) async {
   final index = ref.watch(plcCodeIndexProvider);
-  if (index is! DriftPlcCodeIndex) return [];
+  // `PlcCodeIndexExtras`, not `DriftPlcCodeIndex`: `plcCodeIndexProvider`
+  // returns the guard, and a concrete-type test here answers `[]` silently.
+  if (index is! PlcCodeIndexExtras) return [];
   return index.getVarRefs(variablePath);
 });
 

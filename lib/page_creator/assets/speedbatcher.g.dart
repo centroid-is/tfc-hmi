@@ -12,6 +12,7 @@ SpeedBatcherConfig _$SpeedBatcherConfigFromJson(Map<String, dynamic> json) =>
       key: json['key'] as String,
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -23,6 +24,7 @@ SpeedBatcherConfig _$SpeedBatcherConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$SpeedBatcherConfigToJson(SpeedBatcherConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
@@ -47,6 +49,7 @@ GateStatusConfig _$GateStatusConfigFromJson(Map<String, dynamic> json) =>
       invertPolarity: json['invertPolarity'] as bool? ?? false,
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -58,6 +61,7 @@ GateStatusConfig _$GateStatusConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$GateStatusConfigToJson(GateStatusConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,

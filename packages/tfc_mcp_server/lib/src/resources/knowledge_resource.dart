@@ -207,9 +207,6 @@ the `notifications/initialized` notification, then `tools/call`, carrying the
 request. Replies arrive as SSE `data:` lines. Restarting the HMI kills the
 session, so re-initialize after a restart.
 
-The HMI's environment must have `TFC_USER` set, or every tool call comes back
-as OperatorNotAuthenticatedError.
-
 Tool concurrency is capped at 3: a fourth simultaneous call queues rather
 than failing. `await_proposal_feedback` and `get_proposal_feedback` are
 exempt, so parking a long poll does not consume one of the three slots.

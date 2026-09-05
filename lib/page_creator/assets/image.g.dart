@@ -14,6 +14,7 @@ ImageConfig _$ImageConfigFromJson(Map<String, dynamic> json) => ImageConfig(
       opacity: (json['opacity'] as num?)?.toDouble() ?? 1.0,
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -25,6 +26,7 @@ ImageConfig _$ImageConfigFromJson(Map<String, dynamic> json) => ImageConfig(
 Map<String, dynamic> _$ImageConfigToJson(ImageConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,

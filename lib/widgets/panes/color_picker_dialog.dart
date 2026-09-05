@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-
 import '../../converter/color_converter.dart';
+// `RecentColors` is a static-only class with no `ref` to read
+// `localPreferencesProvider` from, so it calls the factory instead. A widgets
+// file importing a provider file is unusual here; the import is what keeps
+// this site inside spec §6's one-construction-site rule.
+import '../../providers/preferences.dart' show createDeviceLocalPreferences;
 import '../../theme.dart';
 import 'pane_chrome.dart';
 import 'standard_dialog.dart';
@@ -39,7 +42,8 @@ abstract final class RecentColors {
     // the strip just starts empty.
     List<String> stored;
     try {
-      stored = await SharedPreferencesAsync().getStringList(prefsKey) ?? [];
+      stored =
+          await createDeviceLocalPreferences().getStringList(prefsKey) ?? [];
     } catch (_) {
       stored = [];
     }
@@ -63,7 +67,7 @@ abstract final class RecentColors {
     if (list.length > max) list.removeRange(max, list.length);
     _cache = list;
     try {
-      await SharedPreferencesAsync().setStringList(
+      await createDeviceLocalPreferences().setStringList(
         prefsKey,
         [for (final c in list) c.toARGB32().toRadixString(16)],
       );

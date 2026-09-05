@@ -1,5 +1,15 @@
+/// The USB-A sockets on a CX front panel.
+///
+/// Was two nested rectangles, which at mimic scale is indistinguishable from
+/// any other rectangular hole on the machine. A USB-A port is told apart by
+/// the white insulator tongue with its four contacts down one wall inside a
+/// bright metal shroud, so that is what [paintUsbA] draws and this is the
+/// [CustomPainter] shim over it.
+library;
+
 import 'package:flutter/material.dart';
-import 'dart:math' as math;
+
+import 'hardware.dart';
 
 // Usage example widget
 class USBIconWidget extends StatelessWidget {
@@ -8,21 +18,16 @@ class USBIconWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return CustomPaint(size: Size(size, size), painter: UsbPortPainter());
+    return CustomPaint(
+      size: Size(size * usbPortDesign.width / usbPortDesign.height, size),
+      painter: const UsbPortPainter(),
+    );
   }
 }
 
-Path buildUsbPortPath() {
-  final Path path = Path();
-
-  // Main outer shell (keeping same aspect ratio)
-  path.addRect(Rect.fromLTWH(0, 0, 24, 52));
-
-  // Center connector pins area (keeping same proportions)
-  path.addRect(Rect.fromLTWH(6, 6, 8, 39));
-
-  return path;
-}
+/// The socket's design box — 24 x 52, kept from the drawing this replaced so
+/// every caller's `canvas.scale(w / 24, h / 52)` still lands where it did.
+const Size usbPortDesign = Size(24, 52);
 
 class UsbPortPainter extends CustomPainter {
   final double strokeWidthPx;
@@ -31,37 +36,7 @@ class UsbPortPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final path = buildUsbPortPath();
-    final b = path.getBounds();
-    final scale = math.min(size.width / b.width, size.height / b.height);
-    final dx = (size.width - b.width * scale) / 2 - b.left * scale;
-    final dy = (size.height - b.height * scale) / 2 - b.top * scale;
-    canvas.translate(dx, dy);
-    canvas.scale(scale, scale);
-
-    // Draw outer shell with background color
-    final outerPaint = Paint()
-      ..color = Colors.black
-      ..style = PaintingStyle.stroke;
-    canvas.drawRect(Rect.fromLTWH(0, 0, 24, 52), outerPaint);
-
-    // // Draw inner connector with background color
-    // final innerPaint = Paint()
-    //   ..color = Colors.white
-    //   ..style = PaintingStyle.fill;
-    // canvas.drawRect(Rect.fromLTWH(6, 6, 8, 39), innerPaint);
-
-    // Draw outline with stroke color
-    final strokePaint = Paint()
-      ..color = Colors.black
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidthPx / scale
-      ..strokeJoin = StrokeJoin.round
-      ..strokeCap = StrokeCap.round;
-
-    // Draw both rectangles as outlines
-    canvas.drawRect(Rect.fromLTWH(0, 0, 24, 52), strokePaint);
-    canvas.drawRect(Rect.fromLTWH(6, 6, 8, 39), strokePaint);
+    paintUsbA(canvas, Rect.fromLTWH(0, 0, size.width, size.height));
   }
 
   @override

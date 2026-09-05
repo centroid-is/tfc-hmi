@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:dbus/dbus.dart';
@@ -8,18 +9,56 @@ import 'package:nm/nm.dart' as nm;
 
 import '../widgets/base_scaffold.dart';
 
+import '../core/system_clock.dart';
 import '../dbus/generated/hostname1.dart' as hostname1;
 import '../dbus/generated/login1.dart' as login1;
+import '../providers/preferences.dart';
+import '../widgets/system_clock_section.dart';
 
-class AboutLinuxPage extends StatefulWidget {
+class AboutLinuxPage extends ConsumerStatefulWidget {
   final DBusClient dbusClient;
-  const AboutLinuxPage({super.key, required this.dbusClient});
+
+  /// Injection points for tests, which have no bus to talk to. Production
+  /// leaves these null and the page builds D-Bus-backed ones from
+  /// [dbusClient].
+  final TimeDateApi? timeDate;
+  final TimeSyncApi? timeSync;
+
+  /// Returns to the connection chooser. Present because the page now
+  /// auto-connects to the local bus; without it a station that has no saved
+  /// credentials could never reach another machine's bus.
+  final VoidCallback? onSwitchConnection;
+
+  const AboutLinuxPage({
+    super.key,
+    required this.dbusClient,
+    this.timeDate,
+    this.timeSync,
+    this.onSwitchConnection,
+  });
 
   @override
-  State<AboutLinuxPage> createState() => _AboutLinuxPageState();
+  ConsumerState<AboutLinuxPage> createState() => _AboutLinuxPageState();
 }
 
-class _AboutLinuxPageState extends State<AboutLinuxPage> {
+class _AboutLinuxPageState extends ConsumerState<AboutLinuxPage> {
+  /// The NTP servers this station is configured to use. Held here because
+  /// systemd cannot persist them (see [ntpServersPrefsKey]) — the HMI is what
+  /// remembers them across a reboot.
+  List<String> _storedNtpServers = const [];
+
+  Future<void> _loadNtpServers() async {
+    try {
+      final servers = await readNtpServers(ref.read(localPreferencesProvider));
+      if (mounted) setState(() => _storedNtpServers = servers);
+    } catch (_) {
+      // Preferences unavailable — the section still renders live state.
+    }
+  }
+
+  Future<void> _saveNtpServers(List<String> servers) =>
+      writeNtpServers(ref.read(localPreferencesProvider), servers);
+
   late final hostname1.OrgFreedesktopDBusPeer _hostnamed;
   late final login1.OrgFreedesktopDBusPeer _login1;
   StreamSubscription<hostname1.OrgFreedesktopDBusPeerPropertiesChanged>? _sub;
@@ -42,6 +81,7 @@ class _AboutLinuxPageState extends State<AboutLinuxPage> {
 
     // initial load
     _infoFuture = _load();
+    unawaited(_loadNtpServers());
 
     // react to live property changes (hostname, kernel, etc.)
     _sub = _hostnamed.customPropertiesChanged.listen((_) {
@@ -434,6 +474,30 @@ class _AboutLinuxPageState extends State<AboutLinuxPage> {
                     value: _fmtDate(info.osSupportEnd!),
                     caption: 'From org.freedesktop.hostname1 (local time).',
                   ),
+
+                const SizedBox(height: 8),
+                const Divider(),
+
+                // Host clock. Reads need no privileges, so this renders for
+                // anyone who opens the page; only the setters hit polkit.
+                SystemClockSection(
+                  timeDate: widget.timeDate ?? DBusTimeDate(widget.dbusClient),
+                  timeSync: widget.timeSync ?? DBusTimeSync(widget.dbusClient),
+                  storedServers: _storedNtpServers,
+                  onServersChanged: _saveNtpServers,
+                ),
+
+                if (widget.onSwitchConnection != null) ...[
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: widget.onSwitchConnection,
+                      icon: const Icon(Icons.swap_horiz, size: 18),
+                      label: const Text('Connect to another machine'),
+                    ),
+                  ),
+                ],
 
                 const SizedBox(height: 24),
 

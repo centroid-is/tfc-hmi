@@ -26,6 +26,7 @@ library;
 
 import 'dart:math' as math;
 
+import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
 import '../theme.dart' show HmiColorRole;
@@ -516,4 +517,50 @@ class HitBoundaryPainter extends CustomPainter {
       oldDelegate.style != style ||
       oldDelegate.phase != phase ||
       !identical(oldDelegate.contours, contours);
+}
+
+/// Constrains a subtree's hit region to a shape inside its box.
+///
+/// The editor lays an opaque `GestureDetector` over each asset's whole
+/// rectangle, which is right while an asset fills its rectangle. A run does
+/// not: its box is the span between the two devices it plugs into and is
+/// almost entirely empty, so the opaque rectangle would swallow taps meant
+/// for every device the cable passes and stop a marquee being started
+/// anywhere it crosses.
+///
+/// [test] is asked in the child's own coordinates. Returning false makes the
+/// pointer fall through as if this subtree were not there.
+class ShapedHitRegion extends SingleChildRenderObjectWidget {
+  const ShapedHitRegion({super.key, required this.test, super.child});
+
+  final bool Function(Offset local) test;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderShapedHitRegion(test);
+
+  @override
+  void updateRenderObject(BuildContext context, RenderObject renderObject) {
+    (renderObject as _RenderShapedHitRegion).test = test;
+  }
+}
+
+class _RenderShapedHitRegion extends RenderProxyBox {
+  _RenderShapedHitRegion(this.test);
+
+  bool Function(Offset local) test;
+
+  // RenderBox.hitTest's own body with the shape gate in front of it. Written
+  // out rather than delegated because the gate has to block the children too,
+  // and `hitTestSelf` alone would still let them answer.
+  @override
+  bool hitTest(BoxHitTestResult result, {required Offset position}) {
+    if (!size.contains(position)) return false;
+    if (!test(position)) return false;
+    if (hitTestChildren(result, position: position) || hitTestSelf(position)) {
+      result.add(BoxHitTestEntry(this, position));
+      return true;
+    }
+    return false;
+  }
 }

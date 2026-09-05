@@ -7,7 +7,6 @@ import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:postgres/postgres.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:tfc/providers/database.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
@@ -23,7 +22,6 @@ import '../providers/preferences.dart';
 import '../providers/theme.dart';
 import '../theme.dart';
 import 'package:tfc_dart/core/preferences.dart';
-import 'package:tfc/core/preferences.dart';
 import 'package:tfc_dart/core/database.dart';
 
 /// Appearance settings section for the preferences page.
@@ -553,7 +551,6 @@ class _DatabaseConfigEditorState extends ConsumerState<_DatabaseConfigEditor> {
   late TextEditingController passController;
   late bool isUnixSocket;
   late SslMode? sslMode;
-  final SharedPreferencesAsync sharedPreferences = SharedPreferencesAsync();
 
   @override
   void initState() {
@@ -794,7 +791,7 @@ class _PreferencesKeysWidgetState extends ConsumerState<PreferencesKeysWidget>
   Map<String, Object?>? _allPrefs;
   Map<String, bool>? _dbKeyFlags;
   Preferences? _preferences;
-  SharedPreferencesWrapper? _localPrefs;
+  PreferencesApi? _localPrefs;
   bool _loading = true;
 
   // Unsaved editor contents and which row is open, held here rather than in
@@ -822,7 +819,7 @@ class _PreferencesKeysWidgetState extends ConsumerState<PreferencesKeysWidget>
   }
 
   Future<void> _loadData(Preferences preferences) async {
-    final localPrefs = SharedPreferencesWrapper(SharedPreferencesAsync());
+    final localPrefs = ref.read(localPreferencesProvider);
     final results = await Future.wait([
       preferences.getAll(),
       localPrefs.getAll(),

@@ -5,7 +5,6 @@ import 'package:test/test.dart';
 
 import 'package:tfc_mcp_server/src/audit/audit_log_service.dart';
 import 'package:tfc_mcp_server/src/database/server_database.dart';
-import 'package:tfc_mcp_server/src/identity/env_operator_identity.dart';
 import 'package:tfc_mcp_server/src/tools/tool_registry.dart';
 import '../helpers/mock_mcp_client.dart';
 
@@ -20,8 +19,6 @@ void main() {
       db = ServerDatabase.inMemory();
       await db.customStatement('SELECT 1');
 
-      final env = {'TFC_USER': 'op1'};
-      final identity = EnvOperatorIdentity(environmentProvider: () => env);
       final auditService = AuditLogService(db);
 
       mcpServer = McpServer(
@@ -33,7 +30,6 @@ void main() {
 
       registry = ToolRegistry(
         mcpServer: mcpServer,
-        identity: identity,
         auditLogService: auditService,
       );
     });

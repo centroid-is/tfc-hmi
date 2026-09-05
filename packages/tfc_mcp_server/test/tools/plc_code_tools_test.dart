@@ -3,7 +3,6 @@ import 'package:test/test.dart';
 
 import 'package:tfc_mcp_server/src/audit/audit_log_service.dart';
 import 'package:tfc_mcp_server/src/database/server_database.dart';
-import 'package:tfc_mcp_server/src/identity/env_operator_identity.dart';
 import 'package:tfc_mcp_server/src/interfaces/plc_code_index.dart';
 import 'package:tfc_mcp_server/src/services/plc_code_service.dart';
 import 'package:tfc_mcp_server/src/tools/plc_code_tools.dart';
@@ -89,8 +88,6 @@ void main() {
         },
       ]);
 
-      final env = {'TFC_USER': 'op1'};
-      final identity = EnvOperatorIdentity(environmentProvider: () => env);
       final auditService = AuditLogService(db);
 
       mcpServer = McpServer(
@@ -102,7 +99,6 @@ void main() {
 
       final registry = ToolRegistry(
         mcpServer: mcpServer,
-        identity: identity,
         auditLogService: auditService,
       );
 
@@ -287,8 +283,6 @@ void main() {
 
       final keyMappings = _StubKeyMappingLookup();
 
-      final env = {'TFC_USER': 'op1'};
-      final identity = EnvOperatorIdentity(environmentProvider: () => env);
       final auditService = AuditLogService(db);
 
       mcpServer = McpServer(
@@ -300,7 +294,6 @@ void main() {
 
       final registry = ToolRegistry(
         mcpServer: mcpServer,
-        identity: identity,
         auditLogService: auditService,
       );
 

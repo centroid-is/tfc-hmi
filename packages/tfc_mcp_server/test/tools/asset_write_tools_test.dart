@@ -5,7 +5,6 @@ import 'package:test/test.dart';
 
 import 'package:tfc_mcp_server/src/audit/audit_log_service.dart';
 import 'package:tfc_mcp_server/src/database/server_database.dart';
-import 'package:tfc_mcp_server/src/identity/env_operator_identity.dart';
 import 'package:tfc_mcp_server/src/safety/proposal_declined_exception.dart';
 import 'package:tfc_mcp_server/src/safety/risk_gate.dart';
 import 'package:tfc_mcp_server/src/services/proposal_service.dart';
@@ -31,12 +30,9 @@ void main() {
         ),
       );
 
-      final env = {'TFC_USER': 'op1'};
-      final identity = EnvOperatorIdentity(environmentProvider: () => env);
       final auditService = AuditLogService(db);
       final registry = ToolRegistry(
         mcpServer: mcpServer,
-        identity: identity,
         auditLogService: auditService,
       );
 
@@ -60,12 +56,9 @@ void main() {
         ),
       );
 
-      final env = {'TFC_USER': 'op1'};
-      final identity = EnvOperatorIdentity(environmentProvider: () => env);
       final auditService = AuditLogService(db);
       final registry = ToolRegistry(
         mcpServer: mcpServer,
-        identity: identity,
         auditLogService: auditService,
       );
 
@@ -378,6 +371,26 @@ void main() {
         expect(target.containsKey('key'), isFalse);
         expect(target.containsKey('child_id'), isFalse);
         expect(json['patch'], equals({'runKey': 'SB1.Running'}));
+      });
+
+      test('newline in a patch string survives verbatim', () async {
+        await setupWithAutoConfirm();
+
+        // Operators break the ATV320 inline label onto a second line with
+        // an explicit "\n" -- JSON must carry it through untouched.
+        final result = await client.callTool('update_asset', {
+          'page_key': '/',
+          'asset_type': 'SchneiderATV320Config',
+          'title': 'CN01.FD01',
+          'patch': {'label': 'CN01\nFD01'},
+        });
+
+        expect(result.isError, isNot(true));
+        final text = (result.content.first as TextContent).text;
+        final json = jsonDecode(text) as Map<String, dynamic>;
+        expect(json['_proposal_type'], equals('asset_update'));
+        expect(json['patch'], equals({'label': 'CN01\nFD01'}));
+        expect((json['patch'] as Map)['label'], contains('\n'));
       });
 
       test('child_id is passed through in the target', () async {

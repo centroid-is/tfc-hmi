@@ -94,6 +94,46 @@ class LoginCredentials {
   }
 }
 
+/// Reads the saved D-Bus connection credentials.
+///
+/// Top-level so [DbusGate] can ask whether a remote bus was ever configured
+/// without building a login form to find out.
+Future<LoginCredentials> loadSavedDbusCredentials() async {
+  logger.d('Loading saved credentials');
+  final prefs = await SharedPreferences.getInstance();
+
+  logger.d('Loading saved credentials from prefs');
+  final type = ConnectionType.values.byName(
+      prefs.getString('connectionType') ?? ConnectionType.remote.name);
+  final host = prefs.getString('host');
+  final username = prefs.getString('username');
+  final autoLogin = prefs.getBool('autoLogin') ?? false;
+  final sshPrivateKeyPath = prefs.getString('sshPrivateKeyPath');
+
+  // Currently read on FlutterSecureStorage is not working on eLinux
+  // It just hangs indefinitely.
+  String? password;
+  if (username != null && username.isNotEmpty) {
+    logger.d('Loading saved credentials from secure storage');
+    final secureStorage = SecureStorage.getInstance();
+    logger.d('Reading password from secure storage');
+    password = await secureStorage.read(key: 'dbus_password');
+  }
+
+  final credentials = LoginCredentials(
+    type: type,
+    host: host,
+    username: username,
+    password: password,
+    sshPrivateKeyPath:
+        sshPrivateKeyPath?.isNotEmpty == true ? sshPrivateKeyPath : null,
+    autoLogin: autoLogin,
+  );
+
+  logger.d('Loaded credentials: $credentials');
+  return credentials;
+}
+
 class LoginForm extends ConsumerStatefulWidget {
   final void Function(DBusClient) onLoginSuccess;
   final bool showLogo;
@@ -136,41 +176,8 @@ class _LoginFormState extends ConsumerState<LoginForm> {
     logger.d('Saved credentials: $creds');
   }
 
-  Future<LoginCredentials> _loadSavedCredentials() async {
-    logger.d('Loading saved credentials');
-    final prefs = await SharedPreferences.getInstance();
-
-    logger.d('Loading saved credentials from prefs');
-    final type = ConnectionType.values.byName(
-        prefs.getString('connectionType') ?? ConnectionType.remote.name);
-    final host = prefs.getString('host');
-    final username = prefs.getString('username');
-    final autoLogin = prefs.getBool('autoLogin') ?? false;
-    final sshPrivateKeyPath = prefs.getString('sshPrivateKeyPath');
-
-    // Currently read on FlutterSecureStorage is not working on eLinux
-    // It just hangs indefinitely.
-    String? password;
-    if (username != null && username.isNotEmpty) {
-      logger.d('Loading saved credentials from secure storage');
-      final secureStorage = SecureStorage.getInstance();
-      logger.d('Reading password from secure storage');
-      password = await secureStorage.read(key: 'dbus_password');
-    }
-
-    final credentials = LoginCredentials(
-      type: type,
-      host: host,
-      username: username,
-      password: password,
-      sshPrivateKeyPath:
-          sshPrivateKeyPath?.isNotEmpty == true ? sshPrivateKeyPath : null,
-      autoLogin: autoLogin,
-    );
-
-    logger.d('Loaded credentials: $credentials');
-    return credentials;
-  }
+  Future<LoginCredentials> _loadSavedCredentials() =>
+      loadSavedDbusCredentials();
 
   Future<void> _pickPrivateKey() async {
     logger.d('Picking private key');

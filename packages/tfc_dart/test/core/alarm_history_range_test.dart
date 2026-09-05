@@ -13,6 +13,41 @@ class _Db extends AppDatabase {
   _Db() : super.forTest(DatabaseConfig(), NativeDatabase.memory());
 }
 
+/// A executor that only claims to be Postgres, so a statement can be built
+/// for that dialect without a server to send it to.
+class _PostgresDialect extends QueryExecutor {
+  final statements = <String>[];
+
+  @override
+  SqlDialect get dialect => SqlDialect.postgres;
+
+  @override
+  Future<List<Map<String, Object?>>> runSelect(
+      String statement, List<Object?> args) async {
+    statements.add(statement);
+    return const [];
+  }
+
+  @override
+  Future<bool> ensureOpen(QueryExecutorUser user) async => true;
+  @override
+  Future<void> close() async {}
+  @override
+  TransactionExecutor beginTransaction() => throw UnimplementedError();
+  @override
+  QueryExecutor beginExclusive() => throw UnimplementedError();
+  @override
+  Future<void> runBatched(BatchedStatements statements) async {}
+  @override
+  Future<void> runCustom(String statement, [List<Object?>? args]) async {}
+  @override
+  Future<int> runDelete(String statement, List<Object?> args) async => 0;
+  @override
+  Future<int> runInsert(String statement, List<Object?> args) async => 0;
+  @override
+  Future<int> runUpdate(String statement, List<Object?> args) async => 0;
+}
+
 final day = DateTime.utc(2026, 8, 29);
 DateTime at(int hour, [int minute = 0]) =>
     day.add(Duration(hours: hour, minutes: minute));
@@ -93,5 +128,49 @@ void main() {
       await inWindow(from: at(19)),
       ['after', 'spans-whole', 'standing', 'standing-later'],
     );
+  });
+
+  /// The statement, not its results: drift rewrites datetime comparisons into
+  /// `JULIANDAY(a) <op> JULIANDAY(b)` whenever datetimes are stored as text,
+  /// and Postgres has no `julianday()`. The Downtime tab is the only caller
+  /// that bounds the window, so it was the only screen that broke — with
+  /// `42883: function julianday(text) does not exist` where the timeline
+  /// should have been.
+  ///
+  /// test/integration/database_integration_test.dart runs the same query
+  /// against a real server; this one fails without needing one.
+  group('on the postgres dialect', () {
+    Future<String> statementFor({DateTime? from, DateTime? to}) async {
+      final executor = _PostgresDialect();
+      final pg = AppDatabase.forTest(DatabaseConfig(), executor);
+      await (pg.select(pg.alarmHistory)
+            ..where((t) => alarmHistoryOverlaps(t, from: from, to: to)))
+          .get();
+      await pg.close();
+      return executor.statements.single;
+    }
+
+    test('no bound is written as a julianday call', () async {
+      expect(await statementFor(from: at(8), to: at(16)),
+          isNot(contains('JULIANDAY')));
+    });
+
+    test('both sides of a bound are cast to timestamp', () async {
+      // Neither side is one otherwise: drift declares these columns `text` on
+      // Postgres, and binds a mapped datetime variable as `text` too, so
+      // dropping either cast leaves a lexicographic string comparison.
+      expect(
+        await statementFor(from: at(8), to: at(16)),
+        allOf(
+          contains('"created_at"::timestamp <= \$1::timestamp'),
+          contains('"deactivated_at"::timestamp >= \$2::timestamp'),
+        ),
+      );
+    });
+
+    test('a standing alarm still gets its IS NULL branch', () async {
+      expect(await statementFor(from: at(8), to: at(16)),
+          contains('"deactivated_at" IS NULL OR'));
+    });
   });
 }

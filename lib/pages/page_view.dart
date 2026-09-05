@@ -5,20 +5,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart'
     show RenderConstrainedBox, BoxHitTestResult, BoxHitTestEntry;
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
-import 'package:tfc/core/preferences.dart';
+import 'package:tfc_dart/core/preferences.dart' show PreferencesApi;
 import 'package:tfc/page_creator/page.dart' show AssetPage;
 
 import '../chat/asset_context_menu.dart';
 import '../core/feature_flags.dart';
 import '../widgets/proposal_visual.dart';
-import '../providers/mcp_bridge.dart' show isMcpChatAvailable;
 import '../providers/page_manager.dart';
+import '../providers/preferences.dart' show localPreferencesProvider;
 import '../providers/state_man.dart';
 import '../theme.dart' show HmiStateColors;
 import '../page_creator/assets/common.dart'; // your Asset, Coordinates, RelativeSize, TextPos, etc.
+import '../page_creator/assets/link_anchors.dart';
 import '../widgets/base_scaffold.dart';
 import '../widgets/hit_boundary.dart';
 import '../widgets/panes/side_pane.dart';
@@ -251,7 +251,12 @@ class _RenderHitPermissiveConstrainedBox extends RenderConstrainedBox {
 }
 
 class _AssetStackState extends ConsumerState<AssetStack> {
-  final prefs = SharedPreferencesWrapper(SharedPreferencesAsync());
+  // `late` so `ref` is available by the time it is read; `final` so the store
+  // is resolved once per mount rather than per build. Read through the
+  // provider rather than the factory because a `ref` exists here — spec §6's
+  // one-construction-site rule, enforced by
+  // `scripts/check-preferences-construction.sh`.
+  late final PreferencesApi prefs = ref.read(localPreferencesProvider);
 
   /// Read once per mount, not once per build. The stack rebuilds on every
   /// drag tick while an asset is moved, and handing FutureBuilder a fresh
@@ -362,23 +367,33 @@ class _AssetStackState extends ConsumerState<AssetStack> {
         final frames = Map<Object, _AssetFrame>.identity();
 
         for (final asset in widget.assets) {
+          // 0) An asset whose box depends on the rest of the page answers
+          //    with one; everything else sits where it was dropped. Read into
+          //    locals rather than written back into the config -- see
+          //    [Asset.boxOn], and the note above about not editing a config
+          //    during a build.
+          final derived = asset.boxOn(widget.assets, Size(W, H));
+          final baseX = derived?.center.dx ?? asset.coordinates.x;
+          final baseY = derived?.center.dy ?? asset.coordinates.y;
+          final baseW = derived?.width ?? asset.size.width;
+          final baseH = derived?.height ?? asset.size.height;
+
           // 1) normalized coords with optional mirroring
-          final fx = xMirror ? 1 - asset.coordinates.x : asset.coordinates.x;
-          final fy = yMirror ? 1 - asset.coordinates.y : asset.coordinates.y;
+          final fx = xMirror ? 1 - baseX : baseX;
+          final fy = yMirror ? 1 - baseY : baseY;
 
           // 2) canvas-pixel center point
           final cx = fx * W;
           final cy = fy * H;
           final center = Offset(cx, cy);
 
-          final assetW = asset.size.width * W;
-          final assetH = asset.size.height * H;
+          final assetW = baseW * W;
+          final assetH = baseH * H;
           final assetSize = Size(assetW, assetH);
           final halfW = assetW / 2;
           final halfH = assetH / 2;
 
-          final textScaler = TextScaler.linear(
-              math.min(asset.size.width * W, asset.size.height * H) / 25);
+          final textScaler = TextScaler.linear(math.min(assetW, assetH) / 25);
           // Build the label style starting from the ambient DefaultTextStyle
           // and overlaying:
           //   - the scaled font size (preserves the pre-existing behaviour
@@ -442,12 +457,20 @@ class _AssetStackState extends ConsumerState<AssetStack> {
           final halfAabbW = aabbW / 2;
           final halfAabbH = aabbH / 2;
 
-          frames[asset] = _AssetFrame(
+          final frame = _AssetFrame(
             center: center,
             size: assetSize,
             aabb: Size(aabbW, aabbH),
             angle: angleRadians,
           );
+          frames[asset] = frame;
+          // A composite asset's slices ride their parent's frame: the frame
+          // is only the coarse "is it still here / did it move" tracking for
+          // the mark, and a slice moves exactly when its rack does. The
+          // slice's own outline comes from the shape probe, not from here.
+          for (final sub in asset.childAssets) {
+            frames[sub] = frame;
+          }
 
           positionedChildren.add(
             Positioned(
@@ -576,42 +599,54 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                     child: _wrapWithSelectionBorder(
                       isSelected: isSelected,
                       child: widget.absorb
-                          ? GestureDetector(
-                              behavior: HitTestBehavior.opaque,
-                              onTap: widget.onTap != null
-                                  ? () => widget.onTap!(asset)
-                                  : null,
-                              onDoubleTap: widget.onDoubleTap != null
-                                  ? () => widget.onDoubleTap!(asset)
-                                  : null,
-                              onPanUpdate: widget.onPanUpdate != null
-                                  ? (d) => widget.onPanUpdate!(asset, d)
-                                  : null,
-                              onPanStart: widget.onPanStart != null
-                                  ? (details) =>
-                                      widget.onPanStart!(asset, details)
-                                  : null,
-                              // The host's menu wins when supplied: it
-                              // carries editing actions that must be
-                              // reachable whether or not MCP chat is
-                              // available, and folds the AI entries in
-                              // itself.
-                              onSecondaryTapUp: widget.onSecondaryTap != null
-                                  ? (details) => widget.onSecondaryTap!(
-                                        asset,
-                                        details.globalPosition,
-                                      )
-                                  : kChatEnabled && isMcpChatAvailable()
-                                      ? (details) {
-                                          showEditorAssetContextMenu(
-                                            context,
-                                            ref,
-                                            details.globalPosition,
-                                            asset,
-                                          );
-                                        }
-                                      : null,
-                            )
+                          // The opaque detector below covers the asset's whole
+                          // rectangle, which is right until an asset's box is
+                          // mostly empty. A run's is: it spans the two devices
+                          // it plugs into, so without the shape gate the cable
+                          // eats every editor tap meant for the equipment it
+                          // passes.
+                          ? ShapedHitRegion(
+                              test: (local) => asset.hitTestBox(
+                                  local,
+                                  Size(assetW, assetH),
+                                  widget.assets,
+                                  Size(W, H)),
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: widget.onTap != null
+                                    ? () => widget.onTap!(asset)
+                                    : null,
+                                onDoubleTap: widget.onDoubleTap != null
+                                    ? () => widget.onDoubleTap!(asset)
+                                    : null,
+                                onPanUpdate: widget.onPanUpdate != null
+                                    ? (d) => widget.onPanUpdate!(asset, d)
+                                    : null,
+                                onPanStart: widget.onPanStart != null
+                                    ? (details) =>
+                                        widget.onPanStart!(asset, details)
+                                    : null,
+                                // The host's menu wins when supplied: it
+                                // carries editing actions that must be
+                                // reachable whether or not MCP chat is
+                                // available, and folds the AI entries in
+                                // itself.
+                                onSecondaryTapUp: widget.onSecondaryTap != null
+                                    ? (details) => widget.onSecondaryTap!(
+                                          asset,
+                                          details.globalPosition,
+                                        )
+                                    : kChatEnabled
+                                        ? (details) {
+                                            showEditorAssetContextMenu(
+                                              context,
+                                              ref,
+                                              details.globalPosition,
+                                              asset,
+                                            );
+                                          }
+                                        : null,
+                              ))
                           : GestureDetector(
                               // Runtime view: only secondary tap is
                               // handled here (chat context menu). Primary
@@ -620,7 +655,7 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                               // us from swallowing them.
                               behavior: HitTestBehavior.translucent,
                               onSecondaryTapUp:
-                                  kChatEnabled && isMcpChatAvailable()
+                                  kChatEnabled
                                       ? (details) {
                                           showAssetContextMenu(
                                             context,
@@ -722,7 +757,7 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                 ? IgnorePointer(child: Text(asset.text!, style: labelStyle))
                 : GestureDetector(
                     behavior: HitTestBehavior.translucent,
-                    onSecondaryTapUp: kChatEnabled && isMcpChatAvailable()
+                    onSecondaryTapUp: kChatEnabled
                         ? (details) {
                             showAssetContextMenu(
                               context,
@@ -770,12 +805,21 @@ class _AssetStackState extends ConsumerState<AssetStack> {
 
         // The scope carries the *effective* flags, so assets that paint
         // their own text can counter-mirror it (see AssetMirrorScope).
+        //
+        // PageAssetsScope sits inside it and carries the page itself, for the
+        // one asset whose appearance depends on the others: a cable has to
+        // find the devices its ends belong to, and `build(BuildContext)` is
+        // the only thing it is handed.
         return AssetMirrorScope(
           xMirror: xMirror,
           yMirror: yMirror,
-          child: Stack(
-            fit: StackFit.expand,
-            children: positionedChildren,
+          child: PageAssetsScope(
+            assets: widget.assets,
+            canvas: Size(W, H),
+            child: Stack(
+              fit: StackFit.expand,
+              children: positionedChildren,
+            ),
           ),
         );
       },

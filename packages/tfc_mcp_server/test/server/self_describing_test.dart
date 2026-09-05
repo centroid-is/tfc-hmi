@@ -1,7 +1,6 @@
 import 'package:test/test.dart';
 
 import 'package:tfc_mcp_server/src/database/server_database.dart';
-import 'package:tfc_mcp_server/src/identity/env_operator_identity.dart';
 import 'package:tfc_mcp_server/src/server.dart';
 import 'package:tfc_mcp_server/src/server_instructions.dart';
 import 'package:tfc_mcp_server/src/services/proposal_feedback_bus.dart';
@@ -38,9 +37,6 @@ void main() {
     ProposalFeedbackBus? feedbackBus,
   }) {
     return TfcMcpServer(
-      identity: EnvOperatorIdentity(
-        environmentProvider: () => {'TFC_USER': 'op1'},
-      ),
       database: db,
       stateReader: MockStateReader(),
       alarmReader: MockAlarmReader(),
@@ -73,10 +69,9 @@ void main() {
         expect(text, contains('opcua_node'));
         // Verify before proposing.
         expect(text, contains('shared_preferences.json'));
-        // Transport and auth.
+        // Transport.
         expect(text, contains('127.0.0.1:8765/mcp'));
         expect(text, contains('mcp-session-id'));
-        expect(text, contains('TFC_USER'));
         // Concurrency.
         expect(text, contains('concurrency is 3'));
       } finally {

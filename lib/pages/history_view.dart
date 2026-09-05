@@ -6,6 +6,7 @@ import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logger/logger.dart';
 import 'package:board_datetime_picker/board_datetime_picker.dart';
+import 'package:tfc_access/tfc_access.dart'; // AccessDenied
 
 import '../widgets/button_graph.dart';
 import '../widgets/base_scaffold.dart';
@@ -14,8 +15,45 @@ import '../widgets/history_table_pane.dart';
 
 import '../providers/state_man.dart'; // stateManProvider
 import '../providers/database.dart'; // databaseProvider (Future<Database?>)
+import '../providers/access.dart'; // stationNameProvider
+import '../providers/access_policy.dart'; // sessionInForce, RefAuditSink
+import '../core/guarded_history_views.dart'; // HistoryViewStore
 
 import '../models/history_models.dart';
+
+// -----------------------------------------------------------------------------
+// The page's write guard
+// -----------------------------------------------------------------------------
+
+/// Every write this page makes, behind one checked and recorded object.
+///
+/// Spec §6's fourth bypass was that the five history-view writes reached Drift
+/// through `adb` and `dbWrap.db` directly, so neither `GuardedStateMan` nor
+/// `GuardedPreferences` could see them. This provider is where they now go
+/// instead; `guarded_history_views.dart` says which two are gated and why.
+///
+/// A provider rather than a field on the page state, for the reason plan 03-06
+/// gives: `sessionInForce`, [RefAuditSink] and `reportAccessDenial` all need a
+/// provider `Ref`, and a `WidgetRef` is not one. Building the store here means
+/// this page wires its guard exactly the way `stateManProvider` and
+/// `preferencesProvider` wire theirs, rather than growing a second idiom.
+///
+/// Null when the database is not up. Every call site shows the same "Database
+/// not ready yet." toast it showed before.
+final historyViewStoreProvider = FutureProvider<HistoryViewStore?>((ref) async {
+  final dbWrap = await ref.watch(databaseProvider.future);
+  if (dbWrap == null) return null;
+  return HistoryViewStore(
+    db: dbWrap.db,
+    // Read at write time, never captured: the store outlives any one session,
+    // and a captured one would keep granting whatever the operator held when
+    // the database last reconnected.
+    session: () => sessionInForce(ref),
+    audit: RefAuditSink(ref),
+    station: ref.watch(stationNameProvider),
+    onDenied: (denial) => reportAccessDenial(ref, denial),
+  );
+});
 
 // -----------------------------------------------------------------------------
 // Keys from StateMan (uses sm.keys)
@@ -1302,19 +1340,44 @@ class _HistoryViewBodyState extends ConsumerState<HistoryViewBody> {
 
   // ---- DB ops & dialogs ------------------------------------------------------
 
+  /// The one place this page reaches a write.
+  ///
+  /// Null means the database is not up yet, which every caller reports the way
+  /// it always did. It is deliberately the *only* accessor: `dbWrap.db` still
+  /// appears in this file for reads, and a write must not be able to borrow
+  /// one of those handles by accident.
+  Future<HistoryViewStore?> _writeStore() =>
+      ref.read(historyViewStoreProvider.future);
+
   Future<void> _deleteView() async {
     final v = _activeView!;
     final ok = await _confirm(context, 'Delete "${v.name}"?');
     if (!ok) return;
 
-    final dbWrap = await ref.read(databaseProvider.future);
+    final store = await _writeStore();
     if (!context.mounted) return;
-    if (dbWrap == null) {
+    if (store == null) {
       _toast(context, 'Database not ready yet.');
       return;
     }
-    final adb = dbWrap.db;
-    await adb.deleteHistoryView(v.id);
+    try {
+      await store.deleteHistoryView(v.id);
+    } on AccessDenied {
+      // The bare `return` is deliberate, and it is the pattern at all five
+      // writes in this file.
+      //
+      // The operator has already been told: the store published the refusal to
+      // `accessDenialsProvider` before it threw, and `AccessDeniedListener`
+      // (`lib/widgets/access_denied_prompt.dart`) is what names the missing
+      // permission and offers the way through. A `_toast` here would be a
+      // second message for one action, and it would be the worse of the two —
+      // `_toast` is for outcomes, and a refusal is not one.
+      //
+      // Returning is also what keeps the page honest: everything below this
+      // point — the `setState`, the invalidate, the "Deleted" toast — is the
+      // page reacting to a deletion that did not happen.
+      return;
+    }
     setState(() {
       _activeView = null;
       _activePeriod = null;
@@ -1328,17 +1391,25 @@ class _HistoryViewBodyState extends ConsumerState<HistoryViewBody> {
     final name = await _askName(context, title: 'Save period', initial: '');
     if (name == null || name.trim().isEmpty) return;
 
-    final dbWrap = await ref.read(databaseProvider.future);
-    if (dbWrap == null) {
+    final store = await _writeStore();
+    if (store == null) {
       _toast(context, 'Database not ready yet.');
       return;
     }
-    final id = await dbWrap.db.addHistoryViewPeriod(
-      _activeView!.id,
-      name.trim(),
-      _range!.start,
-      _range!.end,
-    );
+    final int id;
+    try {
+      id = await store.addHistoryViewPeriod(
+        _activeView!.id,
+        name.trim(),
+        _range!.start,
+        _range!.end,
+      );
+    } on AccessDenied {
+      // See `_deleteView` for why this shows nothing. Saving a period is open
+      // to any session today (`kHistoryViewWriteGroup`), so this arm is what
+      // makes flipping that constant a one-line change rather than a bug.
+      return;
+    }
     setState(() {
       _activePeriod = SavedPeriod(
           id: id,
@@ -1366,12 +1437,18 @@ class _HistoryViewBodyState extends ConsumerState<HistoryViewBody> {
     final ok = await _confirm(context, 'Delete saved period "${p.name}"?$warn');
     if (!ok) return;
 
-    final dbWrap = await ref.read(databaseProvider.future);
-    if (dbWrap == null) {
+    final store = await _writeStore();
+    if (store == null) {
       _toast(context, 'Database not ready yet.');
       return;
     }
-    await dbWrap.db.deleteHistoryViewPeriod(p.id);
+    try {
+      await store.deleteHistoryViewPeriod(p.id);
+    } on AccessDenied {
+      // See `_deleteView`. In particular the selected period must survive a
+      // delete that was refused.
+      return;
+    }
     if (!mounted) return;
     if (_activePeriod?.id == p.id) {
       setState(() => _activePeriod = null);
@@ -1453,13 +1530,12 @@ class _HistoryViewBodyState extends ConsumerState<HistoryViewBody> {
   }
 
   Future<void> _saveAsNewView() async {
-    final dbWrap = await ref.read(databaseProvider.future);
+    final store = await _writeStore();
     if (!context.mounted) return;
-    if (dbWrap == null) {
+    if (store == null) {
       _toast(context, 'Database not ready yet.');
       return;
     }
-    final adb = dbWrap.db;
 
     final name =
         await _askName(context, initial: '', title: 'Save as new view');
@@ -1487,8 +1563,14 @@ class _HistoryViewBodyState extends ConsumerState<HistoryViewBody> {
       };
     }
 
-    final id = await adb.createHistoryView(
-        name.trim(), _selected.toList(), rawKeyConfigs, rawGraphConfigs);
+    final int id;
+    try {
+      id = await store.createHistoryView(
+          name.trim(), _selected.toList(), rawKeyConfigs, rawGraphConfigs);
+    } on AccessDenied {
+      // See `_deleteView`.
+      return;
+    }
     final newView =
         SavedHistoryView(id: id, name: name.trim(), keys: _selected.toList());
 
@@ -1503,13 +1585,12 @@ class _HistoryViewBodyState extends ConsumerState<HistoryViewBody> {
   Future<void> _updateView() async {
     if (_activeView == null) return;
 
-    final dbWrap = await ref.read(databaseProvider.future);
+    final store = await _writeStore();
     if (!context.mounted) return;
-    if (dbWrap == null) {
+    if (store == null) {
       _toast(context, 'Database not ready yet.');
       return;
     }
-    final adb = dbWrap.db;
 
     final name = _activeView!.name;
 
@@ -1535,8 +1616,14 @@ class _HistoryViewBodyState extends ConsumerState<HistoryViewBody> {
       };
     }
 
-    await adb.updateHistoryView(_activeView!.id, name, _selected.toList(),
-        rawKeyConfigs, rawGraphConfigs);
+    try {
+      await store.updateHistoryView(_activeView!.id, name, _selected.toList(),
+          rawKeyConfigs, rawGraphConfigs);
+    } on AccessDenied {
+      // See `_deleteView`. The `setState` below would otherwise claim the
+      // rename landed.
+      return;
+    }
 
     setState(() => _activeView = SavedHistoryView(
         id: _activeView!.id, name: name, keys: _selected.toList()));

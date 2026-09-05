@@ -3,20 +3,35 @@ import 'dart:typed_data';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart';
 
+import '../core/guarded_knowledge_stores.dart';
 import '../tech_docs/pdfrx_text_extractor.dart';
 import '../tech_docs/tech_doc_upload_service.dart';
+import 'access.dart' show stationNameProvider;
+import 'access_policy.dart'
+    show RefAuditSink, reportAccessDenial, sessionInForce;
 import 'server_database.dart';
 
-/// Cached [DriftTechDocIndex] instance to avoid creating new instances on
+/// Cached [GuardedTechDocIndex] instance to avoid creating new instances on
 /// every provider read, which would cascade and re-trigger downstream
 /// FutureProviders (dbTechDocsProvider, techDocSectionsProvider, etc.).
-DriftTechDocIndex? _cachedTechDocIndex;
+GuardedTechDocIndex? _cachedTechDocIndex;
 McpDatabase? _techDocIndexDb;
 
-/// Provider for a [DriftTechDocIndex] backed by the shared app database.
+/// Provider for the technical-document index backed by the shared app database.
 ///
 /// Returns null when no database connection is available.
 /// Caches the instance to avoid re-triggering downstream FutureProviders.
+///
+/// **What comes out is a [GuardedTechDocIndex], not a [DriftTechDocIndex].**
+/// The five writes — store, update-sections, rename, delete and
+/// update-PDF-bytes — ask for `configure` and leave an audit row; the seven
+/// reads are untouched. `TechDocUploadService` holds a `TechDocIndex`, so no
+/// call site changed.
+///
+/// The session is a callback and the sink is a [RefAuditSink] rather than an
+/// awaited value, both so that this provider never rebuilds: a rebuild here
+/// re-triggers the whole document list on every sign-in and again when Postgres
+/// opens.
 final techDocIndexProvider = Provider<TechDocIndex?>((ref) {
   final db = ref.watch(mcpDatabaseProvider);
   if (db == null) {
@@ -29,7 +44,13 @@ final techDocIndexProvider = Provider<TechDocIndex?>((ref) {
     return _cachedTechDocIndex;
   }
   _techDocIndexDb = db;
-  _cachedTechDocIndex = DriftTechDocIndex(db);
+  _cachedTechDocIndex = GuardedTechDocIndex(
+    inner: DriftTechDocIndex(db),
+    session: () => sessionInForce(ref),
+    audit: RefAuditSink(ref),
+    station: ref.read(stationNameProvider),
+    onDenied: (denial) => reportAccessDenial(ref, denial),
+  );
   return _cachedTechDocIndex;
 });
 

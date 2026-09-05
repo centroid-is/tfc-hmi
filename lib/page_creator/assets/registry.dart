@@ -16,6 +16,7 @@ import 'option_variable.dart';
 import 'text.dart';
 import 'beckhoff.dart';
 import 'advantys_stb.dart';
+import 'festo.dart';
 import 'schneider.dart';
 import 'icon.dart';
 import 'image.dart';
@@ -34,6 +35,7 @@ import 'elevator.dart';
 import 'sensor.dart';
 import '../../core/feature_flags.dart';
 import 'connection_info.dart';
+import 'ethercat_link.dart';
 import 'drawing_viewer.dart';
 import 'third_party.dart';
 import 'alarm_visibility.dart';
@@ -51,6 +53,7 @@ class AssetRegistry {
     ConveyorGateConfig: ConveyorGateConfig.fromJson,
     SensorConfig: SensorConfig.fromJson,
     ConnectionInfoConfig: ConnectionInfoConfig.fromJson,
+    EtherCatLinkConfig: EtherCatLinkConfig.fromJson,
     ElevatorConfig: ElevatorConfig.fromJson,
     ConveyorColorPaletteConfig: ConveyorColorPaletteConfig.fromJson,
     ArrowConfig: ArrowConfig.fromJson,
@@ -80,6 +83,7 @@ class AssetRegistry {
     BeckhoffPS2001Config: BeckhoffPS2001Config.fromJson,
     BeckhoffCU2508Config: BeckhoffCU2508Config.fromJson,
     BeckhoffEPBoxConfig: BeckhoffEPBoxConfig.fromJson,
+    FestoVTUGConfig: FestoVTUGConfig.fromJson,
     STBDDI3725Config: STBDDI3725Config.fromJson,
     STBDDO3705Config: STBDDO3705Config.fromJson,
     STBNIP2311Config: STBNIP2311Config.fromJson,
@@ -111,6 +115,7 @@ class AssetRegistry {
     RollerConveyorConfig: RollerConveyorConfig.preview,
     ConveyorGateConfig: ConveyorGateConfig.preview,
     SensorConfig: SensorConfig.preview,
+    EtherCatLinkConfig: EtherCatLinkConfig.preview,
     ConnectionInfoConfig: ConnectionInfoConfig.preview,
     ElevatorConfig: ElevatorConfig.preview,
     ConveyorColorPaletteConfig: ConveyorColorPaletteConfig.preview,
@@ -139,6 +144,7 @@ class AssetRegistry {
     BeckhoffPS2001Config: BeckhoffPS2001Config.preview,
     BeckhoffCU2508Config: BeckhoffCU2508Config.preview,
     BeckhoffEPBoxConfig: BeckhoffEPBoxConfig.preview,
+    FestoVTUGConfig: FestoVTUGConfig.preview,
     STBDDI3725Config: STBDDI3725Config.preview,
     STBDDO3705Config: STBDDO3705Config.preview,
     STBNIP2311Config: STBNIP2311Config.preview,

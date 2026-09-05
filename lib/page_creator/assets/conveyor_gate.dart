@@ -19,6 +19,7 @@ import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/conveyor_gate_painter.dart';
 import 'package:tfc/providers/state_man.dart';
+import 'package:tfc/widgets/tag_access_guard.dart';
 import '../../widgets/duration_field.dart';
 import '../../widgets/memo_stream_builder.dart';
 
@@ -329,11 +330,18 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
   }
 
   /// Write a boolean value to an OPC UA force key.
+  ///
+  /// No member: a force key is its own BOOL node, so the question is about the
+  /// key as a whole. A refused force never reaches the PLC — `writeTag` has
+  /// already prompted and returns false — and the `catch` below is left for
+  /// the comms failure it was written for.
   Future<void> _writeForce(String key, bool value) async {
     if (key.isEmpty) return;
     try {
       final client = await ref.read(stateManProvider.future);
-      await client.write(
+      await writeTag(
+        ref,
+        client,
         key,
         DynamicValue(value: value, typeId: NodeId.boolean),
       );

@@ -6,7 +6,9 @@ import 'dart:convert';
 import 'package:flutter/rendering.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/hit_boundary.dart' show AssetHitShape;
 import 'package:tfc/widgets/panes/pane_chrome.dart';
+import 'package:tfc/widgets/panes/side_pane.dart' show SidePaneSubject;
 import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -22,6 +24,11 @@ import '../../providers/preferences.dart';
 import '../../widgets/boolean_expression.dart';
 import '../../widgets/bit_mask_grid.dart';
 import '../../widgets/key_mapping_sections.dart';
+import 'bulk_property.dart';
+
+// The `Asset.bulkProperties` contract is declared here, so every asset file
+// that implements it gets the descriptor types along with `Asset` itself.
+export 'bulk_property.dart';
 
 part 'common.g.dart';
 
@@ -82,9 +89,121 @@ class RelativeSize {
   }
 }
 
+/// Mints the handles assets are referred to by — see [Asset.id].
+///
+/// Not a UUID, and no new dependency for one: 96 bits from a secure generator
+/// is orders of magnitude past anything a page full of assets could collide
+/// on, and a short hex string keeps the page JSON readable when somebody has
+/// to diff two versions of it by eye.
+String newAssetId() {
+  final r = _idRandom;
+  final b = StringBuffer();
+  for (var i = 0; i < 24; i++) {
+    b.write('0123456789abcdef'[r.nextInt(16)]);
+  }
+  return b.toString();
+}
+
+/// Gives every asset in [copies] that carried an id a fresh one, and rewrites
+/// the references between them to match.
+///
+/// This is what a paste (or any other duplication) owes the page. Two assets
+/// sharing an id makes every reference to it ambiguous, so a copy cannot keep
+/// the original's. References *inside* the group follow the copies: duplicate
+/// a coupler, a box and the cable between them and you get a second cable
+/// running between the second pair, not one that reaches back to the
+/// originals. References *out* of the group are deliberately left alone — a
+/// cable copied on its own still runs where it ran.
+void reidentifyAssets(List<Asset> copies) {
+  final idMap = <String, String>{};
+  for (final asset in copies) {
+    final old = asset.id;
+    if (old != null) idMap[old] = asset.assignNewId();
+  }
+  if (idMap.isEmpty) return;
+  for (final asset in copies) {
+    asset.remapAssetIds(idMap);
+  }
+}
+
+math.Random? _idRandomCache;
+
+/// Built on first use rather than at import: `Random.secure` reaches for a
+/// platform entropy source, and a top-level initialiser doing that would run
+/// on every import of this library including in environments that have none.
+math.Random get _idRandom => _idRandomCache ??= _makeIdRandom();
+
+math.Random _makeIdRandom() {
+  try {
+    return math.Random.secure();
+  } catch (_) {
+    // No secure source here. Ids only have to be unique within a page, and
+    // the fallback still is — this is not a security boundary.
+    return math.Random();
+  }
+}
+
 abstract class Asset {
   String get assetName;
   String get displayName;
+
+  /// A stable handle other assets can refer to this one by, or null.
+  ///
+  /// Assets are otherwise identified by object identity, which does not
+  /// survive a save: a page serialises as a bare list and nothing in it names
+  /// anything else. That was fine while no asset referred to another. A cable
+  /// does — both its ends and any pinned corner name the asset they belong to
+  /// — so it needs a handle that outlives a reload.
+  ///
+  /// Null by default and stays null: an asset earns an id the first time
+  /// something points at it ([ensureId]), so a page nothing links across is
+  /// saved exactly as it was before ids existed.
+  String? get id;
+  set id(String? id);
+
+  /// This asset's [id], minting one if it has none yet.
+  String ensureId();
+
+  /// Replaces this asset's [id] with a fresh one, and returns it.
+  ///
+  /// Paste and duplicate call this: two assets carrying one id makes every
+  /// reference to it ambiguous, and the copy is a different piece of
+  /// equipment even when it is identical in every other respect.
+  String assignNewId();
+
+  /// The page-relative box this asset occupies, when that is not the one
+  /// [coordinates] and [size] already describe.
+  ///
+  /// Null for every asset whose position is simply where it was dropped, which
+  /// is all of them but one. A run is the exception: its box is wherever the
+  /// assets it plugs into happen to be, so it can only be known once the page
+  /// is known.
+  ///
+  /// Handed back rather than written into [coordinates] on purpose.
+  /// `AssetStack` builds from a config that lives for the whole mount and
+  /// must not edit it in place — deriving the box into a local is how a run
+  /// gets positioned without breaking that.
+  Rect? boxOn(List<Asset> page, Size canvas);
+
+  /// Whether a pointer at [local] — in this asset's own unrotated box, of
+  /// [boxSize] pixels — is on the asset rather than merely inside its
+  /// rectangle.
+  ///
+  /// True for the whole box by default, which is right for everything drawn
+  /// to fill its rectangle. A run is the exception and the reason this
+  /// exists: its box is the span between two devices and is almost entirely
+  /// empty, so an opaque rectangle over it would swallow taps meant for every
+  /// device it passes and stop a marquee from being started anywhere near it.
+  bool hitTestBox(Offset local, Size boxSize, List<Asset> page, Size canvas);
+
+  /// Rewrites references this asset holds to *other* assets' ids.
+  ///
+  /// Called after a paste with a map from each copied asset's old id to its
+  /// new one. An id missing from the map is deliberately left alone: it names
+  /// something outside the pasted group, and a cable copied on its own should
+  /// still run between the two devices it ran between before.
+  void remapAssetIds(Map<String, String> idMap);
+
   String get category;
   String? get text;
   set text(String? text);
@@ -138,6 +257,28 @@ abstract class Asset {
   /// [AssetMirrorScope]).
   bool get mirrorsWithPage;
 
+  /// Assets drawn inside this asset's own box — a rack head's slices.
+  ///
+  /// `AssetStack` registers each of these under its parent's frame, so a
+  /// side pane opened from one slice of a composite asset can be marked on
+  /// that slice alone (see [SubdeviceSubject]) instead of on the whole
+  /// block. An asset that is one piece of equipment returns the empty list.
+  List<Asset> get childAssets;
+
+  /// The settings the page editor may change on several assets at once.
+  ///
+  /// [configure] is a hand-written form per asset type and can only edit one
+  /// asset, so selecting four drives and widening them all needs a second,
+  /// narrower description of what an asset holds. `BaseAsset` supplies the
+  /// settings every asset has — position, size, angle, label — and an asset
+  /// adds its own by appending to `super.bulkProperties`. Anything left out
+  /// simply does not appear in the multi-select editor; the per-asset form
+  /// remains the complete one.
+  ///
+  /// See `bulk_property.dart` for the descriptor types and how a selection is
+  /// reduced to the settings its assets have in common.
+  List<BulkProperty> get bulkProperties;
+
   Widget build(BuildContext context);
   Widget configure(BuildContext context);
   Map<String, dynamic> toJson();
@@ -174,6 +315,12 @@ abstract class BaseAsset implements Asset {
   @override
   bool get mirrorsWithPage => false;
 
+  // Excluded like `searchKeywords`: composition metadata, not page state —
+  // a composite asset serializes its subdevice list as its own field.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<Asset> get childAssets => const [];
+
   static String _humanize(String typeName) {
     String name = typeName;
     if (name.endsWith('Config')) {
@@ -197,6 +344,41 @@ abstract class BaseAsset implements Asset {
     }
     return buffer.toString();
   }
+
+  /// See [Asset.id].
+  ///
+  /// Public, and a field rather than a getter over a private one: every
+  /// concrete asset's `toJson`/`fromJson` is generated from the members
+  /// json_serializable can see on this class, and it cannot see a private
+  /// field. `includeIfNull: false` is what keeps the change additive — an
+  /// asset nothing points at serialises without the key at all, so a page
+  /// saved before ids existed round-trips byte for byte.
+  @JsonKey(name: 'id', includeIfNull: false)
+  @override
+  String? id;
+
+  @override
+  String ensureId() => id ??= newAssetId();
+
+  @override
+  String assignNewId() => id = newAssetId();
+
+  /// Most assets refer to nothing, so the default is to have nothing to
+  /// rewrite. Assets that hold ids (the cable's ends and pinned corners)
+  /// override this.
+  @override
+  void remapAssetIds(Map<String, String> idMap) {}
+
+  /// An asset sits where it was dropped; see [Asset.boxOn] for the exception.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  Rect? boxOn(List<Asset> page, Size canvas) => null;
+
+  /// An asset fills its box; see [Asset.hitTestBox] for the exception.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  bool hitTestBox(Offset local, Size boxSize, List<Asset> page, Size canvas) =>
+      true;
 
   @JsonKey(name: 'coordinates')
   Coordinates _coordinates = Coordinates(x: 0.0, y: 0.0);
@@ -240,6 +422,140 @@ abstract class BaseAsset implements Asset {
   @override
   set textPos(TextPos? textPos) {
     _textPos = textPos;
+  }
+
+  /// Position, size, angle and label — the settings every asset has, and so
+  /// the ones a mixed selection is left with. An asset adds its own on top:
+  ///
+  /// ```dart
+  /// @JsonKey(includeFromJson: false, includeToJson: false)
+  /// @override
+  /// List<BulkProperty> get bulkProperties => [
+  ///       ...super.bulkProperties,
+  ///       NumberBulkProperty(id: 'FooConfig.bar', ...),
+  ///     ];
+  /// ```
+  ///
+  /// Coordinates and sizes are canvas fractions on the wire but percentages
+  /// in the pane: `0.08` is not a width anyone reads off a drawing, and every
+  /// asset on a page is measured against the same canvas, so the conversion
+  /// is a fixed ×100 rather than a per-asset one.
+  ///
+  /// The setters rebuild [Coordinates] rather than mutating it because the
+  /// editor's undo history compares serialized snapshots, and an angle that
+  /// travels on the same object as x/y has to survive an x-only edit.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<BulkProperty> get bulkProperties => [
+        NumberBulkProperty(
+          id: 'x',
+          label: 'X',
+          group: bulkGeometryGroup,
+          unit: '%',
+          min: 0,
+          max: 100,
+          read: () => coordinates.x * 100,
+          apply: (value) => coordinates = Coordinates(
+            x: (value ?? 0) / 100,
+            y: coordinates.y,
+            angle: coordinates.angle,
+          ),
+        ),
+        NumberBulkProperty(
+          id: 'y',
+          label: 'Y',
+          group: bulkGeometryGroup,
+          unit: '%',
+          min: 0,
+          max: 100,
+          read: () => coordinates.y * 100,
+          apply: (value) => coordinates = Coordinates(
+            x: coordinates.x,
+            y: (value ?? 0) / 100,
+            angle: coordinates.angle,
+          ),
+        ),
+        NumberBulkProperty(
+          id: 'width',
+          label: 'Width',
+          group: bulkGeometryGroup,
+          unit: '%',
+          // The same floor the editor's grow/shrink buttons clamp to: an
+          // asset scaled to nothing cannot be found again to fix it.
+          min: 1,
+          max: 100,
+          read: () => size.width * 100,
+          apply: (value) => size = RelativeSize(
+            width: (value ?? 0) / 100,
+            height: size.height,
+          ),
+        ),
+        NumberBulkProperty(
+          id: 'height',
+          label: 'Height',
+          group: bulkGeometryGroup,
+          unit: '%',
+          min: 1,
+          max: 100,
+          read: () => size.height * 100,
+          apply: (value) => size = RelativeSize(
+            width: size.width,
+            height: (value ?? 0) / 100,
+          ),
+        ),
+        NumberBulkProperty(
+          id: 'angle',
+          label: 'Angle',
+          group: bulkGeometryGroup,
+          unit: '°',
+          decimals: 0,
+          // Null is "unrotated" for an asset that has never been turned, and
+          // clearing the field is how a selection gets back to it — the
+          // mirror logic in `AssetStack` treats a null angle differently
+          // from a zero one, so the two are not interchangeable.
+          nullable: true,
+          read: () => coordinates.angle,
+          apply: (value) => coordinates = Coordinates(
+            x: coordinates.x,
+            y: coordinates.y,
+            angle: value?.toDouble(),
+          ),
+        ),
+        TextBulkProperty(
+          id: 'label.text',
+          label: 'Text',
+          group: bulkLabelGroup,
+          read: () => text,
+          apply: (value) => text = value,
+        ),
+        ChoiceBulkProperty<TextPos>(
+          id: 'label.position',
+          label: 'Position',
+          group: bulkLabelGroup,
+          options: TextPos.values,
+          optionLabel: (value) => bulkEnumLabel(value.name),
+          // A null position renders in the asset's default spot. The dropdown
+          // has no entry for it, so an asset that has never had one set shows
+          // as `below` until the row is touched — reading the default rather
+          // than inventing a sixth option nobody would recognise.
+          read: () => textPos ?? TextPos.below,
+          apply: (value) => textPos = value,
+        ),
+      ];
+
+  /// Section headings for the settings on this class. Assets reuse these for
+  /// their own geometry- or label-shaped fields so that a row lands under the
+  /// heading an operator would look for it under, not under the asset name.
+  static const String bulkGeometryGroup = 'Geometry';
+  static const String bulkLabelGroup = 'Label';
+
+  /// An enum constant's name as a dropdown entry: `disableWhenTrue` reads
+  /// "Disable when true". [_humanize] is the wrong tool — it is built for
+  /// `FooBarConfig` type names and leaves a leading lowercase word alone.
+  static String bulkEnumLabel(String name) {
+    final spaced = _humanize(name).toLowerCase();
+    if (spaced.isEmpty) return spaced;
+    return spaced[0].toUpperCase() + spaced.substring(1);
   }
 
   /// The ID of the linked technical document, or null if none linked.
@@ -323,6 +639,63 @@ abstract class BaseAsset implements Asset {
       }
     }
     return keys.toList();
+  }
+}
+
+/// Scopes the side-pane subject — and the dashed open-pane mark — to one
+/// subdevice of a composite asset.
+///
+/// A rack head (a Beckhoff CX, an EK1100) draws its slices inside its own
+/// box, so a pane opened by tapping one slice used to inherit the whole
+/// rack's [SidePaneSubject] and the plant view ringed the entire block.
+/// Wrapping each slice in one of these does three things:
+///
+///  - names the slice as the pane's subject, so `_OpenPaneMark` looks the
+///    slice up rather than the rack (the rack registers the slice under its
+///    own frame via [Asset.childAssets]);
+///  - hangs `ObjectKey(slice)` on the subtree, which is the handle the
+///    plant view's shape probe searches the canvas for;
+///  - publishes the slice's own rectangle as its [AssetHitShape], so the
+///    ring is traced around that slice and nothing else.
+///
+/// The shape is read lazily off the slice's render box (through a
+/// [GlobalObjectKey], resolved only when a pane opens), so the rect is
+/// whatever the slice laid out to — in its native scale; the probe maps it
+/// through the rack's `FittedBox` into canvas coordinates.
+class SubdeviceSubject extends StatelessWidget {
+  /// The slice's long-lived config object — compared by identity everywhere
+  /// (frames, subject, keys), so it must be the object the page holds, not a
+  /// per-build value.
+  final Asset subdevice;
+  final Widget child;
+
+  const SubdeviceSubject({
+    super.key,
+    required this.subdevice,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final boxKey = GlobalObjectKey(subdevice);
+    return KeyedSubtree(
+      key: ObjectKey(subdevice),
+      child: AssetHitShape(
+        shape: () {
+          final box = boxKey.currentContext?.findRenderObject();
+          if (box is RenderBox && box.hasSize) {
+            return Path()..addRect(Offset.zero & box.size);
+          }
+          // Nothing laid out to trace — an empty path draws no ring rather
+          // than a wrong one.
+          return Path();
+        },
+        child: KeyedSubtree(
+          key: boxKey,
+          child: SidePaneSubject(subject: subdevice, child: child),
+        ),
+      ),
+    );
   }
 }
 

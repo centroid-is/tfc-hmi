@@ -5,7 +5,6 @@ import 'package:test/test.dart';
 
 import 'package:tfc_mcp_server/src/audit/audit_log_service.dart';
 import 'package:tfc_mcp_server/src/database/server_database.dart';
-import 'package:tfc_mcp_server/src/identity/env_operator_identity.dart';
 import 'package:tfc_mcp_server/src/interfaces/tech_doc_index.dart';
 import 'package:tfc_mcp_server/src/services/tech_doc_service.dart';
 import 'package:tfc_mcp_server/src/tools/tech_doc_tools.dart';
@@ -79,8 +78,6 @@ void main() {
 
       final techDocService = TechDocService(mockIndex);
 
-      final env = {'TFC_USER': 'op1'};
-      final identity = EnvOperatorIdentity(environmentProvider: () => env);
       final auditService = AuditLogService(db);
 
       mcpServer = McpServer(
@@ -92,7 +89,6 @@ void main() {
 
       final registry = ToolRegistry(
         mcpServer: mcpServer,
-        identity: identity,
         auditLogService: auditService,
       );
 
@@ -206,8 +202,6 @@ void main() {
 
       final techDocService = TechDocService(mockIndex);
 
-      final env = {'TFC_USER': 'op1'};
-      final identity = EnvOperatorIdentity(environmentProvider: () => env);
       final auditService = AuditLogService(db);
 
       mcpServer = McpServer(
@@ -219,7 +213,6 @@ void main() {
 
       final registry = ToolRegistry(
         mcpServer: mcpServer,
-        identity: identity,
         auditLogService: auditService,
       );
 

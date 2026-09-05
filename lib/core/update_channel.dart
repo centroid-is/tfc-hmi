@@ -1,4 +1,10 @@
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:tfc_dart/core/preferences.dart';
+
+// A `core` file importing a provider file is unusual here, and deliberate:
+// the factory is the single point spec §6's invariant is stated at, and
+// importing it is what keeps these two functions inside the rule. Nothing
+// riverpod is used — only the factory.
+import '../providers/preferences.dart' show createDeviceLocalPreferences;
 
 /// The release channel the app checks for updates on.
 ///
@@ -19,8 +25,8 @@ const String updateChannelPrefsKey = 'update_channel';
 const String buildGitSha = String.fromEnvironment('GIT_SHA');
 
 /// Reads the persisted update channel; anything unknown counts as stable.
-Future<String> readUpdateChannel({SharedPreferencesAsync? prefs}) async {
-  final p = prefs ?? SharedPreferencesAsync();
+Future<String> readUpdateChannel({PreferencesApi? prefs}) async {
+  final p = prefs ?? createDeviceLocalPreferences();
   final stored = await p.getString(updateChannelPrefsKey);
   return stored == updateChannelLatest
       ? updateChannelLatest
@@ -30,9 +36,9 @@ Future<String> readUpdateChannel({SharedPreferencesAsync? prefs}) async {
 /// Persists the update channel; anything unknown is stored as stable.
 Future<void> writeUpdateChannel(
   String channel, {
-  SharedPreferencesAsync? prefs,
+  PreferencesApi? prefs,
 }) async {
-  final p = prefs ?? SharedPreferencesAsync();
+  final p = prefs ?? createDeviceLocalPreferences();
   await p.setString(
     updateChannelPrefsKey,
     channel == updateChannelLatest ? updateChannelLatest : updateChannelStable,

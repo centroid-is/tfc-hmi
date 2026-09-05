@@ -15,6 +15,8 @@ import '../page_creator/assets/common.dart';
 import '../page_creator/assets/editor_clipboard.dart';
 import '../page_creator/assets/image.dart';
 import '../page_creator/assets/image_store.dart';
+import '../page_creator/assets/ethercat_link.dart';
+import '../page_creator/assets/link_edit_overlay.dart';
 import '../page_creator/assets/registry.dart';
 import '../providers/page_images.dart';
 import '../widgets/base_scaffold.dart';
@@ -23,10 +25,12 @@ import '../widgets/zoomable_canvas.dart';
 import '../widgets/panes/pane_chrome.dart' show PaneAction;
 import '../widgets/leave_guard.dart';
 import '../widgets/panes/side_pane.dart';
+import '../widgets/bulk_property_editor.dart';
 import '../page_creator/page.dart';
 import '../core/startup_url.dart';
 import '../providers/preferences.dart' show localPreferencesProvider;
 import '../models/menu_item.dart';
+import 'package:tfc_access/tfc_access.dart' show AccessGroup, AccessGroupInfo;
 import '../route_registry.dart';
 import '../routes.dart';
 import '../providers/current_page_assets.dart';
@@ -36,7 +40,6 @@ import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import '../chat/ai_context_action.dart';
 import '../chat/asset_context_menu.dart' show buildEditorAssetMenuItems;
 import '../core/feature_flags.dart';
-import '../providers/mcp_bridge.dart' show isMcpChatAvailable;
 import '../chat/chat_overlay.dart' show ChatContext;
 import '../chat/hamburger_context_menu.dart';
 import '../chat/page_context_menu.dart';
@@ -75,6 +78,49 @@ bool marqueeHitTestRotatedAsset({
   final localDx = dx * cosA - dy * sinA;
   final localDy = dx * sinA + dy * cosA;
   return localDx.abs() <= halfW && localDy.abs() <= halfH;
+}
+
+/// Whether [pointer] lands on [asset], as the editor decides it.
+///
+/// Two steps. The rotated rectangle first, which is the whole answer for
+/// every asset drawn to fill its box. Then the asset's own shape, for the one
+/// whose box is mostly empty: a cable's rectangle spans the two devices it
+/// plugs into, so without the second step a run crossing the canvas would
+/// claim every drag over that area and a marquee could not be started
+/// anywhere near it.
+///
+/// The local conversion ignores rotation deliberately. Only a run refines its
+/// hit shape, and a run is never rotated — its angle comes from where its
+/// devices are, not from a field.
+@visibleForTesting
+bool editorHitTestAsset({
+  required Offset pointer,
+  required Asset asset,
+  required List<Asset> assets,
+  required Size canvas,
+}) {
+  final derived = asset.boxOn(assets, canvas);
+  final cx = (derived?.center.dx ?? asset.coordinates.x) * canvas.width;
+  final cy = (derived?.center.dy ?? asset.coordinates.y) * canvas.height;
+  final w = (derived?.width ?? asset.size.width) * canvas.width;
+  final h = (derived?.height ?? asset.size.height) * canvas.height;
+
+  if (!marqueeHitTestRotatedAsset(
+    pointer: pointer,
+    cx: cx,
+    cy: cy,
+    halfW: w / 2,
+    halfH: h / 2,
+    angleDegrees: asset.coordinates.angle ?? 0.0,
+  )) {
+    return false;
+  }
+  return asset.hitTestBox(
+    Offset(pointer.dx - (cx - w / 2), pointer.dy - (cy - h / 2)),
+    Size(w, h),
+    assets,
+    canvas,
+  );
 }
 
 /// Reorders [assets] so that [targets] sit beneath everything else.
@@ -859,6 +905,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// Snapshot of pages before proposal was applied (for reject/revert).
   Map<String, AssetPage>? _preProposalPages;
 
+  /// Watches operator decisions made on surfaces that never ask this editor.
+  ///
+  /// The banner's per-row reject and the chat batch card's reject-all only
+  /// drop the proposal from [proposalStateProvider]; they know nothing about
+  /// the copy this editor staged into [_temporaryPages]. See
+  /// [_onProposalFeedback] for what happens on such a decision.
+  StreamSubscription<ProposalFeedback>? _feedbackSub;
+
   /// The asset whose configuration pane is docked open, if any. The pane is
   /// non-modal, so the canvas keeps taking taps and drags while it is up and
   /// tapping another asset just re-points the pane at it.
@@ -890,6 +944,23 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// width you drag it to is the one the next asset opens at.
   double _configPaneWidth = 520;
 
+  /// The selection the properties pane is showing, or null when it is closed.
+  ///
+  /// Held apart from [_selectedAssets] so that a change to the selection can
+  /// be spotted (see [_refreshBulkPane]) — the pane is built once into an
+  /// overlay entry and does not rebuild just because this editor did.
+  List<Asset>? _bulkPaneSelection;
+
+  /// Ticks whenever the open properties pane's view of the world goes stale:
+  /// the selection changed, or the assets moved under it. The pane listens
+  /// and re-reads its rows; nothing else does, so the notifier is only
+  /// touched while it is open.
+  final ValueNotifier<int> _bulkRevision = ValueNotifier<int>(0);
+
+  /// Narrower than [_configPaneWidth]: a properties grid is a column of short
+  /// fields, not the dense forms the per-asset editors grew into.
+  double _bulkPaneWidth = 360;
+
   List<Asset> get assets {
     if (_currentPage == null) {
       return [];
@@ -914,6 +985,22 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     // hint was the Save button having turned orange. The navigation chrome
     // asks this guard before it beams away.
     LeaveGuard.set(_confirmLeave);
+    // A decision can land on a surface that never asks this editor: the
+    // banner's per-row reject and the chat batch card's reject-all only drop
+    // the proposal from state. The staged assets stayed on the canvas, and
+    // the operator's next save wrote them as if they had been accepted
+    // (2026-09-02: a rejected 35-asset "ST101 cabinet layout" proposal
+    // persisted to /+ST101). Every decision surface reports to the feedback
+    // stream, so it is what un-stages here -- see [_onProposalFeedback].
+    try {
+      _feedbackSub = ref
+          .read(proposalFeedbackProvider)
+          .stream
+          .listen(_onProposalFeedback);
+    } catch (_) {
+      // Provider unavailable in tests -- outside decisions cannot reach a
+      // staged batch there.
+    }
     ref.read(pageManagerProvider.future).then((pageManager) {
       setState(() {
         _temporaryPages = pageManager.copyWith().pages;
@@ -1100,6 +1187,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   void dispose() {
     LeaveGuard.clear(_confirmLeave);
     HardwareKeyboard.instance.removeHandler(_onShortcutKey);
+    // Not awaited: awaiting a StreamSubscription.cancel() from State code
+    // silently stalls widget tests, and a broadcast cancel has nothing to
+    // flush anyway.
+    _feedbackSub?.cancel();
+    _feedbackSub = null;
     // The banner holds these closures over this State; left set they
     // would fire into a disposed State after navigating away -- nothing
     // saved, the proposals still pending, and an uncaught async error.
@@ -1147,6 +1239,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     _configWatch?.cancel();
     _configWatch = null;
     _closeConfigPane();
+    _closeBulkPane();
+    // After the panes: closing one runs its `onClosed`, which reads this.
+    _bulkRevision.dispose();
     _treeScrollController.dispose();
     _paletteSearchController.dispose();
     _shortcutFocus.dispose();
@@ -1689,6 +1784,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     // Ctrl+Z with nothing to do.
     final configAsset = _configAsset;
     if (configAsset != null) _configSnapshot = _assetSnapshot(configAsset);
+ 
+    // The properties pane reads its rows straight off the assets, so any
+    // settled edit — a nudge, a drag, an undo — leaves its fields showing
+    // stale numbers until it is told to look again.
+    if (_bulkPaneSelection != null) _bulkRevision.value++;
   }
 
   bool get _hasUnsavedChanges =>
@@ -1741,6 +1841,95 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     });
     _commitSlot?.state = null;
     _discardSlot?.state = null;
+  }
+
+  /// Un-stages staged proposals the operator rejected or dismissed on a
+  /// surface that never asks this editor.
+  ///
+  /// [_discardProposal] handles the banner's whole-queue discard, but the
+  /// banner's per-row reject and the chat batch card's reject-all go straight
+  /// to [ProposalStateNotifier]: the proposal vanishes from the banner while
+  /// the assets it staged stay in [_temporaryPages], and the operator's next
+  /// save writes them exactly as an accept would have. That is how a rejected
+  /// 35-asset proposal ended up persisted to its page (2026-09-02).
+  ///
+  /// The staged batch shares one pre-proposal snapshot, so the revert is
+  /// all-or-nothing: restore [_preProposalPages], then restage whatever is
+  /// still pending. A decision on one row of a batch therefore keeps the
+  /// other rows staged -- rebuilt onto the restored snapshot rather than
+  /// peeled out of the patched pages, which is the only way back an
+  /// `asset_update` leaves.
+  ///
+  /// Decisions this editor made itself come through here too, a microtask
+  /// after [_discardProposal] or [_saveToPrefs] reported them -- by then the
+  /// ids are in [_consumedProposalIds] (both record them before reporting),
+  /// so they are skipped below.
+  void _onProposalFeedback(ProposalFeedback event) {
+    if (!mounted) return;
+    if (event.action != 'rejected' && event.action != 'dismissed') return;
+    final undone = {
+      for (final p in event.proposals)
+        if (_proposalIds.contains(p.id) &&
+            !_consumedProposalIds.contains(p.id))
+          p.id,
+    };
+    if (undone.isEmpty) return;
+    // Recorded before anything else, the same order [_discardProposal]
+    // keeps: the restage below walks pending state, and a decided id must
+    // never come back through it.
+    _consumedProposalIds.addAll(undone);
+    setState(() {
+      if (_preProposalPages != null) {
+        _temporaryPages = _preProposalPages!;
+        _preProposalPages = null;
+        if (_currentPage == null ||
+            !_temporaryPages.containsKey(_currentPage)) {
+          _currentPage = _temporaryPages.keys.firstOrNull;
+        }
+      }
+      _isProposal = false;
+      _proposalTitle = null;
+      _proposalIds.clear();
+      _proposedAssets = {};
+      _updateCurrentJson();
+      _savedJson = _currentJson;
+    });
+    _commitSlot?.state = null;
+    _discardSlot?.state = null;
+    // Survivors of a partial decision go back onto the canvas. By the time a
+    // feedback event is delivered the decided rows are already out of state,
+    // so pending is exactly what must stay staged.
+    List<PendingProposal> pending = const [];
+    try {
+      pending = ref.read(proposalStateProvider).proposals.toList();
+    } catch (_) {
+      // Provider gone -- nothing left to restage.
+    }
+    final assetKinds = pending
+        .where((p) =>
+            p.proposalType == 'asset' || p.proposalType == 'asset_update')
+        .toList();
+    final split = _partitionAssetProposals(assetKinds, _currentPage);
+    if (split.onPage.isNotEmpty && _applyAssetBatch(split.onPage) > 0) {
+      setState(() {
+        _updateCurrentJson();
+        _savedJson = ''; // Still a staged proposal -- still unsaved.
+      });
+    } else if (!_isProposal) {
+      final pageOnly =
+          pending.where((p) => p.proposalType == 'page').toList();
+      if (pageOnly.isNotEmpty) {
+        setState(() {
+          _applyProposalData(pageOnly.first.proposalJson);
+          _updateCurrentJson();
+          _savedJson = _isProposal ? '' : _currentJson;
+        });
+      }
+    }
+    // With nothing restaged, whatever payload this editor was opened with is
+    // spent -- the same bookkeeping [_discardProposal] does, so a later
+    // mount handed the same route data does not stage it again.
+    if (!_isProposal) _markRoutePayloadResolved();
   }
 
   Future<void> _saveToPrefs() async {
@@ -1951,6 +2140,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     if (asset != null) closeSidePane(id: _configPaneId(asset));
   }
 
+  /// Shuts the properties pane, if it is open.
+  void _closeBulkPane() {
+    if (_bulkPaneSelection != null) closeSidePane(id: _bulkPaneId);
+  }
+
   /// The canvas shortcuts, registered on [HardwareKeyboard] for the editor's
   /// lifetime rather than hung off a Focus node. Focus wanders — into the
   /// root-overlay config pane, onto whatever button was clicked last — and
@@ -2065,6 +2259,17 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     });
   }
 
+  /// The selected cable, when the selection is exactly one.
+  ///
+  /// Its handles are a different surface from the shared chrome, and showing
+  /// them for a multi-selection would put corner handles on top of whatever
+  /// else is selected.
+  EtherCatLinkConfig? get _selectedLink {
+    if (_selectedAssets.length != 1) return null;
+    final only = _selectedAssets.first;
+    return only is EtherCatLinkConfig ? only : null;
+  }
+
   void _handleCopy() {
     if (_selectedAssets.isEmpty) return;
     _copyAssets(_selectedAssets.toList());
@@ -2121,6 +2326,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
     _saveToHistory();
     final copiedAssets = AssetRegistry.parse(jsonDecode(pasted));
+    reidentifyAssets(copiedAssets);
     setState(() {
       _selectedAssets.clear();
 
@@ -2462,7 +2668,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     BoxConstraints constraints,
     Offset pasteTarget,
   ) async {
-    final aiItems = kChatEnabled && isMcpChatAvailable()
+    final aiItems = kChatEnabled
         ? buildEditorAssetMenuItems(asset)
         : const <AiMenuItem>[];
 
@@ -2484,14 +2690,20 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       ),
       items: [
         // First, and on its own: this is how the configuration editor is
-        // reached now that a tap selects instead of opening it. Unlike the
-        // entries below it acts on the asset under the cursor rather than on
-        // the whole selection — the pane configures one asset.
+        // reached now that a tap selects instead of opening it.
+        //
+        // It follows the same targets rule as the entries below, but opens a
+        // different pane for each case. One asset gets its own `configure()`
+        // form — the complete one, with the key pickers and the device
+        // specifics. A selection gets the properties grid, which offers only
+        // what the selected assets have in common but writes to all of them
+        // at once (see [_openBulkEditPane]).
         PopupMenuItem<int>(
           value: _editAction,
-          child: const ListTile(
-            leading: Icon(Icons.tune),
-            title: Text('Edit'),
+          child: ListTile(
+            leading: const Icon(Icons.tune),
+            title: Text(
+                targets.length > 1 ? 'Edit ${targets.length} assets' : 'Edit'),
             dense: true,
           ),
         ),
@@ -2646,10 +2858,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     if (!mounted) return;
 
     if (choice == _editAction) {
-      // `_openConfigPane` toggles, which from a menu entry reading "Edit"
-      // would read as the pane refusing to open. Already showing this asset
-      // is already the wanted end state.
-      if (!identical(_configAsset, asset)) _openConfigPane(asset);
+      if (targets.length > 1) {
+        _openBulkEditPane(targets);
+      } else if (!identical(_configAsset, asset)) {
+        // `_openConfigPane` toggles, which from a menu entry reading "Edit"
+        // would read as the pane refusing to open. Already showing this asset
+        // is already the wanted end state.
+        _openConfigPane(asset);
+      }
     } else if (choice == _sendToBackAction) {
       _sendToBack(targets);
     } else if (choice == _bringToFrontAction) {
@@ -2711,6 +2927,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
   @override
   Widget build(BuildContext context) {
+    // Keeps the properties pane on the live selection; a no-op when it is
+    // closed, which is the usual case.
+    _refreshBulkPane();
     // Reactively watch for new page/asset proposals arriving via MCP.
     ref.listen<ProposalState>(proposalStateProvider, (prev, next) {
       final pageProposals = next.proposals.where((p) =>
@@ -2953,20 +3172,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                                     // operator clicks empty visual space inside
                                     // the pre-rotation rect.
                                     bool hitAsset = assets.any((asset) {
-                                      return marqueeHitTestRotatedAsset(
+                                      return editorHitTestAsset(
                                         pointer: pointerEvent.localPosition,
-                                        cx: asset.coordinates.x *
-                                            constraints.maxWidth,
-                                        cy: asset.coordinates.y *
-                                            constraints.maxHeight,
-                                        halfW: (asset.size.width *
-                                                constraints.maxWidth) /
-                                            2,
-                                        halfH: (asset.size.height *
-                                                constraints.maxHeight) /
-                                            2,
-                                        angleDegrees:
-                                            asset.coordinates.angle ?? 0.0,
+                                        asset: asset,
+                                        assets: assets,
+                                        canvas: Size(constraints.maxWidth,
+                                            constraints.maxHeight),
                                       );
                                     });
 
@@ -3084,6 +3295,20 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                                     start: _selectionStart!,
                                     current: _selectionCurrent!,
                                   ),
+                                ),
+                              // A run is drawn, not placed, so the box-and-
+                              // handles chrome has nothing useful to offer it.
+                              // Topmost, so grabbing a handle is never read as
+                              // the start of a marquee.
+                              if (_selectedLink != null)
+                                LinkEditOverlay(
+                                  link: _selectedLink!,
+                                  assets: assets,
+                                  canvas: Size(constraints.maxWidth,
+                                      constraints.maxHeight),
+                                  onBeginEdit: _saveToHistory,
+                                  onChanged: () =>
+                                      setState(_updateCurrentJson),
                                 ),
                               Positioned(
                                 top: 16,
@@ -3439,6 +3664,172 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         ),
       ),
     );
+  }
+
+  /// The one properties pane. Unlike the per-asset config pane there is never
+  /// more than one, and it survives the selection changing under it, so its
+  /// id is fixed rather than derived from what it is showing.
+  static const String _bulkPaneId = 'page-editor:properties';
+
+  /// Docks the multi-select property editor to the right of the canvas.
+  ///
+  /// This is what the context menu's Edit does for a selection of more than
+  /// one asset: [configure] can only edit the asset it was handed, so
+  /// widening four drives at once needs the narrower, shared description of
+  /// an asset that [Asset.bulkProperties] gives.
+  void _openBulkEditPane(List<Asset> targets) {
+    if (targets.isEmpty) return;
+    ref.read(currentPageAssetsProvider.notifier).state = assets;
+
+    // Already up: re-point it rather than let `showSidePane`'s toggle read as
+    // the pane refusing to open, the same guard the Edit entry uses for the
+    // single-asset pane.
+    if (_bulkPaneSelection != null) {
+      setState(() => _bulkPaneSelection = List.of(targets));
+      _bulkRevision.value++;
+      return;
+    }
+
+    // The per-asset pane closes: only one side pane fits, and the two would
+    // otherwise fight over the strip.
+    _closeConfigPane();
+
+    final opened = showSidePane(
+      context: context,
+      id: _bulkPaneId,
+      width: _bulkPaneWidth,
+      resizable: true,
+      onWidthChanged: (width) => setState(() => _bulkPaneWidth = width),
+      builder: _buildBulkPane,
+      onClosed: _onBulkPaneClosed,
+      avoidRect: _selectionScreenRect(targets),
+    );
+    if (!opened) return;
+    setState(() => _bulkPaneSelection = List.of(targets));
+  }
+
+  void _onBulkPaneClosed() {
+    if (!mounted) {
+      _bulkPaneSelection = null;
+      return;
+    }
+    setState(() => _bulkPaneSelection = null);
+    // The pane's text fields live in the root overlay and hold keyboard
+    // focus; with it gone the canvas shortcuts take over again without the
+    // operator having to click the canvas first. Same as [_onConfigPaneClosed].
+    _shortcutFocus.requestFocus();
+  }
+
+  /// The bounding box of [targets] on screen, so the canvas only steps aside
+  /// when the pane would actually cover what is being edited. Assets with no
+  /// laid-out element yet are skipped; null (nothing measurable) makes
+  /// `showSidePane` play it safe and inset.
+  Rect? _selectionScreenRect(List<Asset> targets) {
+    Rect? union;
+    for (final asset in targets) {
+      final rect = _assetScreenRect(asset);
+      if (rect == null) continue;
+      union = union == null ? rect : union.expandToInclude(rect);
+    }
+    return union;
+  }
+
+  Widget _buildBulkPane(BuildContext paneContext) {
+    return ListenableBuilder(
+      listenable: _bulkRevision,
+      builder: (context, _) {
+        final selection = _bulkPaneSelection ?? const <Asset>[];
+        return SidePane(
+          title: selection.length == 1
+              ? selection.single.displayName
+              : '${selection.length} assets',
+          subtitle: _bulkPaneSubtitle(selection),
+          icon: Icons.tune,
+          // The editor brings its own scrolling; see [_buildConfigPane].
+          scrollable: false,
+          child: BulkPropertyEditor(
+            selection: selection,
+            revision: _bulkRevision,
+            onBeforeChange: _saveToHistory,
+            onChanged: () => _updateState(() {}),
+          ),
+        );
+      },
+    );
+  }
+
+  /// What is selected, by kind: 'Schneider ATV320 x4', or the mix when the
+  /// selection is not all one thing. Named kinds rather than a bare count
+  /// because the rows on offer depend on them — a selection that has lost its
+  /// device-specific section has usually picked up one asset of another kind.
+  static String? _bulkPaneSubtitle(List<Asset> selection) {
+    if (selection.length < 2) return null;
+    final counts = <String, int>{};
+    for (final asset in selection) {
+      counts.update(asset.displayName, (n) => n + 1, ifAbsent: () => 1);
+    }
+    final parts = [
+      for (final entry in counts.entries)
+        entry.value > 1 ? '${entry.key} \u00d7${entry.value}' : entry.key,
+    ];
+    // Three kinds is already a longer subtitle than the header has room for.
+    if (parts.length > 3) return '${counts.length} kinds of asset';
+    return parts.join(', ');
+  }
+
+  /// Keeps the open properties pane pointed at the live selection.
+  ///
+  /// The pane is an overlay entry built once, so a marquee that grows the
+  /// selection, a Ctrl-click that shrinks it, or a delete that empties it
+  /// would otherwise leave it editing assets that are no longer selected —
+  /// or no longer on the page. Called from [build], where every one of those
+  /// has already landed in [_selectedAssets]; the work itself is deferred to
+  /// after the frame because it notifies a listener.
+  void _refreshBulkPane() {
+    if (_bulkPaneSelection == null) return;
+    // A rubber-band drag clears the selection on the way down and rebuilds it
+    // as the box grows, so mid-drag it passes through empty and through every
+    // partial set. Following that would flicker the pane's rows and — since
+    // an empty selection closes it — shut it halfway through the gesture.
+    // The drag settles into one more build when the pointer lifts.
+    if (_selectionStart != null) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _bulkPaneSelection == null) return;
+      // Recomputed here rather than captured above: several frames can each
+      // queue a callback, and one holding the selection as it stood two
+      // frames ago would undo the newest rebind — or close a pane over a
+      // selection that has since come back.
+      final live = _liveSelection();
+      // Nothing left to edit — an operator who deleted the selection is done
+      // with the pane, and an empty one is just a dead strip.
+      if (live.isEmpty) {
+        closeSidePane(id: _bulkPaneId);
+        return;
+      }
+      if (_sameAssets(live, _bulkPaneSelection!)) return;
+      setState(() => _bulkPaneSelection = live);
+      _bulkRevision.value++;
+    });
+  }
+
+  /// The selection in page order, which is the order the pane lists it in.
+  List<Asset> _liveSelection() => [
+        for (final asset in assets)
+          if (_selectedAssets.contains(asset)) asset,
+      ];
+
+  /// Whether two selections hold the same assets in the same order.
+  ///
+  /// By identity: a rebuilt asset (undo, paste) is a different object holding
+  /// the same values, and the pane's rows must be rebound onto it or they
+  /// write to an instance no longer on the page.
+  static bool _sameAssets(List<Asset> a, List<Asset> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!identical(a[i], b[i])) return false;
+    }
+    return true;
   }
 
   /// Repaints the canvas when the open pane has changed its asset.
@@ -4054,6 +4445,31 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// its place in the tree, and stays editable here. Only whether
   /// `getRootMenuItems` hands it to the app's menu and router does, which the
   /// running app picks up on its next start (as the dialog's subtitle warns).
+  /// Publishes [pagePath] for [group], or for everyone when null.
+  ///
+  /// Same shape as [_setPagePublished]: history first, then the page map, and
+  /// the running app picks it up on its next start via
+  /// `declareMenuRouteGroups`. Clearing goes through `clearRequiredGroup`
+  /// because `copyWith(requiredGroup: null)` means "leave it alone".
+  void _setPageRequiredGroup(
+    String pagePath,
+    AccessGroup? group,
+    StateSetter dialogSetState,
+  ) {
+    final page = _temporaryPages[pagePath];
+    if (page == null || page.menuItem.requiredGroup == group) return;
+    _saveToHistory();
+    setState(() {
+      _temporaryPages[pagePath] = page.copyWith(
+        menuItem: group == null
+            ? page.menuItem.copyWith(clearRequiredGroup: true)
+            : page.menuItem.copyWith(requiredGroup: group),
+      );
+      _updateCurrentJson();
+    });
+    dialogSetState(() {});
+  }
+
   void _setPagePublished(
     String pagePath,
     bool published,
@@ -4166,6 +4582,38 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                 dialogContext: dialogContext,
               ),
             ),
+          // Published for a group, or for everyone. A popup rather than a
+          // dialog: one tap to see the choice, one to make it. Entries carry
+          // their own onTap because PopupMenuButton.onSelected never fires for
+          // a null value, and null -- Everyone -- is a choice here.
+          Builder(builder: (context) {
+            final group = _temporaryPages[pageName]?.menuItem.requiredGroup;
+            return PopupMenuButton<AccessGroup?>(
+              tooltip: group == null
+                  ? 'Published for everyone'
+                  : 'Published for ${group.label}',
+              icon: Icon(
+                group == null ? Icons.lock_open : Icons.lock_outline,
+                size: 18,
+                color: group == null
+                    ? null
+                    : Theme.of(dialogContext).colorScheme.primary,
+              ),
+              itemBuilder: (context) => [
+                PopupMenuItem<AccessGroup?>(
+                  onTap: () =>
+                      _setPageRequiredGroup(pageName, null, dialogSetState),
+                  child: const Text('Everyone'),
+                ),
+                for (final g in AccessGroup.values)
+                  PopupMenuItem<AccessGroup?>(
+                    onTap: () =>
+                        _setPageRequiredGroup(pageName, g, dialogSetState),
+                    child: Text(g.label),
+                  ),
+              ],
+            );
+          }),
           IconButton(
             icon: Icon(
               isDraft ? Icons.visibility_off : Icons.visibility,
