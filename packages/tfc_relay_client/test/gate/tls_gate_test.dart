@@ -668,10 +668,34 @@ void main() {
       final trusted = _trustedCa();
       final now = DateTime.now().toUtc();
 
-      // Three bindings of the same fixture, and the arm is that they are one
-      // shape. 06-RESEARCH §A.3 measured them byte-identical; a case that
-      // asserted three different messages would be asserting a fiction, and
-      // the sabotage arm that tried it is in 07-12-SUMMARY.md.
+      // Three bindings of the same fixture, and the arm is that the panel
+      // cannot tell them apart.
+      //
+      // **06-RESEARCH §A.3's "byte-identical" was a macOS measurement, and it
+      // does not hold on Linux or Windows.** Measured on all three:
+      //
+      //   macOS   all three  CERTIFICATE_VERIFY_FAILED: application
+      //                      verification failure(handshake.cc:298)
+      //   ubuntu  expired    CERTIFICATE_VERIFY_FAILED: certificate has expired
+      //           foreign    …: unable to get local issuer certificate
+      //           SAN        …: IP address mismatch          (handshake.cc:320)
+      //   windows the same three, at the same line
+      //
+      // Two different arms of BoringSSL: 298 is the *application* verification
+      // callback failing with no reason to report, 320 is the built-in
+      // verifier handing back `X509_verify_cert_error_string`. So openssl does
+      // offer the discrimination on two of the three platforms this product
+      // ships to, and a gate that asserted otherwise was asserting one
+      // platform's silence as a universal fact.
+      //
+      // What is universal, and what this case now judges, is the panel's own
+      // classification. `ConnectionSupervisor._refusalReason` branches on one
+      // thing — whether the unwrapped error is a `HandshakeException` — and
+      // emits one sentence for every certificate fault, keeping the OS text
+      // whole after it because that is the part a support engineer pastes into
+      // a ticket. Every arm below is asserted to be exactly that input, so the
+      // sentence is identical by construction rather than by three
+      // measurements of a string openssl is free to change.
       final expired = _mountOf(
           trusted,
           _mintLeaf(
@@ -708,14 +732,30 @@ void main() {
       print('F15b foreign CA   : $foreignText');
       print('F15b SAN mismatch : $wrongNameText');
 
-      expect([foreignText, wrongNameText], everyElement(expiredText),
+      // Everything up to openssl's reason is one string on every platform, and
+      // it is the whole of what the panel branches on. Only the tail after
+      // `CERTIFICATE_VERIFY_FAILED:` varies, and it varies by platform rather
+      // than by anything this product decides.
+      String shape(String text) =>
+          text.split('CERTIFICATE_VERIFY_FAILED:').first;
+      expect([shape(foreignText), shape(wrongNameText)],
+          everyElement(shape(expiredText)),
           reason: 'an expired leaf, a foreign CA and a SAN that does not cover '
-              'the dialled address produced different text on this platform. '
-              'That would be worth knowing — but until it happens, a gate that '
-              'claimed to tell them apart would be claiming a discrimination '
-              'openssl does not offer, and an operator-facing message that '
-              'guessed would be wrong two thirds of the time and believed '
-              'every time');
+              'the dialled address arrived at the panel in different shapes, '
+              'not merely with different reasons inside one. The panel sorts '
+              'certificate faults by the exception it unwraps and by nothing '
+              'else, so a third shape here is a fault it would report as '
+              '"the gateway did not answer" — the cable, the switch and the '
+              'service, three things that are all fine, before anybody thinks '
+              'of the leaf');
+
+      // Which reason openssl volunteered, recorded rather than asserted: on
+      // macOS it volunteers none and the three are byte-identical, on Linux
+      // and Windows it names all three. Neither is a property of this product
+      // and neither may become one — the moment a panel is allowed to read
+      // this tail, it is guessing on one platform out of three.
+      print('F15b reasons by platform (recorded, not asserted): '
+          '${[expiredText, foreignText, wrongNameText].map((t) => t.split('CERTIFICATE_VERIFY_FAILED:').last.trim()).toSet()}');
 
       final health = await _healthLine(fixture);
       print('F15b health line: $health');
@@ -724,6 +764,19 @@ void main() {
               'panel. It has to name the certificate for the same reason F15a '
               'does — and it is the same sentence, because the panel cannot '
               'tell the two apart either');
+      // The half the string comparison above used to stand in for, asserted
+      // where it actually lives. This is the sentence an operator reads, it is
+      // the same one for all three faults because `_refusalReason` branches
+      // only on the exception type every arm above was asserted to be, and it
+      // says nothing about *which* certificate fault it is. A panel that
+      // guessed would be wrong two thirds of the time and believed every time.
+      expect(health,
+          startsWith("the gateway's certificate was not trusted by this panel"),
+          reason: 'the operator sentence for a certificate refusal is fixed '
+              'text; this panel produced "$health" instead. If the sentence '
+              'has started varying with the fault, the panel is reading '
+              'openssl\'s reason — which exists on Linux and Windows, does not '
+              'exist on macOS, and is not something a plant can be told');
       expect(fixture.client.stopReason, isNull,
           reason: 'an expired leaf is the most recoverable certificate fault '
               'there is: somebody renews it. A panel that stopped would need a '

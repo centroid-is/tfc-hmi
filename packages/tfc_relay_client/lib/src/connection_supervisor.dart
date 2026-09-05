@@ -447,10 +447,24 @@ final class ConnectionSupervisor {
   /// integrator pastes into a ticket, and it is the only part of this a
   /// support engineer can act on remotely.
   ///
-  /// **What it deliberately does not say is *which* certificate problem.**
-  /// Wrong CA, expired leaf and a SAN that does not cover the address are
-  /// byte-identical here (trap 16); a message that guessed would be wrong a
-  /// third of the time and believed every time.
+  /// **What it deliberately does not say is *which* certificate problem** —
+  /// and the reason is not the one trap 16 gave. Trap 16 said wrong CA,
+  /// expired leaf and an uncovered SAN are byte-identical here; that was
+  /// measured on macOS only and it is false on the two platforms this product
+  /// also ships to. Measured on all three (`tls_gate_test.dart`'s F15b): macOS
+  /// routes every one of them through BoringSSL's *application* verification
+  /// arm, which has no reason to report, while Linux and Windows route them
+  /// through the built-in verifier and name all three — "certificate has
+  /// expired", "unable to get local issuer certificate", "IP address
+  /// mismatch".
+  ///
+  /// So the discrimination does exist, on two platforms out of three, and that
+  /// is exactly why this sentence must not use it. A panel that named the fault
+  /// where openssl volunteered one would say nothing on the macOS desktops and
+  /// something confident on the eLinux panels, for the same broken certificate
+  /// — an operator-facing message that varies by which machine is looking at
+  /// the plant. The OS text is kept whole below for the integrator; the
+  /// sentence stays one sentence.
   ///
   /// **And no `FailureKind` is added for it**, deliberately against
   /// 06-RESEARCH §C.5's recommendation. `classifyFailure` sorts *call*
