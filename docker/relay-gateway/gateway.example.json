@@ -58,29 +58,52 @@
     "links share one.",
     "protocol: opcua | modbus | umas | m2400.",
     "",
-    "Credentials: username/password for OPC UA user-name auth, or",
-    "certificate_path/private_key_path for an application certificate. Give",
-    "one pair or the other; giving neither is an anonymous session.",
+    "Credentials: NOT one pair or the other. The two do different jobs and a",
+    "hardened server needs BOTH.",
+    "  certificate_path + private_key_path select the SECURE CHANNEL. The",
+    "  gateway asks for SIGNANDENCRYPT only when a certificate is present,",
+    "  and for NONE when it is not (gateway_config.dart, _opcUaClient).",
+    "  username + password are the USER TOKEN, passed independently.",
+    "So a server that offers no None endpoint — this plant's, and any",
+    "hardened one — REJECTS a username-only config, with:",
+    "  error/client  No suitable endpoint found",
+    "  error/client  SecureChannel must be connected to send request  (once a",
+    "                second, for ever)",
+    "That message names neither credentials nor security mode. Adding the",
+    "certificate is the fix. Giving neither is an anonymous, unencrypted",
+    "session, which only a server offering a None endpoint will accept.",
+    "",
+    "The certificate and key are DER, not PEM — see README 'Convert the OPC UA",
+    "credentials to DER'.",
     "",
     "An empty list is legal and serves nothing but the PIPE.* health keys —",
     "useful for a first boot that only has to prove the port answers."
   ],
   "links": [
     {
+      "_comment": [
+        "All four credential fields together — this is the combination that",
+        "connects to the SVN plant. Dropping the certificate pair drops the",
+        "channel to NONE and the server refuses it."
+      ],
       "alias": "ST101",
       "protocol": "opcua",
       "endpoint": "opc.tcp://REPLACE_ME_PLC_HOST:4840",
       "username": "REPLACE_ME_OPCUA_USER",
       "password": "REPLACE_ME_OPCUA_PASSWORD",
+      "certificate_path": "/config/opcua/client-cert.der",
+      "private_key_path": "/config/opcua/client-key.der",
       "string_encoding": "utf8",
       "use_isolate": true
     },
     {
       "_comment": [
         "A second link, shown for the shape only. Delete it if the plant has",
-        "one PLC. `unit_id` is Modbus-only; `certificate_path` /",
-        "`private_key_path` are the OPC UA application-certificate",
-        "alternative to username/password."
+        "one PLC. `unit_id` is Modbus-only.",
+        "",
+        "Certificate WITHOUT username is a legitimate combination — an",
+        "encrypted channel with an anonymous user token — but only if the",
+        "server admits anonymous users. Most do not."
       ],
       "alias": "ST201",
       "protocol": "opcua",
