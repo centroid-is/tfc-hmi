@@ -364,6 +364,31 @@ Future<SoakDriver> _runSoak(
           'the twenty checkpoints before them and the command that reproduces '
           'the run.\n\n${driver.verdictBlock}');
 
+  // **The keyframe verdict, ASSERTED rather than printed — and deliberately
+  // last.**
+  //
+  // Last because the two failures mean different things and the reader should
+  // meet them in that order: a violation above is a FAULT, and residue here is
+  // a DESIGN QUESTION about whether Phase 8's keyframes should have been
+  // built. A run that trips both is a run whose fault is the story.
+  //
+  // Until this call the milestone's headline decision number was print-only.
+  // `keyframesNotNeeded` was read in no file but `soak_meta_test.dart`, against
+  // hand-built ledgers; the ledger's own `violationLog` fires only when the
+  // verdict FILE cannot be written, so `KEYFRAME VERDICT: needed` printed and
+  // the lane exited 0 — on the ninety-second arm and the thirty-five-minute
+  // job alike. Ruling 5 closed the keyframes question on a number nothing
+  // could turn red.
+  //
+  // Every arm runs through this one function, which is what makes "both arms"
+  // true by construction. The 8- and 12-second auxiliary arms reach it with an
+  // empty ledger and pass, which is correct: zero divergences is a clean
+  // verdict however short the run, and their vacuity exemption is already
+  // handled by `minimumSamplesForAVerdict`.
+  for (final one in registered) {
+    if (one is DivergenceLedger) assertKeyframeVerdictIsClean(one);
+  }
+
   return driver;
 }
 

@@ -37,6 +37,7 @@ library;
 
 import 'dart:io';
 
+import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import 'invariant.dart';
@@ -572,6 +573,15 @@ final class DivergenceLedger with GuardedSampling implements SoakRunEndCheck {
       '  total divergence events         : $total',
       '  healed within the stable window : $healed',
       '  RESIDUE (unhealed at window end): $residue',
+      // **Both terms of `keyframesNotNeeded`, adjacent and labelled with what
+      // each one includes.** This line did not exist, and its absence was the
+      // M-08 shape landing on the headline: the predicate reads `unattributed`
+      // = `countOf(unattributed)`, every unattributed event healed or not,
+      // while the only `unattributed` in the block was the residue-by-cause
+      // slice, `residueOf(unattributed)`. A run whose unattributed
+      // divergences all healed printed zeros everywhere and then "needed,
+      // evidence above", with no evidence above.
+      '  UNATTRIBUTED (healed or not)    : $unattributed',
       '  residue by cause: ${causes.take(3).join(' ')}',
       '                    ${causes.skip(3).join(' ')}',
       '  KEYFRAME VERDICT: '
@@ -598,6 +608,45 @@ final class DivergenceLedger with GuardedSampling implements SoakRunEndCheck {
 
   @override
   String toString() => verdictBlock;
+}
+
+/// Fails the run when the keyframe verdict says the decision must be reopened.
+///
+/// **The verdict used to be print-only, and a decision number that cannot
+/// change visibly is not a decision number.** `keyframesNotNeeded`,
+/// [DivergenceLedger.unattributed] and [DivergenceLedger.residue] were read
+/// nowhere outside `soak_meta_test.dart`'s hand-built ledgers; the composed
+/// run printed the block and moved on, and the ledger's own `violationLog`
+/// fires on exactly one condition — the verdict FILE failing to write. So
+/// `KEYFRAME VERDICT: needed` went green on both arms.
+///
+/// **A failure here is a design question reopening, not a fault**, and the
+/// message says so. 11-CONTEXT ruling 5 closed the keyframes decision on a
+/// threshold of [keyframeVerdictThreshold] measured over a composed run; a
+/// run that crosses it is evidence the ruling was decided on runs that did
+/// not contain the case. Whoever reads this at 3 a.m. must not go looking for
+/// a broken pipe.
+///
+/// **The control cannot trip it**, and that is structural rather than lucky:
+/// [DivergenceLedger.record] returns at the top on `isControl` before any
+/// counter, so the warrant — which is unhealed by construction — never
+/// reaches either term. `soak_meta_test.dart` pins that early return, because
+/// deleting it would make every push red for ever.
+void assertKeyframeVerdictIsClean(DivergenceLedger ledger) {
+  if (ledger.keyframesNotNeeded) return;
+  fail('the keyframe decision must be revisited.\n\n'
+      '${ledger.verdictBlock}\n\n'
+      'This is NOT a pipe fault and nothing here says the gateway is broken. '
+      '11-CONTEXT ruling 5 closed the keyframes question on a threshold of '
+      '$keyframeVerdictThreshold over a composed run, and this run crossed '
+      'it: ${ledger.unattributed} unattributed (healed or not) and '
+      '${ledger.residue} unhealed residue. Either state converged somewhere '
+      'the pipe promises it converges, or the taxonomy attributed something '
+      'it should have explained. Both are reasons to reopen the decision and '
+      'neither is an incident.\n\n'
+      'Every event is in $divergenceFileName in the run artifact, one JSON '
+      'object per line, with its cause, its schedule offset and the values '
+      'both sides held. Read those before reading any source file.');
 }
 
 /// Where the verdict lands beside the rest of the artifact.

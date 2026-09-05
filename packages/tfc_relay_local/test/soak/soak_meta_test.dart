@@ -2790,17 +2790,164 @@ void main() {
       expect(lines[1], '  total divergence events         : 0');
       expect(lines[2], '  healed within the stable window : 0');
       expect(lines[3], '  RESIDUE (unhealed at window end): 0');
-      expect(lines[4],
-          '  residue by cause: lostPush=0 unknownHandle=0 generationChange=0');
+      expect(lines[4], '  UNATTRIBUTED (healed or not)    : 0');
       expect(lines[5],
+          '  residue by cause: lostPush=0 unknownHandle=0 generationChange=0');
+      expect(lines[6],
           '                    resyncFailure=0 epochChange=0 unattributed=0');
-      expect(lines[6], '  KEYFRAME VERDICT: not needed');
-      expect(lines[7], contains('ledger control: 1 event recorded, '
+      expect(lines[7], '  KEYFRAME VERDICT: not needed');
+      expect(lines[8], contains('ledger control: 1 event recorded, '
           'attributed lostPush'));
-      expect(lines, hasLength(8),
+      expect(lines, hasLength(9),
           reason: 'this block is pasted into the milestone audit, quoted in '
               'STATE.md and read months from now. A shape that drifts between '
               'runs is a shape nobody can diff, so drift fails here');
+    });
+
+    test('the block prints BOTH terms the verdict turns on, and a healed '
+        'unattributed event proves they are different numbers', () {
+      // **`unattributed` is half of `keyframesNotNeeded` and the block did not
+      // print it.** The predicate is `unattributed <= 0 && residue <= 0`,
+      // where `unattributed` is `countOf(unattributed)` — every unattributed
+      // event, HEALED OR NOT — and `residue` sums `residueOf` over the
+      // non-epoch causes, unhealed only. The only `unattributed` in the block
+      // was the one inside the residue-by-cause line, which is
+      // `residueOf(unattributed)`: a different number.
+      //
+      // So a run whose unattributed divergences all healed printed
+      // `total 3 / healed 3 / RESIDUE 0 / ... unattributed=0` and then
+      // `KEYFRAME VERDICT: needed, evidence above` — with no evidence above.
+      // The milestone's headline decision was closed on "unattributed 0,
+      // residue 0" read out of a block that did not contain the first number.
+      final ledger = DivergenceLedger(_ResyncSource())
+        ..record(_event(1, DivergenceCause.lostPush, isControl: true))
+        ..record(_event(2, DivergenceCause.unattributed, healedWithinMs: 900))
+        ..record(_event(3, DivergenceCause.unattributed, healedWithinMs: 1200))
+        ..record(_event(4, DivergenceCause.unattributed, healedWithinMs: 800));
+
+      expect(ledger.unattributed, 3);
+      expect(ledger.residue, 0, reason: 'all three healed inside the window');
+      expect(ledger.keyframesNotNeeded, isFalse,
+          reason: 'the predicate reads countOf, so it says NEEDED');
+
+      expect(ledger.verdictBlock,
+          contains('UNATTRIBUTED (healed or not)    : 3'),
+          reason: 'the verdict says needed and the reader must be able to see '
+              'WHY from the same block. A verdict whose asserted number is '
+              'printed nowhere is the M-08 shape on the headline line');
+      expect(ledger.verdictBlock, contains('RESIDUE (unhealed at window end): 0'),
+          reason: 'and the other term stays visible beside it, or the reader '
+              'swaps one lie for another');
+    });
+
+    test('a clean verdict passes the assertion; a residue-carrying one fails '
+        'it and says the DECISION must be revisited', () {
+      // **The verdict was print-only.** `keyframesNotNeeded`, `unattributed`
+      // and `residue` were read in exactly one file — this one, against
+      // hand-built ledgers — and `soak_test.dart` read none of them. The
+      // ledger's own `violationLog` fires on one condition, the verdict FILE
+      // failing to write, so `KEYFRAME VERDICT: needed` printed and the lane
+      // went green, on the ninety-second arm and the thirty-five-minute job
+      // alike. A decision number that cannot change visibly is not a decision
+      // number.
+      final clean = DivergenceLedger(_ResyncSource())
+        ..record(_event(1, DivergenceCause.lostPush, isControl: true));
+      expect(() => assertKeyframeVerdictIsClean(clean), returnsNormally);
+
+      final dirty = DivergenceLedger(_ResyncSource())
+        ..record(_event(1, DivergenceCause.lostPush, isControl: true))
+        ..record(_event(2, DivergenceCause.unattributed));
+
+      Object? thrown;
+      try {
+        assertKeyframeVerdictIsClean(dirty);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown, isNotNull, reason: 'residue 1 against a threshold of 0');
+      final message = thrown.toString();
+      expect(message, contains('keyframe decision'),
+          reason: 'a red here is a DESIGN QUESTION REOPENING, not a fault. '
+              'Whoever reads this at 3 a.m. has to know which of the two it '
+              'is, or they will go looking for a broken pipe');
+      expect(message, contains('revisit'));
+      expect(message, contains('divergences.jsonl'),
+          reason: 'and it must name where the events are, not merely that '
+              'there were some');
+    });
+
+    test('the ledger control cannot trip the assertion, and that is one early '
+        'return', () {
+      // **The pin that stands between this assertion and a permanently red
+      // lane.** The control is recorded with `healedWithinMs: null` — it is
+      // unhealed BY CONSTRUCTION, because it substitutes a value nothing in
+      // the run will ever supply again. If it reached the counters it would be
+      // residue on every run for ever.
+      //
+      // What stops it is `record()` returning at the top on `event.isControl`,
+      // before `_total`, `_byCause`, `_residueByCause` and `_retain`. One
+      // branch, one call site (`eventual_resync.dart` sets `isControl: true`
+      // in exactly one place). Nothing failed if somebody deleted it: the
+      // cases below assert the control's EFFECTS, not that the isolation is
+      // what produces them, and with the verdict unasserted on composed runs
+      // the lane would not have noticed either.
+      //
+      // Deliberately given the most dangerous cause available rather than the
+      // `lostPush` the real control uses, so the pin holds even if the
+      // taxonomy's attribution of the control ever changes.
+      final ledger = DivergenceLedger(_ResyncSource())
+        ..record(_event(1, DivergenceCause.unattributed, isControl: true));
+
+      expect(ledger.unattributed, 0,
+          reason: 'an unhealed, unattributed CONTROL event must not reach the '
+              'counters — it is the verdict\'s warrant, not one of the run\'s '
+              'divergences');
+      expect(ledger.residue, 0);
+      expect(ledger.total, 0);
+      expect(ledger.keyframesNotNeeded, isTrue);
+      expect(() => assertKeyframeVerdictIsClean(ledger), returnsNormally,
+          reason: 'if this ever fails, EVERY push is red for ever and the '
+              'cause is two lines in DivergenceLedger.record');
+      expect(ledger.judgedSamples, 1,
+          reason: 'and it still counts as the reading that clears the vacuity '
+              'gate, which is the whole reason the control exists');
+    });
+
+    test('the composed run ASSERTS the verdict, on every arm, and not only '
+        'prints it', () {
+      // **A structural pin, and it is the only honest instrument for this.**
+      // The behaviour — a composed run going red on residue — cannot be
+      // produced on demand: three composed runs have recorded zero divergence
+      // events, the negative branch has never fired on one, and manufacturing
+      // a real divergence would mean corrupting a frame through a seam the
+      // soak does not have (`eventual_resync.dart` explains why the control
+      // substitutes an answer instead). So what is pinned is that the call
+      // site exists, in the same idiom as invariant 5's `_tickResyncComplained`
+      // pin and invariant 4's `_debugHistory` pin.
+      //
+      // It is pinned rather than trusted because the whole finding was that
+      // this number printed and nothing read it, on both arms, for the length
+      // of the milestone. There is ONE `_runSoak`, so one call site covers the
+      // ninety-second arm, the thirty-five-minute job and the auxiliary arms —
+      // an assertion that ran on one arm and not the other would be "judged on
+      // a column where it never ran", which is the failure this phase keeps
+      // finding.
+      final soakTest = File('test/soak/soak_test.dart');
+      expect(soakTest.existsSync(), isTrue,
+          reason: 'the pin is worthless if the path rots: ${soakTest.path}');
+      final source = soakTest.readAsStringSync();
+
+      expect(source, contains('assertKeyframeVerdictIsClean'),
+          reason: 'the keyframe verdict is the milestone\'s headline decision '
+              'number (11-CONTEXT ruling 5). Without this call the composed '
+              'run PRINTS "KEYFRAME VERDICT: needed" and exits 0 — which is '
+              'what it did for the whole of Phase 11');
+      expect(RegExp(r'_runSoak').allMatches(source).length,
+          greaterThanOrEqualTo(2),
+          reason: 'one composed entry point is what makes "both arms" true by '
+              'construction rather than by two call sites staying in step. If '
+              'this ever becomes two functions, the assertion has to be in '
+              'both and this pin has to say so');
     });
 
     test('one unhealed unattributed event prints NEEDED', () {
