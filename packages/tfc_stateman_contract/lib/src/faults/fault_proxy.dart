@@ -210,6 +210,7 @@ final class FaultProxy {
 
   /// The high-water reading of every pair that has already closed.
   int _retiredPeakPendingBytes = 0;
+  int _retiredLargestChunkBytes = 0;
 
   /// The per-chunk delay every line gets, rebuilt when [latency] or [jitter]
   /// changes and handed to pairs accepted afterwards.
@@ -263,6 +264,24 @@ final class FaultProxy {
       if (pairPeak > peak) peak = pairPeak;
     }
     return peak;
+  }
+
+  /// The largest single chunk any direction of any pair has ever been handed.
+  ///
+  /// The companion of [peakPendingBytes], and the reason the memory bound can
+  /// be asserted exactly rather than approximated: the queue's peak is strictly
+  /// below the high-water mark plus this. See `DelayLine.largestChunkBytes` —
+  /// the number belongs to the runner's kernel, not to the proxy, so a test
+  /// that hard-codes it is asserting which machine it is on.
+  ///
+  /// Retired pairs are remembered, for the same reason their peaks are.
+  int get largestChunkBytes {
+    var largest = _retiredLargestChunkBytes;
+    for (final pair in _pairs) {
+      final pairLargest = pair.largestChunkBytes;
+      if (pairLargest > largest) largest = pairLargest;
+    }
+    return largest;
   }
 
   /// How many times [flap] has changed half since this proxy was created.
@@ -892,6 +911,10 @@ final class FaultProxy {
   void _retire(_ProxiedPair pair) {
     final peak = pair.peakPendingBytes;
     if (peak > _retiredPeakPendingBytes) _retiredPeakPendingBytes = peak;
+    final largest = pair.largestChunkBytes;
+    if (largest > _retiredLargestChunkBytes) {
+      _retiredLargestChunkBytes = largest;
+    }
     _pairs.remove(pair);
   }
 }
@@ -923,6 +946,12 @@ final class _ProxiedPair {
   int get peakPendingBytes => toUpstream.peakPendingBytes > toClient.peakPendingBytes
       ? toUpstream.peakPendingBytes
       : toClient.peakPendingBytes;
+
+  /// The largest single chunk either direction of this pair has been handed.
+  int get largestChunkBytes =>
+      toUpstream.largestChunkBytes > toClient.largestChunkBytes
+          ? toUpstream.largestChunkBytes
+          : toClient.largestChunkBytes;
 
   /// Applies a per-chunk delay to **both** directions.
   ///
