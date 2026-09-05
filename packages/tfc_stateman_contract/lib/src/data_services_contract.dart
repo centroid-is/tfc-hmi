@@ -44,6 +44,7 @@ import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import 'check.dart';
+import 'harness.dart';
 
 /// A recorded series on the pre-freezer line, named the way the database names
 /// tables rather than the way the key space names tags — the parameter is
@@ -644,6 +645,12 @@ void runDataServicesContract(
       test(property, () async {
         final api = make();
         addTearDown(api.dispose);
+        // The link, before the property. On an in-process source this is a
+        // synchronous read and nothing more; behind a socket it is where the
+        // connect, the handshake and the first subscribe come due, and leaving
+        // them inside the case's own budget made the first check in this suite
+        // a measurement of the transport (`harness.dart`'s [linkUp]).
+        await linkUp(api);
         if (expectUnreachable.contains(property)) {
           await expectUnreachableMethod(property, () => check(api));
           return;
