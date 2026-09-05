@@ -67,6 +67,20 @@ dependencies:
   # of the relay server and a later web client.
   tfc_access:
     path: packages/tfc_access
+  # The panel side of the relay pipe: `RemoteStateMan` over WebSocket +
+  # JSON-RPC. Pure Dart with no Flutter and no open62541, which is why it can
+  # be added here without touching the native-asset build. Its own dev
+  # dependencies — the gateway and the contract kit, both of which bind ports —
+  # are dev-only in that package and so do not reach this solve.
+  tfc_relay_client:
+    path: packages/tfc_relay_client
+  # Named directly as well as reached through the client, because the adapter
+  # in `lib/core/gateway_state_man.dart` switches on `WriteResult`'s variants
+  # and translates the protocol's `DynamicValue` into open62541's. An implicit
+  # transitive dependency is one `dart pub get` away from being an unresolved
+  # import.
+  tfc_relay_protocol:
+    path: packages/tfc_relay_protocol
   # Pinned: newer mcp_dart (2.4.0 observed, 2026-08) removes server-initiated
   # elicitation ("elicitation/create is a legacy server-initiated
   # interaction"), which ElicitationRiskGate depends on. Migrate to stateless
