@@ -1,0 +1,456 @@
+name: iOS Build
+
+# Builds the iOS app and, on the release channels, ships it to App Store
+# Connect. Two channels, mirroring what the desktop builds already do:
+#
+#   testflight  every merge to main (called by main-prerelease.yml) — the
+#               mobile equivalent of the rolling `main-latest` prerelease.
+#               Lands in TestFlight for internal testers.
+#   appstore    a version tag (called by tag.yml) — the same upload, plus the
+#               App Store Connect API calls that attach the build to a store
+#               version and submit it for review.
+#
+# Both channels upload to the same place: App Store Connect has one build
+# stream, and every uploaded build is a TestFlight build. "App Store" is not a
+# different upload, it is what happens to a build afterwards — which is why the
+# only real difference between the two channels below is whether
+# appstore_submit.py runs.
+#
+# With no channel (pull requests, plain workflow_dispatch) this only proves the
+# iOS build still compiles. That gate matters more here than on desktop: the
+# iOS target had never been built in CI before, so nothing else notices when a
+# dependency stops supporting it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'What to do with the build'
+        type: choice
+        options:
+          - none
+          - testflight
+          - appstore
+        default: none
+      submit_for_review:
+        description: 'appstore channel only: submit the store version to Apple for review'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+        default: 'true'
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref to checkout (commit SHA, branch, tag)'
+        type: string
+        default: ''
+      channel:
+        description: 'none | testflight | appstore'
+        type: string
+        default: none
+      # A string, not a boolean. Boolean `workflow_call` inputs have bitten
+      # this repository before: the value a caller passes is not always the
+      # value the `if:` expression sees, and a silently-false flag here means a
+      # release that uploads and then never gets submitted.
+      submit_for_review:
+        description: "'true' or 'false' — appstore channel only"
+        type: string
+        default: 'true'
+  # Path-filtered, unlike macos.yml's unfiltered PR trigger. GitHub Free allows
+  # 5 concurrent macOS jobs and macos.yml already claims one on every PR; a
+  # second unconditional macOS job per PR is what starves the queue. The real
+  # gate is the build on every merge to main.
+  pull_request:
+    paths:
+      - 'centroid-hmi/ios/**'
+      - 'centroid-hmi/pubspec.yaml'
+      - '.github/workflows/ios.yml'
+      - '.github/scripts/appstore_submit.py'
+      - '.flutter-version'
+
+permissions:
+  contents: read
+
+# Same shape and the same reasoning as macos.yml's group — see the long comment
+# there. The `ios-` prefix is what keeps this workflow's jobs from sharing a
+# group with the macOS/Linux/Windows callees inside one main-prerelease run,
+# since a called workflow sees the caller's `github` context.
+concurrency:
+  group: ios-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: iOS Build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          # CFBundleVersion is the commit count (see the next step). A shallow
+          # clone counts 1, so every upload after the first would be rejected
+          # as a duplicate build number.
+          fetch-depth: 0
+
+      # CFBundleShortVersionString comes from pubspec.yaml, so a tag build
+      # carries the tag's version (tag.yml rewrites pubspec before calling us)
+      # and a main build carries whatever the last tag left behind.
+      #
+      # CFBundleVersion is the commit count rather than pubspec's `+n` or
+      # github.run_number. App Store Connect requires it to be unique — and
+      # higher than every build already uploaded for the same version string —
+      # and pubspec's build number is `+1` on every tag, which would collide
+      # with the main builds uploaded under that same version. run_number
+      # resets if a workflow file is ever renamed. The commit count only ever
+      # goes up and is a property of the repository, not of the CI system.
+      - name: Resolve version and build number
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_sha=$(git rev-parse HEAD)
+          build_number=$(git rev-list --count HEAD)
+          build_name=$(sed -n 's/^version: *\([^+]*\).*/\1/p' centroid-hmi/pubspec.yaml | tr -d '[:space:]')
+          if [ -z "$build_name" ]; then
+            echo "::error::centroid-hmi/pubspec.yaml has no 'version:' line"
+            exit 1
+          fi
+          echo "build_sha=$build_sha"       >> "$GITHUB_OUTPUT"
+          echo "build_name=$build_name"     >> "$GITHUB_OUTPUT"
+          echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
+          echo "Version $build_name ($build_number) from ${build_sha:0:7}"
+
+      # Everything needed to sign for distribution and talk to App Store
+      # Connect. Absent on a fork, on a pull request, and — until the secrets
+      # below are added — on main. Missing secrets are a warning rather than a
+      # failure: this workflow's other job is to keep the iOS build compiling,
+      # and a permanently red main is how a real failure gets ignored. Anything
+      # that asked for an upload says so loudly in the run summary instead.
+      - name: Check distribution credentials
+        id: creds
+        shell: bash
+        env:
+          CHANNEL: ${{ inputs.channel || 'none' }}
+          APPLE_DISTRIBUTION_P12_BASE64: ${{ secrets.APPLE_DISTRIBUTION_P12_BASE64 }}
+          APPLE_IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_IOS_PROVISIONING_PROFILE_BASE64 }}
+          APPLE_ASC_KEY_ID: ${{ secrets.APPLE_ASC_KEY_ID }}
+          APPLE_ASC_ISSUER_ID: ${{ secrets.APPLE_ASC_ISSUER_ID }}
+          APPLE_ASC_PRIVATE_KEY: ${{ secrets.APPLE_ASC_PRIVATE_KEY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in APPLE_DISTRIBUTION_P12_BASE64 APPLE_IOS_PROVISIONING_PROFILE_BASE64 \
+                      APPLE_ASC_KEY_ID APPLE_ASC_ISSUER_ID APPLE_ASC_PRIVATE_KEY APPLE_TEAM_ID; do
+            [ -n "${!name:-}" ] || missing+=("$name")
+          done
+
+          if [ "$CHANNEL" = "none" ]; then
+            echo "upload=false" >> "$GITHUB_OUTPUT"
+            echo "No channel requested — compile check only."
+            exit 0
+          fi
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "upload=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=iOS upload skipped::The $CHANNEL channel was requested but these repository secrets are unset: ${missing[*]}. See docs/ios-release.md. The app was still built, unsigned."
+            {
+              echo "### iOS upload skipped"
+              echo
+              echo "Channel \`$CHANNEL\` was requested but these repository secrets are unset:"
+              echo
+              for name in "${missing[@]}"; do echo "- \`$name\`"; done
+              echo
+              echo "Setup instructions: [docs/ios-release.md](docs/ios-release.md)."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "upload=true" >> "$GITHUB_OUTPUT"
+          echo "Signing and uploading on the $CHANNEL channel."
+
+      - name: Setup Flutter
+        uses: ./.github/actions/setup-flutter
+
+      - name: Get Flutter packages
+        working-directory: centroid-hmi
+        run: flutter pub get
+
+      # ---------------------------------------------------------------------
+      # Compile check only. Nothing below this point runs.
+      # ---------------------------------------------------------------------
+      - name: Build unsigned .app
+        if: steps.creds.outputs.upload != 'true'
+        working-directory: centroid-hmi
+        # CENTROIDX_CHAT/CENTROIDX_KNOWLEDGE off to match the shipped desktop
+        # binaries — see macos.yml and lib/core/feature_flags.dart.
+        run: |
+          flutter build ios --release --no-codesign \
+            --build-name=${{ steps.version.outputs.build_name }} \
+            --build-number=${{ steps.version.outputs.build_number }} \
+            --dart-define=GIT_SHA=${{ steps.version.outputs.build_sha }} \
+            --dart-define=CENTROIDX_CHAT=false \
+            --dart-define=CENTROIDX_KNOWLEDGE=false
+
+      # ---------------------------------------------------------------------
+      # Signed distribution build.
+      # ---------------------------------------------------------------------
+      - name: Import Apple Distribution certificate
+        if: steps.creds.outputs.upload == 'true'
+        env:
+          APPLE_DISTRIBUTION_P12_BASE64: ${{ secrets.APPLE_DISTRIBUTION_P12_BASE64 }}
+          APPLE_DISTRIBUTION_P12_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH=$RUNNER_TEMP/ios-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          echo "$APPLE_DISTRIBUTION_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/distribution.p12"
+          security import "$RUNNER_TEMP/distribution.p12" -P "$APPLE_DISTRIBUTION_P12_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # "Apple Distribution", not the "Developer ID Application" identity
+          # macos.yml uses. Developer ID signs software distributed outside the
+          # store; App Store Connect rejects it on sight. Asserted here rather
+          # than discovered at upload, 20 minutes into the job.
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+            | grep -E '"(Apple Distribution|iPhone Distribution)' | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          if [ -z "$IDENTITY" ]; then
+            echo "::error title=Wrong certificate::APPLE_DISTRIBUTION_P12_BASE64 contains no Apple Distribution identity. Available:"
+            security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+            exit 1
+          fi
+          echo "CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "Signing identity: $IDENTITY"
+
+      - name: Install App Store provisioning profile
+        if: steps.creds.outputs.upload == 'true'
+        env:
+          APPLE_IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_IOS_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          PROFILE="$RUNNER_TEMP/centroidx.mobileprovision"
+          echo "$APPLE_IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PROFILE"
+
+          # A .mobileprovision is a CMS envelope around a plist.
+          security cms -D -i "$PROFILE" > "$RUNNER_TEMP/profile.plist"
+          UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$RUNNER_TEMP/profile.plist")
+          NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$RUNNER_TEMP/profile.plist")
+          APP_ID=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$RUNNER_TEMP/profile.plist")
+
+          # Three ways this profile can be the wrong one, all of which produce
+          # an IPA that builds cleanly and is rejected after upload:
+          #   * a Development profile (has ProvisionedDevices),
+          #   * an Ad Hoc / Development profile (get-task-allow true),
+          #   * a profile for some other app id.
+          if /usr/libexec/PlistBuddy -c 'Print :ProvisionedDevices' "$RUNNER_TEMP/profile.plist" >/dev/null 2>&1; then
+            echo "::error title=Wrong provisioning profile::This is a Development or Ad Hoc profile (it lists provisioned devices). App Store distribution needs an App Store profile."
+            exit 1
+          fi
+          if [ "$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:get-task-allow' "$RUNNER_TEMP/profile.plist")" != "false" ]; then
+            echo "::error title=Wrong provisioning profile::get-task-allow is true — that is a development profile."
+            exit 1
+          fi
+          # application-identifier is "<TEAMID>.<bundle id>".
+          if [ "${APP_ID#*.}" != "is.centroid.x" ]; then
+            echo "::error title=Wrong provisioning profile::profile is for ${APP_ID#*.}, expected is.centroid.x"
+            exit 1
+          fi
+
+          # Xcode 16 reads profiles from UserData; older Xcode from
+          # MobileDevice. Installed in both so the runner image can move
+          # without taking a release with it.
+          for dir in "$HOME/Library/MobileDevice/Provisioning Profiles" \
+                     "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+            mkdir -p "$dir"
+            cp "$PROFILE" "$dir/$UUID.mobileprovision"
+          done
+
+          echo "PROVISIONING_PROFILE_NAME=$NAME" >> "$GITHUB_ENV"
+          echo "Provisioning profile: $NAME ($UUID) for ${APP_ID#*.}"
+
+      # The Runner target pins CODE_SIGN_STYLE = Automatic in project.pbxproj,
+      # and a target-level setting beats anything an xcconfig says. Automatic
+      # signing on a runner means xcodebuild reaching out to create
+      # certificates and profiles of its own — which silently burns through the
+      # team's three-distribution-certificate limit. Flipped to Manual by the
+      # same sed macos.yml uses, then the identity and profile are supplied
+      # through an xcconfig, which the pbxproj does not override because it
+      # names neither of those settings.
+      - name: Configure manual signing
+        if: steps.creds.outputs.upload == 'true'
+        working-directory: centroid-hmi/ios
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          sed -i '' 's/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g' Runner.xcodeproj/project.pbxproj
+          {
+            echo "CODE_SIGN_STYLE = Manual"
+            echo "DEVELOPMENT_TEAM = $APPLE_TEAM_ID"
+            echo "CODE_SIGN_IDENTITY = $CODESIGN_IDENTITY"
+            echo "PROVISIONING_PROFILE_SPECIFIER = $PROVISIONING_PROFILE_NAME"
+          } > Flutter/Signing.xcconfig
+          echo '#include "Signing.xcconfig"' >> Flutter/Release.xcconfig
+          cat Flutter/Signing.xcconfig
+
+      - name: Write export options
+        if: steps.creds.outputs.upload == 'true'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          # manageAppVersionAndBuildNumber must be false: left at its default,
+          # Xcode rewrites CFBundleVersion during export to whatever it thinks
+          # comes next, which throws away the commit count this workflow
+          # carefully chose and makes uploads collide.
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>teamID</key>
+            <string>$APPLE_TEAM_ID</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>signingCertificate</key>
+            <string>$CODESIGN_IDENTITY</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>is.centroid.x</key>
+              <string>$PROVISIONING_PROFILE_NAME</string>
+            </dict>
+            <key>destination</key>
+            <string>export</string>
+            <key>uploadSymbols</key>
+            <true/>
+            <key>manageAppVersionAndBuildNumber</key>
+            <false/>
+          </dict>
+          </plist>
+          PLIST
+          cat "$RUNNER_TEMP/ExportOptions.plist"
+
+      - name: Build signed IPA
+        if: steps.creds.outputs.upload == 'true'
+        working-directory: centroid-hmi
+        run: |
+          set -euo pipefail
+          flutter build ipa --release \
+            --build-name=${{ steps.version.outputs.build_name }} \
+            --build-number=${{ steps.version.outputs.build_number }} \
+            --dart-define=GIT_SHA=${{ steps.version.outputs.build_sha }} \
+            --dart-define=CENTROIDX_CHAT=false \
+            --dart-define=CENTROIDX_KNOWLEDGE=false \
+            --export-options-plist="$RUNNER_TEMP/ExportOptions.plist"
+
+          IPA=$(find build/ios/ipa -name '*.ipa' -maxdepth 1 | head -1)
+          if [ -z "$IPA" ]; then
+            echo "::error::flutter build ipa produced no .ipa"
+            ls -R build/ios/ipa || true
+            exit 1
+          fi
+          echo "IPA_PATH=$(pwd)/$IPA" >> "$GITHUB_ENV"
+          ls -lh "$IPA"
+
+      # altool finds the key by id under one of a handful of fixed directories;
+      # there is no flag for the path.
+      - name: Stage the App Store Connect API key
+        if: steps.creds.outputs.upload == 'true'
+        env:
+          APPLE_ASC_KEY_ID: ${{ secrets.APPLE_ASC_KEY_ID }}
+          APPLE_ASC_PRIVATE_KEY: ${{ secrets.APPLE_ASC_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/private_keys"
+          printf '%s\n' "$APPLE_ASC_PRIVATE_KEY" > "$HOME/private_keys/AuthKey_${APPLE_ASC_KEY_ID}.p8"
+          chmod 600 "$HOME/private_keys/AuthKey_${APPLE_ASC_KEY_ID}.p8"
+
+      - name: Upload to App Store Connect
+        if: steps.creds.outputs.upload == 'true'
+        env:
+          APPLE_ASC_KEY_ID: ${{ secrets.APPLE_ASC_KEY_ID }}
+          APPLE_ASC_ISSUER_ID: ${{ secrets.APPLE_ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+
+          xcrun altool --validate-app --type ios --file "$IPA_PATH" \
+            --apiKey "$APPLE_ASC_KEY_ID" --apiIssuer "$APPLE_ASC_ISSUER_ID"
+
+          # Re-running a workflow on a commit that was already uploaded is a
+          # normal thing to do (a flaky notarization, a cancelled run) and it
+          # must not turn main red. The build number is the commit count, so a
+          # rerun offers a build App Store Connect already has; that one
+          # specific rejection is downgraded to a warning. Every other altool
+          # failure still fails the job.
+          set +e
+          out=$(xcrun altool --upload-app --type ios --file "$IPA_PATH" \
+            --apiKey "$APPLE_ASC_KEY_ID" --apiIssuer "$APPLE_ASC_ISSUER_ID" 2>&1)
+          status=$?
+          set -e
+          echo "$out"
+
+          if [ $status -ne 0 ]; then
+            if echo "$out" | grep -qiE 'bundle version must be higher|has already been used|already exists|redundant binary upload'; then
+              echo "::warning title=Build already uploaded::App Store Connect already has build ${{ steps.version.outputs.build_number }} for version ${{ steps.version.outputs.build_name }}. Treating as success — this is what a rerun of an already-published commit looks like."
+            else
+              exit $status
+            fi
+          fi
+
+      # Attaching the build to a store version and submitting it is pure App
+      # Store Connect API work, so it runs on the artifacts of the upload
+      # above rather than on anything in the build tree.
+      - name: Set up the App Store Connect client
+        if: steps.creds.outputs.upload == 'true' && inputs.channel == 'appstore'
+        run: |
+          set -euo pipefail
+          # A venv rather than `pip install --user`: the runner's system Python
+          # is externally managed and refuses a bare install.
+          python3 -m venv "$RUNNER_TEMP/asc-venv"
+          "$RUNNER_TEMP/asc-venv/bin/pip" install --quiet --disable-pip-version-check 'pyjwt[crypto]==2.10.1'
+
+      - name: Submit to the App Store
+        if: steps.creds.outputs.upload == 'true' && inputs.channel == 'appstore'
+        env:
+          APPLE_ASC_KEY_ID: ${{ secrets.APPLE_ASC_KEY_ID }}
+          APPLE_ASC_ISSUER_ID: ${{ secrets.APPLE_ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          submit=--submit
+          [ "${{ inputs.submit_for_review }}" = "true" ] || submit=--no-submit
+          "$RUNNER_TEMP/asc-venv/bin/python" .github/scripts/appstore_submit.py \
+            --key-id "$APPLE_ASC_KEY_ID" \
+            --issuer-id "$APPLE_ASC_ISSUER_ID" \
+            --private-key "$HOME/private_keys/AuthKey_${APPLE_ASC_KEY_ID}.p8" \
+            --bundle-id is.centroid.x \
+            --version "${{ steps.version.outputs.build_name }}" \
+            --build-number "${{ steps.version.outputs.build_number }}" \
+            --whats-new "CentroidX ${{ steps.version.outputs.build_name }}. See the release notes at https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}" \
+            "$submit"
+
+      - name: Cleanup keychain and API key
+        if: always()
+        run: |
+          rm -f "$HOME/private_keys/"AuthKey_*.p8
+          [ -z "${KEYCHAIN_PATH:-}" ] || security delete-keychain "$KEYCHAIN_PATH" || true
+
+      # Kept even on the release channels: when a submission is rejected the
+      # first question is always what was actually in the binary, and the
+      # archive is gone with the runner.
+      - name: Upload IPA artifact
+        if: steps.creds.outputs.upload == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: centroidx_ios_${{ inputs.channel }}.ipa
+          path: ${{ env.IPA_PATH }}
+          if-no-files-found: error

@@ -42,6 +42,14 @@ Checksums: [`SHA256SUMS.txt`](https://github.com/centroid-is/tfc-hmi/releases/do
 
 > These are development builds with no release testing, replaced on every merge to `main`. They do not auto-update — use the version manager above for production.
 
+### iOS
+
+The iOS app is not downloadable from here — Apple distributes it. Every merge
+to `main` is uploaded to **TestFlight**, and every version tag is submitted to
+the **App Store**. See [docs/ios-release.md](docs/ios-release.md) for how that
+is wired, which repository secrets it needs, and what has to be in place on
+Apple's side before the first submission.
+
 ## Development
 
 ### Prerequisites
