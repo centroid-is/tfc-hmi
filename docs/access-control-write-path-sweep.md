@@ -115,6 +115,7 @@ file and call rather than by line.**
 | `lib/core/secure_storage/macos.dart:123, 152, 172`, `lib/core/secure_storage/other.dart:29`, `packages/tfc_dart/lib/core/secure_storage/linux.dart:52` | `_storage.delete(key:)` / `_legacy.delete(key:)` | OS keychain | the `MySecureStorage` implementations | `left open: secure storage is outside both guards` — see §3.4 |
 | `lib/pages/ip_settings.dart:408, 1127` | `connection.delete()`, `connection.update(updatedSettings)` | NetworkManager | `/advanced/ip-settings` | `route-gated (Phase 2)` — `kRaisedRoutes` raises it to `administer` |
 | `lib/pages/ip_settings.dart:588` | `_tracker.update(...)` | — | in-memory traffic-rate tracker | `not widget-reachable` — not a store; a false positive of a deliberately broad grep, recorded rather than filtered away |
+| `lib/pages/page_editor.dart:3706` | `counts.update(asset.displayName, ...)` | — | an in-memory tally of asset kinds, for a label | `not widget-reachable` — not a store; the same broad-grep false positive as the row above. The editor's real persistence is `PageManager`, rowed in §2.9 |
 | `packages/centroidx_upgrader/lib/src/manager_launcher.dart:170` | `staged.delete()` | filesystem | cleanup of a failed staging write; see 2.7 | `left open: the update path is ungated` — see §3.5 |
 | `packages/tfc_dart/lib/core/state_man.dart:2175` | `wrapper.client.delete()` | — | OPC UA client teardown | `not widget-reachable` — not a store; disposes a connection |
 
@@ -231,6 +232,9 @@ all three identified, two of them already behind a raised route.
 | `lib/pages/about_linux.dart:98` | `nm.NetworkManagerClient(bus: ...)` | — | `/advanced/about-linux` (read-only page) | `not widget-reachable` as a write — the client is constructed to *read* device state; no write member is called in that file |
 | `lib/core/network_manager_ops.dart:86, 107` | `client.settings.addConnection(settings)`, `client.activateConnection(device:, connection:)` | NetworkManager over D-Bus | `lib/pages/ip_settings.dart:10` — the **only** importer in the tree (`grep -rn network_manager_ops lib centroid-hmi/lib`), so `/advanced/ip-settings` | `route-gated (Phase 2)` — the same verdict as the rows above it, reached one file deeper. **This row was missing from the 2026-08-29 run and is the 2026-08-30 re-run's one genuine finding — see §4.1 F** |
 | `lib/widgets/tfc_operations.dart:22, 24, 69` | `_operationMode.callSetMode('running' \| 'stopped' \| 'cleaning')` | `is.centroid.OperationMode` over D-Bus | `OperationModeAppBarLeftWidgetProvider`, which **nothing in the repository constructs** — `globalAppBarLeftWidgetProvider` (`lib/widgets/base_scaffold.dart:36`) defaults to null and is never overridden | `left open: unwired today, and start/stop is an operator action by design` — see §3.8 |
+| `lib/core/system_clock.dart:453-465, 538` | `callSetNTP`, `callSetTimezone`, `callSetLocalRTC`, `callSetTime`, `callSetRuntimeNTPServers` | systemd-timedated / systemd-timesyncd over D-Bus | `lib/widgets/system_clock_section.dart`, mounted on `/advanced/about-linux` | `left open: arrived from main after this milestone's route census` — upstream #440 gave the clock and NTP settings to a page the row below classified, correctly at the time, as read-only. Two things stand behind it today and neither is this milestone's gate: every call passes `allowInteractiveAuthorization: true`, so **polkit** decides at the OS, and the station's clock is not a plant control. Raising `/advanced/about-linux` is a product decision for the owner of #440 — a rebase is the wrong place to take an operator's clock away. See §3.9 |
+| `lib/core/system_clock.dart:51-53` | `prefs.remove(ntpServersPrefsKey)`, `prefs.setStringList(ntpServersPrefsKey, ...)` | device-local | the same section, through `ref.read(localPreferencesProvider)` at `lib/pages/about_linux.dart:52, 60` | construction `enforced by 03-11` — the store comes from the provider rather than the factory. Device-local by design: NTP servers are a per-station choice, like the startup URL, so the write bypasses `GuardedPreferences` for the same reason those do |
+| `lib/dbus/generated/timedate1.dart:101-116`, `lib/dbus/generated/timesync1.dart:131` | `callSetTime`, `callSetTimezone`, `callSetLocalRTC`, `callSetNTP`, `callSetRuntimeNTPServers` | systemd-timedated / systemd-timesyncd | `lib/core/system_clock.dart` — the only importer | `correct as-is` — generated D-Bus bindings. The verdict belongs at the caller, one row above, exactly as it does for the NetworkManager bindings; a generated proxy is transport, not a decision |
 | `lib/dbus/generated/hostname1.dart:290-356` | `callSetHostname`, `callSetStaticHostname`, `callSetPrettyHostname`, `callSetIconName`, `callSetChassis`, `callSetDeployment`, `callSetLocation` | systemd-hostnamed | **no caller anywhere in the tree** | `not widget-reachable` — generated D-Bus bindings with zero call sites; a grep for each name outside this file returns nothing |
 | `lib/dbus/generated/login1.dart:1140-1563` | `callSetUserLinger`, `callSetRebootParameter`, `callSetRebootToFirmwareSetup`, `callSetRebootToBootLoaderMenu`, `callSetRebootToBootLoaderEntry`, `callSetWallMessage` | systemd-logind | **no caller anywhere in the tree** | `not widget-reachable` — same |
 | `lib/dbus/generated/operations.dart:88` | `callSetMode` declaration | — | the binding `tfc_operations.dart` calls | `correct as-is` — a generated binding; the call site is the row above |
@@ -621,6 +625,27 @@ handle lives on a narrower interface the decorator does not have to expose. That
 is a refactor of `tfc_dart`'s core, not a guard change.
 
 ---
+
+### 3.11 `/advanced/about-linux` gained writes after the census
+
+The route census that produced `kRaisedRoutes` classified
+`/advanced/about-linux` as a read-only page, and at the time it was one: the
+only D-Bus client on it was constructed to *read* device state (§2.8).
+Upstream #440 then added the system clock and NTP settings to it, so the page
+now sets the station's time, timezone, RTC mode and NTP servers.
+
+**Left open deliberately, and this is the reasoning rather than an oversight.**
+Every call passes `allowInteractiveAuthorization: true`, which puts the
+decision on **polkit** at the OS — the boundary that actually holds for
+system-level state, and the one the HMI container already has rules for. The
+NTP server list itself is a device-local preference, per-station like the
+startup URL. And the change arrived on main *after* this milestone's census:
+raising the route here would take an operator's clock away as a side effect of
+a rebase, which is a product decision belonging to the owner of #440.
+
+What would settle it either way: decide whether the clock is `administer`
+(most of `/advanced` is) or stays an operator affordance, then either raise
+the route or split the clock section onto a page that is already raised.
 
 ## 4. Is there a fifth?
 

@@ -1010,15 +1010,25 @@ const Set<String> _kStateManWriteReceivers = {
   'widget.stateMan',
 };
 
-/// Every other `.write(` receiver in `lib/`: string buffers and the secure
-/// store. Listed rather than filtered by a pattern so a new one fails the
-/// classification test instead of quietly joining either side.
+/// Every other `.write(` receiver in `lib/`: string buffers, the secure
+/// store, and the page editor's in-memory property bindings. Listed rather
+/// than filtered by a pattern so a new one fails the classification test
+/// instead of quietly joining either side.
+///
+/// `binding` and `slot` are upstream #459's bulk property editor: both write
+/// onto an asset's **config object in memory**, which the editor then saves
+/// through `PageManager` — a `configure`-classified preference behind a
+/// `configure`-gated route. Neither is a plant write and neither reaches a
+/// `StateMan`; the check that keeps this honest is that the census reads the
+/// receiver name from the source rather than trusting this comment.
 const Set<String> _kOtherWriteReceivers = {
+  'binding',
   'buffer',
   'builder',
   'contentBuffer',
   'request',
   'secureStorage',
+  'slot',
   '_storage',
   '_legacy',
 };

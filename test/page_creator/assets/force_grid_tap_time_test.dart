@@ -26,7 +26,7 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/advantys_stb.dart'
     show STBDDI3725Config, STBDDO3705Config;
 import 'package:tfc/page_creator/assets/beckhoff.dart'
-    show BeckhoffEL2008Config, BeckhoffEL9222Config, RowIOView;
+    show BeckhoffEL9222Config, RowIOView;
 import 'package:tfc/page_creator/assets/el9222.dart' show kEl9222ResetPulse;
 import 'package:tfc/painter/advantys_stb/ddi3725.dart' show STBDDI3725Widget;
 import 'package:tfc/painter/advantys_stb/ddo3705.dart' show STBDDO3705Widget;
@@ -264,106 +264,14 @@ void main() {
   // ------------------------------------------------------------------
   // beckhoff.dart — the EL2008's 8-channel force grid
   // ------------------------------------------------------------------
-  group('the beckhoff force grid', () {
-    tearDown(closeSidePane);
-
-    Future<_ForceStateMan> open(
-      WidgetTester tester, {
-      required TagBindingResolver resolver,
-    }) async {
-      await tester.binding.setSurfaceSize(const Size(1400, 900));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final stateMan = _ForceStateMan();
-      final config = BeckhoffEL2008Config(
-        nameOrId: 'EL2008-fwt',
-        rawStateKey: _rawKey,
-        forceValuesKey: _forceKey,
-        descriptionsKey: _descKey,
-      );
-
-      await tester.pumpWidget(_shell(
-        body: SizedBox(
-          width: 200,
-          height: 300,
-          child: Builder(builder: (context) => config.build(context)),
-        ),
-        overrides: _overrides(stateMan, resolver),
-      ));
-      await tester.pumpAndSettle();
-      // Tap 1 opens the docked pane; tap 2 expands the channel grid into its
-      // floating dialog, which is where the force cells live.
-      await tester.tap(find.byType(IO8Widget));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Channel detail'));
-      await tester.pumpAndSettle();
-      expect(find.byType(StandardDialog), findsOneWidget);
-      return stateMan;
-    }
-
-    testWidgets('an unbound cell writes exactly the array it wrote before',
-        (tester) async {
-      final stateMan = await open(tester, resolver: _unboundResolver());
-
-      await tester.tap(find.text('Low ').first);
-      await tester.pumpAndSettle();
-
-      expect(stateMan.writes, hasLength(1));
-      final write = stateMan.writes.single;
-      expect(write.key, _forceKey);
-      expect(write.value.isArray, isTrue);
-      expect(write.value[0].asInt, 1, reason: 'channel 1 forced low');
-      for (int i = 1; i < 8; i++) {
-        expect(write.value[i].asInt, 0, reason: 'channel ${i + 1} stays auto');
-      }
-      expect(_prompt, findsNothing);
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets(
-        'a bound cell on a session without force prompts and writes nothing',
-        (tester) async {
-      final stateMan = await open(tester, resolver: _boundForceResolver());
-
-      await tester.tap(find.text('Low ').first);
-      await tester.pumpAndSettle();
-
-      expect(stateMan.writes, isEmpty,
-          reason: 'the cell refused before it composed a value');
-      expect(_prompt, findsOneWidget);
-      expect(
-          find.text(kAccessDeniedGroupNote(AccessGroup.force)), findsOneWidget);
-      expect(tester.takeException(), isNull,
-          reason: 'nothing is thrown anywhere on the operator path');
-    });
-
-    testWidgets('a locked cell is still on screen and still hit-testable',
-        (tester) async {
-      await open(tester, resolver: _boundForceResolver());
-
-      // Four rows of two channels, and every one of the eight cells still
-      // offers its three segments. Nothing is greyed and nothing is removed.
-      expect(find.byType(RowIOView), findsNWidgets(4));
-      expect(find.text('Low '), findsNWidgets(8));
-
-      // `onSelectionChanged` is what Flutter reads to decide whether a
-      // `SegmentedButton` is interactive at all: null there is the greyed,
-      // inert control this milestone forbids. Asserted on every cell rather
-      // than on the visible ones, because the grid scrolls.
-      final cells = tester.widgetList<SegmentedButton<int>>(
-          find.byType(SegmentedButton<int>, skipOffstage: false));
-      expect(cells, hasLength(8));
-      for (final cell in cells) {
-        expect(cell.onSelectionChanged, isNotNull,
-            reason: 'a locked cell is refused at the tap, not disabled');
-      }
-      // And the ones on screen still take the tap that opens the prompt.
-      expect(find.text('Low ').hitTestable(), findsWidgets);
-    });
-  });
-
-  // ------------------------------------------------------------------
-  // advantys_stb.dart — the DDO3705's 16-channel force grid
-  // ------------------------------------------------------------------
+  // The beckhoff force grid was here. Upstream #456 replaced the EL1008 /
+  // EL2008 channel dialogs with a read-only side pane and deleted the force
+  // controls outright — "the force *controls* are gone because the PLC
+  // accepts no override" (`io_pane.dart`). There is no longer a beckhoff cell
+  // to resolve at the tap, so the group that asserted it went with the UI it
+  // described rather than being kept alive against a widget that no longer
+  // exists. The advantys grids below are unchanged and still force, and they
+  // are what keeps this plan's claim under test.
   group('the advantys force grid', () {
     tearDown(closeSidePane);
 
