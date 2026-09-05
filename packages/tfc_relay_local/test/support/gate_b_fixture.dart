@@ -535,6 +535,25 @@ final class GateBFixture {
   /// Clients [redial] replaced, kept so [dispose] can close their sockets too.
   final List<RemoteStateMan> _retired = <RemoteStateMan>[];
 
+  /// Every client [redial] has replaced, oldest first.
+  ///
+  /// **The fixture's own record of its own event, and the reason it is exposed
+  /// is that the alternatives are incidental.** A caller can recover the
+  /// retired clients by diffing a set it accumulated itself against
+  /// [panels] — but such a set is populated by whatever sampler happened to
+  /// tick while a client was live, so it is true by cadence rather than by
+  /// construction. This list is appended by [redial] unconditionally, before
+  /// the old client is disposed.
+  ///
+  /// It matters because `dispose()` does **not** clear `RemoteStateMan`'s
+  /// unresolved-write set: a retired client still answers
+  /// `debugUnresolvedCmds` with whatever was in flight when it was replaced.
+  /// So "which commands went down with a replaced client?" is an answerable
+  /// question, and this is what answers it — see the identity-versus-magnitude
+  /// note on `_LivePanelLogView` in `soak_driver.dart`.
+  List<RemoteStateMan> get retiredClients =>
+      List<RemoteStateMan>.unmodifiable(_retired);
+
   bool _disposed = false;
 
   /// The first panel, for the ordinary one-panel row.

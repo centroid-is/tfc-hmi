@@ -94,6 +94,66 @@ const String pipeKeyPrefix = 'PIPE.';
 
 
 
+/// A distribution kept as a frequency map rather than as a list of readings.
+///
+/// **The instrument must not be the leak it is measuring** (07-RESEARCH trap
+/// 15). `bounded_memory.dart` keeps a frequency map for its series and
+/// `BoundedLogsWindow` ages its readings out past the window; invariant 3 was
+/// the sibling that retained one entry per reading. `_lagInWindow` took one
+/// per key comparison inside a window, and the thirty-five-minute arm makes
+/// 127,440 of them, so the list ended at roughly 128,000 entries and the
+/// report sorted a copy — growing linearly in `RELAY_SOAK_MINUTES`, which at
+/// 480 is about 1.7 million.
+///
+/// What changes is what the retention scales with: readings scale with the
+/// RUN, distinct values scale with the RANGE of the quantity. A lag counted in
+/// sweeps has a range of single digits, and a convergence in milliseconds is
+/// bounded by the window's own width.
+///
+/// The printed quantiles are identical. [at] reproduces the old
+/// `sorted[(n * fraction).floor()]` exactly, walking the counts in key order
+/// rather than materialising the list.
+final class LagTally {
+  final Map<int, int> _counts = <int, int>{};
+  int _n = 0;
+  int _max = 0;
+
+  void add(int value) {
+    _counts[value] = (_counts[value] ?? 0) + 1;
+    if (_n == 0 || value > _max) _max = value;
+    _n++;
+  }
+
+  /// How many readings were taken.
+  int get length => _n;
+
+  bool get isEmpty => _n == 0;
+
+  /// How many distinct values are retained — the thing that must stay small.
+  int get retained => _counts.length;
+
+  /// The largest reading.
+  int get max => _max;
+
+  /// The value at `floor(n * fraction)` in sorted order.
+  int at(double fraction) {
+    if (_n == 0) return 0;
+    var index = (_n * fraction).floor();
+    if (index >= _n) index = _n - 1;
+    final keys = _counts.keys.toList()..sort();
+    var seen = 0;
+    for (final key in keys) {
+      seen += _counts[key]!;
+      if (index < seen) return key;
+    }
+    return keys.last;
+  }
+
+  String get quantiles => isEmpty
+      ? 'n=0 (nothing to summarise)'
+      : 'n=$_n p50=${at(0.5)} p95=${at(0.95)} max=$_max';
+}
+
 /// One key on one panel as the last sample inside a window saw it.
 ///
 /// **The window's END is the judgement instant**, so the reading that is
@@ -191,16 +251,16 @@ final class EventualResyncChecker
   int _plantWideArmsAtWindowStart = 0;
   final Set<int> _disturbedWindows = <int>{};
 
-  /// Every lag reading taken inside a window, in sweeps.
-  final List<int> _lagInWindow = <int>[];
+  /// Every lag reading taken inside a window, in sweeps. See [LagTally].
+  final LagTally _lagInWindow = LagTally();
 
   /// How long a key took to come back into step **inside** a window, measured
   /// from the first sample that saw it behind. The distribution
   /// [minStableWindow] is judged against.
-  final List<int> _convergenceMs = <int>[];
+  final LagTally _convergenceMs = LagTally();
 
   /// How long a divergence judged at a window's end then took to heal.
-  final List<int> _postWindowHealMs = <int>[];
+  final LagTally _postWindowHealMs = LagTally();
 
   /// Divergences the never-faulted control panel produced.
   final List<String> _controlDivergences = <String>[];
@@ -717,20 +777,27 @@ final class EventualResyncChecker
   /// **[marginNote] says what that means for this arm**, on every run, green
   /// or red, because the margin is the number that decides whether residue is
   /// evidence or noise.
+  /// How many DISTINCT values the three distributions retain between them.
+  ///
+  /// The number that must not scale with [keysCompared]. See [LagTally].
+  int get retainedSamples =>
+      _lagInWindow.retained + _convergenceMs.retained + _postWindowHealMs.retained;
+
+  /// How many key comparisons this checker has made. The denominator
+  /// [retainedSamples] must not scale with.
+  int get keysCompared => _keysComparedTotal;
+
   String get convergenceReport {
-    final lags = <int>[..._lagInWindow]..sort();
-    final converged = <int>[..._convergenceMs]..sort();
-    final healed = <int>[..._postWindowHealMs]..sort();
     return <String>[
       '  eventualResync: $_windowsJudged windows judged against a floor of '
           '$minimumSamplesForAVerdict '
           '(${_source.stableWindows.length} generated), '
           '$_keysComparedTotal key comparisons',
-      '    in-window convergence (ms): ${_quantiles(converged)}',
+      '    in-window convergence (ms): ${_convergenceMs.quantiles}',
       '    $marginNote',
-      '    lag while judging (sweeps): ${_quantiles(lags)} '
+      '    lag while judging (sweeps): ${_lagInWindow.quantiles} '
           'against an allowance of $convergedLagSweeps',
-      '    healed after the window (ms): ${_quantiles(healed)}',
+      '    healed after the window (ms): ${_postWindowHealMs.quantiles}',
       '    control panel (panel-${_source.controlPanelIndex}): '
           '${_controlDivergences.length} divergences at the end of undisturbed '
           'windows',
@@ -752,23 +819,12 @@ final class EventualResyncChecker
           'this run says nothing about whether '
           '${window.inMilliseconds}ms is enough';
     }
-    final slowest = _convergenceMs.reduce((a, b) => a > b ? a : b);
+    final slowest = _convergenceMs.max;
     final used = (slowest * 100 / window.inMilliseconds).round();
     return 'window margin: the slowest recovery used $used% of this arm\'s '
         '${window.inMilliseconds}ms window. Above about 90% the window is too '
         'short to tell residue from a panel that had not finished its '
         'reconnect backoff, and the residue count stops being evidence';
-  }
-
-  String _quantiles(List<int> sorted) {
-    if (sorted.isEmpty) return 'n=0 (nothing to summarise)';
-    int at(double fraction) {
-      final index = (sorted.length * fraction).floor();
-      return sorted[index >= sorted.length ? sorted.length - 1 : index];
-    }
-
-    return 'n=${sorted.length} p50=${at(0.5)} p95=${at(0.95)} '
-        'max=${sorted.last}';
   }
 
   @override

@@ -8,8 +8,25 @@
 /// which panel writes, which alias goes down — all of it arrives here as a
 /// `SoakEvent` arm and none of it is decided here. That is what makes a repro
 /// log a reproduction rather than a summary, and it is why this file contains
-/// no draw at all: `Random(` and `DateTime.now()` are both swept out of the
-/// soak trees by freeze 9.
+/// no draw at all: `Random(`, `DateTime.now()` and `DateTime.timestamp(` are
+/// all swept out of the soak trees by freeze 9.
+///
+/// **The trees, and the composed run is wider than the trees.** Freeze 9's
+/// scopes are `test/soak/` and `test/support/soak/`. The pipe this driver
+/// stands up reaches six wall-clock sites one directory up, outside both:
+/// `fake_upstream_link.dart:337` (the `at:` stamp on every `WriteApplied`,
+/// which crosses the wire to the panel), `:421` (`_lastDeathAt`, published as
+/// `UpstreamLinkDriver.lastDeathAt`), and four wait-loop deadlines in
+/// `gate_b_fixture.dart` (`:80`, `:82`, `:746`, `:748`).
+///
+/// **None of them feeds a verdict today, and that was checked rather than
+/// assumed:** `terminal_state.dart` stamps everything from
+/// `SoakWriteRecord.at`, which is `_playClock.elapsed`, and no checker reads
+/// `WriteApplied.at` or `lastDeathAt`. The two fixture files are shared with
+/// gate B, so widening the sweep to them would put a soak freeze in charge of
+/// a file gate B owns. What a future checker must not do is age a verdict on
+/// one of those six — that would be a wall-clock verdict freeze 9 passes, and
+/// it is the exact class 11-04 sabotage 2 belongs to.
 ///
 /// **What it composes is what ships.** Phase 10's CR-01 is the standing lesson:
 /// its timeseries family was dead in the shipping gateway because the one
@@ -314,6 +331,26 @@ const Duration panelSampleCadence = Duration(milliseconds: 250);
 /// that case is about is the trip, its offset and the run continuing; the value
 /// of the grace is this constant's business and is argued here, once.
 const Duration populationFloorGraceDefault = Duration(seconds: 75);
+
+/// How many `trip-N.txt` records one run may leave behind.
+///
+/// **`violationLogCapacity`'s argument, applied to the disk.** The in-memory
+/// log stops retaining at two hundred because "retaining them would make the
+/// harness the leak it is measuring"; the trip writer had no cap at all, so
+/// the artifact directory grew without bound where the log did not. A
+/// `GatewayRestart` that exhausts its rebind budget fails every subsequent
+/// write, and at the probe's one-per-two-seconds that is about 690 violations
+/// over the rest of a thirty-five-minute arm — several megabytes of
+/// near-identical records in the uploaded CI artifact.
+///
+/// **Twenty, not two hundred, and the difference is what a trip record is
+/// for.** A retained violation is a row in a list; a trip record is four to
+/// eight kilobytes with the last twenty checkpoints quoted inline, meant to be
+/// OPENED. Nobody opens the two-hundredth. The first occurrence is the
+/// diagnostic — the same argument `ViolationLog` makes for keeping the first
+/// rather than the last — and [SoakDriver.tripRecordsSuppressed] says how many
+/// were not written, so the cap cannot be mistaken for the count.
+const int soakTripRecordCap = 20;
 
 // ------------------------------------------------------------- the endpoint
 
@@ -685,10 +722,20 @@ final class SoakDriver
   @override
   Duration get plantSweepPeriod => soakSweepPeriod;
 
+  /// The aliases whose epoch bump is still settling.
+  ///
+  /// **Bounded to one settling span, and that bound is the property.** See the
+  /// `UpstreamEpochBump` arm for why: an entry here is subtracted from
+  /// `DivergenceLedger.residue` *and* missing from `countOf(unattributed)`, so
+  /// a stale entry moves both halves of the keyframe verdict at once.
   @override
   Set<String> get epochBumpedAliases => Set<String>.unmodifiable(_epochBumped);
 
   final Set<String> _epochBumped = <String>{};
+
+  /// Which bump each alias's pending recovery belongs to, so a later bump
+  /// extends the exemption instead of an earlier recovery ending it early.
+  final Map<String, int> _epochBumpGeneration = <String, int>{};
 
   /// The keys a `PlantMutate` has pinned, and to what.
   ///
@@ -933,6 +980,10 @@ final class SoakDriver
           '${_applied.length} applied, ${neverReached.length} never reached, '
           '${_fizzled.length} fired into nothing',
       '  levers      : ${_leversByKind.entries.map((e) => '${e.key}:${e.value}').join(', ')}',
+      if (tripRecordsSuppressed > 0)
+        '  trip records: capped at $soakTripRecordCap; '
+            '$tripRecordsSuppressed further violations left no file. The '
+            'first occurrences are the diagnosis and they are all here',
       '  population  : floor $populationFloor of $herdSize, connected now '
           '$connectedPanels, worst stretch below floor '
           '${formatSoakOffset(worstBelowFloor)} (grace '
@@ -951,7 +1002,8 @@ final class SoakDriver
             '${checker.judgedSamples} judged readings against a floor of '
             '${checker.minimumSamplesForAVerdict}, ticked every '
             '${registration.cadence.inMilliseconds} ms, '
-            '${checker.violations.length} violations');
+            '${checker.violationTotal} violations'
+            '${checker.violationOverflow > 0 ? ' (${checker.violations.length} retained, ${checker.violationOverflow} past the cap)' : ''}');
         // A checker's own counters, when it has any worth reading. The two
         // numbers that make invariant 1's green mean something — did anything
         // ever go stale, did anything ever recover — are not on the interface
@@ -1181,21 +1233,42 @@ final class SoakDriver
     if (_disposed) return;
     _disposed = true;
     stop();
-    for (final held in _subscriptions.values) {
-      await held.cancel();
+    // **Every step in a `finally`, and the journal in the outermost one.**
+    // The ordering argument above is only safe if nothing before the journal
+    // can throw, and plenty can: cancelling subscriptions on clients a redial
+    // replaced, `fixture.dispose()` awaiting five panel disposals and a server
+    // close and five `proxy.shutdown()`s — on sockets the storm has been
+    // shutting down all run — and a recursive delete of the token directory.
+    // A `FaultProxy.shutdown()` throwing there used to skip `_journal.close()`
+    // entirely, leaving `metrics.jsonl` and `events.jsonl` holding whatever
+    // `IOSink` buffering had not flushed: the last checkpoints and the last
+    // applied events, which are exactly what a trip at minute 34 is diagnosed
+    // from. `_disposed` is set at the top so a second call is a no-op, and
+    // `addTearDown(driver.dispose)` is the only caller, so nobody retried.
+    try {
+      try {
+        for (final held in _subscriptions.values) {
+          await held.sub.cancel();
+        }
+        _subscriptions.clear();
+        for (final watch in _writeWatches) {
+          await watch.cancel();
+        }
+        _writeWatches.clear();
+        _watchedClients.clear();
+      } finally {
+        await _fixture?.dispose();
+      }
+    } finally {
+      try {
+        final dir = _tokenDir;
+        if (dir != null && dir.existsSync()) dir.deleteSync(recursive: true);
+      } finally {
+        // Last, and with no timeout: the artifact is the only thing a failed
+        // run leaves behind.
+        await _journal?.close();
+      }
     }
-    _subscriptions.clear();
-    for (final watch in _writeWatches) {
-      await watch.cancel();
-    }
-    _writeWatches.clear();
-    _watchedClients.clear();
-    await _fixture?.dispose();
-    final dir = _tokenDir;
-    if (dir != null && dir.existsSync()) dir.deleteSync(recursive: true);
-    // Last, and with no timeout: the artifact is the only thing a failed run
-    // leaves behind.
-    await _journal?.close();
   }
 
   // ---------------------------------------------------------------- internals
@@ -1204,8 +1277,31 @@ final class SoakDriver
   final List<Timer> _tickers = <Timer>[];
   final List<Timer> _recoveries = <Timer>[];
   final List<Future<void>> _inFlight = <Future<void>>[];
-  final Map<String, StreamSubscription<DynamicValue>> _subscriptions =
-      <String, StreamSubscription<DynamicValue>>{};
+  /// Live storm-opened subscriptions, by `panel|key`, **with the client that
+  /// holds them**.
+  ///
+  /// The client is half the key in effect: [GateBFixture.redial] replaces a
+  /// panel's `RemoteStateMan` outright and a handle filed against the old one
+  /// names a subscription on a disposed object. The driver rebuilds
+  /// `panelViews`, `panelResyncViews` and `panelLogs` per call for exactly
+  /// this reason; this map was the one that did not, so a later
+  /// `PanelSubscribe` reported "already held" about a dead client and a later
+  /// `PanelUnsubscribe` reported "dropped" for cancelling nothing.
+  final Map<String, ({RemoteStateMan client, StreamSubscription<DynamicValue> sub})>
+      _subscriptions = <String, ({RemoteStateMan client, StreamSubscription<DynamicValue> sub})>{};
+
+  /// The live subscription under [handle], dropping it if the client that
+  /// opened it has since been replaced.
+  StreamSubscription<DynamicValue>? _liveSubscription(
+      String handle, RemoteStateMan current) {
+    final held = _subscriptions[handle];
+    if (held == null) return null;
+    if (identical(held.client, current)) return held.sub;
+    // The old client is disposed, so its subscription is already dead; drop
+    // the handle rather than cancelling into a closed object.
+    _subscriptions.remove(handle);
+    return null;
+  }
   final Set<int> _revoked = <int>{};
   Completer<void>? _finished;
   Timer? _pending;
@@ -1520,6 +1616,15 @@ final class SoakDriver
     final now = clock.elapsed;
     if (connected >= populationFloor) {
       _belowFloorSince = null;
+      // **Reset with the stretch, or the comment below is false.** It says
+      // "one violation per breach"; a flag set once and never cleared is one
+      // per RUN. A revocation whose restore lands late trips the floor at
+      // +05:00 and is recorded; a reaper regression that takes three panels at
+      // +22:00 then records nothing, and the second breach is the interesting
+      // one. The run is already red from the first, so this costs forensics
+      // rather than the verdict — but it costs the second breach its trip
+      // record and its schedule offset.
+      _floorBreachReported = false;
       return;
     }
     final since = _belowFloorSince ??= now;
@@ -1553,6 +1658,12 @@ final class SoakDriver
     writeTripFor(violation);
   }
 
+  /// How many trip records were not written because the run was past
+  /// [soakTripRecordCap]. Printed in the verdict block when non-zero.
+  int tripRecordsSuppressed = 0;
+
+  int _tripsWritten = 0;
+
   /// Writes one violation's trip record — the seed, the schedule offset, the
   /// modes the timeline had armed, the last twenty checkpoints and the frame
   /// ring for the panel it names.
@@ -1570,6 +1681,21 @@ final class SoakDriver
   /// twenty of the run, and the offset the violation carries is still the
   /// instant it happened.
   void writeTripFor(SoakViolation violation) {
+    // **Capped, for `violationLog`'s own reason applied to the disk.** The
+    // in-memory log stops retaining at `violationLogCapacity` because
+    // "retaining them would make the harness the leak it is measuring"; this
+    // call had no cap at all, so the artifact directory was unbounded where
+    // the log was bounded. A `GatewayRestart` that exhausts its rebind budget
+    // fails every subsequent write, and at the probe's one-per-two-seconds
+    // that is ~690 more violations over the rest of a thirty-five-minute arm
+    // — several megabytes of near-identical `trip-N.txt`, uploaded as the CI
+    // artifact. The first twenty are the diagnosis and the rest make the
+    // artifact harder to read than no artifact.
+    if (_tripsWritten >= soakTripRecordCap) {
+      tripRecordsSuppressed++;
+      return;
+    }
+    _tripsWritten++;
     _journal?.writeTrip(violation, armedModes: _armedModesAt(violation));
   }
 
@@ -1813,7 +1939,35 @@ final class SoakDriver
         // know the bump happened, and nothing else in the process records it:
         // the epoch is opaque above `epoch.dart` and comparing two of them for
         // recency is explicitly forbidden there.
+        //
+        // **And it needs to know when the bump STOPPED applying, which is the
+        // whole of this arm's care.** `eventual_resync.dart:484-488` attributes
+        // any non-good-quality divergence on a bumped alias to
+        // `DivergenceCause.epochChange`, and that is the one cause
+        // `DivergenceLedger.residue` subtracts — so an entry in this set is
+        // subtracted from residue AND absent from `countOf(unattributed)`,
+        // which is both terms of `keyframesNotNeeded`. One alias left in here
+        // permanently is ten of the forty plant keys exempt from the
+        // milestone's headline decision number for the rest of the run, and
+        // the storm draws this lever about four times in thirty-five minutes.
+        //
+        // What the bump actually excuses is bad quality until the re-browse
+        // completes (`epoch.dart:26`, 08-08) — a transient condition — so the
+        // exemption is cleared after the span the GENERATOR declares for this
+        // kind, exactly as `UpstreamSlowResolve` clears its latency below.
+        // Honouring `recoverySpanOf` is the driver agreeing with the timeline
+        // rather than authoring a number of its own.
+        //
+        // Generation-stamped so a second bump EXTENDS the exemption rather
+        // than the first bump's recovery cutting it short — the defect
+        // `upstreamSlowResolve` has and this arm does not.
         _epochBumped.add(alias);
+        final epochGeneration = (_epochBumpGeneration[alias] ?? 0) + 1;
+        _epochBumpGeneration[alias] = epochGeneration;
+        _scheduleRecovery(SoakEventSchedule.recoverySpanOf(event.kind), () {
+          if (_epochBumpGeneration[alias] != epochGeneration) return;
+          _epochBumped.remove(alias);
+        });
         return SoakApplyOutcome.fired(
             event.kind, 'FakeUpstreamLink.bumpEpoch',
             note: '$alias $before -> ${link.inner.epoch}');
@@ -1823,12 +1977,35 @@ final class SoakDriver
         // one announcement for however many keys.
         final link = fixture.linkFor(alias);
         final before = link.inner.statusNotifications;
+        // **Asked of the link rather than assumed.** The generator guards
+        // `upstreamEpochBump` against a down alias and `upstreamLinkDown`
+        // against a second down; it has no rule for this kind, so the draw can
+        // and does land on an alias that is already disconnected — where every
+        // key is already bad-quality from `disconnectUpstream`'s own
+        // `applyLinkLoss` and `announceLinkState` re-announces a state nothing
+        // changed. This arm had the before/after numbers in hand and returned
+        // `fired` regardless, which is the storm quietly narrowing itself
+        // while `events.jsonl` says it widened.
+        if (link.inner.state == UpstreamLinkState.disconnected) {
+          return SoakApplyOutcome.fizzled(
+              event.kind,
+              'FakeUpstreamLink.applyLinkLoss+announceLinkState',
+              '$alias was already disconnected, so every key it carries was '
+                  'already bad-quality and this degraded nothing');
+        }
         link.inner.applyLinkLoss();
         link.inner.announceLinkState();
+        final after = link.inner.statusNotifications;
+        if (after == before) {
+          return SoakApplyOutcome.fizzled(
+              event.kind,
+              'FakeUpstreamLink.applyLinkLoss+announceLinkState',
+              '$alias announced nothing new ($before), so no panel saw a '
+                  'degrade');
+        }
         return SoakApplyOutcome.fired(
             event.kind, 'FakeUpstreamLink.applyLinkLoss+announceLinkState',
-            note: '$alias, announcements $before -> '
-                '${link.inner.statusNotifications}');
+            note: '$alias, announcements $before -> $after');
 
       case UpstreamSlowResolve(:final alias, :final latency):
         final link = fixture.linkFor(alias);
@@ -1927,8 +2104,9 @@ final class SoakDriver
         final opened = <String>[];
         for (final key in keys) {
           final handle = '$panel|$key';
-          if (_subscriptions.containsKey(handle)) continue;
-          _subscriptions[handle] = client.subscribe(key).listen((_) {});
+          if (_liveSubscription(handle, client) != null) continue;
+          _subscriptions[handle] =
+              (client: client, sub: client.subscribe(key).listen((_) {}));
           opened.add(key);
         }
         if (opened.isEmpty) {
@@ -1937,15 +2115,29 @@ final class SoakDriver
               'RemoteStateMan.subscribe',
               '$panel already held every one of ${keys.join('+')}');
         }
+        // **The note says what the lever DID, not what its name suggests.**
+        // `RemoteStateMan.subscribe` returns a broadcast view of an existing
+        // store node — it wraps `_storeOf(key).node(key)` in a local
+        // `StreamController` and opens no wire subscription — and the fixture
+        // has already filed every plant key under `defaultPageSubscription`,
+        // so this cannot move the gateway's session, subscription or listener
+        // counts. Deviation 'no subscription-lifecycle coverage' is the long
+        // form; this note is so a reader of `events.jsonl` does not have to
+        // find it.
         return SoakApplyOutcome.fired(event.kind, 'RemoteStateMan.subscribe',
-            note: '$panel opened ${opened.join('+')}');
+            note: '$panel opened a LOCAL broadcast view of '
+                '${opened.join('+')} (no wire subscription; the page already '
+                'held the key)');
 
       case PanelUnsubscribe(:final panel, :final keys):
         final dropped = <String>[];
+        final client = fixture.panels[_indexOfPanel(panel)].client;
         for (final key in keys) {
-          final held = _subscriptions.remove('$panel|$key');
-          if (held == null) continue;
-          await held.cancel();
+          final handle = '$panel|$key';
+          final live = _liveSubscription(handle, client);
+          if (live == null) continue;
+          _subscriptions.remove(handle);
+          await live.cancel();
           dropped.add(key);
         }
         if (dropped.isEmpty) {
@@ -1955,9 +2147,13 @@ final class SoakDriver
               '$panel held no subscription to ${keys.join('+')}, so this '
                   'unsubscribe cancelled nothing');
         }
+        // Local too — see the subscribe arm. Cancelling this closes a
+        // controller in the panel's own process and leaves the gateway's
+        // subscription untouched.
         return SoakApplyOutcome.fired(
             event.kind, 'StreamSubscription.cancel',
-            note: '$panel dropped ${dropped.join('+')}');
+            note: '$panel dropped its LOCAL view of ${dropped.join('+')} '
+                '(the page subscription is untouched)');
 
       case PanelWrite(:final panel, :final key, :final value):
         final index = _indexOfPanel(panel);
@@ -2126,6 +2322,27 @@ final class _LivePanelResyncView implements SoakPanelResyncView {
 /// complaints — which, for an invariant about a list that never shrinks, would
 /// read as a panel that stopped complaining rather than as a panel that was
 /// replaced.
+///
+/// # Reading a live-client observable across a redial: the choice, once
+///
+/// **Building per call fixes the stale half and creates the other half**, and
+/// every checker that reads a live-client observable has to answer it: the new
+/// client's counter starts at zero, so the reading DROPS mid-run for a reason
+/// that has nothing to do with the property being judged. There are two
+/// correct answers and which one applies depends on what the observable is.
+///
+/// **A complaint is a thing that HAPPENED**, so its count is a magnitude and
+/// the run's total is the honest number: invariant 5 accumulates across
+/// incarnations ([BoundedLogsWindow.push]) and never needs to know which
+/// client produced which complaint. **An unresolved command is a thing still
+/// PENDING**, so it is an identity question — *where did this cmd go?* — and
+/// summing magnitudes answers nothing. A checker asking that one has to reach
+/// the retired client itself, which is what [GateBFixture.retiredClients] is
+/// for.
+///
+/// Do not derive one from the other. A drop in a monotone counter is enough to
+/// notice a replacement and is not enough to name it, and `debugUnresolvedCmds`
+/// is not monotone.
 final class _LivePanelLogView implements SoakPanelLogView {
   _LivePanelLogView(this.index, this._client, this.reestablishments);
 

@@ -339,6 +339,7 @@ final class TerminalStateChecker
           'about twice, and the second answer may disagree with the first',
           panel: issued.panel,
           key: issued.key,
+          at: issued.at,
         );
       } else if (!inTerminal && !inUnresolved) {
         _record(
@@ -349,6 +350,7 @@ final class TerminalStateChecker
           'an operator discovers by walking out to look at the machine',
           panel: issued.panel,
           key: issued.key,
+          at: issued.at,
         );
       }
     }
@@ -377,7 +379,19 @@ final class TerminalStateChecker
       );
       return;
     }
-    for (final cmd in _terminal.keys) {
+    // **`_issued`, not `_terminal`, and the difference is the whole arm.**
+    // `_consume` returns before filing an `unknown` into `_terminal` (:260) —
+    // correctly, because `unknown` is not an established outcome. Walking
+    // `_terminal` therefore skipped every command that stayed unknown for the
+    // run, which is the ONE population where a duplicate application is
+    // plausible: the link breaks mid-round-trip, the client is told "I cannot
+    // say" and keeps the cmd re-queryable, and the gateway or the upstream
+    // applies it again across the reconnect. `_checkTheDistribution` requires
+    // `unknown > 0`, so that population is on every run.
+    //
+    // `_issued` holds every command the run made, and `forCmd` is a filter
+    // over a bounded list, so this is strictly wider at no cost.
+    for (final cmd in _issued.keys) {
       final applications = ledger.forCmd(cmd);
       if (applications.length <= 1) continue;
       final issued = _issued[cmd];
@@ -391,6 +405,7 @@ final class TerminalStateChecker
         key: issued?.key,
         observed: applications.length,
         expected: 1,
+        at: issued?.at,
       );
     }
   }
@@ -454,12 +469,29 @@ final class TerminalStateChecker
   /// the driver it is judging.
   static const String _readOnlyHint = 'a key in the PIPE. namespace';
 
+  /// Records a run-end finding.
+  ///
+  /// **[at] is the instant the finding is ABOUT, not the instant it was
+  /// noticed**, and it is the difference between a usable trip record and a
+  /// misleading one. `SoakJournal.writeTrip` prints `modes armed` by looking
+  /// `scheduleOffset` up in the timeline; stamped with `source.scheduleOffset`
+  /// — the end of the run — every run-end violation named whatever the storm
+  /// had armed at +35:00. The 35-minute arm's `trip-0.txt` read `monotonic:
+  /// +00:00.000 / schedule: +35:00.001 / modes armed: blackhole` for a write
+  /// issued around +03:24, and a reader takes that as "the panel was
+  /// blackholed when this happened". The issued record is in hand at every
+  /// call site that is about one write, so the honest offset costs an
+  /// argument.
+  ///
+  /// Left at the run's end for the findings that genuinely are about the run
+  /// as a whole — the distribution arms and the truncated-ledger report.
   void _record(String detail,
-      {String? panel, String? key, Object? observed, Object? expected}) {
+      {String? panel, String? key, Object? observed, Object? expected,
+      Duration? at}) {
     violationLog.add(SoakViolation(
       checker: name,
-      monotonic: Duration.zero,
-      scheduleOffset: source.scheduleOffset,
+      monotonic: at ?? Duration.zero,
+      scheduleOffset: at ?? source.scheduleOffset,
       panel: panel,
       key: key,
       observed: observed,

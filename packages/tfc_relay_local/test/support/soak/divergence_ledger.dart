@@ -37,6 +37,7 @@ library;
 
 import 'dart:io';
 
+import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import 'invariant.dart';
@@ -368,7 +369,9 @@ final class DivergenceLedger with GuardedSampling implements SoakRunEndCheck {
   int _overflow = 0;
   int _total = 0;
   int _healed = 0;
-  int _streamed = 0;
+  /// Lines recorded and not yet on disk. Drained every tick by
+  /// [takeReading]; see there for why it is not the cursor it replaced.
+  final List<String> _unstreamed = <String>[];
   final List<DivergenceEvent> _controls = <DivergenceEvent>[];
 
   /// Retained events, oldest first — the first occurrence is the diagnostic.
@@ -447,6 +450,9 @@ final class DivergenceLedger with GuardedSampling implements SoakRunEndCheck {
     } else {
       _healed++;
     }
+    // **Before `_retain`**, which is what makes the file the record and the
+    // retained list merely the print. See [takeReading].
+    _unstreamed.add('${jsonOf(event)}\n');
     _retain(event);
   }
 
@@ -510,6 +516,9 @@ final class DivergenceLedger with GuardedSampling implements SoakRunEndCheck {
   }
 
   void _writeVerdictFile() {
+    // The last events, before the verdict that counts them: a reader diffing
+    // the block against the file must not find the file one tick short.
+    _flushPending();
     final dir = Directory(_source.journalPath);
     if (!dir.existsSync()) dir.createSync(recursive: true);
     File('${dir.path}/$verdictFileName').writeAsStringSync('$verdictBlock\n');
@@ -529,21 +538,53 @@ final class DivergenceLedger with GuardedSampling implements SoakRunEndCheck {
   /// **Streamed rather than accumulated**, so a thirty-five-minute run whose
   /// ledger overflowed still has every event on disk. The retained list is for
   /// the verdict block; `divergences.jsonl` is the record.
+  ///
+  /// **It streams from its own queue and NOT from [entries], which is the
+  /// whole of the fix.** `_retain` stops appending at [capacity], so a cursor
+  /// walking `_entries` catches up with a list that has stopped growing and
+  /// every later tick becomes a no-op — the events past the cap reached
+  /// neither the retained list nor the file, while the doc above and the
+  /// verdict block both told the reader they were in the file. `record` now
+  /// enqueues the line before `_retain` is given the chance to drop the event,
+  /// so the cap governs what is PRINTED and nothing governs what is RECORDED.
+  ///
+  /// **Written synchronously, and that is deliberate rather than lazy.** The
+  /// previous shape opened an append sink per tick and dropped the `close()`
+  /// future: an `IOSink` error went to an unhandled async error in the test's
+  /// zone twenty minutes from the line that caused it, the cursor advanced in
+  /// a `finally` BEFORE the flush so a failed close lost lines and marked them
+  /// written, and two overlapping append handles on one file can interleave
+  /// mid-line — a corrupted record in the artifact whose entire job is to be
+  /// machine-readable evidence for the keyframe decision. A synchronous append
+  /// has none of those: it either wrote or it threw, the queue is drained only
+  /// after it returns, and `GuardedSampling` turns a throw into a violation
+  /// naming this ledger. The cost is a few hundred bytes appended every five
+  /// seconds, against a checker that already spends 50 ms in a synchronous
+  /// `lsof`.
+  ///
+  /// `_unstreamed` grows only while the write is failing — a drained queue is
+  /// empty every tick — so the instrument does not become the leak it is
+  /// measuring except on a filesystem that is already broken, and on that
+  /// filesystem the violation log is saying so every five seconds.
   @override
-  void takeReading(SoakClock clock) {
-    if (_streamed >= _entries.length) return;
+  void takeReading(SoakClock clock) => _flushPending();
+
+  /// Flushes the queue and lets a caller await it. Sync underneath; the future
+  /// is for symmetry with the callers that have one.
+  Future<void> flushStream() async => _flushPending();
+
+  void _flushPending() {
+    if (_unstreamed.isEmpty) return;
     final dir = Directory(_source.journalPath);
     if (!dir.existsSync()) dir.createSync(recursive: true);
-    final sink = File('${dir.path}/$divergenceFileName')
-        .openWrite(mode: FileMode.append);
-    try {
-      for (var i = _streamed; i < _entries.length; i++) {
-        sink.writeln(jsonOf(_entries[i]));
-      }
-    } finally {
-      _streamed = _entries.length;
-      sink.close();
-    }
+    File('${dir.path}/$divergenceFileName').writeAsStringSync(
+        _unstreamed.join(),
+        mode: FileMode.append,
+        flush: true);
+    // Only after the write RETURNED. The previous shape cleared its cursor in
+    // a `finally`, so a failed flush lost the lines and recorded them as
+    // written.
+    _unstreamed.clear();
   }
 
   // ------------------------------------------------------------ the verdict
@@ -572,6 +613,15 @@ final class DivergenceLedger with GuardedSampling implements SoakRunEndCheck {
       '  total divergence events         : $total',
       '  healed within the stable window : $healed',
       '  RESIDUE (unhealed at window end): $residue',
+      // **Both terms of `keyframesNotNeeded`, adjacent and labelled with what
+      // each one includes.** This line did not exist, and its absence was the
+      // M-08 shape landing on the headline: the predicate reads `unattributed`
+      // = `countOf(unattributed)`, every unattributed event healed or not,
+      // while the only `unattributed` in the block was the residue-by-cause
+      // slice, `residueOf(unattributed)`. A run whose unattributed
+      // divergences all healed printed zeros everywhere and then "needed,
+      // evidence above", with no evidence above.
+      '  UNATTRIBUTED (healed or not)    : $unattributed',
       '  residue by cause: ${causes.take(3).join(' ')}',
       '                    ${causes.skip(3).join(' ')}',
       '  KEYFRAME VERDICT: '
@@ -598,6 +648,45 @@ final class DivergenceLedger with GuardedSampling implements SoakRunEndCheck {
 
   @override
   String toString() => verdictBlock;
+}
+
+/// Fails the run when the keyframe verdict says the decision must be reopened.
+///
+/// **The verdict used to be print-only, and a decision number that cannot
+/// change visibly is not a decision number.** `keyframesNotNeeded`,
+/// [DivergenceLedger.unattributed] and [DivergenceLedger.residue] were read
+/// nowhere outside `soak_meta_test.dart`'s hand-built ledgers; the composed
+/// run printed the block and moved on, and the ledger's own `violationLog`
+/// fires on exactly one condition — the verdict FILE failing to write. So
+/// `KEYFRAME VERDICT: needed` went green on both arms.
+///
+/// **A failure here is a design question reopening, not a fault**, and the
+/// message says so. 11-CONTEXT ruling 5 closed the keyframes decision on a
+/// threshold of [keyframeVerdictThreshold] measured over a composed run; a
+/// run that crosses it is evidence the ruling was decided on runs that did
+/// not contain the case. Whoever reads this at 3 a.m. must not go looking for
+/// a broken pipe.
+///
+/// **The control cannot trip it**, and that is structural rather than lucky:
+/// [DivergenceLedger.record] returns at the top on `isControl` before any
+/// counter, so the warrant — which is unhealed by construction — never
+/// reaches either term. `soak_meta_test.dart` pins that early return, because
+/// deleting it would make every push red for ever.
+void assertKeyframeVerdictIsClean(DivergenceLedger ledger) {
+  if (ledger.keyframesNotNeeded) return;
+  fail('the keyframe decision must be revisited.\n\n'
+      '${ledger.verdictBlock}\n\n'
+      'This is NOT a pipe fault and nothing here says the gateway is broken. '
+      '11-CONTEXT ruling 5 closed the keyframes question on a threshold of '
+      '$keyframeVerdictThreshold over a composed run, and this run crossed '
+      'it: ${ledger.unattributed} unattributed (healed or not) and '
+      '${ledger.residue} unhealed residue. Either state converged somewhere '
+      'the pipe promises it converges, or the taxonomy attributed something '
+      'it should have explained. Both are reasons to reopen the decision and '
+      'neither is an incident.\n\n'
+      'Every event is in $divergenceFileName in the run artifact, one JSON '
+      'object per line, with its cause, its schedule offset and the values '
+      'both sides held. Read those before reading any source file.');
 }
 
 /// Where the verdict lands beside the rest of the artifact.

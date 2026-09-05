@@ -51,7 +51,7 @@ import 'soak_registry.dart';
 /// 11-05 deviates the server-side log clause — so an appending plan changes
 /// this number in the same commit as its entry, and an entry that arrives
 /// without one is a departure nobody declared in the index.
-const int _declaredDeviations = 5;
+const int _declaredDeviations = 6;
 
 /// Six: the five invariants of §7.8 plus the divergence ledger.
 ///
@@ -630,6 +630,16 @@ final class _FakeChecker implements InvariantChecker {
 
   @override
   List<SoakViolation> get violations => const <SoakViolation>[];
+
+  // This fake drives the vacuity gate and records nothing, so both counters
+  // are zero and agree with the empty list above. A fake whose total
+  // disagreed with its retained list would be a fake that could not be used
+  // to test the gate it exists for.
+  @override
+  int get violationTotal => 0;
+
+  @override
+  int get violationOverflow => 0;
 
   @override
   void sample(SoakClock clock) {}

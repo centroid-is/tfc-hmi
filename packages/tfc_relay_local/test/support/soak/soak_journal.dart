@@ -133,6 +133,21 @@ final class JournalledFrame {
 /// whose first instance is the diagnostic, while a trip is diagnosed from what
 /// arrived immediately before it. Two bounded structures, two directions, both
 /// stated where somebody would otherwise make them agree.
+/// **Unit-tested, and the composed run does not feed it.** Nothing in
+/// `soak_driver.dart` calls [SoakJournal.frame]; the only callers are this
+/// library's own tests. So `_rings` is always empty on a real run and no
+/// `frames-<panel>.jsonl` has ever existed.
+///
+/// That is recorded here, and said in the trip record itself, because the
+/// alternative is the failure the rest of this apparatus exists to refuse: a
+/// reader opening `trip-0.txt` for the window a trip is diagnosed from, seeing
+/// an empty ring, and concluding the frames were checked and were quiet. A
+/// skip and a pass must not look identical.
+///
+/// It is kept rather than deleted because the ring itself is correct and
+/// bounded — it evicts oldest and counts evictions — and the missing half is a
+/// producer, which is a client-side hook the soak does not have. Whoever adds
+/// one should delete this paragraph in the same commit.
 final class FrameRing {
   FrameRing({this.capacity = frameRingCapacity});
 
@@ -296,7 +311,12 @@ final class SoakJournal {
     out
       ..writeln('')
       ..writeln(ring == null
-          ? 'no frame ring for this violation.'
+          ? 'frame ring: NOT RECORDED BY THIS RUN. SoakJournal.frame has no '
+              'producer in the composed soak — nothing calls it outside this '
+              'journal\'s own unit test — so no frames-<panel>.jsonl has ever '
+              'been written. This is an absence of INSTRUMENTATION and not an '
+              'absence of frames: do not read it as "the last minute before '
+              'the trip was checked and was quiet". See the FrameRing doc.'
           : 'frame ring for $panel: ${ring.length} retained, '
               '${ring.evicted} evicted — dumped to frames-$panel.jsonl');
     File('${directory.path}/trip-$n.txt').writeAsStringSync(out.toString());

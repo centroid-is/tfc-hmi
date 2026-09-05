@@ -267,6 +267,18 @@ final class BoundedMemorySeries {
   /// The longest [monotoneRun] this series ever reached.
   int worstMonotoneRun = 0;
 
+  /// Whether the construction-cap rule has already recorded this breach.
+  ///
+  /// Latched, and cleared when the reading comes back to or below the cap.
+  /// Same reason as [ratioReported], and this rule needed it most: a structure
+  /// stuck one entry over its cap records at every checkpoint on every panel
+  /// holding it, which on the thirty-five-minute arm is 420 checkpoints x up
+  /// to 4 stormed panels — about 1,600 violations for one defect, into a log
+  /// that retains 200. One finding would fill it and push every other
+  /// checker's first occurrence into overflow, which is exactly what 11-06
+  /// measured on invariant 1's missing latch and named a prerequisite.
+  bool capReported = false;
+
   /// Whether the ratio rule has already recorded this excursion.
   ///
   /// Latched, and cleared when the series comes back under. One breach is one
@@ -363,6 +375,15 @@ final class BoundedMemoryChecker with GuardedSampling implements SoakRunEndCheck
   /// Checkpoints taken, judged or not. The denominator.
   int checkpoints = 0;
 
+  /// Cap breaches the latch grouped into an episode already reported.
+  ///
+  /// **The latch groups; this is what stops it under-reporting.** A reader
+  /// needs to know whether a cap broke at one checkpoint or stayed broken for
+  /// four hundred, and a bare latch answers neither. Reported in
+  /// [spreadReport], never asserted — same shape as invariant 1's
+  /// `repeatsSuppressed`.
+  int capRepeatsSuppressed = 0;
+
   /// Series name -> its shape. `plantWide/<structure>` or `panel-N/<structure>`.
   final Map<String, BoundedMemorySeries> series =
       <String, BoundedMemorySeries>{};
@@ -415,16 +436,22 @@ final class BoundedMemoryChecker with GuardedSampling implements SoakRunEndCheck
     for (final structure in boundedMemoryPlantWideStructures) {
       if (reading.skips.containsKey(structure)) continue;
       final value = reading.plantWide[structure] ?? 0;
-      if (value != 0) anythingWasNonZero = true;
       // A carried-forward value is a number the row still owes the journal and
       // a reading the series must not have. Feeding a repeat into the monotone
       // rule would break every run of a genuinely climbing structure five
       // times out of six, which is a rule that cannot fire dressed as a rule
       // that can. See `openSocketCheckpointCadence`.
+      //
+      // **Before the vacuity counter, not after.** This used to set
+      // `anythingWasNonZero` first, so a reading the checker had just declined
+      // to judge still advanced `judgedSamples` — a path that clears the
+      // anti-vacuity gate without judging, which is 11-01's third sabotage in
+      // miniature.
       if (reading.carriedForward.contains(structure)) {
         carriedForward.add(structure);
         continue;
       }
+      if (value != 0) anythingWasNonZero = true;
       _observe('plantWide/$structure', structure, value, clock);
     }
 
@@ -459,17 +486,37 @@ final class BoundedMemoryChecker with GuardedSampling implements SoakRunEndCheck
     final cap = boundedMemoryConstructionCaps[structure];
     if (cap != null) {
       if (value > cap) {
-        _record(
-          clock,
-          panel: panel,
-          structure: structure,
-          observed: value,
-          expected: 'at most its construction cap of $cap',
-          detail: '$structure is at $value against a cap of $cap that the '
-              'product enforces on every append. This is not a slope and does '
-              'not need to be: the cap breaking means the code trimming the '
-              'list stopped running. Its readings so far: $line',
-        );
+        // **One breach observed at many checkpoints is one finding**, and this
+        // was the last bounded-memory rule without a latch: the ratio rule has
+        // `ratioReported`, the monotone rule resets its run after firing,
+        // invariant 5 has `overReported`, and 11-07 gave invariant 1 its
+        // episode latch. Unlatched, a `writeStatusQueries` list stuck at 65
+        // records once per checkpoint per panel — 420 x up to 4 on the
+        // thirty-five-minute arm, roughly 1,600 violations for one defect,
+        // into a log that retains 200. The finding survives; every other
+        // checker's first occurrence does not.
+        if (line.capReported) {
+          capRepeatsSuppressed++;
+        } else {
+          line.capReported = true;
+          _record(
+            clock,
+            panel: panel,
+            structure: structure,
+            observed: value,
+            expected: 'at most its construction cap of $cap',
+            detail: '$structure is at $value against a cap of $cap that the '
+                'product enforces on every append. This is not a slope and '
+                'does not need to be: the cap breaking means the code '
+                'trimming the list stopped running. Its readings so far: '
+                '$line',
+          );
+        }
+      } else {
+        // Cleared on the way back under, which is what makes this a latch
+        // rather than a mute: a trim that recovers and then stops again is a
+        // second finding and is reported as one.
+        line.capReported = false;
       }
       // The ratio rule still applies, and it is what would notice a capped
       // structure sitting far above where it normally sits without ever
@@ -606,6 +653,10 @@ final class BoundedMemoryChecker with GuardedSampling implements SoakRunEndCheck
         if (skipped.isNotEmpty)
           for (final entry in skipped.entries)
             '  SKIPPED ${entry.key}: ${entry.value}',
+        if (capRepeatsSuppressed > 0)
+          '  $capRepeatsSuppressed further cap breaches grouped into episodes '
+              'already reported — one broken trim observed at many '
+              'checkpoints is one finding',
         if (carriedForward.isNotEmpty)
           '  ${carriedForward.join(', ')} read every '
               '$openSocketCheckpointCadence checkpoints, not every one — a '

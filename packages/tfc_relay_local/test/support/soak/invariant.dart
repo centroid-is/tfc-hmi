@@ -236,6 +236,20 @@ abstract interface class InvariantChecker {
 
   /// What it recorded. Bounded — see [ViolationLog].
   List<SoakViolation> get violations;
+
+  /// Every violation recorded, **retained or not**.
+  ///
+  /// Not `violations.length`. The retained list is capped at
+  /// [violationLogCapacity] and the cap is load-bearing — retaining 84,000
+  /// violations would make the harness the leak it is measuring — but a capped
+  /// list read as a count is the lie [ViolationLog]'s own doc warns about, and
+  /// it has cost this phase two waves' diagnoses. Every reader that prints or
+  /// sums a violation count must use THIS.
+  int get violationTotal;
+
+  /// How many were recorded past [violationLogCapacity]. Zero on almost every
+  /// run, and the number that makes [violationTotal] believable when it is not.
+  int get violationOverflow;
 }
 
 /// Turns a throw inside a checker into a recorded violation.
@@ -276,6 +290,12 @@ mixin GuardedSampling implements InvariantChecker {
 
   @override
   List<SoakViolation> get violations => violationLog.entries;
+
+  @override
+  int get violationTotal => violationLog.total;
+
+  @override
+  int get violationOverflow => violationLog.overflow;
 }
 
 /// The first few frames of a stack, which is what a trip record wants.

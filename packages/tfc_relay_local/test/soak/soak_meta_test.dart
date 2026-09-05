@@ -27,6 +27,7 @@
 @Timeout(Duration(minutes: 4))
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:test/test.dart';
@@ -1127,6 +1128,94 @@ void main() {
           hasLength(1));
     });
 
+    test('a run-end violation is stamped with the WRITE\'s instant, not the '
+        'run\'s end', () {
+      // **The most diagnostic field in a trip record was describing the wrong
+      // moment.** `writeTrip` prints `modes armed` by looking up
+      // `violation.scheduleOffset` in the timeline, and the run-end arm
+      // stamped every violation with `source.scheduleOffset` — the end of the
+      // run. The 35-minute arm's `trip-0.txt` therefore read `monotonic:
+      // +00:00.000 / schedule: +35:00.001 / modes armed: blackhole` for a
+      // write issued at about +03:24, which a reader takes as "the panel was
+      // blackholed when this happened". It is not what it says, and it is the
+      // one field they would act on.
+      //
+      // The issued record is in hand at every call site, so this costs an
+      // argument.
+      final source = _WriteSource()
+        ..settled('cmd-a', 'applied')
+        ..settled('cmd-b', 'rejected');
+      source.scheduleOffset = const Duration(minutes: 3, seconds: 24);
+      source
+        ..issue('cmd-lost',
+            panel: 'panel-2', key: 'ST301.CN01.MOT03.setpoint', value: 5)
+        ..direct('cmd-lost', 'unknown', reachedASocket: true);
+      // The run ends half an hour later, and nothing settles the write.
+      source.scheduleOffset = const Duration(minutes: 35);
+      final checker = TerminalStateChecker(source);
+      checker.sample(_at(const Duration(minutes: 35)));
+      checker.finish();
+
+      final lost = checker.violations
+          .where((one) => one.toString().contains('NEITHER'))
+          .toList();
+      expect(lost, hasLength(1), reason: 'the write-loss arm, unchanged');
+      expect(lost.single.scheduleOffset,
+          const Duration(minutes: 3, seconds: 24),
+          reason: 'the trip record looks up the armed fault modes at this '
+              'offset. Stamped with the run\'s end it names whatever was armed '
+              'at +35:00, which is a fault the write never saw');
+      expect(lost.single.monotonic, const Duration(minutes: 3, seconds: 24));
+    });
+
+    test('the plant applying an UNKNOWN command twice is a violation', () {
+      // **The one population where a duplicate application is plausible, and
+      // the arm structurally excluded it.** `_consume` returns before
+      // `_terminal[cmd] = ...` for `unknown` — correctly, because `unknown` is
+      // not an established outcome — so a reconciliation that walked
+      // `_terminal.keys` never asked the ledger about a command that stayed
+      // unknown for the whole run.
+      //
+      // That is exactly the shape §7.8 and CLAUDE.md name: the link breaks
+      // mid-round-trip, the client is told `unknown` and keeps the cmd
+      // re-queryable, and the gateway or the upstream applies it a second time
+      // across the reconnect. `_checkTheDistribution` REQUIRES `unknown > 0`,
+      // so this population exists on every run — 2 to 5 per ninety-second lane
+      // run, measured — and nothing was looking at it.
+      //
+      // The case above duplicates `cmd-a`, which is `applied`, which is why
+      // the gap was invisible.
+      final source = _WriteSource()
+        ..settled('cmd-a', 'applied')
+        ..settled('cmd-b', 'rejected')
+        ..issue('cmd-c', panel: 'panel-4', key: 'BAADER.CN02.MOT03.setpoint',
+            value: 9)
+        ..direct('cmd-c', 'unknown', reachedASocket: true)
+        ..stillUnresolved('cmd-c');
+      source.appliedWrites
+        ..attribute('cmd-c', 'panel-4')
+        ..recordApplied(
+            key: 'BAADER.CN02.MOT03.setpoint', value: 9, cmd: 'cmd-c')
+        ..recordApplied(
+            key: 'BAADER.CN02.MOT03.setpoint', value: 9, cmd: 'cmd-c');
+      final checker = TerminalStateChecker(source);
+      checker.sample(_at(Duration.zero));
+      checker.finish();
+
+      final duplicates = checker.violations
+          .where((one) => one.toString().contains('the plant applied'))
+          .toList();
+      expect(duplicates, hasLength(1),
+          reason: 'one button press moved the machine twice and the write was '
+              'never established, so nothing else in this run will ever '
+              'notice. An unknown that was applied twice is the worst case '
+              'the three-state contract has: the operator is told "I cannot '
+              'say", and the answer is "twice"');
+      expect(duplicates.single.toString(), contains('panel-4'),
+          reason: 'the violation is attributed from _issued, which holds the '
+              'panel and key for every command the run made');
+    });
+
     test('a truncated ledger is reported rather than read as an answer', () {
       final source = _WriteSource(ledgerCapacity: 1)
         ..settled('cmd-a', 'applied')
@@ -1519,6 +1608,81 @@ void main() {
           210);
     });
 
+    test('a checker past its violation cap reports the TOTAL, not the cap', () {
+      // **"200" is a CEILING, not a count, and reading it as a count has cost
+      // this phase real time twice** — two waves built diagnoses on it before
+      // 11-07 found it was `violationLogCapacity` (`invariant.dart:171`). The
+      // reason `ViolationLog` keeps an overflow counter at all is its own doc:
+      // "a capped list without a counter would report '200 violations' for a
+      // run that had eighty thousand, which is a worse lie than the memory it
+      // saves". The counter existed; nothing above `ViolationLog` could read
+      // it, because `InvariantChecker` exposes only `violations`.
+      //
+      // So `soak_test.dart`'s headline total summed `violations.length` — the
+      // capped list — reintroducing the exact lie the counter prevents, in the
+      // one message a person reads at 07:00.
+      final source = _StructureSource(panels: 2);
+      final checker = BoundedMemoryChecker(source);
+      // The cap rule fires once per structure per breach episode, so break
+      // several structures at once and keep them broken, cycling under and
+      // back over so the latch re-arms. 300+ violations against a cap of 200.
+      var i = 0;
+      while (checker.violationTotal <= violationLogCapacity + 40) {
+        source.panel(1)[writeStatusQueriesStructure] = i.isEven ? 70 : 10;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+        i++;
+        if (i > 2000) break; // never spin for ever on a broken checker
+      }
+
+      expect(checker.violations.length, violationLogCapacity,
+          reason: 'the retained list is capped, which is correct and is the '
+              'whole reason the counter has to be readable');
+      expect(checker.violationTotal, greaterThan(violationLogCapacity),
+          reason: 'and the total must be reachable from the INTERFACE — '
+              'summing `violations.length` across the checkers is what turned '
+              'eighty thousand into two hundred');
+      expect(checker.violationOverflow,
+          checker.violationTotal - violationLogCapacity);
+      expect(checker.violationTotal,
+          checker.violations.length + checker.violationOverflow,
+          reason: 'retained + overflow = total, or the three numbers are not '
+              'about the same run');
+    });
+
+    test('a CARRIED-FORWARD reading does not make a checkpoint judged', () {
+      // **A path that increments the vacuity counter without judging
+      // anything.** `anythingWasNonZero = true` was set before the
+      // `carriedForward` `continue`, so a repeated `openSockets` value — the
+      // one reading this checker explicitly refuses to feed to any rule, on
+      // the grounds that it is not a reading — still advanced
+      // `judgedSamples`. The file's own comment says the counter counts
+      // "readings that said something".
+      //
+      // Inert today: `sessions` is 5 from the first checkpoint of any run
+      // where the fixture came up, so the counter is dominated by structures
+      // that are always non-zero. It is fixed because 11-01's third sabotage
+      // is the standing lesson — a checker that THREW on all five calls
+      // reported five readings against a floor of one and cleared the very
+      // gate built to catch it — and a counter with a path that inflates it is
+      // the same shape waiting for a run where the other structures are quiet.
+      final source = _StructureSource(panels: 2);
+      final checker = BoundedMemoryChecker(source);
+      // Everything genuinely zero, and one structure carrying a stale
+      // non-zero value forward.
+      source.plantWide[openSocketsStructure] = 56;
+      source.carriedForward.add(openSocketsStructure);
+      for (var i = 0; i <= 4; i++) {
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+
+      expect(checker.checkpoints, 5);
+      expect(checker.judgedSamples, 0,
+          reason: 'every real structure read zero and the only non-zero number '
+              'in the row is one the checker itself declined to judge. A '
+              'checkpoint that judged nothing must not clear the vacuity gate '
+              'on the strength of a value it refused to look at');
+    });
+
     test('a source that throws becomes a recorded violation, never a dead run',
         () {
       final checker = BoundedMemoryChecker(_ThrowingStructureSource());
@@ -1565,13 +1729,54 @@ void main() {
         checker.sample(_at(Duration(seconds: 5 * i)));
       }
 
-      expect(checker.violations, isNotEmpty,
-          reason: 'seventy entries in a list trimmed to sixty-four means the '
-              'trim stopped running');
+      // **A COUNT, not `isNotEmpty`.** The loop breaches on i=4, 5 and 6 — one
+      // defect observed at three checkpoints — and an `isNotEmpty` here cannot
+      // tell those apart. That mattered: unlatched, a structure stuck above
+      // its cap records once per checkpoint per panel, which on the
+      // thirty-five-minute arm is 420 checkpoints x up to 4 stormed panels,
+      // about 1,600 violations for one defect. `ViolationLog` retains 200
+      // (`invariant.dart:171`), so one finding fills the log and pushes every
+      // other checker's FIRST occurrence into overflow — precisely what 11-06
+      // measured on invariant 1 and named a prerequisite for reading anything
+      // else in the log.
+      expect(checker.violations, hasLength(1),
+          reason: 'seventy entries in a list trimmed to sixty-four is ONE '
+              'finding — the trim stopped running — however many checkpoints '
+              'observe it. Three violations here is the missing latch, and '
+              'the cap rule was the last bounded-memory rule without one '
+              '(the ratio rule latches at :527, the monotone rule resets at '
+              ':509, invariant 5 has overReported, invariant 1 got its '
+              'episode latch in 11-07)');
       final first = checker.violations.first.toString();
       expect(first, contains(writeStatusQueriesStructure));
       expect(first, contains('64'));
       expect(first, contains('cap'));
+      // Grouping, not under-reporting: the repeats the latch swallowed are
+      // still counted, so a reader can tell one checkpoint from four hundred.
+      expect(checker.capRepeatsSuppressed, 2,
+          reason: 'i=5 and i=6 observed the same unbroken cap; a latch that '
+              'dropped them without counting them would be the checker going '
+              'quiet rather than grouping');
+    });
+
+    test('a capped structure that comes back under the cap and breaches again '
+        'reports twice', () {
+      // The other half of a latch, and the half that makes it a latch rather
+      // than a mute. Two separate breaches with a healthy reading between them
+      // are two findings; only an unbroken run is one.
+      final source = _StructureSource(panels: 2);
+      final checker = BoundedMemoryChecker(source);
+      const readings = <int>[64, 64, 64, 64, 70, 70, 64, 64, 70, 70];
+      for (var i = 0; i < readings.length; i++) {
+        source.panel(1)[writeStatusQueriesStructure] = readings[i];
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+
+      expect(checker.violations, hasLength(2),
+          reason: 'the trim came back and then stopped again — two episodes, '
+              'and a latch that never cleared would report one');
+      expect(checker.capRepeatsSuppressed, 2,
+          reason: 'one suppressed repeat inside each of the two episodes');
     });
 
     test('the construction cap matches the product constant it duplicates', () {
@@ -1735,6 +1940,73 @@ void main() {
       for (final fragment in <String>['panel-1', 'per minute']) {
         expect(rendered, contains(fragment), reason: rendered);
       }
+    });
+
+    test('a flood is still a flood when a redial resets the panel\'s counter',
+        () {
+      // **The reading this checker takes is off the LIVE client, and
+      // `GateBFixture.redial` replaces it outright.** `_LivePanelLogView`
+      // (`soak_driver.dart:2144`) is `_client.complaints.length`, and
+      // `TokenRestore` calls `redial` (`:1889`), which disposes the old
+      // `RemoteStateMan` and installs a new one. So `complaints` drops to 0
+      // mid-run — while `reestablishments` does NOT, because `_health[i]` is
+      // created once at `start()`. The anti-vacuity gate survives the reset
+      // that destroys the quantity being judged, and that asymmetry is what
+      // makes this a defect rather than noise.
+      //
+      // What it costs, concretely: a forty-complaint flood inside one minute,
+      // then a redial before the next checkpoint. `last - oldest` goes
+      // NEGATIVE, `rate` is negative, `rate <= ceilingPerMinute` holds,
+      // `overReported` is cleared — and the window still counts toward
+      // `judgedSamples`. The flood is erased and the verdict block reports a
+      // green rate over a judged window.
+      final source = _LogSource(panels: 3);
+      final checker = BoundedLogsChecker(source, ceilingPerMinute: 30);
+
+      // Sixty complaints across a full sixty-second window: 60/min against a
+      // ceiling of 30. The window is exactly `boundedLogsRateWindow` wide by
+      // the end, so the next reading slides it and the oldest retained count
+      // is no longer zero — which is what makes the reset produce a NEGATIVE
+      // rate rather than a merely flat one.
+      for (var i = 0; i <= 12; i++) {
+        source.panel(1).complaints = i * 5;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+      expect(checker.violations, hasLength(1),
+          reason: 'the flood itself, before any redial — this half is the '
+              'control for the half below');
+
+      // The redial: a new `RemoteStateMan`, a new empty complaint list.
+      source.panel(1).complaints = 0;
+      checker.sample(_at(const Duration(seconds: 65)));
+
+      final panel = checker.windows[1]!;
+      expect(panel.ratePerMinute, isNotNull);
+      expect(panel.ratePerMinute! >= 0, isTrue,
+          reason: 'the retained window still holds 5 complaints at its far '
+              'end and the live client now reports 0, so `last - oldest` is '
+              '-5 and the rate is NEGATIVE. That is not a rate — it is the '
+              'instrument being replaced mid-measurement — and it is what '
+              'clears overReported and launders the flood, while the window '
+              'still counts toward judgedSamples');
+
+      // And the panel goes on producing complaints from zero.
+      for (var i = 14; i <= 18; i++) {
+        source.panel(1).complaints = (i - 13) * 5;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+
+      expect(checker.violations, hasLength(1),
+          reason: 'the flood is a fact about the run and a redial is not a '
+              'retraction of it. Two violations would mean the post-redial '
+              'climb was read as a fresh flood; ZERO would mean the reset '
+              'erased the first');
+      expect(panel.last, 85,
+          reason: 'sixty complaints on the first incarnation and twenty-five '
+              'on the second. The run total is the only number the backstop '
+              'can be asked about — "a list growing steadily, slowly and for '
+              'ever", the arm\'s stated purpose, cannot be seen across a '
+              'redial if the run total is never held anywhere');
     });
 
     test('a panel under the ceiling is not a violation', () {
@@ -2283,6 +2555,46 @@ void main() {
       expect(checker.ledger.entries.single.plantQuality, Quality.good);
     });
 
+    test('the checker does not become the leak it is measuring', () {
+      // **Invariant 3 was the one sibling that retained per-READING.**
+      // `bounded_memory.dart` keeps a frequency map for exactly this reason —
+      // "the checker must not become the leak it is measuring", 07-RESEARCH
+      // trap 15 — and `BoundedLogsWindow` ages its readings out past the
+      // window. `_lagInWindow.add(lag)` ran once per key comparison inside a
+      // window, and the thirty-five-minute arm does 127,440 of them, so the
+      // list ended the run at roughly 128,000 entries and `convergenceReport`
+      // sorted a COPY of it. It grows linearly in the parameter:
+      // RELAY_SOAK_MINUTES=480 is about 1.7 million.
+      //
+      // What is asserted is the shape of the retention rather than a byte
+      // count: readings scale with the run, retained values scale with the
+      // RANGE of the quantity, and a lag in sweeps has a tiny range.
+      final source = _ResyncSource();
+      final checker = _resync(source);
+      source.plantSweep = 100;
+      source.panel(1).say(_resyncKey, 100);
+      for (var i = 0; i < 400; i++) {
+        // The source's own offset is what picks the window; the clock only
+        // stamps the reading.
+        final at = source.insideWindow(0,
+            plus: Duration(milliseconds: 10 * (i % 500)));
+        source.scheduleOffset = at;
+        checker.takeReading(_at(at));
+      }
+
+      expect(checker.keysCompared, greaterThanOrEqualTo(400),
+          reason: 'the readings really were taken — an arm that retained '
+              'nothing because it compared nothing would pass this vacuously');
+      expect(checker.retainedSamples, lessThan(64),
+          reason: 'four hundred sweeps over a plant sitting still produce a '
+              'handful of DISTINCT lag values and nothing else. Retaining one '
+              'entry per comparison is what made a bounded-memory checker the '
+              'unbounded structure in the room');
+      // And the report must still say the same things about the same data.
+      expect(checker.convergenceReport, contains('lag while judging (sweeps)'));
+      expect(checker.convergenceReport, contains('n='));
+    });
+
     test('PIPE. keys are excluded by prefix, because the gateway produces them '
         'and the plant does not', () {
       final source = _ResyncSource(keys: <String>[_resyncKey, 'PIPE.connected']);
@@ -2634,17 +2946,164 @@ void main() {
       expect(lines[1], '  total divergence events         : 0');
       expect(lines[2], '  healed within the stable window : 0');
       expect(lines[3], '  RESIDUE (unhealed at window end): 0');
-      expect(lines[4],
-          '  residue by cause: lostPush=0 unknownHandle=0 generationChange=0');
+      expect(lines[4], '  UNATTRIBUTED (healed or not)    : 0');
       expect(lines[5],
+          '  residue by cause: lostPush=0 unknownHandle=0 generationChange=0');
+      expect(lines[6],
           '                    resyncFailure=0 epochChange=0 unattributed=0');
-      expect(lines[6], '  KEYFRAME VERDICT: not needed');
-      expect(lines[7], contains('ledger control: 1 event recorded, '
+      expect(lines[7], '  KEYFRAME VERDICT: not needed');
+      expect(lines[8], contains('ledger control: 1 event recorded, '
           'attributed lostPush'));
-      expect(lines, hasLength(8),
+      expect(lines, hasLength(9),
           reason: 'this block is pasted into the milestone audit, quoted in '
               'STATE.md and read months from now. A shape that drifts between '
               'runs is a shape nobody can diff, so drift fails here');
+    });
+
+    test('the block prints BOTH terms the verdict turns on, and a healed '
+        'unattributed event proves they are different numbers', () {
+      // **`unattributed` is half of `keyframesNotNeeded` and the block did not
+      // print it.** The predicate is `unattributed <= 0 && residue <= 0`,
+      // where `unattributed` is `countOf(unattributed)` — every unattributed
+      // event, HEALED OR NOT — and `residue` sums `residueOf` over the
+      // non-epoch causes, unhealed only. The only `unattributed` in the block
+      // was the one inside the residue-by-cause line, which is
+      // `residueOf(unattributed)`: a different number.
+      //
+      // So a run whose unattributed divergences all healed printed
+      // `total 3 / healed 3 / RESIDUE 0 / ... unattributed=0` and then
+      // `KEYFRAME VERDICT: needed, evidence above` — with no evidence above.
+      // The milestone's headline decision was closed on "unattributed 0,
+      // residue 0" read out of a block that did not contain the first number.
+      final ledger = DivergenceLedger(_ResyncSource())
+        ..record(_event(1, DivergenceCause.lostPush, isControl: true))
+        ..record(_event(2, DivergenceCause.unattributed, healedWithinMs: 900))
+        ..record(_event(3, DivergenceCause.unattributed, healedWithinMs: 1200))
+        ..record(_event(4, DivergenceCause.unattributed, healedWithinMs: 800));
+
+      expect(ledger.unattributed, 3);
+      expect(ledger.residue, 0, reason: 'all three healed inside the window');
+      expect(ledger.keyframesNotNeeded, isFalse,
+          reason: 'the predicate reads countOf, so it says NEEDED');
+
+      expect(ledger.verdictBlock,
+          contains('UNATTRIBUTED (healed or not)    : 3'),
+          reason: 'the verdict says needed and the reader must be able to see '
+              'WHY from the same block. A verdict whose asserted number is '
+              'printed nowhere is the M-08 shape on the headline line');
+      expect(ledger.verdictBlock, contains('RESIDUE (unhealed at window end): 0'),
+          reason: 'and the other term stays visible beside it, or the reader '
+              'swaps one lie for another');
+    });
+
+    test('a clean verdict passes the assertion; a residue-carrying one fails '
+        'it and says the DECISION must be revisited', () {
+      // **The verdict was print-only.** `keyframesNotNeeded`, `unattributed`
+      // and `residue` were read in exactly one file — this one, against
+      // hand-built ledgers — and `soak_test.dart` read none of them. The
+      // ledger's own `violationLog` fires on one condition, the verdict FILE
+      // failing to write, so `KEYFRAME VERDICT: needed` printed and the lane
+      // went green, on the ninety-second arm and the thirty-five-minute job
+      // alike. A decision number that cannot change visibly is not a decision
+      // number.
+      final clean = DivergenceLedger(_ResyncSource())
+        ..record(_event(1, DivergenceCause.lostPush, isControl: true));
+      expect(() => assertKeyframeVerdictIsClean(clean), returnsNormally);
+
+      final dirty = DivergenceLedger(_ResyncSource())
+        ..record(_event(1, DivergenceCause.lostPush, isControl: true))
+        ..record(_event(2, DivergenceCause.unattributed));
+
+      Object? thrown;
+      try {
+        assertKeyframeVerdictIsClean(dirty);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown, isNotNull, reason: 'residue 1 against a threshold of 0');
+      final message = thrown.toString();
+      expect(message, contains('keyframe decision'),
+          reason: 'a red here is a DESIGN QUESTION REOPENING, not a fault. '
+              'Whoever reads this at 3 a.m. has to know which of the two it '
+              'is, or they will go looking for a broken pipe');
+      expect(message, contains('revisit'));
+      expect(message, contains('divergences.jsonl'),
+          reason: 'and it must name where the events are, not merely that '
+              'there were some');
+    });
+
+    test('the ledger control cannot trip the assertion, and that is one early '
+        'return', () {
+      // **The pin that stands between this assertion and a permanently red
+      // lane.** The control is recorded with `healedWithinMs: null` — it is
+      // unhealed BY CONSTRUCTION, because it substitutes a value nothing in
+      // the run will ever supply again. If it reached the counters it would be
+      // residue on every run for ever.
+      //
+      // What stops it is `record()` returning at the top on `event.isControl`,
+      // before `_total`, `_byCause`, `_residueByCause` and `_retain`. One
+      // branch, one call site (`eventual_resync.dart` sets `isControl: true`
+      // in exactly one place). Nothing failed if somebody deleted it: the
+      // cases below assert the control's EFFECTS, not that the isolation is
+      // what produces them, and with the verdict unasserted on composed runs
+      // the lane would not have noticed either.
+      //
+      // Deliberately given the most dangerous cause available rather than the
+      // `lostPush` the real control uses, so the pin holds even if the
+      // taxonomy's attribution of the control ever changes.
+      final ledger = DivergenceLedger(_ResyncSource())
+        ..record(_event(1, DivergenceCause.unattributed, isControl: true));
+
+      expect(ledger.unattributed, 0,
+          reason: 'an unhealed, unattributed CONTROL event must not reach the '
+              'counters — it is the verdict\'s warrant, not one of the run\'s '
+              'divergences');
+      expect(ledger.residue, 0);
+      expect(ledger.total, 0);
+      expect(ledger.keyframesNotNeeded, isTrue);
+      expect(() => assertKeyframeVerdictIsClean(ledger), returnsNormally,
+          reason: 'if this ever fails, EVERY push is red for ever and the '
+              'cause is two lines in DivergenceLedger.record');
+      expect(ledger.judgedSamples, 1,
+          reason: 'and it still counts as the reading that clears the vacuity '
+              'gate, which is the whole reason the control exists');
+    });
+
+    test('the composed run ASSERTS the verdict, on every arm, and not only '
+        'prints it', () {
+      // **A structural pin, and it is the only honest instrument for this.**
+      // The behaviour — a composed run going red on residue — cannot be
+      // produced on demand: three composed runs have recorded zero divergence
+      // events, the negative branch has never fired on one, and manufacturing
+      // a real divergence would mean corrupting a frame through a seam the
+      // soak does not have (`eventual_resync.dart` explains why the control
+      // substitutes an answer instead). So what is pinned is that the call
+      // site exists, in the same idiom as invariant 5's `_tickResyncComplained`
+      // pin and invariant 4's `_debugHistory` pin.
+      //
+      // It is pinned rather than trusted because the whole finding was that
+      // this number printed and nothing read it, on both arms, for the length
+      // of the milestone. There is ONE `_runSoak`, so one call site covers the
+      // ninety-second arm, the thirty-five-minute job and the auxiliary arms —
+      // an assertion that ran on one arm and not the other would be "judged on
+      // a column where it never ran", which is the failure this phase keeps
+      // finding.
+      final soakTest = File('test/soak/soak_test.dart');
+      expect(soakTest.existsSync(), isTrue,
+          reason: 'the pin is worthless if the path rots: ${soakTest.path}');
+      final source = soakTest.readAsStringSync();
+
+      expect(source, contains('assertKeyframeVerdictIsClean'),
+          reason: 'the keyframe verdict is the milestone\'s headline decision '
+              'number (11-CONTEXT ruling 5). Without this call the composed '
+              'run PRINTS "KEYFRAME VERDICT: needed" and exits 0 — which is '
+              'what it did for the whole of Phase 11');
+      expect(RegExp(r'_runSoak').allMatches(source).length,
+          greaterThanOrEqualTo(2),
+          reason: 'one composed entry point is what makes "both arms" true by '
+              'construction rather than by two call sites staying in step. If '
+              'this ever becomes two functions, the assertion has to be in '
+              'both and this pin has to say so');
     });
 
     test('one unhealed unattributed event prints NEEDED', () {
@@ -2726,6 +3185,65 @@ void main() {
               'a threshold');
       expect(ledger.keyframesNotNeeded, isFalse);
       expect(ledger.verdictBlock, contains('needed, evidence above'));
+    });
+
+    test('an OVERFLOWED ledger still streams every event to divergences.jsonl',
+        () async {
+      // **The doc and the verdict block both promise this and neither was
+      // true.** `takeReading` streams `for (i = _streamed; i < _entries.length;
+      // i++)`, and `_retain` stops appending to `_entries` at `capacity`. So
+      // once the ledger overflows, `_entries.length` is pinned, `_streamed`
+      // catches up to it, and the guard `if (_streamed >= _entries.length)
+      // return` makes every later tick a no-op. The events past the cap reach
+      // NEITHER the retained list nor the file.
+      //
+      // The doc directly above `takeReading` says "**Streamed rather than
+      // accumulated**, so a thirty-five-minute run whose ledger overflowed
+      // still has every event on disk", and the verdict block tells the reader
+      // the overflowed events are "counted above and in divergences.jsonl
+      // ONLY". On the one run where the keyframe decision flips and the
+      // per-event record IS the evidence, the reader follows that instruction
+      // and gets nothing after event #200.
+      final dir = _tempJournal();
+      final source = _ResyncSource()..journalPath = dir;
+      final ledger = DivergenceLedger(source, capacity: 3);
+      // Ticked between events, the way the driver ticks it: the first few are
+      // streamed, and then the ledger overflows and every later tick is a
+      // no-op because the cursor has caught up with a list that stopped
+      // growing.
+      for (var i = 1; i <= 10; i++) {
+        ledger.record(_event(i, DivergenceCause.unattributed));
+        ledger.takeReading(_at(Duration(seconds: i)));
+      }
+      await ledger.flushStream();
+
+      final file = File('$dir/$divergenceFileName');
+      final lines = file
+          .readAsLinesSync()
+          .where((one) => one.trim().isNotEmpty)
+          .toList();
+      expect(lines, hasLength(10),
+          reason: 'ten events were recorded and the file is THE record — the '
+              'retained list is only what the verdict block prints. Three '
+              'lines here is the ledger silently forgetting seven events it '
+              'told the reader to look for in this file');
+      expect(ledger.overflow, 7);
+      expect(ledger.total, 10);
+      // Every line a whole JSON object: two append sinks open on one file can
+      // interleave mid-line, and a corrupted record in the artifact whose
+      // whole job is to be machine-readable is worse than a short one.
+      for (final line in lines) {
+        expect(() => jsonDecode(line), returnsNormally,
+            reason: 'unparseable line in $divergenceFileName: $line');
+      }
+      expect(
+          <int>[
+            for (final line in lines)
+              (jsonDecode(line) as Map<String, Object?>)['nth']! as int,
+          ],
+          <int>[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+          reason: 'in order, once each — a cursor advanced before the flush '
+              'loses lines and a sink reopened per tick can duplicate them');
     });
 
     test('the verdict is written to verdict.txt and matches stdout', () {

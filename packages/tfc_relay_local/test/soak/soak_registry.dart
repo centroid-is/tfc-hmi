@@ -238,6 +238,33 @@ const List<SoakDeviation> soakDeviations = <SoakDeviation>[
         'the on-site arm against a deployed gateway, post-milestone, with the '
         'config seam built now so the retrofit is not a rewrite.',
   ),
+  SoakDeviation(
+    id: 'no subscription-lifecycle coverage',
+    clause: 'subscription churn under fault — sessions, subscriptions and '
+        'listeners bounded across a storm that opens and closes them',
+    instead: 'the storm draws panelSubscribe and panelUnsubscribe, and NEITHER '
+        'can move the gateway\'s sessionCount, subscriptionCount or '
+        'listenerCount. Gate B\'s own rows are where that coverage lives.',
+    reasoning: 'two facts make it structural rather than a gap somebody could '
+        'close by tuning the storm. RemoteStateMan.subscribe returns a '
+        'broadcast view of an EXISTING store node — it wraps '
+        '_storeOf(key).node(key) in a local StreamController and opens no wire '
+        'subscription at all. And gateBFixture constructs every panel with its '
+        'whole key list, so all forty plant keys are already filed under '
+        'defaultPageSubscription before the storm starts; stormKeys is a strict '
+        'subset of plantKeys, so EVERY panelSubscribe the storm can draw names '
+        'a key the panel already holds. The two levers therefore create and '
+        'destroy local broadcast controllers, which is a real thing to do to a '
+        'client and is not subscription lifecycle. The consequence worth '
+        'writing down: a regression in which subscribe began opening a real '
+        'wire subscription per call and leaking it — precisely what invariant '
+        '4 watches subscriptionsStructure and listenersStructure FOR — would '
+        'be invisible to the two levers that name subscriptions, because they '
+        'never reach the wire. Closing it means constructing panels with '
+        'subsets of the key list, which is gate B\'s fixture and gate B\'s '
+        'sixty-five rows. NO WAVE MAY CITE THESE TWO LEVERS AS '
+        'SUBSCRIPTION-LIFECYCLE COVERAGE.',
+  ),
 ];
 
 // ------------------------------------------------------------- RES-03's ledger

@@ -281,6 +281,193 @@ void main() {
     });
   });
 
+  // ------------------------------------------------------- the epoch exemption
+  //
+  // `epochBumpedAliases` is the ONE input to `DivergenceCause.epochChange`
+  // (`eventual_resync.dart:484-488`), and `epochChange` is the ONE cause the
+  // keyframe verdict subtracts (`divergence_ledger.dart:413-420`). A
+  // divergence re-attributed to it leaves `countOf(unattributed)` AND the
+  // residue sum in the same step — both terms of `keyframesNotNeeded` — so
+  // whatever this set says is the milestone's headline decision number.
+  //
+  // Which makes its LIFETIME the property, not its contents. The condition an
+  // epoch bump excuses is a re-browse; the set is a plain `Set<String>`, and
+  // the exemption must not outlive the settling the generator declares for the
+  // kind.
+  group('the epoch exemption', () {
+    test('a bump exempts its alias for the settling span and not for the rest '
+        'of the run', () async {
+      final driver = _driver(
+        duration: const Duration(seconds: 30),
+        timeline: _handTimeline(const <SoakTimelineEntry>[],
+            duration: const Duration(seconds: 30)),
+      );
+      await driver.start();
+
+      final span = SoakEventSchedule.recoverySpanOf(
+          SoakEventKinds.upstreamEpochBump);
+
+      final outcome = await driver.apply(const UpstreamEpochBump('ST101'));
+      expect(outcome.fired, isTrue);
+      expect(driver.epochBumpedAliases, <String>{'ST101'},
+          reason: 'the bump happened, so the alias is exempt while the '
+              're-browse it excuses is in flight');
+
+      await Future<void>.delayed(span + const Duration(milliseconds: 750));
+
+      expect(driver.epochBumpedAliases, isEmpty,
+          reason: 'the bump is a TRANSIENT condition and the exemption it '
+              'buys must be transient too. Left permanent, every subsequent '
+              'non-good-quality divergence on ST101 is attributed epochChange '
+              'for the rest of the run — subtracted from residue AND absent '
+              'from countOf(unattributed), which is both halves of the '
+              'keyframe verdict. The storm draws this lever ~4 times in '
+              'thirty-five minutes, so two draws on distinct aliases exempt '
+              'half the plant');
+    });
+
+    test('a second bump extends the exemption instead of the first recovery '
+        'cutting it short', () async {
+      // The defect the obvious fix imports. One timer per bump, with no
+      // bookkeeping, means bump A's recovery fires while bump B is still
+      // armed and clears an exemption B is entitled to — `upstreamSlowResolve`
+      // has exactly this shape today (M-15). Avoided here by construction
+      // rather than reproduced one file over.
+      final driver = _driver(
+        duration: const Duration(seconds: 30),
+        timeline: _handTimeline(const <SoakTimelineEntry>[],
+            duration: const Duration(seconds: 30)),
+      );
+      await driver.start();
+
+      final span = SoakEventSchedule.recoverySpanOf(
+          SoakEventKinds.upstreamEpochBump);
+
+      await driver.apply(const UpstreamEpochBump('ST101'));
+      await Future<void>.delayed(const Duration(seconds: 2));
+      await driver.apply(const UpstreamEpochBump('ST101'));
+
+      // Past the FIRST bump's span, inside the second's.
+      await Future<void>.delayed(span - const Duration(seconds: 1));
+      expect(driver.epochBumpedAliases, <String>{'ST101'},
+          reason: 'the first bump\'s recovery must not clear an exemption the '
+              'second bump is still entitled to');
+
+      // Past the second's.
+      await Future<void>.delayed(const Duration(milliseconds: 1750));
+      expect(driver.epochBumpedAliases, isEmpty,
+          reason: 'and the second bump\'s own span still ends it');
+    });
+
+    test('one alias\'s bump exempts that alias and nobody else', () async {
+      final driver = _driver(
+        duration: const Duration(seconds: 30),
+        timeline: _handTimeline(const <SoakTimelineEntry>[],
+            duration: const Duration(seconds: 30)),
+      );
+      await driver.start();
+
+      await driver.apply(const UpstreamEpochBump('ST101'));
+      expect(driver.epochBumpedAliases, hasLength(1),
+          reason: 'ten of the forty plant keys ride on one alias, so a set '
+              'that widened by accident would exempt a quarter of the plant');
+      expect(driver.epochBumpedAliases, isNot(contains('BAADER')));
+    });
+  });
+
+  // ------------------------------------------- levers that must not overclaim
+  //
+  // `SoakApplyOutcome.fizzled` exists because "a storm that quietly narrows
+  // itself is the failure mode both halves of the artifact hide on their own"
+  // (`soak_event.dart:60-66`). A lever that reports `fired` for something it
+  // did not do is that failure with a green tick on it.
+  group('levers that must not report firing into nothing', () {
+    test('a mass degrade on an ALREADY DOWN alias fizzles', () async {
+      // The generator guards `upstreamEpochBump` against a down alias
+      // (`SoakExclusivityRules.bumpOnDownAlias`) and `upstreamLinkDown`
+      // against a second down. It has no such rule for `upstreamMassDegrade`,
+      // and the driver's arm returned `fired` unconditionally — while having
+      // read `statusNotifications` before and after, so it held the evidence
+      // and threw it away.
+      //
+      // Real shape: `UpstreamLinkDown(ST301)` at +03:24 with its paired
+      // `UpstreamLinkUp` at +03:48, and a mass-degrade draw landing on ST301
+      // at +03:35. Every key it carries is already bad-quality from
+      // `disconnectUpstream`'s own `applyLinkLoss`, `announceLinkState`
+      // re-announces a state nothing changed, and `events.jsonl` records
+      // `"fired": true` for a degrade the run did not deliver.
+      final driver = _driver(
+        duration: const Duration(seconds: 20),
+        timeline: _handTimeline(const <SoakTimelineEntry>[],
+            duration: const Duration(seconds: 20)),
+      );
+      await driver.start();
+
+      final healthy = await driver.apply(const UpstreamMassDegrade('ST101'));
+      expect(healthy.fired, isTrue,
+          reason: 'the negative half: on a live link the lever really does '
+              'degrade, and a fizzle here would mean the arm had been made '
+              'blind rather than honest');
+
+      expect((await driver.apply(const UpstreamLinkDown('ST301'))).fired,
+          isTrue);
+      final onADeadLink =
+          await driver.apply(const UpstreamMassDegrade('ST301'));
+
+      expect(onADeadLink.fired, isFalse,
+          reason: 'ST301 is already disconnected and every key it carries is '
+              'already bad-quality, so this degraded nothing. Counting it in '
+              'the verdict block\'s levers line is the storm narrowing itself '
+              'while the artifact says it widened');
+      expect(onADeadLink.note, isNotNull);
+      expect(driver.fizzled.last, contains('ST301'));
+    });
+
+    test('a subscribe after a REDIAL opens against the new client, and does '
+        'not report the dead one as already held', () async {
+      // `PanelSubscribe` files its handle as `panel|key` and nothing clears it
+      // when `GateBFixture.redial` replaces the panel's `RemoteStateMan`
+      // outright. The driver is careful about this everywhere else —
+      // `panelViews`, `panelResyncViews` and `panelLogs` are all rebuilt per
+      // call with a doc explaining exactly this hazard — and `_subscriptions`
+      // was missed.
+      //
+      // The consequence is the same class as the case above: the second draw
+      // finds the handle present, skips it, and reports `fizzled … already
+      // held every one of` — about a subscription on an object disposed
+      // minutes earlier. The arm the `SoakApplyOutcome` type exists to make
+      // visible reports the OPPOSITE of what happened.
+      const key = 'ST101.CN01.MOT01.setpoint';
+      final driver = _driver(
+        duration: const Duration(seconds: 30),
+        timeline: _handTimeline(const <SoakTimelineEntry>[],
+            duration: const Duration(seconds: 30)),
+      );
+      await driver.start();
+
+      expect(
+          (await driver.apply(PanelSubscribe('panel-3', const <String>[key])))
+              .fired,
+          isTrue);
+
+      // The pair the timeline always draws together, and the only thing in the
+      // storm that replaces a client.
+      expect((await driver.apply(const TokenRevocation('panel-3'))).fired,
+          isTrue);
+      expect(
+          (await driver.apply(const TokenRestore('panel-3'))).fired, isTrue);
+      await Future<void>.delayed(const Duration(seconds: 3));
+
+      final again =
+          await driver.apply(PanelSubscribe('panel-3', const <String>[key]));
+      expect(again.fired, isTrue,
+          reason: 'the new client holds nothing of the sort — the old handle '
+              'names a subscription on a disposed object. Reporting "already '
+              'held" here is the storm narrowing itself for a reason that is '
+              'not true');
+    });
+  });
+
   group('a short run against the composed pipe', () {
     test('the pipe stands up, the storm plays, and every planned entry is '
         'applied', () async {
