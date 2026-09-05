@@ -16,10 +16,12 @@
 #   2. Put it in .env:        echo 'GATEWAY_DATA_NET=<that name>' > .env
 #   3. Bring it up:           docker compose -f docker/relay-gateway/docker-compose.yml up -d
 #
-# Step 2 is not optional guesswork: compose prefixes a network with its project
-# name, so the backend stack's `data-net` is really `backend_data-net` or
-# `<whatever the directory was called>_data-net`. The default below is the most
-# likely spelling, not a promise.
+# Step 1 is not optional guesswork: compose prefixes a network with its project
+# name, so what a compose file calls `data-net` is really `<project>_data-net`,
+# and the project name is whatever the directory happened to be called. On the
+# SVN rig the answer turned out to be neither — it is `centroid_default`, the
+# default network of a project called `centroid`, which is the default below.
+# Run the inspect anyway; the next rig will differ again.
 #
 # To MERGE this into an existing compose file by hand instead: copy the
 # `centroidx-relay-gateway:` service block into the existing `services:` map,
@@ -46,10 +48,19 @@ services:
     volumes:
       - ${GATEWAY_CONFIG_DIR:-./config}:/config:ro
 
-    # The wss port. 8443 inside is what gateway.example.json's `server.port`
-    # says; change both together or the publish maps nothing.
+    # The wss port.
+    #
+    # 9443 and not the 8443 you might expect: on the SVN rig **8443 is already
+    # published by `docker-update`**, so a reader following this file verbatim
+    # got a port clash. 9443 was free there and is now the default on both
+    # sides.
+    #
+    # GATEWAY_PORT is the port INSIDE the container and must equal
+    # `server.port` in gateway.json — compose cannot read that file, so the two
+    # are kept in step by hand. It is a variable rather than a literal so the
+    # healthcheck below cannot drift from the mapping.
     ports:
-      - "${GATEWAY_WSS_PORT:-8443}:8443"
+      - "${GATEWAY_WSS_PORT:-9443}:${GATEWAY_PORT:-9443}"
 
     # No `depends_on`: timescaledb is not in this file, and the gateway is
     # correct without a database — collection is a block an operator turns on.
@@ -73,7 +84,7 @@ services:
     # The runtime image has no curl and no netcat, and adding one for a
     # liveness probe is a package more than the job needs.
     healthcheck:
-      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8443"]
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/${GATEWAY_PORT:-9443}"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -94,4 +105,4 @@ services:
 networks:
   data-net-external:
     external: true
-    name: ${GATEWAY_DATA_NET:-backend_data-net}
+    name: ${GATEWAY_DATA_NET:-centroid_default}

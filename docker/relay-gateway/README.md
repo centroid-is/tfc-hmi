@@ -232,9 +232,10 @@ docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' ti
 
 # 2. tell compose, along with where the config lives
 cat > docker/relay-gateway/.env <<'EOF'
-GATEWAY_DATA_NET=backend_data-net
+GATEWAY_DATA_NET=centroid_default
 GATEWAY_CONFIG_DIR=/home/centroid/relay_config
-GATEWAY_WSS_PORT=8443
+GATEWAY_PORT=9443
+GATEWAY_WSS_PORT=9443
 EOF
 
 # 3. up
@@ -242,8 +243,17 @@ docker compose -f docker/relay-gateway/docker-compose.yml up -d --build
 ```
 
 Step 1 is not optional: compose prefixes network names with the project name, so
-the backend stack's `data-net` is really `<project>_data-net`. The default in the
-compose file is the most likely spelling, not a promise.
+what a compose file calls `data-net` is really `<project>_data-net`, and the
+project name is whatever the directory happened to be called. On the SVN rig the
+answer is neither — it is **`centroid_default`**, the default network of a
+project called `centroid`, which is the default the compose file now carries.
+Run the inspect anyway; the next rig will differ again.
+
+`GATEWAY_PORT` is the port **inside** the container and must equal `server.port`
+in `gateway.json`; `GATEWAY_WSS_PORT` is the host port. Both default to **9443**
+rather than 8443 because **8443 is already published by `docker-update` on the
+SVN rig** — a reader following an earlier draft of this file verbatim got a port
+clash.
 
 To merge the service into the rig's existing compose file by hand instead: copy
 the `centroidx-relay-gateway:` block into that file's `services:` map, change
@@ -262,7 +272,7 @@ The two lines that matter, in order:
 
 ```
 INFO  upstream ST101: opcua opc.tcp://10.50.10.10:4840
-INFO  serving on 0.0.0.0:8443, TLS on
+INFO  serving on 0.0.0.0:9443, TLS on
 ```
 
 `serving on ...` is the line to look for, and it comes **last**: the gateway
@@ -284,13 +294,13 @@ Then prove the socket from outside:
 curl -i --http1.1 -N \
   -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
   -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
-  http://10.50.10.11:8443/
+  http://10.50.10.11:9443/
 
 # TLS, verified against the CA you minted
 curl -i --http1.1 -N --cacert pki/ca.pem \
   -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
   -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
-  https://10.50.10.11:8443/
+  https://10.50.10.11:9443/
 ```
 
 `HTTP/1.1 101 Switching Protocols` is the answer. Any other status, or a TLS
