@@ -36,6 +36,19 @@ jobs:
     uses: ./.github/workflows/linux.yml
     secrets: inherit
 
+  # The mobile half of "the tip of main, rebuilt on every merge". There is no
+  # asset to attach to the prerelease below — an iOS build is not a file anyone
+  # downloads from GitHub, it goes to TestFlight — so this job publishes to
+  # App Store Connect itself and is deliberately absent from `publish`'s
+  # `needs`. Same reasoning as manager-build: `needs` on a reusable workflow is
+  # all-or-nothing, and a failed upload to Apple must not hold the desktop
+  # prerelease hostage. It still shows red on the run.
+  ios-testflight:
+    uses: ./.github/workflows/ios.yml
+    secrets: inherit
+    with:
+      channel: testflight
+
   # The manager is only otherwise published on a tagged release, so the README
   # served a manager as old as the last tag. Building it here keeps the
   # download current with main — and a manager predating a fix cannot install
@@ -151,6 +164,7 @@ jobs:
           | Windows (x64) | \`centroidx_windows_amd64.msix\` — sideload installer, used by the in-app updater's latest channel |
           | Windows (x64) | \`centroidx-sideload.cer\` — public signing certificate; the MSIX will not install until this is in \`LocalMachine\\TrustedPeople\` |
           | Linux (x64) | \`centroidx_linux_x64.tar.gz\` — GTK3 desktop bundle |
+          | iOS | Not downloadable here — this commit was uploaded to **TestFlight** |
 
           The \`centroidx-manager_*\` assets are the version manager built from this same commit; its **Latest** channel installs the packages above.
 

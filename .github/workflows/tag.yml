@@ -100,6 +100,32 @@ jobs:
       ref: ${{ needs.retag-pubspec.outputs.ref }}
     secrets: inherit
 
+  # Stable goes to the App Store, which is the same upload TestFlight gets plus
+  # the App Store Connect calls that attach the build to a store version and
+  # send it to Apple for review (.github/scripts/appstore_submit.py).
+  #
+  # Built from retag-pubspec's commit like every other job here, so
+  # CFBundleShortVersionString is the tag's version — the version string Apple
+  # publishes under is read straight out of the pubspec that commit wrote.
+  #
+  # Not in create-release's `needs`: the GitHub release and the App Store
+  # submission are independent shipments, and Apple can hold a review up for
+  # reasons no code change can fix. A red job here means the binary is in
+  # TestFlight but the store version needs a look.
+  ios-build:
+    needs: [retag-pubspec]
+    uses: ./.github/workflows/ios.yml
+    with:
+      ref: ${{ needs.retag-pubspec.outputs.ref }}
+      channel: appstore
+      # Quoted, and a string input on the other side, on purpose — see the
+      # note on the input's declaration in ios.yml. Do not "tidy" this into a
+      # bare `true`. (actionlint reads the quoted scalar back as a boolean and
+      # warns about it; main carries the identical false positive on
+      # main-prerelease.yml's `run_integration_tests: 'false'`.)
+      submit_for_review: 'true'
+    secrets: inherit
+
   build-manager:
     needs: [retag-pubspec]
     uses: ./.github/workflows/build-manager.yml

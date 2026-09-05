@@ -518,3 +518,46 @@ jobs:
           echo "::error::tools ran only $ran tests, expected >=105 — check the discover pattern"
           exit 1
         fi
+
+  # The App Store Connect client that ios.yml runs on a tagged release. It
+  # cannot be exercised for real from CI — it needs Apple credentials and every
+  # call mutates a live app listing — so its tests drive it against an
+  # in-memory double, and this job is the only thing standing between a typo
+  # and a release that uploads a binary and then fails to submit it.
+  #
+  # Linux only, and no `pip install`: the suite stubs PyJWT and touches neither
+  # the network nor the filesystem, so its result is a property of the source
+  # and identical on every runner.
+  release-scripts-python-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Run release script tests
+      shell: bash
+      run: |
+        python3 -m unittest discover -s .github/scripts/tests -v 2>&1 | tee test-output.txt
+
+    # Same reasoning as tools-python-test: a discover pattern that stops
+    # matching produces a green job that ran nothing.
+    #
+    # Counted off unittest's own "Ran N tests" summary rather than by grepping
+    # for "... ok" the way tools-python-test does. That grep undercounts here:
+    # several of these tests print while they run, which splits unittest's
+    # "<name> ... ok" across two lines and hides 8 of the 20 from the pattern.
+    - name: Verify the suite actually ran
+      if: always()
+      shell: bash
+      run: |
+        [ -f test-output.txt ] || { echo "::error::the test step produced no output"; exit 1; }
+        ran=$(sed -n 's/^Ran \([0-9][0-9]*\) tests\{0,1\} in .*/\1/p' test-output.txt)
+        echo "release script tests reported: ${ran:-none}"
+        # 20 in .github/scripts/tests/test_appstore_submit.py as of this commit.
+        if [ -z "$ran" ] || [ "$ran" -lt 18 ]; then
+          echo "::error::release scripts ran ${ran:-0} tests, expected >=18 — check the discover pattern"
+          exit 1
+        fi
