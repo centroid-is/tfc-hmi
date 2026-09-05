@@ -118,6 +118,11 @@ jobs:
     with:
       ref: ${{ needs.retag-pubspec.outputs.ref }}
       channel: appstore
+      # Quoted, and a string input on the other side, on purpose — see the
+      # note on the input's declaration in ios.yml. Do not "tidy" this into a
+      # bare `true`. (actionlint reads the quoted scalar back as a boolean and
+      # warns about it; main carries the identical false positive on
+      # main-prerelease.yml's `run_integration_tests: 'false'`.)
       submit_for_review: 'true'
     secrets: inherit
 

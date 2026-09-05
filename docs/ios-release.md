@@ -131,6 +131,17 @@ only thing left to do is finish the listing and re-run the job. It is
 idempotent: it reuses the open draft version and the open review submission
 rather than creating second ones.
 
+## Who gets the TestFlight builds
+
+Nothing in the pipeline assigns builds to a tester group. Internal testers
+(anyone with an App Store Connect role on the app, up to 100) receive every
+processed build automatically, which is what the `testflight` channel is for.
+
+External testing is a separate decision with a separate Apple review, so if
+builds should reach testers outside the team, create the external group in App
+Store Connect and turn on automatic distribution there rather than adding a
+step here.
+
 Export compliance is already answered: `ITSAppUsesNonExemptEncryption` is
 `false` in `centroid-hmi/ios/Runner/Info.plist`, so no build is ever held
 waiting on that question.
