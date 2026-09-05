@@ -444,11 +444,17 @@ jobs:
           rm -f "$HOME/private_keys/"AuthKey_*.p8
           [ -z "${KEYCHAIN_PATH:-}" ] || security delete-keychain "$KEYCHAIN_PATH" || true
 
-      # Kept even on the release channels: when a submission is rejected the
-      # first question is always what was actually in the binary, and the
-      # archive is gone with the runner.
+      # Kept even on the release channels: when Apple rejects a binary the
+      # first question is always what was actually in it, and the archive goes
+      # away with the runner.
+      #
+      # `always()`, because a step failing above is precisely when this
+      # artifact is worth having — without it the upload is skipped on exactly
+      # the runs someone needs to debug. Guarded on IPA_PATH so it does not
+      # add a second, confusing failure to a run that never got as far as
+      # producing an IPA.
       - name: Upload IPA artifact
-        if: steps.creds.outputs.upload == 'true'
+        if: always() && steps.creds.outputs.upload == 'true' && env.IPA_PATH != ''
         uses: actions/upload-artifact@v4
         with:
           name: centroidx_ios_${{ inputs.channel }}.ipa
