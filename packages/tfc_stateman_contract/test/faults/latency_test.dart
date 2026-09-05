@@ -63,6 +63,24 @@ final _slack = Platform.isLinux
     ? const Duration(milliseconds: 20)
     : const Duration(milliseconds: 75);
 
+/// What a round trip may come in *under* the ideal by, and why the band was
+/// one-sided before.
+///
+/// The ceiling above carries a platform-sized allowance and the floor carried
+/// **none**: it was exactly `2 * latency`, so any measurement landing a hair
+/// below the ideal failed. The first CI run of this suite produced exactly
+/// that — **99,845 µs against a 100,000 µs floor, short by 155 µs** — and the
+/// message blamed a delay "not applied to both directions", which was not what
+/// happened. The stopwatch and the two `Future.delayed` calls do not share an
+/// origin, so the observed total can round marginally under the sum.
+///
+/// **Two milliseconds is derived, not tuned.** The floor exists to catch a
+/// missing direction, which at this file's smallest injected delay is a **50 ms**
+/// shortfall — twenty-five times this allowance. So the arm still catches every
+/// failure it was written for, with the same margin it always had, and stops
+/// failing on measurement granularity it was never meant to judge.
+const _floorSlack = Duration(milliseconds: 2);
+
 /// The delay the headline arm injects, and the one the live-mutability arm
 /// switches on mid-connection.
 const _longDelay = Duration(milliseconds: 200);
@@ -137,7 +155,7 @@ void main() {
 
     // Two directions, so the extra is drawn twice: the upper bound is the
     // ideal round trip plus two full spreads plus the constant overhead.
-    final floor = _shortDelay * 2;
+    final floor = _shortDelay * 2 - _floorSlack;
     final ceiling = _shortDelay * 2 + _jitterSpread * 2 + _slack;
     for (final rtt in samples) {
       // Compared in microseconds because `inInclusiveRange` is a numeric
@@ -226,7 +244,8 @@ Future<void> _expectAdditiveRoundTrip(Duration d) async {
   // are the additive Durations, never a proportion of `d`.
   expect(
     rtt.inMicroseconds,
-    inInclusiveRange((d * 2).inMicroseconds, (d * 2 + _slack).inMicroseconds),
+    inInclusiveRange((d * 2 - _floorSlack).inMicroseconds,
+        (d * 2 + _slack).inMicroseconds),
     reason: 'a round trip through a proxy delaying ${d.inMilliseconds} ms per '
         'direction took ${rtt.inMilliseconds} ms, outside '
         '${(d * 2).inMilliseconds}-${(d * 2 + _slack).inMilliseconds} ms. '
