@@ -299,14 +299,22 @@ Future<void> settle(WidgetTester tester) async {
 /// Bypasses [BaseScaffold] (which requires Beamer routing context) by
 /// rendering the same Column of sections that [ServerConfigPage.build]
 /// produces. This tests all section widgets without needing a full router.
+///
+/// [localPreferences] is the device-local store the transport-mode card reads
+/// and writes. Pass one to seed a station into gateway mode, or to read back
+/// what a save wrote; the default is an empty in-memory store, which is a
+/// station that has never been configured and therefore runs direct.
 Widget buildTestableServerConfig({
   StateManConfig? stateManConfig,
+  PreferencesApi? localPreferences,
 }) {
   return ProviderScope(
     overrides: [
       preferencesProvider.overrideWith((ref) => createTestPreferences(
             stateManConfig: stateManConfig,
           )),
+      localPreferencesProvider
+          .overrideWithValue(localPreferences ?? InMemoryPreferences()),
       databaseProvider.overrideWith((ref) async => null),
       // Override stateManProvider to avoid real network connections.
       // Throwing makes valueOrNull return null and isLoading false,
