@@ -1128,6 +1128,46 @@ void main() {
           hasLength(1));
     });
 
+    test('a run-end violation is stamped with the WRITE\'s instant, not the '
+        'run\'s end', () {
+      // **The most diagnostic field in a trip record was describing the wrong
+      // moment.** `writeTrip` prints `modes armed` by looking up
+      // `violation.scheduleOffset` in the timeline, and the run-end arm
+      // stamped every violation with `source.scheduleOffset` — the end of the
+      // run. The 35-minute arm's `trip-0.txt` therefore read `monotonic:
+      // +00:00.000 / schedule: +35:00.001 / modes armed: blackhole` for a
+      // write issued at about +03:24, which a reader takes as "the panel was
+      // blackholed when this happened". It is not what it says, and it is the
+      // one field they would act on.
+      //
+      // The issued record is in hand at every call site, so this costs an
+      // argument.
+      final source = _WriteSource()
+        ..settled('cmd-a', 'applied')
+        ..settled('cmd-b', 'rejected');
+      source.scheduleOffset = const Duration(minutes: 3, seconds: 24);
+      source
+        ..issue('cmd-lost',
+            panel: 'panel-2', key: 'ST301.CN01.MOT03.setpoint', value: 5)
+        ..direct('cmd-lost', 'unknown', reachedASocket: true);
+      // The run ends half an hour later, and nothing settles the write.
+      source.scheduleOffset = const Duration(minutes: 35);
+      final checker = TerminalStateChecker(source);
+      checker.sample(_at(const Duration(minutes: 35)));
+      checker.finish();
+
+      final lost = checker.violations
+          .where((one) => one.toString().contains('NEITHER'))
+          .toList();
+      expect(lost, hasLength(1), reason: 'the write-loss arm, unchanged');
+      expect(lost.single.scheduleOffset,
+          const Duration(minutes: 3, seconds: 24),
+          reason: 'the trip record looks up the armed fault modes at this '
+              'offset. Stamped with the run\'s end it names whatever was armed '
+              'at +35:00, which is a fault the write never saw');
+      expect(lost.single.monotonic, const Duration(minutes: 3, seconds: 24));
+    });
+
     test('the plant applying an UNKNOWN command twice is a violation', () {
       // **The one population where a duplicate application is plausible, and
       // the arm structurally excluded it.** `_consume` returns before
