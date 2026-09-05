@@ -118,11 +118,71 @@ authoritative shape is `packages/tfc_relay_local/lib/src/gateway_config.dart`.
 | --- | --- | --- |
 | `links[].endpoint` | `opc.tcp://<host>:4840` per PLC | the `opcua[].endpoint` entries in the rig's `stateman.json` |
 | `links[].alias` | the name keymappings, health keys and status notifications use | the `opcua[].server_alias` in the same file — **use the same spelling**, or the keymappings will not route |
-| `links[].username` / `.password` | OPC UA credentials | `opcua[].username` / `.password` in the rig's `stateman.json` — see below |
+| `links[].username` / `.password` | the OPC UA **user token** | `opcua[].username` / `.password` in the rig's `stateman.json` — see below |
+| `links[].certificate_path` / `.private_key_path` | the OPC UA **application certificate**, which is what selects an encrypted channel | `opcua[].ssl_cert` / `.ssl_key` in the same file, converted to DER — see below |
 | `key_mappings` | container path to the plant's key→node map | export it out of the database — see below |
 | `collection.endpoint.password` | the Postgres password | the running backend's environment — see below |
 
 Everything else in the example is a working default.
+
+### OPC UA credentials: the certificate is not an alternative to the password
+
+The two fields do different jobs, and on a hardened server you need **both**.
+
+- `certificate_path` + `private_key_path` select the **secure channel**. The
+  gateway asks for `SIGNANDENCRYPT` **only when a certificate is present**, and
+  for `NONE` when it is not — `_opcUaClient` in `gateway_config.dart` computes
+  `hasUser` and `hasCert` independently and derives the security mode from
+  `hasCert` alone.
+- `username` + `password` are the **user token**, passed independently of the
+  channel.
+
+So a server that offers no `None` endpoint — this plant's, and any hardened one
+— rejects a username-only config. What that looks like:
+
+```
+error/client   No suitable endpoint found
+error/client   SecureChannel must be connected to send request
+error/client   SecureChannel must be connected to send request
+   … once a second, for ever
+```
+
+That message names neither the credentials nor the security mode, which is why
+it is worth writing down: **the fix is to add the certificate pair**, not to
+re-check the password. Found in the field on the first SVN deployment.
+
+Certificate without username is a legitimate combination — an encrypted channel
+with an anonymous user token — but only if the server admits anonymous users.
+Neither pair at all is an anonymous, unencrypted session.
+
+### Convert the OPC UA credentials to DER
+
+The rig keeps its OPC UA client certificate and key in `stateman.json` as
+**base64-encoded PEM**. The gateway reads **DER** file paths. Nothing in either
+format announces itself, so this is a required, easy-to-miss step:
+
+```sh
+CONFIG=/home/centroid/relay_config
+mkdir -p "$CONFIG/opcua"
+
+# 1. out of stateman.json, un-base64'd — this yields PEM
+jq -r '.opcua[0].ssl_cert' /home/centroid/tfc_config/stateman.json \
+  | base64 -d > "$CONFIG/opcua/client-cert.pem"
+jq -r '.opcua[0].ssl_key'  /home/centroid/tfc_config/stateman.json \
+  | base64 -d > "$CONFIG/opcua/client-key.pem"
+
+# 2. PEM -> DER, which is what gateway.json points at
+openssl x509 -in "$CONFIG/opcua/client-cert.pem" -outform der \
+  -out "$CONFIG/opcua/client-cert.der"
+openssl pkey -in "$CONFIG/opcua/client-key.pem" -outform der \
+  -out "$CONFIG/opcua/client-key.der"
+
+rm "$CONFIG/opcua/client-cert.pem" "$CONFIG/opcua/client-key.pem"
+chmod 600 "$CONFIG/opcua/client-key.der"
+```
+
+Adjust the `jq` index if the PLC you want is not `opcua[0]`; match on
+`server_alias` rather than position when there is more than one.
 
 ### Where the real credentials live — paths, not values
 
@@ -132,6 +192,9 @@ Nothing in this repository holds the plant's credentials, and
 - **OPC UA username/password** — `/home/centroid/tfc_config/stateman.json`, in
   the `opcua[]` array as `username` and `password`. That file is bind-mounted
   into `centroidx-backend` as `/config/stateman.json`.
+- **OPC UA client certificate and key** — the same file, as `opcua[].ssl_cert`
+  and `opcua[].ssl_key`, base64-encoded PEM. Converted to DER by the step
+  above; the DER lands in `<config dir>/opcua/`.
 - **Postgres password** — the `CENTROID_PGPASSWORD` environment variable on the
   running `centroidx-backend` container, which is set from the rig's backend
   compose file. Read it with
@@ -232,9 +295,10 @@ docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' ti
 
 # 2. tell compose, along with where the config lives
 cat > docker/relay-gateway/.env <<'EOF'
-GATEWAY_DATA_NET=backend_data-net
+GATEWAY_DATA_NET=centroid_default
 GATEWAY_CONFIG_DIR=/home/centroid/relay_config
-GATEWAY_WSS_PORT=8443
+GATEWAY_PORT=9443
+GATEWAY_WSS_PORT=9443
 EOF
 
 # 3. up
@@ -242,8 +306,17 @@ docker compose -f docker/relay-gateway/docker-compose.yml up -d --build
 ```
 
 Step 1 is not optional: compose prefixes network names with the project name, so
-the backend stack's `data-net` is really `<project>_data-net`. The default in the
-compose file is the most likely spelling, not a promise.
+what a compose file calls `data-net` is really `<project>_data-net`, and the
+project name is whatever the directory happened to be called. On the SVN rig the
+answer is neither — it is **`centroid_default`**, the default network of a
+project called `centroid`, which is the default the compose file now carries.
+Run the inspect anyway; the next rig will differ again.
+
+`GATEWAY_PORT` is the port **inside** the container and must equal `server.port`
+in `gateway.json`; `GATEWAY_WSS_PORT` is the host port. Both default to **9443**
+rather than 8443 because **8443 is already published by `docker-update` on the
+SVN rig** — a reader following an earlier draft of this file verbatim got a port
+clash.
 
 To merge the service into the rig's existing compose file by hand instead: copy
 the `centroidx-relay-gateway:` block into that file's `services:` map, change
@@ -262,7 +335,7 @@ The two lines that matter, in order:
 
 ```
 INFO  upstream ST101: opcua opc.tcp://10.50.10.10:4840
-INFO  serving on 0.0.0.0:8443, TLS on
+INFO  serving on 0.0.0.0:9443, TLS on
 ```
 
 `serving on ...` is the line to look for, and it comes **last**: the gateway
@@ -271,6 +344,15 @@ delays the port answering by its full connection timeout. Two links pointed at
 black-hole addresses measured ~14 s. Until then the container is up, the port is
 closed, and the log is a wall of `SecureChannel must be connected` from the OPC
 UA client — that is the link retrying, not a fault in the gateway.
+
+**But if that wall never stops, it is not patience you need.** A
+`SecureChannel must be connected` that repeats once a second indefinitely,
+especially preceded by `No suitable endpoint found`, is the missing-certificate
+misconfiguration above — see "the certificate is not an alternative to the
+password". The distinguishing question is whether `serving on ...` ever
+appears: it does eventually even with every link down, so a log with no
+`serving` line at all is a bind problem, and a log *with* one and a continuing
+wall is a link problem.
 
 That line also reports the port it *actually*
 bound, which is the check that matters when `server.port` was left out — a
@@ -284,13 +366,13 @@ Then prove the socket from outside:
 curl -i --http1.1 -N \
   -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
   -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
-  http://10.50.10.11:8443/
+  http://10.50.10.11:9443/
 
 # TLS, verified against the CA you minted
 curl -i --http1.1 -N --cacert pki/ca.pem \
   -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
   -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
-  https://10.50.10.11:8443/
+  https://10.50.10.11:9443/
 ```
 
 `HTTP/1.1 101 Switching Protocols` is the answer. Any other status, or a TLS
