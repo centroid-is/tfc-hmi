@@ -1,0 +1,207 @@
+/// Protocol version negotiated in `hello` (MCP-style: date-stamped, client
+/// sends the newest it supports, server echoes or counter-offers).
+const protocolVersion = '2026-08-13';
+
+/// JSON-RPC method names.
+///
+/// Requests (carry an id, expect a result): [hello], [subscribe],
+/// [unsubscribe], [write], [writeStatus], [read], [readFresh], [readMany],
+/// [ping], plus the timeseries / history / preferences methods added in later
+/// steps.
+///
+/// Notifications (no id, never acknowledged): [update], [tick], [resync],
+/// [status], [bye] server→client, and [holdTick] client→server — the only
+/// name a client sends without expecting an answer. Nothing that needs an
+/// outcome may ever be sent as a notification, and a hold tick has none: the
+/// engage and the release are ordinary [write] calls with three-state
+/// outcomes, and the feed in between is liveness, whose whole safety property
+/// is that it STOPS.
+abstract final class Methods {
+  static const hello = 'hello';
+  static const subscribe = 'subscribe';
+  static const unsubscribe = 'unsubscribe';
+  static const write = 'write';
+  static const writeStatus = 'writeStatus';
+
+  /// The cached read — no round trip, answered from what the gateway last
+  /// heard. `StateManApi.read`'s name, because it is the same concept.
+  static const read = 'read';
+
+  /// The forced round trip for one key — `StateManApi.readFresh`.
+  static const readFresh = 'readFresh';
+
+  /// One round trip for many keys — `StateManApi.readMany`.
+  static const readMany = 'readMany';
+
+  static const ping = 'ping';
+
+  /// The hold-to-run deadman feed — client→server, one frame per tick period
+  /// while a button is held, carrying [HoldTickParams] and no id.
+  ///
+  /// One character for the same reason [update] is: this is a hot path, and
+  /// the wire spelling is a literal in the server's surface test either way.
+  /// It is registered as a handler so json_rpc_2 dispatches it, but it is not
+  /// one of the nine names a client may *call* — nothing is ever sent back.
+  static const holdTick = 'h';
+
+  static const update = 'u'; // hot path — one character on purpose
+  static const tick = 'tick';
+  static const resync = 'resync';
+  static const status = 'status';
+  static const bye = 'bye';
+}
+
+/// The wire names of the four data services, and their per-family sets.
+///
+/// A **sibling** of [Methods] rather than more names inside it, and the
+/// argument is readability under a reviewer's eye: [Methods] is the session
+/// and value vocabulary somebody reads top to bottom to learn what this pipe
+/// does, and forty-seven names in one class stops being that. The split also
+/// buys the shape the tests want — the per-family sets are what a closure test
+/// *iterates* instead of restating, which is exactly what
+/// `rpc_names.dart:378-381` asks for one layer up.
+///
+/// These names lived in `tfc_relay_client`'s `client_sub_apis.dart` until
+/// Phase 10, where the client was the only end that had them. The gateway
+/// could not reach them: the server's production `lib/` may not name the
+/// contract kit (`handler_table_test.dart:264-296`) and it does not depend on
+/// the client at all, so registering handlers meant a second copy of
+/// thirty-four strings and a drift nobody would notice until a method came
+/// back `-32601` in the plant. This package is the one both ends already
+/// import.
+///
+/// Every name is `family.methodName`: the family segment is the `StateManApi`
+/// getter, the method segment is the interface member verbatim, and
+/// `data_service_methods_test.dart` compares each family against its interface
+/// in both directions so neither half can move without the other.
+abstract final class DataServiceMethods {
+  static const browseFetchRoots = 'browse.fetchRoots';
+  static const browseFetchChildren = 'browse.fetchChildren';
+  static const browseFetchDetail = 'browse.fetchDetail';
+  static const browseResolvePath = 'browse.resolvePath';
+
+  /// Every `BrowseApi` method, as data.
+  static const browseMethods = <String>{
+    browseFetchRoots,
+    browseFetchChildren,
+    browseFetchDetail,
+    browseResolvePath,
+  };
+
+  static const timeseriesQuery = 'timeseries.queryTimeseriesData';
+  static const timeseriesQueryMultiple =
+      'timeseries.queryTimeseriesDataMultiple';
+  static const timeseriesQueryDownsampled =
+      'timeseries.queryTimeseriesDataDownsampled';
+  static const timeseriesCountMultiple = 'timeseries.countTimeseriesDataMultiple';
+
+  /// Every `TimeseriesApi` method, as data.
+  static const timeseriesMethods = <String>{
+    timeseriesQuery,
+    timeseriesQueryMultiple,
+    timeseriesQueryDownsampled,
+    timeseriesCountMultiple,
+  };
+
+  static const historyCreateView = 'historyViews.createHistoryView';
+  static const historyUpdateView = 'historyViews.updateHistoryView';
+  static const historyDeleteView = 'historyViews.deleteHistoryView';
+  static const historySelectViews = 'historyViews.selectHistoryViews';
+  static const historyGetKeys = 'historyViews.getHistoryViewKeys';
+  static const historyGetGraphs = 'historyViews.getHistoryViewGraphs';
+  static const historyGetKeyNames = 'historyViews.getHistoryViewKeyNames';
+  static const historyAddPeriod = 'historyViews.addHistoryViewPeriod';
+  static const historyDeletePeriod = 'historyViews.deleteHistoryViewPeriod';
+  static const historyListPeriods = 'historyViews.listHistoryViewPeriods';
+  static const historyRetentionHorizon = 'historyViews.getGlobalRetentionHorizon';
+
+  /// Every `HistoryViewApi` method, as data.
+  static const historyViewMethods = <String>{
+    historyCreateView,
+    historyUpdateView,
+    historyDeleteView,
+    historySelectViews,
+    historyGetKeys,
+    historyGetGraphs,
+    historyGetKeyNames,
+    historyAddPeriod,
+    historyDeletePeriod,
+    historyListPeriods,
+    historyRetentionHorizon,
+  };
+
+  static const prefGetKeys = 'preferences.getKeys';
+  static const prefGetAll = 'preferences.getAll';
+  static const prefGetBool = 'preferences.getBool';
+  static const prefGetInt = 'preferences.getInt';
+  static const prefGetDouble = 'preferences.getDouble';
+  static const prefGetString = 'preferences.getString';
+  static const prefGetStringList = 'preferences.getStringList';
+  static const prefContainsKey = 'preferences.containsKey';
+  static const prefSetBool = 'preferences.setBool';
+  static const prefSetInt = 'preferences.setInt';
+  static const prefSetDouble = 'preferences.setDouble';
+  static const prefSetString = 'preferences.setString';
+  static const prefSetStringList = 'preferences.setStringList';
+  static const prefRemove = 'preferences.remove';
+  static const prefClear = 'preferences.clear';
+
+  /// Every `PreferencesApi` *method*, as data.
+  ///
+  /// [preferencesChanged] is deliberately absent for the reason given at its
+  /// own declaration.
+  static const preferencesMethods = <String>{
+    prefGetKeys,
+    prefGetAll,
+    prefGetBool,
+    prefGetInt,
+    prefGetDouble,
+    prefGetString,
+    prefGetStringList,
+    prefContainsKey,
+    prefSetBool,
+    prefSetInt,
+    prefSetDouble,
+    prefSetString,
+    prefSetStringList,
+    prefRemove,
+    prefClear,
+  };
+
+  /// Every data-service **request** name: thirty-four, and the whole wire
+  /// surface Phase 10 adds to the gateway.
+  ///
+  /// Spelled from the four sets above rather than as a second copy of the
+  /// strings, so a name can only be in one place.
+  static const all = <String>{
+    ...browseMethods,
+    ...timeseriesMethods,
+    ...historyViewMethods,
+    ...preferencesMethods,
+  };
+
+  /// The gateway's notification that a preference changed somewhere else.
+  ///
+  /// In this class but in **none** of the sets above, including [all]. It is a
+  /// server→client notification: it belongs in the session's
+  /// `expectedNotifications` and never in the handler table, and a set that
+  /// carried it would make the method-table-closure test demand a handler for
+  /// a frame that must never have one. `PreferencesApi.onPreferencesChanged`
+  /// is the receiving half, and it is a getter — so the reflection that counts
+  /// the family sets against the interface excludes it from the other
+  /// direction too.
+  static const preferencesChanged = 'preferences.changed';
+}
+
+/// Application close codes (WebSocket 4000–4999 private range).
+///
+/// Standard codes other than 1000 throw in web_socket_channel (#1690), and
+/// `closeCode` is unreliable for self-initiated closes (#1698) — both ends
+/// track the codes they send themselves.
+abstract final class CloseCodes {
+  static const authExpired = 4001;
+  static const serverDraining = 4002;
+  static const heartbeatTimeout = 4003;
+  static const backpressureOverrun = 4004;
+  static const protocolMismatch = 4005;
+}
