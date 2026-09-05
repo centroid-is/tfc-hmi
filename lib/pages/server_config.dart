@@ -18,6 +18,7 @@ import 'package:cryptography/cryptography.dart' as crypto;
 import 'package:cryptography_flutter/cryptography_flutter.dart' as crypto_fl;
 import 'package:tfc_access/tfc_access.dart';
 
+import '../core/gateway_config.dart';
 import '../core/server_config_db.dart';
 import '../widgets/base_scaffold.dart';
 import '../widgets/connection_status_chip.dart';
@@ -27,6 +28,7 @@ import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/modbus_device_client.dart';
 import 'package:modbus_client/modbus_client.dart' show ModbusEndianness;
 import 'package:tfc_dart/core/database.dart';
+import '../providers/gateway.dart';
 import '../providers/state_man.dart';
 import '../providers/preferences.dart';
 import '../providers/database.dart';
@@ -544,24 +546,43 @@ class ServerConfigBody extends ConsumerWidget {
     // Watch a simple counter that gets incremented on import
     final refreshKey = ref.watch(refreshKeyProvider);
 
+    // The saved transport, not the one being edited. Restart-to-apply means
+    // the running panel is on whatever was saved, and hiding the four sections
+    // the instant a radio button moves would tell the operator the panel had
+    // already changed.
+    //
+    // Absent or still loading reads as direct mode, which is what an
+    // unconfigured station runs.
+    final gateway = ref.watch(gatewayConfigProvider).valueOrNull ??
+        GatewayConfig.defaults;
+
     return SingleChildScrollView(
       child: Column(
         children: [
-          // Database Configuration Section
-          DatabaseConfigWidget(key: ValueKey('db_$refreshKey')),
+          // Which pipe this station runs on. First, because in gateway mode
+          // the four sections below are not siblings of it — they are
+          // irrelevant, and it is this card that says so.
+          TransportModeCard(key: ValueKey('transport_$refreshKey')),
           const SizedBox(height: 16),
 
-          // OPC-UA Servers Section
-          _OpcUAServersSection(key: ValueKey('opcua_$refreshKey')),
-          const SizedBox(height: 16),
+          if (!gateway.isGateway) ...[
+            // Database Configuration Section
+            DatabaseConfigWidget(key: ValueKey('db_$refreshKey')),
+            const SizedBox(height: 16),
 
-          // JBTM M2400 Servers Section
-          _JbtmServersSection(key: ValueKey('jbtm_$refreshKey')),
-          const SizedBox(height: 16),
+            // OPC-UA Servers Section
+            _OpcUAServersSection(key: ValueKey('opcua_$refreshKey')),
+            const SizedBox(height: 16),
 
-          // Modbus TCP Servers Section
-          _ModbusServersSection(key: ValueKey('modbus_$refreshKey')),
-          const ImportExportCard(),
+            // JBTM M2400 Servers Section
+            _JbtmServersSection(key: ValueKey('jbtm_$refreshKey')),
+            const SizedBox(height: 16),
+
+            // Modbus TCP Servers Section
+            _ModbusServersSection(key: ValueKey('modbus_$refreshKey')),
+            const ImportExportCard(),
+          ] else
+            const _DirectSectionsHiddenNote(),
         ],
       ),
     );
@@ -921,6 +942,280 @@ class _EmptyServersPlaceholder extends StatelessWidget {
           const SizedBox(height: 8),
           Text(subtitle, style: const TextStyle(color: Colors.grey)),
         ],
+      ),
+    );
+  }
+}
+
+// ===================== Transport Mode =====================
+
+/// Which pipe this station runs on, and where the far end is.
+///
+/// **A mode switch, not a fifth section.** In gateway mode this panel opens no
+/// OPC UA session, no Modbus socket and no Postgres pool, so the four sections
+/// below it are not another thing to configure — they are inert. This card
+/// therefore sits above them and `ServerConfigBody` hides them behind it.
+///
+/// **Device-local, and that is why it does not save where its neighbours do.**
+/// Every other section on this page writes through `preferencesProvider`, the
+/// shared, DB-backed store, so that one machine can configure the plant. A
+/// gateway URL must not travel that way for the same reason a Postgres address
+/// must not: two stations reach the same service at different addresses, and
+/// the sync would re-point one from the other. It writes through
+/// `localPreferencesProvider` instead.
+///
+/// **Restart to apply**, deliberately, and the card says so after every save.
+/// Swapping transport live means tearing down OPC UA sessions and a database
+/// pool while widgets hold subscriptions against them.
+class TransportModeCard extends ConsumerStatefulWidget {
+  const TransportModeCard({super.key});
+
+  @override
+  ConsumerState<TransportModeCard> createState() => _TransportModeCardState();
+}
+
+class _TransportModeCardState extends ConsumerState<TransportModeCard> {
+  /// What is on disk. `null` until the first read completes.
+  GatewayConfig? _saved;
+
+  /// What the operator has typed. Diffed against [_saved] for the save button.
+  GatewayConfig _edited = GatewayConfig.defaults;
+
+  final _urlController = TextEditingController();
+  final _caController = TextEditingController();
+  final _tokenController = TextEditingController();
+
+  @override
+  void dispose() {
+    _urlController.dispose();
+    _caController.dispose();
+    _tokenController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final loaded = await ref.read(gatewayConfigProvider.future);
+    if (!mounted) return;
+    _urlController.text = loaded.url;
+    _caController.text = loaded.caCertPath ?? '';
+    _tokenController.text = loaded.tokenPath ?? '';
+    setState(() {
+      _saved = loaded;
+      _edited = loaded;
+    });
+  }
+
+  bool get _hasUnsavedChanges => _saved != null && _edited != _saved;
+
+  Future<void> _save() async {
+    await writeGatewayConfig(ref.read(localPreferencesProvider), _edited);
+    ref.invalidate(gatewayConfigProvider);
+    if (!mounted) return;
+    setState(() => _saved = _edited);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Transport saved. Restart the HMI to apply it.'),
+        backgroundColor: Colors.green,
+      ),
+    );
+  }
+
+  void _edit(GatewayConfig next) => setState(() => _edited = next);
+
+  @override
+  Widget build(BuildContext context) {
+    final saved = _saved;
+    if (saved == null) {
+      // Load once, then rebuild — the same shape `McpServerSection` uses.
+      _load();
+      return const Card(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      );
+    }
+
+    final refusal = _edited.validationError;
+
+    // Collapsed by default in direct mode — the shape `McpServerSection`
+    // already uses for a device-local setting, and the reason is not only
+    // consistency: an expanded card here pushes the four sections down the
+    // page on every station in the plant, for a setting almost none of them
+    // will ever change.
+    return Card(
+      child: ExpansionTile(
+        leading: const FaIcon(FontAwesomeIcons.networkWired, size: 20),
+        title: const Text('Transport'),
+        subtitle: Text(saved.isGateway
+            ? 'Relay gateway — ${saved.url}'
+            : 'Direct to PLCs'),
+        trailing: _hasUnsavedChanges
+            ? Chip(
+                label: const Text('Unsaved'),
+                backgroundColor: Theme.of(context).colorScheme.errorContainer,
+              )
+            : null,
+        // A gateway station opens on its own settings; a direct one does not
+        // have any to show.
+        initiallyExpanded: saved.isGateway,
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        expandedCrossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'This setting belongs to this station only. It is never '
+            'exported, imported or synced from another machine.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 12),
+          SegmentedButton<TransportMode>(
+            segments: const [
+              ButtonSegment(
+                value: TransportMode.direct,
+                label: Text('Direct to PLCs'),
+                icon: FaIcon(FontAwesomeIcons.plug, size: 14),
+              ),
+              ButtonSegment(
+                value: TransportMode.gateway,
+                label: Text('Relay gateway'),
+                icon: FaIcon(FontAwesomeIcons.towerBroadcast, size: 14),
+              ),
+            ],
+            selected: {_edited.mode},
+            onSelectionChanged: (selection) =>
+                _edit(_edited.copyWith(mode: selection.first)),
+          ),
+          const SizedBox(height: 12),
+          if (_edited.isGateway) ...[
+            TextField(
+              controller: _urlController,
+              decoration: const InputDecoration(
+                labelText: 'Gateway address',
+                hintText: 'wss://10.50.10.11:9443',
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (value) => _edit(_edited.copyWith(url: value)),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _caController,
+              decoration: const InputDecoration(
+                labelText: 'Plant CA certificate (PEM path)',
+                hintText: '/home/centroid/relay_config/pki/ca.pem',
+                helperText: 'Required for wss. A path on this machine, never '
+                    'the certificate text.',
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (value) => _edit(_edited.copyWith(
+                caCertPath: value.trim().isEmpty ? null : value.trim(),
+                clearCaCertPath: value.trim().isEmpty,
+              )),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _tokenController,
+              decoration: const InputDecoration(
+                labelText: 'Station credential file (optional)',
+                helperText: 'A file holding this station\'s token. Leave '
+                    'empty when the gateway runs no token file.',
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (value) => _edit(_edited.copyWith(
+                tokenPath: value.trim().isEmpty ? null : value.trim(),
+                clearTokenPath: value.trim().isEmpty,
+              )),
+            ),
+            const SizedBox(height: 12),
+            if (refusal != null)
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.error_outline,
+                      size: 18, color: Theme.of(context).colorScheme.error),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      refusal,
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.error),
+                    ),
+                  ),
+                ],
+              ),
+            if (refusal != null) const SizedBox(height: 12),
+          ],
+          // Not `_SaveConfigButton`: that one has two states and this has
+          // three. A configuration that cannot be dialled is not saveable —
+          // the panel would construct nothing at the next boot and show a
+          // start-up error instead of the message the operator can read
+          // right here — but calling that state "All Changes Saved" would be
+          // a lie about work the operator has just done and can still see on
+          // screen.
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed:
+                      _hasUnsavedChanges && refusal == null ? _save : null,
+                  icon: FaIcon(FontAwesomeIcons.floppyDisk,
+                      size: 16,
+                      color: _hasUnsavedChanges && refusal == null
+                          ? null
+                          : Colors.grey),
+                  label: Text(switch ((_hasUnsavedChanges, refusal)) {
+                    (false, _) => 'All Changes Saved',
+                    (true, final String _) => 'Cannot save yet',
+                    (true, _) => 'Save Configuration',
+                  }),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    backgroundColor: _hasUnsavedChanges && refusal == null
+                        ? null
+                        : Colors.grey,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Changing the transport takes effect when the HMI restarts.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// What sits where the four direct-mode sections were.
+///
+/// An empty space would read as a page that failed to load. This says which
+/// decision removed them and how to get them back.
+class _DirectSectionsHiddenNote extends StatelessWidget {
+  const _DirectSectionsHiddenNote();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const FaIcon(FontAwesomeIcons.circleInfo, size: 18),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'This station talks to the relay gateway, so it opens no '
+                'connections of its own. The database, OPC UA, JBTM and '
+                'Modbus settings belong to the gateway and are configured '
+                'there. Switch back to Direct to PLCs to edit them here.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
