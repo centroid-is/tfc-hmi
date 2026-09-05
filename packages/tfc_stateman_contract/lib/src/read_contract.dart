@@ -54,19 +54,46 @@ List<String> _diagnosticsKeys() => [
         'ST201.CN${i.toString().padLeft(2, '0')}.MOT01.speed',
     ];
 
-/// `read` is null until a value has actually arrived, and not null after.
+/// `read` presents no reading until a value has actually arrived, and the real
+/// one after.
 ///
 /// The distinction a widget cannot draw without: "nothing known yet" renders as
 /// a placeholder and "known to be zero" renders as a zero. A source that
 /// answers zero for an unknown key puts a plausible reading on a mimic for a
 /// tag that may not exist at all.
+///
+/// **Two spellings of "nothing yet", and the case accepts exactly those two.**
+/// A source that has never heard the key named answers `null`. A source that
+/// declares its page up front — which every real one does, `LocalStateMan` from
+/// its DeviceClient config and a panel from its subscribe — has heard the key
+/// named and has been told there is no reading, and answers that state in the
+/// vocabulary the protocol has for it: a value of `null` carrying
+/// [Quality.uncertainNotYetKnown]. Neither is a reading, which is the property;
+/// insisting on the first spelling was insisting on the in-memory fake's
+/// *representation*.
+///
+/// That distinction had never actually been judged over a socket. Until the
+/// suite grew [linkUp] the case ran before the gateway's snapshot landed, so on
+/// the WS and fault legs it asserted `null` against a store that had not been
+/// filled yet and passed by outrunning the transport. It is stricter now than
+/// it was: the state it accepts is named, so a confident zero, a good-quality
+/// null and a last-known reading all still fail it.
 Future<void> checkSyncReadIsNullBeforeFirstValue(StateManApi api) async {
   final plant = harnessOf(api);
 
-  expect(api.read(_speedKey), isNull,
-      reason: 'a key nothing has been heard about read as a value; "not known '
+  final before = api.read(_speedKey);
+  expect(
+      before == null ||
+          (before.value == null &&
+              before.quality == Quality.uncertainNotYetKnown),
+      isTrue,
+      reason: 'a key nothing has been heard about read as $before; "not known '
           'yet" and "known to be zero" must be distinguishable, or every '
-          'unbound box on a new page shows a confident number');
+          'unbound box on a new page shows a confident number. A source that '
+          'has not heard the key named answers null; one that declared it and '
+          'has no reading answers a null value at '
+          '${Quality.uncertainNotYetKnown.code}. Anything else is a reading '
+          'that does not exist');
 
   final node = api.listen(_speedKey);
   final seen = observe(node);
