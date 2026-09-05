@@ -15,6 +15,8 @@ import '../page_creator/assets/common.dart';
 import '../page_creator/assets/editor_clipboard.dart';
 import '../page_creator/assets/image.dart';
 import '../page_creator/assets/image_store.dart';
+import '../page_creator/assets/ethercat_link.dart';
+import '../page_creator/assets/link_edit_overlay.dart';
 import '../page_creator/assets/registry.dart';
 import '../providers/page_images.dart';
 import '../widgets/base_scaffold.dart';
@@ -76,6 +78,49 @@ bool marqueeHitTestRotatedAsset({
   final localDx = dx * cosA - dy * sinA;
   final localDy = dx * sinA + dy * cosA;
   return localDx.abs() <= halfW && localDy.abs() <= halfH;
+}
+
+/// Whether [pointer] lands on [asset], as the editor decides it.
+///
+/// Two steps. The rotated rectangle first, which is the whole answer for
+/// every asset drawn to fill its box. Then the asset's own shape, for the one
+/// whose box is mostly empty: a cable's rectangle spans the two devices it
+/// plugs into, so without the second step a run crossing the canvas would
+/// claim every drag over that area and a marquee could not be started
+/// anywhere near it.
+///
+/// The local conversion ignores rotation deliberately. Only a run refines its
+/// hit shape, and a run is never rotated — its angle comes from where its
+/// devices are, not from a field.
+@visibleForTesting
+bool editorHitTestAsset({
+  required Offset pointer,
+  required Asset asset,
+  required List<Asset> assets,
+  required Size canvas,
+}) {
+  final derived = asset.boxOn(assets, canvas);
+  final cx = (derived?.center.dx ?? asset.coordinates.x) * canvas.width;
+  final cy = (derived?.center.dy ?? asset.coordinates.y) * canvas.height;
+  final w = (derived?.width ?? asset.size.width) * canvas.width;
+  final h = (derived?.height ?? asset.size.height) * canvas.height;
+
+  if (!marqueeHitTestRotatedAsset(
+    pointer: pointer,
+    cx: cx,
+    cy: cy,
+    halfW: w / 2,
+    halfH: h / 2,
+    angleDegrees: asset.coordinates.angle ?? 0.0,
+  )) {
+    return false;
+  }
+  return asset.hitTestBox(
+    Offset(pointer.dx - (cx - w / 2), pointer.dy - (cy - h / 2)),
+    Size(w, h),
+    assets,
+    canvas,
+  );
 }
 
 /// Reorders [assets] so that [targets] sit beneath everything else.
@@ -2214,6 +2259,17 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     });
   }
 
+  /// The selected cable, when the selection is exactly one.
+  ///
+  /// Its handles are a different surface from the shared chrome, and showing
+  /// them for a multi-selection would put corner handles on top of whatever
+  /// else is selected.
+  EtherCatLinkConfig? get _selectedLink {
+    if (_selectedAssets.length != 1) return null;
+    final only = _selectedAssets.first;
+    return only is EtherCatLinkConfig ? only : null;
+  }
+
   void _handleCopy() {
     if (_selectedAssets.isEmpty) return;
     _copyAssets(_selectedAssets.toList());
@@ -2270,6 +2326,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
     _saveToHistory();
     final copiedAssets = AssetRegistry.parse(jsonDecode(pasted));
+    reidentifyAssets(copiedAssets);
     setState(() {
       _selectedAssets.clear();
 
@@ -3115,20 +3172,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                                     // operator clicks empty visual space inside
                                     // the pre-rotation rect.
                                     bool hitAsset = assets.any((asset) {
-                                      return marqueeHitTestRotatedAsset(
+                                      return editorHitTestAsset(
                                         pointer: pointerEvent.localPosition,
-                                        cx: asset.coordinates.x *
-                                            constraints.maxWidth,
-                                        cy: asset.coordinates.y *
-                                            constraints.maxHeight,
-                                        halfW: (asset.size.width *
-                                                constraints.maxWidth) /
-                                            2,
-                                        halfH: (asset.size.height *
-                                                constraints.maxHeight) /
-                                            2,
-                                        angleDegrees:
-                                            asset.coordinates.angle ?? 0.0,
+                                        asset: asset,
+                                        assets: assets,
+                                        canvas: Size(constraints.maxWidth,
+                                            constraints.maxHeight),
                                       );
                                     });
 
@@ -3246,6 +3295,20 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                                     start: _selectionStart!,
                                     current: _selectionCurrent!,
                                   ),
+                                ),
+                              // A run is drawn, not placed, so the box-and-
+                              // handles chrome has nothing useful to offer it.
+                              // Topmost, so grabbing a handle is never read as
+                              // the start of a marquee.
+                              if (_selectedLink != null)
+                                LinkEditOverlay(
+                                  link: _selectedLink!,
+                                  assets: assets,
+                                  canvas: Size(constraints.maxWidth,
+                                      constraints.maxHeight),
+                                  onBeginEdit: _saveToHistory,
+                                  onChanged: () =>
+                                      setState(_updateCurrentJson),
                                 ),
                               Positioned(
                                 top: 16,

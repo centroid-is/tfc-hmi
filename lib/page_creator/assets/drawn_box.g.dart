@@ -22,6 +22,7 @@ DrawnBoxConfig _$DrawnBoxConfigFromJson(Map<String, dynamic> json) =>
       dashSpacing: (json['dashSpacing'] as num?)?.toDouble() ?? 5.0,
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -33,6 +34,7 @@ DrawnBoxConfig _$DrawnBoxConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$DrawnBoxConfigToJson(DrawnBoxConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,

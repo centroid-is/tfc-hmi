@@ -16,6 +16,7 @@ STBDDI3725Config _$STBDDI3725ConfigFromJson(Map<String, dynamic> json) =>
       descriptionsKey: json['descriptionsKey'] as String?,
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -27,6 +28,7 @@ STBDDI3725Config _$STBDDI3725ConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$STBDDI3725ConfigToJson(STBDDI3725Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
@@ -57,6 +59,7 @@ STBDDO3705Config _$STBDDO3705ConfigFromJson(Map<String, dynamic> json) =>
       descriptionsKey: json['descriptionsKey'] as String?,
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -68,6 +71,7 @@ STBDDO3705Config _$STBDDO3705ConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$STBDDO3705ConfigToJson(STBDDO3705Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
@@ -87,6 +91,7 @@ STBNIP2311Config _$STBNIP2311ConfigFromJson(Map<String, dynamic> json) =>
           json['subdevices'], const AssetListConverter().fromJson),
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -98,6 +103,7 @@ STBNIP2311Config _$STBNIP2311ConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$STBNIP2311ConfigToJson(STBNIP2311Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
@@ -120,6 +126,7 @@ STBPDT3100Config _$STBPDT3100ConfigFromJson(Map<String, dynamic> json) =>
       inputOkKey: json['inputOkKey'] as String?,
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -131,6 +138,7 @@ STBPDT3100Config _$STBPDT3100ConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$STBPDT3100ConfigToJson(STBPDT3100Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,

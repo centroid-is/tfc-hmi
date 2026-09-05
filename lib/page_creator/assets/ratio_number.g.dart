@@ -36,6 +36,7 @@ RatioNumberConfig _$RatioNumberConfigFromJson(Map<String, dynamic> json) =>
       decimalPlaces: (json['decimal_places'] as num?)?.toInt() ?? 1,
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -47,6 +48,7 @@ RatioNumberConfig _$RatioNumberConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$RatioNumberConfigToJson(RatioNumberConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,

@@ -22,6 +22,7 @@ SensorConfig _$SensorConfigFromJson(Map<String, dynamic> json) => SensorConfig(
       showTag: json['showTag'] as bool? ?? false,
     )
       ..variant = json['asset_name'] as String
+      ..id = json['id'] as String?
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -33,6 +34,7 @@ SensorConfig _$SensorConfigFromJson(Map<String, dynamic> json) => SensorConfig(
 Map<String, dynamic> _$SensorConfigToJson(SensorConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      if (instance.id case final value?) 'id': value,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'textPos': _$TextPosEnumMap[instance.textPos],
