@@ -1567,6 +1567,47 @@ void main() {
           210);
     });
 
+    test('a checker past its violation cap reports the TOTAL, not the cap', () {
+      // **"200" is a CEILING, not a count, and reading it as a count has cost
+      // this phase real time twice** — two waves built diagnoses on it before
+      // 11-07 found it was `violationLogCapacity` (`invariant.dart:171`). The
+      // reason `ViolationLog` keeps an overflow counter at all is its own doc:
+      // "a capped list without a counter would report '200 violations' for a
+      // run that had eighty thousand, which is a worse lie than the memory it
+      // saves". The counter existed; nothing above `ViolationLog` could read
+      // it, because `InvariantChecker` exposes only `violations`.
+      //
+      // So `soak_test.dart`'s headline total summed `violations.length` — the
+      // capped list — reintroducing the exact lie the counter prevents, in the
+      // one message a person reads at 07:00.
+      final source = _StructureSource(panels: 2);
+      final checker = BoundedMemoryChecker(source);
+      // The cap rule fires once per structure per breach episode, so break
+      // several structures at once and keep them broken, cycling under and
+      // back over so the latch re-arms. 300+ violations against a cap of 200.
+      var i = 0;
+      while (checker.violationTotal <= violationLogCapacity + 40) {
+        source.panel(1)[writeStatusQueriesStructure] = i.isEven ? 70 : 10;
+        checker.sample(_at(Duration(seconds: 5 * i)));
+        i++;
+        if (i > 2000) break; // never spin for ever on a broken checker
+      }
+
+      expect(checker.violations.length, violationLogCapacity,
+          reason: 'the retained list is capped, which is correct and is the '
+              'whole reason the counter has to be readable');
+      expect(checker.violationTotal, greaterThan(violationLogCapacity),
+          reason: 'and the total must be reachable from the INTERFACE — '
+              'summing `violations.length` across the checkers is what turned '
+              'eighty thousand into two hundred');
+      expect(checker.violationOverflow,
+          checker.violationTotal - violationLogCapacity);
+      expect(checker.violationTotal,
+          checker.violations.length + checker.violationOverflow,
+          reason: 'retained + overflow = total, or the three numbers are not '
+              'about the same run');
+    });
+
     test('a source that throws becomes a recorded violation, never a dead run',
         () {
       final checker = BoundedMemoryChecker(_ThrowingStructureSource());

@@ -631,6 +631,16 @@ final class _FakeChecker implements InvariantChecker {
   @override
   List<SoakViolation> get violations => const <SoakViolation>[];
 
+  // This fake drives the vacuity gate and records nothing, so both counters
+  // are zero and agree with the empty list above. A fake whose total
+  // disagreed with its retained list would be a fake that could not be used
+  // to test the gate it exists for.
+  @override
+  int get violationTotal => 0;
+
+  @override
+  int get violationOverflow => 0;
+
   @override
   void sample(SoakClock clock) {}
 }

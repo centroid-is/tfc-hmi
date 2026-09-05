@@ -337,8 +337,15 @@ Future<SoakDriver> _runSoak(
     ...driver.violations,
     for (final one in registered) ...one.violations,
   ];
+  // **`.violationTotal`, never `.violations.length`.** The driver's own term
+  // was already honest; the checkers' term summed the CAPPED list, so a
+  // checker that recorded 84,000 violations contributed 200 to the number in
+  // the failure message — reintroducing the exact "200 for a run that had
+  // eighty thousand" lie `ViolationLog.overflow` exists to prevent, in the one
+  // message a person reads at 07:00. Two waves of this phase built diagnoses
+  // on a 200 that was a ceiling.
   final total = driver.violationLog.total +
-      registered.fold<int>(0, (sum, one) => sum + one.violations.length);
+      registered.fold<int>(0, (sum, one) => sum + one.violationTotal);
 
   // The forensics the message below promises. The driver writes its own trip
   // record at the instant it records a violation; a checker's log is only

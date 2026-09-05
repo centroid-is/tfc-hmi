@@ -332,6 +332,26 @@ const Duration panelSampleCadence = Duration(milliseconds: 250);
 /// of the grace is this constant's business and is argued here, once.
 const Duration populationFloorGraceDefault = Duration(seconds: 75);
 
+/// How many `trip-N.txt` records one run may leave behind.
+///
+/// **`violationLogCapacity`'s argument, applied to the disk.** The in-memory
+/// log stops retaining at two hundred because "retaining them would make the
+/// harness the leak it is measuring"; the trip writer had no cap at all, so
+/// the artifact directory grew without bound where the log did not. A
+/// `GatewayRestart` that exhausts its rebind budget fails every subsequent
+/// write, and at the probe's one-per-two-seconds that is about 690 violations
+/// over the rest of a thirty-five-minute arm — several megabytes of
+/// near-identical records in the uploaded CI artifact.
+///
+/// **Twenty, not two hundred, and the difference is what a trip record is
+/// for.** A retained violation is a row in a list; a trip record is four to
+/// eight kilobytes with the last twenty checkpoints quoted inline, meant to be
+/// OPENED. Nobody opens the two-hundredth. The first occurrence is the
+/// diagnostic — the same argument `ViolationLog` makes for keeping the first
+/// rather than the last — and [SoakDriver.tripRecordsSuppressed] says how many
+/// were not written, so the cap cannot be mistaken for the count.
+const int soakTripRecordCap = 20;
+
 // ------------------------------------------------------------- the endpoint
 
 /// Where the driver's panels dial.
@@ -960,6 +980,10 @@ final class SoakDriver
           '${_applied.length} applied, ${neverReached.length} never reached, '
           '${_fizzled.length} fired into nothing',
       '  levers      : ${_leversByKind.entries.map((e) => '${e.key}:${e.value}').join(', ')}',
+      if (tripRecordsSuppressed > 0)
+        '  trip records: capped at $soakTripRecordCap; '
+            '$tripRecordsSuppressed further violations left no file. The '
+            'first occurrences are the diagnosis and they are all here',
       '  population  : floor $populationFloor of $herdSize, connected now '
           '$connectedPanels, worst stretch below floor '
           '${formatSoakOffset(worstBelowFloor)} (grace '
@@ -978,7 +1002,8 @@ final class SoakDriver
             '${checker.judgedSamples} judged readings against a floor of '
             '${checker.minimumSamplesForAVerdict}, ticked every '
             '${registration.cadence.inMilliseconds} ms, '
-            '${checker.violations.length} violations');
+            '${checker.violationTotal} violations'
+            '${checker.violationOverflow > 0 ? ' (${checker.violations.length} retained, ${checker.violationOverflow} past the cap)' : ''}');
         // A checker's own counters, when it has any worth reading. The two
         // numbers that make invariant 1's green mean something — did anything
         // ever go stale, did anything ever recover — are not on the interface
@@ -1580,6 +1605,12 @@ final class SoakDriver
     writeTripFor(violation);
   }
 
+  /// How many trip records were not written because the run was past
+  /// [soakTripRecordCap]. Printed in the verdict block when non-zero.
+  int tripRecordsSuppressed = 0;
+
+  int _tripsWritten = 0;
+
   /// Writes one violation's trip record — the seed, the schedule offset, the
   /// modes the timeline had armed, the last twenty checkpoints and the frame
   /// ring for the panel it names.
@@ -1597,6 +1628,21 @@ final class SoakDriver
   /// twenty of the run, and the offset the violation carries is still the
   /// instant it happened.
   void writeTripFor(SoakViolation violation) {
+    // **Capped, for `violationLog`'s own reason applied to the disk.** The
+    // in-memory log stops retaining at `violationLogCapacity` because
+    // "retaining them would make the harness the leak it is measuring"; this
+    // call had no cap at all, so the artifact directory was unbounded where
+    // the log was bounded. A `GatewayRestart` that exhausts its rebind budget
+    // fails every subsequent write, and at the probe's one-per-two-seconds
+    // that is ~690 more violations over the rest of a thirty-five-minute arm
+    // — several megabytes of near-identical `trip-N.txt`, uploaded as the CI
+    // artifact. The first twenty are the diagnosis and the rest make the
+    // artifact harder to read than no artifact.
+    if (_tripsWritten >= soakTripRecordCap) {
+      tripRecordsSuppressed++;
+      return;
+    }
+    _tripsWritten++;
     _journal?.writeTrip(violation, armedModes: _armedModesAt(violation));
   }
 
