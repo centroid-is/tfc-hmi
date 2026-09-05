@@ -2115,8 +2115,19 @@ final class SoakDriver
               'RemoteStateMan.subscribe',
               '$panel already held every one of ${keys.join('+')}');
         }
+        // **The note says what the lever DID, not what its name suggests.**
+        // `RemoteStateMan.subscribe` returns a broadcast view of an existing
+        // store node — it wraps `_storeOf(key).node(key)` in a local
+        // `StreamController` and opens no wire subscription — and the fixture
+        // has already filed every plant key under `defaultPageSubscription`,
+        // so this cannot move the gateway's session, subscription or listener
+        // counts. Deviation 'no subscription-lifecycle coverage' is the long
+        // form; this note is so a reader of `events.jsonl` does not have to
+        // find it.
         return SoakApplyOutcome.fired(event.kind, 'RemoteStateMan.subscribe',
-            note: '$panel opened ${opened.join('+')}');
+            note: '$panel opened a LOCAL broadcast view of '
+                '${opened.join('+')} (no wire subscription; the page already '
+                'held the key)');
 
       case PanelUnsubscribe(:final panel, :final keys):
         final dropped = <String>[];
@@ -2136,9 +2147,13 @@ final class SoakDriver
               '$panel held no subscription to ${keys.join('+')}, so this '
                   'unsubscribe cancelled nothing');
         }
+        // Local too — see the subscribe arm. Cancelling this closes a
+        // controller in the panel's own process and leaves the gateway's
+        // subscription untouched.
         return SoakApplyOutcome.fired(
             event.kind, 'StreamSubscription.cancel',
-            note: '$panel dropped ${dropped.join('+')}');
+            note: '$panel dropped its LOCAL view of ${dropped.join('+')} '
+                '(the page subscription is untouched)');
 
       case PanelWrite(:final panel, :final key, :final value):
         final index = _indexOfPanel(panel);

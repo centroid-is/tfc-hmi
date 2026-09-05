@@ -291,6 +291,38 @@ void main() {
   });
 
   group('the trip record', () {
+    test('a trip with no ring says the ring was NOT RECORDED, never that it '
+        'was empty', () async {
+      // `SoakJournal.frame` has no producer in the composed run — nothing
+      // outside this file calls it — so `_rings` is always empty on a real
+      // run and every trip record takes this branch. The old wording, "no
+      // frame ring for this violation", cannot be told apart from "the ring
+      // was checked and nothing had arrived", and the file's opening doc
+      // promises the reader "roughly the last minute before a trip, which is
+      // the window a trip is diagnosed from". A forensic artifact that
+      // silently reports its own absence is worse than no artifact.
+      final journal = SoakJournal.open(seed: 11, path: tmp.path)
+        ..writeTrip(
+          SoakViolation(
+            checker: 'freshnessHonesty',
+            monotonic: const Duration(minutes: 5),
+            scheduleOffset: const Duration(minutes: 5),
+            panel: 'panel-2',
+            detail: 'a breach with no frames behind it',
+          ),
+          armedModes: const <String>['blackhole'],
+        );
+      await journal.close();
+
+      final trip = File('${tmp.path}/trip-0.txt').readAsStringSync();
+      expect(trip, contains('NOT RECORDED'),
+          reason: 'the reader must be told this is missing instrumentation '
+              'rather than a quiet minute');
+      expect(trip, contains('no producer'));
+      expect(trip, isNot(contains('no frame ring for this violation')),
+          reason: 'the ambiguous wording is the whole finding');
+    });
+
     test('frames reach disk ONLY on a trip', () async {
       final journal = SoakJournal.open(seed: 11, path: tmp.path);
       for (var i = 0; i < 3; i++) {

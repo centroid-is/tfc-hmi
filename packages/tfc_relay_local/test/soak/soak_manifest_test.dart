@@ -51,7 +51,7 @@ import 'soak_registry.dart';
 /// 11-05 deviates the server-side log clause — so an appending plan changes
 /// this number in the same commit as its entry, and an entry that arrives
 /// without one is a departure nobody declared in the index.
-const int _declaredDeviations = 5;
+const int _declaredDeviations = 6;
 
 /// Six: the five invariants of §7.8 plus the divergence ledger.
 ///
