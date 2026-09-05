@@ -435,9 +435,15 @@ const List<String> boundedMemoryPlantWideStructures = <String>[
 ///
 /// Every sixth checkpoint takes it to 0.17 %. The cost is resolution on one
 /// series: descriptor leaks are judged at 30 s rather than 5 s, which in the
-/// ninety-second lane leaves three readings (below the settle floor, so the
-/// series is carried and not judged there) and in the thirty-five-minute run
-/// leaves seventy. A descriptor leak is a long-run question and seventy readings
+/// ninety-second lane leaves three readings and in the thirty-five-minute run
+/// leaves seventy. **Three readings is not "not judged there", which this
+/// comment used to say.** `openSockets` has no entry in
+/// `boundedMemorySettleOverrides`, so its settle is the default 2 and `settled`
+/// is `readings > settleCheckpoints` — the third reading makes the series
+/// settled and the RATIO rule does judge it in the lane. Only the monotone rule
+/// cannot fire there, because its own override is 10. The carry-forward line
+/// in the ledger is right about the monotone rule and this text overstated it
+/// to the whole series. A descriptor leak is a long-run question and seventy readings
 /// is plenty of slope; a five-second one was never the point.
 ///
 /// On the checkpoints in between, the last value is carried into the row so the

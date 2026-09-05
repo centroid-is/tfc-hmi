@@ -436,16 +436,22 @@ final class BoundedMemoryChecker with GuardedSampling implements SoakRunEndCheck
     for (final structure in boundedMemoryPlantWideStructures) {
       if (reading.skips.containsKey(structure)) continue;
       final value = reading.plantWide[structure] ?? 0;
-      if (value != 0) anythingWasNonZero = true;
       // A carried-forward value is a number the row still owes the journal and
       // a reading the series must not have. Feeding a repeat into the monotone
       // rule would break every run of a genuinely climbing structure five
       // times out of six, which is a rule that cannot fire dressed as a rule
       // that can. See `openSocketCheckpointCadence`.
+      //
+      // **Before the vacuity counter, not after.** This used to set
+      // `anythingWasNonZero` first, so a reading the checker had just declined
+      // to judge still advanced `judgedSamples` — a path that clears the
+      // anti-vacuity gate without judging, which is 11-01's third sabotage in
+      // miniature.
       if (reading.carriedForward.contains(structure)) {
         carriedForward.add(structure);
         continue;
       }
+      if (value != 0) anythingWasNonZero = true;
       _observe('plantWide/$structure', structure, value, clock);
     }
 

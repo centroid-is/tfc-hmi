@@ -1609,6 +1609,40 @@ void main() {
               'about the same run');
     });
 
+    test('a CARRIED-FORWARD reading does not make a checkpoint judged', () {
+      // **A path that increments the vacuity counter without judging
+      // anything.** `anythingWasNonZero = true` was set before the
+      // `carriedForward` `continue`, so a repeated `openSockets` value — the
+      // one reading this checker explicitly refuses to feed to any rule, on
+      // the grounds that it is not a reading — still advanced
+      // `judgedSamples`. The file's own comment says the counter counts
+      // "readings that said something".
+      //
+      // Inert today: `sessions` is 5 from the first checkpoint of any run
+      // where the fixture came up, so the counter is dominated by structures
+      // that are always non-zero. It is fixed because 11-01's third sabotage
+      // is the standing lesson — a checker that THREW on all five calls
+      // reported five readings against a floor of one and cleared the very
+      // gate built to catch it — and a counter with a path that inflates it is
+      // the same shape waiting for a run where the other structures are quiet.
+      final source = _StructureSource(panels: 2);
+      final checker = BoundedMemoryChecker(source);
+      // Everything genuinely zero, and one structure carrying a stale
+      // non-zero value forward.
+      source.plantWide[openSocketsStructure] = 56;
+      source.carriedForward.add(openSocketsStructure);
+      for (var i = 0; i <= 4; i++) {
+        checker.sample(_at(Duration(seconds: 5 * i)));
+      }
+
+      expect(checker.checkpoints, 5);
+      expect(checker.judgedSamples, 0,
+          reason: 'every real structure read zero and the only non-zero number '
+              'in the row is one the checker itself declined to judge. A '
+              'checkpoint that judged nothing must not clear the vacuity gate '
+              'on the strength of a value it refused to look at');
+    });
+
     test('a source that throws becomes a recorded violation, never a dead run',
         () {
       final checker = BoundedMemoryChecker(_ThrowingStructureSource());
@@ -2479,6 +2513,46 @@ void main() {
               'convergence');
       expect(checker.ledger.entries.single.clientQuality, Quality.badStale);
       expect(checker.ledger.entries.single.plantQuality, Quality.good);
+    });
+
+    test('the checker does not become the leak it is measuring', () {
+      // **Invariant 3 was the one sibling that retained per-READING.**
+      // `bounded_memory.dart` keeps a frequency map for exactly this reason —
+      // "the checker must not become the leak it is measuring", 07-RESEARCH
+      // trap 15 — and `BoundedLogsWindow` ages its readings out past the
+      // window. `_lagInWindow.add(lag)` ran once per key comparison inside a
+      // window, and the thirty-five-minute arm does 127,440 of them, so the
+      // list ended the run at roughly 128,000 entries and `convergenceReport`
+      // sorted a COPY of it. It grows linearly in the parameter:
+      // RELAY_SOAK_MINUTES=480 is about 1.7 million.
+      //
+      // What is asserted is the shape of the retention rather than a byte
+      // count: readings scale with the run, retained values scale with the
+      // RANGE of the quantity, and a lag in sweeps has a tiny range.
+      final source = _ResyncSource();
+      final checker = _resync(source);
+      source.plantSweep = 100;
+      source.panel(1).say(_resyncKey, 100);
+      for (var i = 0; i < 400; i++) {
+        // The source's own offset is what picks the window; the clock only
+        // stamps the reading.
+        final at = source.insideWindow(0,
+            plus: Duration(milliseconds: 10 * (i % 500)));
+        source.scheduleOffset = at;
+        checker.takeReading(_at(at));
+      }
+
+      expect(checker.keysCompared, greaterThanOrEqualTo(400),
+          reason: 'the readings really were taken — an arm that retained '
+              'nothing because it compared nothing would pass this vacuously');
+      expect(checker.retainedSamples, lessThan(64),
+          reason: 'four hundred sweeps over a plant sitting still produce a '
+              'handful of DISTINCT lag values and nothing else. Retaining one '
+              'entry per comparison is what made a bounded-memory checker the '
+              'unbounded structure in the room');
+      // And the report must still say the same things about the same data.
+      expect(checker.convergenceReport, contains('lag while judging (sweeps)'));
+      expect(checker.convergenceReport, contains('n='));
     });
 
     test('PIPE. keys are excluded by prefix, because the gateway produces them '
