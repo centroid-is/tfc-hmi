@@ -97,6 +97,24 @@ create_alarm returns the alarm `uid`, and alarm beacon assets bind BY uid:
 create the alarm first, then the asset. Replacing an alarm means replacing
 its asset as a pair.
 
+## Static reports
+
+list_reports, get_report_definition, generate_report, resolve_shift and
+get_shift_calendar read. generate_report takes an offset: 0 is the current
+period, -1 the one before, so "last night's shift" is offset -1 on a
+shift-ranged report.
+
+create_report, update_report, delete_report and set_shift_calendar are
+**proposals like every other write here** — they change nothing. A person
+applies them in the report editor, and that save is checked against their
+session for `configure` and recorded. Say so when you propose one: the
+operator has to approve it.
+
+A report's `sql` section runs one read-only SELECT. It may not name the
+access tables (app_user, app_role, audit_entry, access_template,
+access_key_binding) — a report is rendered on a page any operator can open,
+so publishing credentials or the audit record through one is refused.
+
 ## Looking at the screen
 
 screenshot_window returns a PNG of the HMI window as the operator sees it --
