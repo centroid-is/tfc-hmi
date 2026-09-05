@@ -189,6 +189,23 @@ final class TerminalStateChecker
   /// The largest the unresolved set was seen to be.
   int worstUnresolved = 0;
 
+  /// Writes that went down with a client a restart replaced.
+  ///
+  /// **A fourth accounted state, and it is printed rather than absorbed.** A
+  /// write here is not a breach: the panel restarted, and `_unresolved` is
+  /// in-memory only, so the command stopped being pending for a reason the
+  /// harness modelled on purpose. Neither is it nothing — it is the one place
+  /// the run can say out loud that a restart ends an operator's chance of ever
+  /// being told what became of a write they issued.
+  ///
+  /// **Zero on any run with no `tokenRestore`**, which is what makes a non-zero
+  /// reading mean something. Counted here and named in [toString] because the
+  /// verdict block prints that: this milestone has now three times found a
+  /// number that was correct, load-bearing and printed nowhere — `unattributed`
+  /// most recently — and **a number that is not printed is not a standing
+  /// measurement.**
+  int orphanedByRestart = 0;
+
   /// How many commands were reported terminal twice **with the same answer**.
   ///
   /// Not a breach — see the comment at the recording site — but a real fact
@@ -316,6 +333,7 @@ final class TerminalStateChecker
         declaredDuration: declaredDuration));
 
     final outstanding = source.unresolvedCmds.toSet();
+    final orphans = source.orphanedCmds.toSet();
 
     for (final issued in _issued.values) {
       final cmd = issued.cmd;
@@ -329,19 +347,23 @@ final class TerminalStateChecker
 
       final inTerminal = _terminal.containsKey(cmd);
       final inUnresolved = outstanding.contains(cmd);
-      if (inTerminal && inUnresolved) {
+      final wasOrphaned = orphans.contains(cmd) && _aRestartCouldHaveTakenIt(issued);
+      if (wasOrphaned) orphanedByRestart++;
+      if (inTerminal && (inUnresolved || wasOrphaned)) {
         _record(
           'write #${issued.nth} (cmd $cmd) is in BOTH the terminal map — '
           '"${_terminal[cmd]!.state}" at '
-          '${formatSoakOffset(_terminal[cmd]!.at)} — and the client\'s '
-          'unresolved set. A settled command the client is still going to '
-          're-query on the next reconnect is one the operator will be told '
-          'about twice, and the second answer may disagree with the first',
+          '${formatSoakOffset(_terminal[cmd]!.at)} — and '
+          '${inUnresolved ? 'the client\'s unresolved set' : 'the unresolved '
+              'set of a client a restart retired'}. A settled command the '
+          'client is still going to re-query on the next reconnect is one the '
+          'operator will be told about twice, and the second answer may '
+          'disagree with the first',
           panel: issued.panel,
           key: issued.key,
           at: issued.at,
         );
-      } else if (!inTerminal && !inUnresolved) {
+      } else if (!inTerminal && !inUnresolved && !wasOrphaned) {
         _record(
           'write #${issued.nth} (cmd $cmd) reached a socket and is in NEITHER '
           'the terminal map nor the client\'s unresolved set: nothing settled '
@@ -358,6 +380,34 @@ final class TerminalStateChecker
     _reconcileAgainstThePlant();
     _checkTheUnresolvedSet();
     _checkTheDistribution();
+  }
+
+  /// Whether a restart of [issued]'s **own** panel, **after** it was issued,
+  /// could have taken this command with it.
+  ///
+  /// **Conditions (2) and (3) of the admissibility rule, and they are what stop
+  /// "orphaned" becoming an exemption nothing constrains.** Membership in
+  /// [SoakWriteSource.orphanedCmds] alone would be condition (1) on its own,
+  /// and a bucket that admits on membership alone is the shape that already
+  /// cost this milestone a headline number: `_epochBumped` was a set nothing
+  /// removed from, and it manufactured "unattributed 0" by moving divergences
+  /// out of the one bucket the verdict counted (11-CARRY-FORWARD, M-01).
+  ///
+  /// So orphan status is earned per write rather than granted per bucket. A
+  /// command cannot hide behind a restart that belonged to another panel, or
+  /// behind one that happened before it was issued, or behind none at all —
+  /// each of those stays a write silently lost and still turns this arm red.
+  ///
+  /// The comparison is inclusive because condition (1) is doing the
+  /// discriminating: a write issued on the *new* client cannot be in a
+  /// *retired* client's unresolved set, so a tie at the same clock offset is
+  /// already excluded by membership and does not need excluding twice.
+  bool _aRestartCouldHaveTakenIt(SoakWriteRecord issued) {
+    for (final restart in source.panelRestarts) {
+      if (restart.panel != issued.panel) continue;
+      if (issued.at <= restart.at) return true;
+    }
+    return false;
   }
 
   /// The question `WriteOutcomeLog` structurally cannot answer.
@@ -505,7 +555,9 @@ final class TerminalStateChecker
       'of $minimumSamplesForAVerdict '
       '(applied $applied, rejected $rejected, unknown $unknown, '
       'not_received $notReceived, $neverReachedASocket never reached a '
-      'socket, $reResolvedInAgreement re-reported in agreement); '
+      'socket, $reResolvedInAgreement re-reported in agreement, '
+      '$orphanedByRestart orphaned by a panel restart across '
+      '${source.panelRestarts.length} restarts); '
       '${distributionWasAsked ? 'distribution asked' : 'distribution NOT '
           'asked — declared $declaredDuration is under '
           '$distributionArmFloor'}; '

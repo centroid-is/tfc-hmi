@@ -909,6 +909,98 @@ void main() {
       expect(lost.single.toString(), contains('cmd-lost'));
     });
 
+    test('a write a panel restart orphaned is accounted, not reported lost',
+        () {
+      // The instrument defect 11-08 found on the 35-minute arm, at unit scale.
+      // The cmd is in neither the terminal map nor the LIVE unresolved set —
+      // but it is in the set of a client `GateBFixture.redial` retired, and
+      // that panel really was restarted, after the write.
+      final source = _WriteSource()
+        ..issue('cmd-orphan', panel: 'panel-2',
+            key: 'ST301.CN01.MOT03.setpoint', value: 3)
+        ..direct('cmd-orphan', 'unknown', reachedASocket: true)
+        ..orphaned('cmd-orphan')
+        ..restarted('panel-2', const Duration(seconds: 40));
+      final checker = TerminalStateChecker(source);
+      checker.sample(_at(Duration.zero));
+      checker.finish();
+
+      expect(
+          checker.violations
+              .where((one) => one.toString().contains('in NEITHER')),
+          isEmpty,
+          reason: 'the panel restarted; it did not lose the write. The command '
+              'is still in the retired client\'s unresolved set, which is the '
+              'harness remembering what the plant forgot');
+      expect(checker.orphanedByRestart, 1,
+          reason: 'and it is COUNTED rather than absorbed — a design '
+              'consequence that appears as a number on every run is one that '
+              'stays visible');
+    });
+
+    test('ANTI-WIDENING: an orphan-looking write whose panel never restarted, '
+        'or that was issued after the restart, is still lost', () {
+      // **The arm that stops "orphaned" becoming `_epochBumped`.** Membership
+      // in the retired set is condition (1); a bucket that admits on
+      // membership alone is exactly the shape that manufactured M-01's
+      // "unattributed 0" by moving events out of the bucket the verdict
+      // counted. Both writes below are in `orphanedCmds` and neither may be
+      // excused: one belongs to a panel that was never restarted, the other
+      // was issued after its panel's only restart.
+      final source = _WriteSource()
+        ..issue('cmd-no-restart', panel: 'panel-1',
+            key: 'ST101.CN01.MOT01.setpoint', value: 1)
+        ..direct('cmd-no-restart', 'unknown', reachedASocket: true)
+        ..orphaned('cmd-no-restart')
+        // A restart, but of somebody else.
+        ..restarted('panel-2', const Duration(seconds: 10));
+      source.scheduleOffset = const Duration(seconds: 30);
+      source
+        ..issue('cmd-after', panel: 'panel-2',
+            key: 'ST301.CN01.MOT01.setpoint', value: 2)
+        ..direct('cmd-after', 'unknown', reachedASocket: true)
+        ..orphaned('cmd-after');
+
+      final checker = TerminalStateChecker(source);
+      checker.sample(_at(const Duration(seconds: 30)));
+      checker.finish();
+
+      final lost = checker.violations
+          .where((one) => one.toString().contains('in NEITHER'))
+          .map((one) => one.toString())
+          .toList();
+      expect(lost, hasLength(2),
+          reason: 'neither write is attributable to a restart of its own panel '
+              'after it was issued, so neither is an orphan and both are the '
+              'failure the Core Value names. Got:\n${lost.join('\n')}');
+      expect(lost.join('\n'), contains('cmd-no-restart'));
+      expect(lost.join('\n'), contains('cmd-after'));
+      expect(checker.orphanedByRestart, 0);
+    });
+
+    test('the orphan count is PRINTED, beside the restarts it is attributed '
+        'to', () {
+      // Three times this milestone a number has been correct, load-bearing and
+      // printed nowhere — `unattributed` most recently, which is how ruling 5
+      // came to be closed on a figure no reader ever saw. A number that is not
+      // printed is not a standing measurement, so the verdict block's own
+      // `toString` is pinned here.
+      final source = _WriteSource()
+        ..issue('cmd-orphan', panel: 'panel-2', key: 'k', value: 3)
+        ..direct('cmd-orphan', 'unknown', reachedASocket: true)
+        ..orphaned('cmd-orphan')
+        ..restarted('panel-2', const Duration(seconds: 40));
+      final checker = TerminalStateChecker(source);
+      checker.sample(_at(Duration.zero));
+      checker.finish();
+
+      expect(checker.toString(), contains('1 orphaned by a panel restart'));
+      expect(checker.toString(), contains('across 1 restarts'),
+          reason: 'the denominator matters as much as the count: one orphan '
+              'across one restart is a modelled consequence, and one across '
+              'zero restarts would be a contradiction the reader must see');
+    });
+
     test('the SAME terminal state re-reported through the recovery path is '
         'counted, not a violation', () {
       // Measured in the lane, in roughly half of ninety-second runs, always on
@@ -3776,6 +3868,23 @@ final class _WriteSource implements SoakWriteSource {
 
   @override
   List<String> get unresolvedCmds => List<String>.unmodifiable(_unresolved);
+
+  @override
+  List<String> get orphanedCmds => List<String>.unmodifiable(_orphaned);
+
+  @override
+  List<SoakPanelRestart> get panelRestarts =>
+      List<SoakPanelRestart>.unmodifiable(_restarts);
+
+  final List<String> _orphaned = <String>[];
+  final List<SoakPanelRestart> _restarts = <SoakPanelRestart>[];
+
+  /// A cmd left behind on a client a redial retired.
+  void orphaned(String cmd) => _orphaned.add(cmd);
+
+  /// A client replacement, as `GateBFixture.redial` performs it.
+  void restarted(String panel, Duration at) =>
+      _restarts.add(SoakPanelRestart(panel: panel, at: at));
 
   void issue(String cmd,
       {required String panel, required String key, required Object? value}) {

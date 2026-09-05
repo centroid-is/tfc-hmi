@@ -820,6 +820,32 @@ final class SoakDriver
           for (final panel in fixture.panels) ...panel.client.debugUnresolvedCmds,
       ];
 
+  /// Commands that went down with a client [GateBFixture.redial] replaced.
+  ///
+  /// **Read at the instant it is asked rather than captured at the redial, and
+  /// the difference is a race.** [issueWrite] reads its client before its
+  /// `await` and `redial` is fired un-awaited from the `TokenRestore` arm, so a
+  /// write still in flight lands in the retired client *after* a capture would
+  /// have run. Nothing removes from a disposed client's `_unresolved` —
+  /// `RemoteStateMan.dispose` never touches it — so reading it late is a strict
+  /// superset of anything a capture could have seen, and cannot miss a
+  /// straggler.
+  ///
+  /// The offsets that make an orphan attributable come from [panelRestarts]
+  /// instead, which records the event rather than the set.
+  @override
+  List<String> get orphanedCmds => <String>[
+        if (_fixture != null)
+          for (final retired in fixture.retiredClients)
+            ...retired.debugUnresolvedCmds,
+      ];
+
+  @override
+  List<SoakPanelRestart> get panelRestarts =>
+      List<SoakPanelRestart>.unmodifiable(_panelRestarts);
+
+  final List<SoakPanelRestart> _panelRestarts = <SoakPanelRestart>[];
+
   /// How many writes the probe has issued. A denominator for the verdict block.
   int get probeWrites => _probeWrites;
   int _probeWrites = 0;
@@ -2063,6 +2089,17 @@ final class SoakDriver
         // reconnect loop for good on a refused credential — by design — so a
         // restore is an application restart, and that is what `redial` is.
         // Not awaited: a panel coming back must not hold the storm's clock.
+        // **Recorded before the call, and it is the event that is recorded.**
+        // Invariant 2 needs to know that this panel's client was replaced and
+        // when, so that a write still unresolved on the retired object can be
+        // told from one that was genuinely lost. A record of the FACT is safe
+        // here where a capture of the retired client's unresolved SET would
+        // not be: `issueWrite` holds its client across an `await` and the
+        // redial below is deliberately un-awaited, so a write in flight lands
+        // in that set afterwards. The set is read late, by `orphanedCmds`;
+        // only the offset comes from here.
+        _panelRestarts.add(
+            SoakPanelRestart(panel: stationId, at: _playClock.elapsed));
         _track(fixture.redial(index), 'the redial of $stationId after restore');
         return SoakApplyOutcome.fired(event.kind, 'GateBFixture.redial',
             note: '$stationId back in the token file; a new client dialled');

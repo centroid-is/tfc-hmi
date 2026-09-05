@@ -527,22 +527,35 @@ jobs:
 
   # RES-03's evidence, and the job that keeps producing it.
   #
-  # ⚠ **THIS JOB IS EXPECTED TO BE RED ON MAIN UNTIL A NAMED FINDING IS
-  # FIXED, AND THAT IS FLAGGED FOR THE USER RATHER THAN HIDDEN.** The
-  # 35-minute arm at seed 11 records four `terminalStateWrites` violations:
-  # writes #103, #108, #110 and #400 reached a socket and ended in neither the
-  # terminal map nor the client's unresolved set. All four are on keys whose
-  # upstream link was down when the write was issued (ST301 at +03:24–+03:48,
-  # BAADER at +13:16–+13:28). That is a write silently lost — the failure
-  # CLAUDE.md's Core Value names first — and it is a product finding, not an
-  # instrument fault, so it rides its own RED in its own plan rather than
-  # being tuned away here (T-11-33).
+  # **This job is expected to be GREEN.** It was expected to be red until
+  # 2026-09-05, and the text that said so is rewritten rather than deleted
+  # because the reason it was wrong is worth carrying.
   #
-  # The job ships anyway, per 11-CONTEXT ruling 1, because the alternative is
-  # a soak nobody runs. **If a standing red on main is not acceptable while
-  # that fix is pending, the change is to delete `push` from the `if:` below
-  # and leave `workflow_dispatch` — one line, and no other part of this job
-  # moves.** That is the user's call and is on the morning-flag list.
+  # The 35-minute arm at seed 11 recorded four `terminalStateWrites`
+  # violations — writes #103, #108, #110 and #400, "reached a socket and in
+  # neither the terminal map nor the client's unresolved set". This header
+  # called that a product finding and said so twice. **It was an instrument
+  # defect** (11-08). All four were on panel-2 and panel-4, the only two
+  # panels the run ever redialed, and all four were issued before their
+  # panel's redial; the upstream outage explains why each write came back
+  # `unknown`, not why the harness then lost sight of it. The commands were
+  # never lost — they were in the `_unresolved` set of the `RemoteStateMan`
+  # that `GateBFixture.redial` replaced, which `dispose()` does not clear,
+  # while the run-end arm read a union over the current clients only.
+  #
+  # A write a restart orphaned is now a fourth accounted state, earned per
+  # write and printed in the distribution line, never folded into "still
+  # outstanding" — a restarted panel really has forgotten the command, and
+  # saying otherwise would satisfy the invariant with the harness's own
+  # bookkeeping. **If this job goes red on `terminalStateWrites` again, read
+  # the orphan count in the verdict block first**: a violation beside a
+  # non-zero orphan count is a write the rule refused to excuse, which is the
+  # rule working.
+  #
+  # The job ships on every push per 11-CONTEXT ruling 1, because the
+  # alternative is a soak nobody runs. The `push`-vs-`workflow_dispatch`
+  # question below was live only while a standing red was pending; it is not
+  # a live decision now, and the `if:` is left as it is.
   #
   # **Cadence: on every push to main, plus on demand.** 11-CONTEXT ruling 1,
   # resolved by the user on 2026-09-02 — the repository is public, so runner
