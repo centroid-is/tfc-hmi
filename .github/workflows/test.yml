@@ -295,6 +295,40 @@ jobs:
         dart analyze
         dart test
 
+    # **The web backend, because the VM cannot see this class of defect at all.**
+    #
+    # `newUlid()` built its 48-bit time prefix with `<<`, `>>` and `&`. That is
+    # correct on the VM and silently wrong under dart2js, where bitwise operators
+    # coerce to signed 32 bits: two mints 2^32 ms (49.7 days) apart produced an
+    # identical prefix, so every browser-minted write id would have sorted before
+    # every native one for ever. 308 VM tests were green throughout.
+    #
+    # **dart2js specifically, and dart2wasm would not do.** Wasm has true 64-bit
+    # integers and produced the *correct* id, so the Wasm smoke test this design
+    # originally scheduled would have passed while the defect shipped.
+    # `flutter build web` emits dart2js, so dart2js is the backend that both
+    # matters and reproduces it.
+    #
+    # Ubuntu only: one backend is one backend, and chrome is preinstalled on the
+    # hosted image. The floor is the same idiom as the soak lane's — `dart test`
+    # with a selector that matches nothing exits 0, and a browser-tagged file
+    # that stopped being compiled would otherwise read as covered.
+    - name: Test tfc_relay_protocol on dart2js
+      if: runner.os == 'Linux'
+      shell: bash
+      working-directory: packages/tfc_relay_protocol
+      run: |
+        dart test -p chrome -r expanded --file-reporter "json:web-report.json"
+        [ -f web-report.json ] || { echo "::error::no web-report.json — the chrome lane never produced a report"; exit 1; }
+        total=$( { grep -o '"type":"testStart"' web-report.json || true; } | wc -l)
+        loading=$( { grep -o '"name":"loading ' web-report.json || true; } | wc -l)
+        ran=$((total - loading))
+        echo "browser-tagged tests reported: $ran"
+        if [ "$ran" -lt 5 ]; then
+          echo "::error::the chrome lane ran only $ran tests, expected at least 5 — the browser lane is not selecting what it used to"
+          exit 1
+        fi
+
     - name: Test tfc_stateman_contract
       working-directory: packages/tfc_stateman_contract
       run: |

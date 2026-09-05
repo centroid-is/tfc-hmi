@@ -1196,6 +1196,29 @@ pinned Flutter version with soak-before-bump (a stable release shipped a
 before Dart 3.13; gateway event-loop lag monitor exposed as a `PIPE.` key;
 own dart2wasm smoke test when the web phase starts.
 
+**Correction (2026-09-05): that mitigation would have missed the defect it was
+for, and the lane is dart2js instead.** `newUlid()` built its 48-bit time prefix
+with `<<`, `>>` and `&` — correct on the VM, silently wrong under dart2js, where
+bitwise operators coerce to signed 32 bits. Two mints 2^32 ms (49.7 days) apart
+produced an identical prefix; uniqueness survived (the 80-bit secure suffix
+never touches a shift) but the time-sortability this design calls load-bearing
+did not, and every browser-minted id would have sorted before every native one
+for ever. All 308 VM tests were green throughout.
+
+**dart2wasm has true 64-bit integers and produced the *correct* id**, so the
+Wasm smoke test scheduled above would have passed while the defect shipped.
+`flutter build web` emits dart2js, so that is the backend that both matters and
+reproduces it. Fixed by replacing the bitwise arithmetic with `%` and `~/`
+(exact on both backends below 2^53), pinned by `ulid_web_test.dart` under
+`@TestOn('browser')`, and run in CI as *Test tfc_relay_protocol on dart2js*.
+
+The general lesson, which is not about ULIDs: **a smoke test on the wrong
+backend is worse than none, because it is reported as coverage.** When a defect
+class is "this platform's integers are narrower", the test has to run on the
+narrow platform — and it must not build its own inputs with the construct under
+test, which the first draft of that file did (`1 << 32` evaluated to 0 there,
+and the test reported the *fixed* code as broken).
+
 ## 8a. The chaos soak (conventions)
 
 A seeded randomized fault schedule that runs the composed pipe — four fake

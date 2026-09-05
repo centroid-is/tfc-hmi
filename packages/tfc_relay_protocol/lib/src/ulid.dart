@@ -52,10 +52,30 @@ const int _timeChars = 10;
 /// 16 characters × 5 bits = 80 bits of randomness.
 const int _randomChars = 16;
 
-/// Milliseconds are a 48-bit field. Masking (rather than widening) is what
+/// Milliseconds are a 48-bit field. Wrapping (rather than widening) is what
 /// guarantees the timestamp can never spill into the random characters, even
 /// if a caller passes a nonsense clock reading.
-const int _msMask = (1 << 48) - 1;
+///
+/// **Arithmetic, not bitwise, and that is load-bearing on the web.** This was
+/// `(1 << 48) - 1` with `&` and `>>` below, which is correct on the VM and
+/// silently wrong under `dart2js`: JavaScript's bitwise operators coerce to
+/// **signed 32 bits**, so the top 16 bits of the timestamp were discarded and
+/// two mints 2^32 ms (49.7 days) apart produced an identical prefix. Uniqueness
+/// survived — the 80-bit suffix never touches a shift — but the time-sortability
+/// this file calls load-bearing did not, and every browser-minted id would have
+/// sorted before every native one for ever.
+///
+/// `%` and `~/` are exact on both backends here because 2^48 is comfortably
+/// inside the 2^53 a JavaScript double represents exactly. Dart's `%` returns a
+/// non-negative result for a positive divisor, so a negative clock reading
+/// wraps into the field exactly as the mask did.
+///
+/// `dart2wasm` has true 64-bit integers and produced the *correct* id, so a Wasm
+/// smoke test cannot stand in for the dart2js one — see `ulid_web_test.dart`.
+const int _twoTo48 = 281474976710656;
+
+/// The base the time characters are encoded in: 32 values, five bits each.
+const int _base32 = 32;
 
 /// Upper bound on the random step between two ids minted in one millisecond.
 /// Large enough that neighbours are not enumerable, small enough that the
@@ -77,7 +97,7 @@ final List<int> _lastRandom = List<int>.filled(_randomChars, 0);
 /// a caller that already read the clock should pass it rather than read it
 /// again. Values outside 48 bits are masked into range.
 String newUlid({int? nowMs}) {
-  final ms = (nowMs ?? DateTime.now().millisecondsSinceEpoch) & _msMask;
+  final ms = (nowMs ?? DateTime.now().millisecondsSinceEpoch) % _twoTo48;
 
   if (ms == _lastMs) {
     _bumpEntropy();
@@ -89,8 +109,8 @@ String newUlid({int? nowMs}) {
   final out = List<String>.filled(_timeChars + _randomChars, '0');
   var remaining = ms;
   for (var i = _timeChars - 1; i >= 0; i--) {
-    out[i] = _alphabet[remaining & 0x1f];
-    remaining >>= 5;
+    out[i] = _alphabet[remaining % _base32];
+    remaining ~/= _base32;
   }
   for (var i = 0; i < _randomChars; i++) {
     out[_timeChars + i] = _alphabet[_lastRandom[i]];
