@@ -250,8 +250,56 @@ abstract interface class SoakWriteSource {
   /// read by whoever owns the other.
   List<String> get unresolvedCmds;
 
+  /// Commands still in flight on a client [GateBFixture.redial] replaced.
+  ///
+  /// **A fourth place a write can be, and it is deliberately not folded into
+  /// [unresolvedCmds].** A restore is an application restart (`redial`'s own
+  /// doc), so the retired client's set is memory a real restarted panel would
+  /// not have. Answering "still outstanding" out of it would satisfy the
+  /// invariant with the harness's own bookkeeping rather than with anything an
+  /// operator could rely on — the failure invariant 2 exists to catch, wearing
+  /// the instrument's clothes.
+  ///
+  /// What the retired object legitimately is, is the only surviving record of
+  /// *what the restart destroyed*. An instrument is required to remember what
+  /// the plant forgot; what it must not do is call that memory something it is
+  /// not. So these are reported as orphaned, counted in the distribution line,
+  /// and never counted as pending.
+  ///
+  /// Identity and not magnitude — see the note on `_LivePanelLogView` in
+  /// `soak_driver.dart` for why invariant 5 sums a count forward across the
+  /// same event and this one cannot.
+  List<String> get orphanedCmds;
+
+  /// Every client replacement this run performed, in order.
+  ///
+  /// The **fact**, recorded where `redial` is called, rather than a set
+  /// captured at that instant. `SoakDriver.issueWrite` holds the old client
+  /// across its `await`, and `redial` is fired un-awaited, so a write still in
+  /// flight lands in the retired client *after* any capture would have run. A
+  /// record of an event cannot miss a set.
+  ///
+  /// Read with [orphanedCmds] by whoever is deciding whether a particular
+  /// write was orphaned: membership alone is not the question, because a
+  /// bucket that admits on membership alone is an exemption nothing constrains.
+  List<SoakPanelRestart> get panelRestarts;
+
   /// What the plant actually applied.
   AppliedWriteLedger get appliedWrites;
+}
+
+/// One panel's client being replaced, and when.
+final class SoakPanelRestart {
+  const SoakPanelRestart({required this.panel, required this.at});
+
+  /// `panel-N`, as [SoakWriteRecord.panel] spells it.
+  final String panel;
+
+  /// The play clock at the instant `redial` was called.
+  final Duration at;
+
+  @override
+  String toString() => '$panel restarted at ${formatSoakOffset(at)}';
 }
 
 // ------------------------------------------------ what a checkpoint measured

@@ -3777,6 +3777,23 @@ final class _WriteSource implements SoakWriteSource {
   @override
   List<String> get unresolvedCmds => List<String>.unmodifiable(_unresolved);
 
+  @override
+  List<String> get orphanedCmds => List<String>.unmodifiable(_orphaned);
+
+  @override
+  List<SoakPanelRestart> get panelRestarts =>
+      List<SoakPanelRestart>.unmodifiable(_restarts);
+
+  final List<String> _orphaned = <String>[];
+  final List<SoakPanelRestart> _restarts = <SoakPanelRestart>[];
+
+  /// A cmd left behind on a client a redial retired.
+  void orphaned(String cmd) => _orphaned.add(cmd);
+
+  /// A client replacement, as `GateBFixture.redial` performs it.
+  void restarted(String panel, Duration at) =>
+      _restarts.add(SoakPanelRestart(panel: panel, at: at));
+
   void issue(String cmd,
       {required String panel, required String key, required Object? value}) {
     final record = SoakWriteRecord(

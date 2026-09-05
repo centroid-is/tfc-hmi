@@ -255,6 +255,12 @@ final class _LateSource
   List<String> get unresolvedCmds => _driver().unresolvedCmds;
 
   @override
+  List<String> get orphanedCmds => _driver().orphanedCmds;
+
+  @override
+  List<SoakPanelRestart> get panelRestarts => _driver().panelRestarts;
+
+  @override
   AppliedWriteLedger get appliedWrites => _driver().appliedWrites;
 
   @override
