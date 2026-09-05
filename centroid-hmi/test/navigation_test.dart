@@ -25,6 +25,7 @@ import 'package:tfc/pages/tech_doc_library.dart';
 import 'package:tfc/route_registry.dart';
 import 'package:tfc/routes.dart';
 import 'package:tfc/widgets/access_gate.dart';
+import 'package:tfc/widgets/dbus_gate.dart';
 import 'package:tfc/widgets/route_redirect.dart';
 
 import 'package:centroidx/main.dart';
@@ -355,13 +356,18 @@ void main() {
       });
 
       testWidgets('IP settings needs administer, and the D-Bus login behind it is untouched', (tester) async {
-        // The gate wraps the existing Consumer from the outside. Inside it,
-        // the FutureBuilder still shows LoginForm until the D-Bus client
-        // arrives — this phase gates the route, not the station credential.
+        // The gate wraps the D-Bus login from the outside, and the two are
+        // different questions asked in order: may this session open the page
+        // at all, and then has the station logged in to D-Bus. This phase
+        // gates the route, not the station credential.
+        //
+        // The inner widget was an inline Consumer until #440 extracted it
+        // into [DbusGate]; what this asserts is the nesting, so it moved with
+        // the extraction rather than pinning a shape upstream had refactored.
         final lb = createLocationBuilder([_page('Home', '/')]);
         final gate = await buildGate(tester, lb, '/advanced/ip-settings');
         expect(gate.group.name, 'administer');
-        expect(gate.child, isA<Consumer>());
+        expect(gate.child, isA<DbusGate>());
       });
 
       testWidgets('preferences needs administer', (tester) async {
