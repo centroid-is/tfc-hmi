@@ -383,6 +383,18 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Validation runs first so a binary Apple would reject fails here,
+          # with Apple's own reason, instead of half an hour later in an email
+          # to the account holder.
+          #
+          # `altool --upload-app` below carries a [DEPRECATED] marker as of
+          # Xcode 16.2 (`--validate-app` does not). It still works, and it is
+          # the simplest thing that does. If a future runner image drops it
+          # this step fails loudly and the replacement is a second
+          # `xcodebuild -exportArchive` whose ExportOptions.plist sets
+          # `destination` to `upload` instead of `export`, authenticated with
+          # -authenticationKeyPath/-authenticationKeyID/-authenticationKeyIssuerID.
+          # Nothing else about this workflow would need to change.
           xcrun altool --validate-app --type ios --file "$IPA_PATH" \
             --apiKey "$APPLE_ASC_KEY_ID" --apiIssuer "$APPLE_ASC_ISSUER_ID"
 
