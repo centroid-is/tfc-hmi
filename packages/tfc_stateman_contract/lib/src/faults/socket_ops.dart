@@ -26,16 +26,24 @@
 /// N bytes, then a cut" must cut with FIN and must not call this function. Two
 /// primitives, two modes; do not merge them.
 ///
-/// **Capability is probed, never inferred.** Winsock's `struct linger` is
-/// believed to use `u_short` fields, making this 8-byte struct wrong on
-/// Windows — but that is an assumption (Assumptions Log A3), and an assumption
-/// is a poor thing to branch on when the platform will answer the question.
-/// `setRawOption` rejects a wrong-size struct loudly with `OSError` errno 22
-/// (verified at 2 and 4 bytes; 8 and 16 accepted), so [lingerResetSupported]
-/// asks. Nothing in this file branches on which OS it is running under except
-/// the option number itself.
+/// **Capability is probed, never inferred — and the probe asks the question
+/// the callers gate on.** [lingerResetSupported] performs a whole [forceReset]
+/// on a throwaway loopback pair and reads the peer, because "did the kernel
+/// accept the option" and "did the peer observe a reset" are different
+/// questions with different answers. Windows says yes to the first and no to
+/// the second: `dart:io` calls `shutdown(socket, SD_BOTH)` before closing
+/// (`ClientSocket::DoCloseLocked`), so the FIN is already away before linger
+/// could apply, and no amount of correct `struct linger` changes that. An
+/// acceptance-only probe reported Windows as capable and three arms asserting a
+/// peer-observable reset failed there on the first CI run.
+///
+/// The wrong-struct case is still caught the same way: `setRawOption` rejects a
+/// bad size loudly with `OSError` errno 22 (verified at 2 and 4 bytes; 8 and 16
+/// accepted), which is Assumptions Log A3's original concern. Nothing in this
+/// file branches on which OS it is running under except the option number.
 library;
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -112,12 +120,36 @@ Future<({bool supported, String? reason})>? _lingerProbeInFlight;
 /// read this.
 String? get lingerResetSkipReason => _lingerProbe?.reason;
 
-/// Whether `SO_LINGER{1, 0}` is accepted by this kernel, asked once.
+/// How long the probe waits for the peer to notice its throwaway reset.
 ///
-/// Opens a throwaway loopback connection and sets the option on it. A wrong
-/// struct size fails with `OSError` errno 22 rather than silently no-op'ing
-/// (verified), which is what makes this a real probe rather than a guess
-/// dressed up as one.
+/// A loopback RST is delivered in microseconds; two seconds is the difference
+/// between "this platform does not reset" and "this runner was busy". A probe
+/// that timed out reports unsupported, which is the safe direction — the arms
+/// it gates skip with a reason rather than run without a reset behind them.
+const _lingerProbeBudget = Duration(seconds: 2);
+
+/// Whether [forceReset] actually resets on this platform, asked once.
+///
+/// **This probe runs the whole primitive and reads the peer**, rather than
+/// asking whether the kernel accepted the option. The two are different
+/// questions and Windows answers them differently: `setRawOption` takes the
+/// 8-byte struct there (Winsock's `struct linger` is two `u_short`s, and the
+/// first four bytes of this one happen to say `{1, 0}` correctly), so an
+/// acceptance check returns true — but `Socket.destroy()` cannot produce a
+/// reset on Windows whatever linger says, because `dart:io` calls
+/// `shutdown(socket, SD_BOTH)` before closing (`ClientSocket::DoCloseLocked`,
+/// runtime/bin/eventhandler_win.cc). `SD_BOTH` sends the FIN first, so the
+/// connection is already shutting down gracefully by the time linger could
+/// apply, and the peer sees `onDone`.
+///
+/// An acceptance check therefore let three arms run on `windows-latest` that
+/// assert the peer gets an error, and all three failed on the first CI run.
+/// Asking the question the callers actually gate on — does a peer observe an
+/// error — makes that an honest skip instead.
+///
+/// The wrong-struct case (Assumptions Log A3) is still detected and still
+/// reported by errno: `setRawOption` rejects a bad size loudly with `OSError`
+/// errno 22 rather than silently no-op'ing.
 ///
 /// Asynchronous because `dart:io` has no synchronous way to obtain a `Socket`
 /// — every constructor is a future. Callers that need the answer at test
@@ -138,8 +170,48 @@ Future<({bool supported, String? reason})> _probeLinger() async {
     final pending = server.first;
     client = await Socket.connect(server.address, server.port);
     accepted = await pending;
-    client.setRawOption(
-        RawSocketOption(RawSocketOption.levelSocket, _soLinger, _lingerZero()));
+
+    // The peer half, listening before the reset is issued so nothing can be
+    // missed between the two.
+    final observed = Completer<Object?>();
+    accepted.listen(
+      (_) {},
+      onError: (Object error) {
+        if (!observed.isCompleted) observed.complete(error);
+      },
+      onDone: () {
+        if (!observed.isCompleted) observed.complete(null);
+      },
+      cancelOnError: true,
+    );
+
+    forceReset(client);
+    final outcome = await observed.future
+        .timeout(_lingerProbeBudget, onTimeout: () => _noOutcome);
+
+    if (identical(outcome, _noOutcome)) {
+      return _lingerProbe = (
+        supported: false,
+        reason: 'the peer of a throwaway forceReset noticed nothing within '
+            '${_lingerProbeBudget.inSeconds} s, so this platform neither reset '
+            'nor closed the connection the way the fault kit needs. Every arm '
+            'that asserts a peer-observable reset is skipped rather than run '
+            'against a primitive whose effect could not be confirmed',
+      );
+    }
+    if (outcome == null) {
+      return _lingerProbe = (
+        supported: false,
+        reason: 'forceReset ended the peer cleanly on this platform rather '
+            'than with an error, so SO_LINGER{1,0} produced a FIN and not a '
+            'reset. On Windows that is dart:io itself: Socket.destroy() calls '
+            'shutdown(SD_BOTH) before closing (ClientSocket::DoCloseLocked), '
+            'which sends the FIN before linger can apply. Half-open recovery '
+            'and killOnce cannot be judged here — an arm that ran anyway would '
+            'be testing an orderly shutdown while its name promises a cut '
+            'cable',
+      );
+    }
     return _lingerProbe = (supported: true, reason: null);
   } catch (error) {
     // Object, not SocketException: setRawOption throws bare OSError here
@@ -159,3 +231,10 @@ Future<({bool supported, String? reason})> _probeLinger() async {
     _lingerProbeInFlight = null;
   }
 }
+
+/// Distinguishes "the peer said nothing" from "the peer ended cleanly".
+///
+/// `null` already means a clean end in this file, so the timeout needs a value
+/// of its own; collapsing the two would report a hung platform as a graceful
+/// one and put the wrong sentence on the run report.
+final Object _noOutcome = Object();

@@ -114,6 +114,45 @@ Future<void> main() async {
   },
       skip: lingerWorks ? null : lingerResetSkipReason);
 
+  // Runs everywhere, and is the only arm in this file that must: it is the one
+  // that judges the gate the others hang from. The reset group is skipped where
+  // the probe says no, so nothing inside it can notice a probe that says yes on
+  // a platform where forceReset sends a FIN — which is exactly what happened on
+  // the first CI run, when the probe asked whether the kernel accepted
+  // SO_LINGER rather than whether the peer saw a reset. Windows accepts the
+  // option and still cannot reset, because dart:io calls shutdown(SD_BOTH)
+  // before closing, and three arms failed there for a platform difference
+  // nobody had measured.
+  group('the probe and the primitive agree', () {
+    test('a peer observes an error here exactly when the probe says it will',
+        () async {
+      final pair = await _loopbackPair();
+      final seen = _peerOutcome(pair.near);
+      forceReset(pair.far);
+      final outcome = await within(
+        seen,
+        'the peer of a forceReset reached a terminal state',
+        budget: const Duration(seconds: 2),
+      );
+
+      print('forceReset on ${Platform.operatingSystem}: probe says '
+          '$lingerWorks, peer saw ${outcome ?? 'a clean end'}');
+
+      expect(
+        outcome != null,
+        lingerWorks,
+        reason: 'lingerResetSupported() answered $lingerWorks and the peer '
+            '${outcome == null ? 'ended cleanly' : 'got $outcome'}. The probe '
+            'is a gate: every arm asserting a peer-observable reset is skipped '
+            'when it says no and run when it says yes, so a probe that answers '
+            'a *different* question than its callers ask cannot be caught by '
+            'any of them. A probe that only checks whether setRawOption threw '
+            'fails here on any platform that accepts SO_LINGER and still sends '
+            'a FIN',
+      );
+    });
+  });
+
   group('the clean-close contrast', () {
     test('destroy() alone ends the peer cleanly — it is not a reset', () async {
       final pair = await _loopbackPair();
