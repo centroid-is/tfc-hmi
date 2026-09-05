@@ -1003,11 +1003,19 @@ void main() {
 /// The receivers that mean a `StateMan`. Every one of them is a variable
 /// holding the value of `ref.read(stateManProvider.future)` or the
 /// `stateMan` a pane builder hands down.
+///
+/// `_remote` is the odd one out and belongs here rather than in
+/// [_kOtherWriteReceivers]: it is a `StateManApi`, so it is a real plant
+/// write, but it is issued from *inside* an implementation rather than by a
+/// caller holding a guarded object. See `lib/core/gateway_state_man.dart`'s
+/// row in [_kHandledWriteSites] for why that means the refusal is already
+/// settled by the time it runs.
 const Set<String> _kStateManWriteReceivers = {
   'client',
   'stateMan',
   'sm',
   'widget.stateMan',
+  '_remote',
 };
 
 /// Every other `.write(` receiver in `lib/`: string buffers, the secure
@@ -1053,8 +1061,10 @@ const Set<String> _kOtherWriteReceivers = {
 /// | File | Why its `.write(` is handled |
 /// |---|---|
 /// | `lib/widgets/tag_access_guard.dart` | `writeTag`'s own call, reached only after `guardTagWrite` has resolved the permission; a refusal there is prompted and recorded rather than thrown, so there is nothing at this site for a caller to let past |
+/// | `lib/core/gateway_state_man.dart` | `GatewayStateMan.write`'s call onto the relay client. It sits **below** `GuardedStateMan`, which is what `stateManProvider` returns in gateway mode exactly as it does in direct mode, so the permission is resolved and the audit row written before this line runs. There is no caller here to let a refusal past: the refusal never reaches this frame |
 const Set<String> _kHandledWriteSites = {
   'lib/widgets/tag_access_guard.dart',
+  'lib/core/gateway_state_man.dart',
 };
 
 final RegExp _writeCall = RegExp(r'([A-Za-z_][A-Za-z0-9_.]*)\.write\(');
