@@ -205,6 +205,81 @@ final class Notifications {
 Notifications observe(ValueListenable<DynamicValue> node) =>
     Notifications._(node);
 
+/// How long the *link* gets to come up, before any property's budget opens.
+///
+/// Not a tolerance on anything this suite judges. No case asserts how fast a
+/// source connects, and [linkUp] is not the place to start: this number exists
+/// only so an implementation whose link never comes up fails by name instead of
+/// hanging until the runner's timeout — the same job [within] does everywhere
+/// else, one level further out.
+///
+/// So it is deliberately generous, and generous is the *point*. The failure
+/// being fixed here was a tight bound applied to a transport coming up, and a
+/// tight bound here would be the identical mistake one line higher. Two seconds
+/// is the control deadline every socket leg configures for a wire call
+/// (`client_harness.dart`'s `contractClientConfig`): a link that is still not up
+/// after it has elapsed is one the implementation's own calls have already
+/// given up on, so nothing is being excused by waiting that long, and it is 20×
+/// the 105 ms this barrier measured on an idle machine.
+const Duration _linkUpBudget = Duration(seconds: 2);
+
+/// Waits until the source's link is up, before a case's own budget opens.
+///
+/// **What this fixes is a measurement, not a tolerance.** Every case gets one
+/// fresh implementation from `make()` — synchronously, because the factory
+/// signature has no async hook (04-RESEARCH Finding 6) — and then starts
+/// asserting. On an in-process source that is exact: the store is there, the
+/// levers land synchronously, and the first `within` bounds the property it
+/// names. Behind a socket the same line bounds something else entirely. The
+/// first await in the case is where the TCP connect, the WebSocket handshake,
+/// the subscribe of a three-hundred-key page and the gateway's first tick all
+/// come due, and the property the case is named for is whatever is left of the
+/// budget afterwards.
+///
+/// Measured on the `RemoteStateMan` leg on an idle Apple Silicon machine:
+/// `PIPE.connected` goes true at **105 ms** and the first plant value lands
+/// **0.3 ms** later. Of a 200 ms budget, 99.6 % was being spent on the
+/// transport coming up and 0.4 % on the property. Raising the budget would have
+/// bought green while leaving that ratio exactly as wrong; this moves the start
+/// of the window instead, and the property keeps the 200 ms it always had.
+///
+/// **Late and never are different failures, and this is what tells them apart.**
+/// A single timeout around both cannot: a slow runner and a source that has
+/// stopped delivering produce the same red. Split in two, a link that never
+/// comes up fails here saying so, and a value that never arrives over a link
+/// that *is* up fails in the case naming the property an operator lost.
+///
+/// The condition is [PipeKeys.connected], which is contract vocabulary rather
+/// than a new lever: HLTH-01 makes the health keys ordinary subscribable
+/// values, `checkHealthKeysAreSubscribableLikeAnyTag` holds every leg to
+/// serving them, and the reference implementation seeds them true at
+/// construction. So this is free on a source that is already up — a synchronous
+/// [StateManApi.read] and nothing attached — exactly as [arrived] is, and a real
+/// wait only where a link is a real thing.
+Future<void> linkUp(
+  StateManApi api, {
+  Duration budget = _linkUpBudget,
+}) async {
+  if (api.read(PipeKeys.connected)?.asBool == true) return;
+
+  final node = api.listen(PipeKeys.connected);
+  final up = Completer<void>();
+  void settle() {
+    if (!up.isCompleted && node.value.asBool == true) up.complete();
+  }
+
+  node.addListener(settle);
+  try {
+    // Re-checked after the listener goes on: the link may come up between the
+    // read above and the attach, and a barrier that missed that edge would wait
+    // for a notification that has already happened.
+    settle();
+    await within(up.future, 'the link coming up', budget: budget);
+  } finally {
+    node.removeListener(settle);
+  }
+}
+
 /// Waits until a value has genuinely arrived for [key], if one has not already.
 ///
 /// The barrier a case needs *before* it starts counting. Every case that seeds
@@ -227,18 +302,46 @@ Notifications observe(ValueListenable<DynamicValue> node) =>
 /// Free on a source that delivers in-process: the fast path is a synchronous
 /// [StateManApi.read], and nothing is attached or awaited. Re-checked after the
 /// listener goes on, because the value may land between the two.
+///
+/// **The fast path asks whether a reading has been heard, not whether there is
+/// an entry**, and the difference is the whole barrier. A gateway accepts a key
+/// the source *declares* and snapshots it [Quality.uncertainNotYetKnown] —
+/// "not known yet is a value state, not a rejection", which the gateway's own
+/// `subscribe_test.dart` holds it to — so on a socket leg every key on the page
+/// has a non-null entry from the moment the subscribe lands, before any plant
+/// value has been delivered for it. A `read(key) != null` test would then
+/// return instantly from the fast path, the barrier would guard nothing, and
+/// the *next* notification the case saw would be the seed's own — exactly the
+/// failure this helper's own doc describes, arriving through the helper meant
+/// to prevent it.
+///
+/// It is the same shape as the previous round's capability probe: a question
+/// that is cheap to ask and is not the one the callers need. Callers need "the
+/// plant has been heard from about this key"; a placeholder is the source
+/// saying the opposite in as many words.
 Future<void> arrived(
   StateManApi api,
   String key, {
   Duration budget = const Duration(milliseconds: 200),
 }) async {
-  if (api.read(key) != null) return;
+  if (_heard(api, key)) return;
   final seen = observe(api.listen(key));
   try {
-    if (api.read(key) != null) return;
+    if (_heard(api, key)) return;
     await within(seen.next, 'the seeded value for $key arriving',
         budget: budget);
   } finally {
     seen.stop();
   }
+}
+
+/// Whether anything has actually been heard about [key] yet.
+///
+/// A subscribed-but-never-delivered key reads as a real [DynamicValue] carrying
+/// [Quality.uncertainNotYetKnown] on any source that snapshots its page; that is
+/// the source saying "nothing yet", and it must not satisfy a barrier waiting
+/// for something.
+bool _heard(StateManApi api, String key) {
+  final value = api.read(key);
+  return value != null && value.quality != Quality.uncertainNotYetKnown;
 }

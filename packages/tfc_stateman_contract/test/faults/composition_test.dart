@@ -108,7 +108,31 @@ void main() {
     final client = await _Client.connect(rig.proxy.port);
     final roundTrip = await client.probe();
     final measured = await client.rateOver(_rateWindow);
-    final droppedAt = await client.awaitDrop(budget: _up * 2);
+    final measuredBy = run.elapsed;
+
+    // **The precondition the whole arm rests on, asserted instead of assumed.**
+    // Everything above has to finish inside the up half of the flap, or the
+    // rate window straddled a transition and the number it produced is a rate
+    // measured across a dropout. Locally that is 4.1 s of 8 — connect, a
+    // 100 ms probe, an 800 ms warm-up and a 3 s window — so the headroom is
+    // roughly 2x and the warm-up spent one second of it. If a future change
+    // spends the rest, this line says so; without it the symptom is the
+    // dropout assertion failing for a reason nowhere near it.
+    expect(measuredBy, lessThan(_up),
+        reason: 'the rate window closed ${measuredBy.inMilliseconds} ms into '
+            'an ${_up.inMilliseconds} ms up-window, so the measurement above '
+            'straddled the flap and is a rate taken across a dropout. Either '
+            'the up half needs to grow or the measurement needs to shrink — '
+            'not the rate tolerance, which is the one thing here that must not '
+            'move');
+
+    final droppedAt = await client.awaitDrop(
+      budget: _up * 2,
+      state: () => 'the rate window closed at ${measuredBy.inMilliseconds} ms '
+          'of an ${_up.inMilliseconds} ms up-window; since then the proxy has '
+          'made ${rig.proxy.flapTransitions} flap transition(s) and holds '
+          '${rig.proxy.livePairs} live pair(s)',
+    );
     run.stop();
 
     print('composed: round trip ${roundTrip.inMilliseconds} ms against '
@@ -491,8 +515,32 @@ final class _Client {
   }
 
   /// Waits for the link to go away and returns how far into the run it did.
-  Future<Duration> awaitDrop({required Duration budget}) =>
-      _dropped.future.timeout(budget);
+  ///
+  /// **Fails by name, with the proxy's own account of what it did.** A bare
+  /// `.timeout` here produced the whole of one CI failure — "TimeoutException
+  /// after 0:00:16: Future not completed", no line of context, on a run that
+  /// prints nothing until after this call returns. That message cannot tell
+  /// apart the two things it could mean, and they need opposite
+  /// investigations: a flap that never fired (the timer, the mode, the
+  /// exclusion table) and a flap that fired at a client which did not notice
+  /// (the reset, the socket, this listener). [state] is the caller's snapshot
+  /// of the proxy at the moment of the failure, so the next occurrence names
+  /// which one it was instead of costing another round of guessing.
+  Future<Duration> awaitDrop({
+    required Duration budget,
+    required String Function() state,
+  }) async {
+    try {
+      return await _dropped.future.timeout(budget);
+    } on TimeoutException {
+      fail('the link never went away: no dropout reached this client within '
+          '${budget.inSeconds} s. ${state()}. A transition count above zero '
+          'with the link still up means the flap fired and the reset did not '
+          'reach the peer; a count of zero means the flap was not running '
+          'while the other two modes were set, which is the composition '
+          'failure this arm exists for');
+    }
+  }
 
   void _onData(Uint8List data) {
     final probe = _probeDone;
