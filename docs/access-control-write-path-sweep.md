@@ -37,6 +37,30 @@ comment is not a call, which is why `centroid-hmi/lib/main.dart:449` quoting
 files are collapsed to a counted line per file rather than listed. Both are
 limits on the search and both are restated in §6 below.
 
+**Re-run: 2026-09-05** against the relay branch, and this one is different in
+kind from the first two. Both of those swept one program: a Flutter app whose
+writes start at a widget, travel through a provider and end at a store, with a
+route gate or a decorator somewhere in between. The relay packages
+(`tfc_relay_client`, `tfc_relay_local`, `tfc_relay_protocol`,
+`tfc_relay_server`, `tfc_stateman_contract`) are **not that program**. They are
+a separate Dart backend and its client half, and the repository root's
+`pubspec.yaml` names none of them — the app links `tfc_dart`,
+`tfc_mcp_server`, `jbtm` and `tfc_access`, and nothing under `lib/`,
+`centroid-hmi/lib/` or `demo/` imports a relay package at all. The script
+sweeps them because its roots are `packages/*/lib`, which is correct: a write
+path is a write path whichever process runs it.
+
+Seventeen files came back with no row. Every one is in those five packages, and
+**the reason none of them had a verdict is that the vocabulary had no term for
+what guards them.** The relay's writes are not reached from a widget on a
+route; they arrive over a WebSocket, from a session whose token was exchanged
+for an `Identity{stationId, role}`, and are refused by the relay's own policy
+decorator before they reach a store. That is a guard, and calling it
+`not widget-reachable` would have been true-sounding and wrong — it would have
+filed a live, remotely reachable DELETE beside a drift `Migrator` callback. §2
+gains two terms rather than stretching one, §3.12 tells the relay's guard model
+once, and §4.5 records what the run found.
+
 **The answer to "is there a fifth?" is yes**, and it is in §4. The largest new
 finding is a family the spec never mentions: three raw-Drift index classes in
 `packages/tfc_mcp_server`, called directly from the Knowledge Base page, which
@@ -48,26 +72,54 @@ and the operational cost of the second.
 
 ## 2. The table
 
-The verdict vocabulary is fixed at five terms. Every row carries exactly one;
-no row is blank and no row says "probably".
+The verdict vocabulary is fixed at **seven** terms. Every row carries exactly
+one; no row is blank and no row says "probably".
 
 | Verdict | Meaning |
 |---|---|
 | `guarded by NN-NN` | a plan routes it through a guard. `03-NN` for the plans in this phase; one later row carries `06-03`, which closed §3.3 |
 | `route-gated (Phase 2)` | reachable only from a route in `kRaisedRoutes` |
+| `session-gated (relay policy)` | reached over the relay's WebSocket, and refused by `PolicyStateMan` (`packages/tfc_relay_server/lib/src/policy/policy_state_man.dart`) unless the session's `Identity.role` is `Role.operate`. Not a route and not one of this milestone's plans — a **third** enforcement point, in a different process. The row says which member is gated and which is deliberately not; §3.12 carries the model and where it disagrees with `kPrefAccessRules` |
 | `not widget-reachable` | provider or core machinery with no path from a widget; the row says which and why the claim holds |
+| `test-kit only (dev dependency)` | in `packages/tfc_stateman_contract`, which every package that uses it names under `dev_dependencies` and which no production `lib/` in the repository imports. Not compiled into the app or into the gateway. The row still says what the call would write, so the claim is checkable rather than a category |
 | `correct as-is` | the audit sink, the guards themselves, and the stores' own declarations |
 | `left open: <reason>` | found, understood, and deliberately not closed |
+
+**Why two new terms rather than one, and why neither is a stretch of an old
+one.** They make opposite kinds of statement, so one term cannot carry both.
+`session-gated (relay policy)` says *a guard exists and here it is* — the row
+points at a check the reader can go and read. `test-kit only (dev dependency)`
+says *this code is not in any shipped binary* — a claim about the dependency
+graph, not about a guard. Filing either under `not widget-reachable` would have
+been literally true and materially false: nothing in the relay is
+widget-reachable, so that verdict would have absorbed the whole of five
+packages and said nothing about any of them, including the DELETE that a
+connected client can reach in one call.
 
 Where a file carries many calls of one shape, the row names the shape and lists
 the lines, because that is how plan 03-12 compares — by file and call.
 
-### 2.1 Named Drift write helpers on `AppDatabase` (script §1 — 44 hits at the 2026-08-29 run, 54 at the 2026-08-30 re-run)
+### 2.1 Named Drift write helpers on `AppDatabase` (script §1 — 44 hits at the 2026-08-29 run, 54 at the 2026-08-30 re-run, 111 at the 2026-09-05 re-run)
 
 The ten new hits are plan 03-10's guard, which declares the same five method
 names and delegates to them. That is the shape a guard has, and it is why the
 count going **up** is the expected outcome of closing a bypass rather than a
 regression.
+
+Fifty-five of the fifty-seven further hits at the 2026-09-05 run are the same
+five method names travelling the length of the relay — declared once on the
+wire interface, called once by the client's proxy, served once by the gateway's
+handlers, decorated once by the policy, implemented once against the database,
+and reproduced four times over by the contract kit. The other two are new lines
+in files this section already rowed.
+
+**Nine rows, and the first five of them are one method chain rather than five
+write paths.** A `history.deleteView` frame reaches exactly one `DELETE`:
+`client_sub_apis` sends it, `data_handlers` receives it, `policy_state_man`
+decides it, `history_view_store` executes it, and `state_man_api` only declares
+that the method exists. The rows say where in that chain each file sits, so a
+reader is not left counting five deletes where there is one. The last four are
+the contract kit, which is a different claim entirely.
 
 | File and line | Call | Store | Reached from | Verdict |
 |---|---|---|---|---|
@@ -82,6 +134,15 @@ regression.
 | `packages/tfc_mcp_server/lib/src/database/server_database.dart:356-397` | `m.createTable(<table>)` | schema | same, for the MCP server's own database | `not widget-reachable` — same reason |
 | `packages/tfc_dart/lib/core/database.dart:930` | `db.updateRetentionPolicy(tableName, retention)` | timescale policy | `Database._applyRetentionPolicy` ← `registerRetentionPolicy` ← `Collector` (`collector.dart:216`) | `not widget-reachable` — no widget calls it; the widget-reachable input is the `collector_config` key, which `03-09` guards |
 | `packages/tfc_dart/lib/core/database.dart:1715, 1738` | `db.createTable(tableName, ...)` | timeseries tables | `Database` creating a table on first insert | `not widget-reachable` — driven by a sample arriving, not by a control |
+| `packages/tfc_relay_protocol/lib/src/state_man_api.dart:321, 326, 331, 347, 351` | the five history-view mutators, **declared** on `HistoryViewApi` | — | — | `correct as-is` — an interface declaration, the same shape as `database_drift.dart`'s seven above and `operations.dart:88` below: declaring a method is not calling one. It is the file's own stated rule that "a method that exists is a thing any connected client may invoke, so adding one is an access-control decision", and `api_surface_test.dart` fails when this file grows or shrinks — which is a **surface** control, not a guard, and the row says so rather than banking it as one |
+| `packages/tfc_relay_server/lib/src/policy/policy_state_man.dart:739-743, 750-755, 811-813, 850-853, 858-860` | the five names on `_PolicyHistoryViews`, each delegating to `_source.<name>` | `history_view`, `history_view_period` | every `history.*` frame on the wire, through `DataHandlers` | `correct as-is` — this **is** the relay's guard, and the row is here for the same reason `guarded_history_views.dart`'s is: the check and the delegation happen in this file. `updateHistoryView`, `deleteHistoryView`, `addHistoryViewPeriod` and `deleteHistoryViewPeriod` each call `requireOperate(...)` before delegating; `createHistoryView` deliberately does not, and §3.12 carries that asymmetry rather than leaving it implied by a row |
+| `packages/tfc_relay_server/lib/src/data_handlers.dart:440, 455, 474, 552, 559` | `source.historyViews.<name>(...)` | `history_view`, `history_view_period` | the `history.createView` / `updateView` / `deleteView` / `addPeriod` / `deletePeriod` methods, registered on the session's peer | `session-gated (relay policy)` — `source` is the session's `PolicyStateMan`, never the shared plant (`relay_session.dart` builds `DataHandlers(source: api, …)` where `api` is the decorator), so there is no unwrapped source in scope for a handler to reach around. Every registration also passes `RelaySession._on`, which applies the pre-`hello` handshake gate |
+| `packages/tfc_relay_local/lib/src/data/history_view_store.dart:95-99, 104-112, 140-142, 211-221, 225-226` | the five names on `HistoryViewStore`, each reaching `database().db.<name>` | `history_view`, `history_view_period` | `_PolicyHistoryViews`, from the five handlers above | `session-gated (relay policy)` — the store the relay's guard delegates through, and the row is here rather than at `correct as-is` on purpose: these rows are the **same four tables** `lib/pages/history_view.dart` writes through `03-10`'s guard, so a reader arriving at this file needs to be told which of the two guards stands above it. This one. Reached only from the policy decorator, which is reached only from a gated handler |
+| `packages/tfc_relay_client/lib/src/client_sub_apis.dart:275, 288, 301, 336, 347` | the five names on the client's `HistoryViewApi` proxy | **no store in this process** | a Flutter client of the gateway — which is nothing in this repository today | `session-gated (relay policy)` — the far end is the enforcement. Each of these sends one JSON-RPC request and awaits one answer; the store, and the `requireOperate` above it, are in the gateway. Worth stating because the verdict looks generous otherwise: a client-side method call cannot write what the gateway's policy refuses, and the refusal comes back as a `forbidden` the caller must handle |
+| `packages/tfc_stateman_contract/lib/src/channel/channel_sub_apis.dart:248, 261, 274, 309, 320` | the same five, over the harness channel | — | the contract suite's client side | `test-kit only (dev dependency)` — `client_sub_apis.dart` above is this file "ported method for method", and the port is the shipping one. This copy speaks `harness.`-prefixed method names to `served_state_man.dart` and never to a gateway |
+| `packages/tfc_stateman_contract/lib/src/channel/served_state_man.dart:558, 567, 579, 609, 618` | `api.historyViews.<name>(...)` | whatever the suite pointed it at | the contract suite's server side | `test-kit only (dev dependency)` — the harness peer, and `data_handlers.dart`'s library doc names it as the thing the gateway deliberately **copied rather than imported**: `handler_table_test.dart` sweeps `tfc_relay_server`'s production `lib/` for this package's name and requires zero hits, "because a gateway that imported its test kit at runtime would ship the fake plant, the seeding levers and the fault injectors into the plant". The duplication is the control |
+| `packages/tfc_stateman_contract/lib/src/data_services_contract.dart:261, 314, 334, 339, 368` | `views.createHistoryView(...)`, `.addHistoryViewPeriod(...)`, `.deleteHistoryView*(...)` | whatever implementation the suite is run against | the shared contract suite, run by `dart test` in five packages | `test-kit only (dev dependency)` — these are **assertions**, not a program: the suite is in `lib/` rather than `test/` precisely so five packages' tests can import it, which is also why `test: ^1.25.0` is a runtime dependency of that package and of no other. Against a real database it writes real rows, and that is what a contract suite is for |
+| `packages/tfc_stateman_contract/lib/testing/fake_data_services.dart:367, 379, 400, 426, 441` | the five names on the in-memory fake | **no store at all** — three `Map`s | the contract suite, and the packages' own fixtures | `test-kit only (dev dependency)` — an in-memory reference implementation, "not a mock": the view delete cascades because the suite asserts that it does. Nothing here opens a connection |
 
 **Both accessors were present, and both moved.** At the first run `:1108` used
 `adb` and `:1165` used `dbWrap.db`; the script found both because section 1
@@ -92,7 +153,7 @@ two of these five; all five were here, and plan 03-10 moved all five onto
 runs and none of the calls did. **This is the reason the reconciliation is by
 file and call rather than by line.**
 
-### 2.2 Raw Drift statement API (script §2 — 116 hits at the 2026-08-29 run, 113 at the 2026-08-30 re-run)
+### 2.2 Raw Drift statement API (script §2 — 116 hits at the 2026-08-29 run, 113 at the 2026-08-30 re-run, 144 at the 2026-09-05 re-run)
 
 | File and line | Call | Store | Reached from | Verdict |
 |---|---|---|---|---|
@@ -118,13 +179,22 @@ file and call rather than by line.**
 | `lib/pages/page_editor.dart:3706` | `counts.update(asset.displayName, ...)` | — | an in-memory tally of asset kinds, for a label | `not widget-reachable` — not a store; the same broad-grep false positive as the row above. The editor's real persistence is `PageManager`, rowed in §2.9 |
 | `packages/centroidx_upgrader/lib/src/manager_launcher.dart:170` | `staged.delete()` | filesystem | cleanup of a failed staging write; see 2.7 | `left open: the update path is ungated` — see §3.5 |
 | `packages/tfc_dart/lib/core/state_man.dart:2175` | `wrapper.client.delete()` | — | OPC UA client teardown | `not widget-reachable` — not a store; disposes a connection |
+| `packages/tfc_relay_local/lib/src/data/preference_store.dart:517` | `db.db.customUpdate('DELETE FROM flutter_preferences WHERE key IN (…)', updateKind: UpdateKind.delete)` | `flutter_preferences` | `PreferenceStore.clear(allowList:)` ← `_PolicyPreferences.clear` ← the `preferences.clear` handler | `session-gated (relay policy)` — and the **only** raw Drift write anywhere in the relay. The statement is parameterised (`Variable.withString` per key, placeholders never interpolation), the key list comes from `getKeys(allowList:)` rather than from the client, and an *unrestricted* clear is refused outright above it (`policy_state_man.dart`, 10-REVIEW CR-02) because `key_mappings` is 518 KiB of routing nothing else on the wire can restore. The allow-listed form still takes `operate` |
+| `packages/tfc_relay_local/lib/src/opcua_upstream_link.dart:746, 1427` | `await client.delete()` | — | disposing an `open62541` client whose creation raced a dispose | `not widget-reachable` — not a store; the same call and the same reason as `state_man.dart:2175` one row above. An undeleted client is a live worker isolate, so the call is a leak fix, not a write |
+| `packages/tfc_relay_local/lib/src/collect/collection_runner.dart:449` | `_health.update(rowsWritten:, rowsDropped:, rowsQueued:, lastError:)` | — | the collector's insert path refreshing six health keys | `not widget-reachable` — not a store; `_health` is a `CollectHealth` (`pipe_health.dart:326`) which publishes into the in-memory `ValueStore` the pipe serves. A false positive of the deliberately broad `.update(` grep, recorded rather than filtered away, exactly as `ip_settings.dart:588`'s `_tracker.update(...)` is |
+| `packages/tfc_relay_local/lib/src/data/collection_plan_resolver.dart:111` | `claimed.update(identifier, (_) => null, ifAbsent: …)` | — | a local `Map<String, String?>` counting duplicate OPC UA identifiers | `not widget-reachable` — not a store; the same broad-grep false positive as `page_editor.dart:3706`'s `counts.update(...)`. The map is built and discarded inside one constructor body |
+| `packages/tfc_stateman_contract/lib/src/faults/os_level.dart:535` | `directory.delete(recursive: true)` | filesystem | the teardown of the macOS dummynet fault injector | `test-kit only (dev dependency)` — removes the temp directory `:468` created; see 2.7 for the write that put a file in it |
 
 **Nothing further found** in this section beyond `server_config_db.dart`, the
 three MCP index classes and the audit stores: every other hit is either the
 store's own implementation, a migration, or a `.delete(`/`.update(` on
-something that is not a database at all.
+something that is not a database at all. **The 2026-09-05 re-run adds one
+name to that first list and nothing to the argument**:
+`preference_store.dart:517` is the relay's single raw statement, and the four
+relay rows below it are three broad-grep false positives and a test kit's
+temp-directory cleanup.
 
-### 2.3 `AppDatabase` handles and the `.db` accessor (script §3 — 60 hits at the 2026-08-29 run, 55 at the 2026-08-30 re-run, plus 176 collapsed in `database_drift.g.dart` at both)
+### 2.3 `AppDatabase` handles and the `.db` accessor (script §3 — 60 hits at the 2026-08-29 run, 55 at the 2026-08-30 re-run, 67 at the 2026-09-05 re-run; plus 176 collapsed in `database_drift.g.dart` at the first two runs and 192 at the third)
 
 This section exists to catch a *new accessor spelling* the first time it
 appears. It found no handle that is not already covered by 2.1 or 2.2. Rows
@@ -146,7 +216,10 @@ here are therefore grouped by what the handle is used for.
 | `lib/core/audit_trail_store.dart:413, 417` | `required AppDatabase db`, `final AppDatabase _db` | `AppDatabase` | `AuditTrailStore` | `correct as-is` — the handle Phase 5's **read-only** trail viewer holds. It is on this table because it names `AppDatabase`, not because it writes: the file contains no `into(`, no `update(` and no `delete(`, and `test/core/audit_trail_store_test.dart` asserts that on the source text rather than leaving it merely true today. The enforcement is the route gate `kRaisedRoutes['/advanced/audit-trail']` (05-07) and deliberately not a store check — a guard here would write a row into the trail every time somebody scrolled the trail, on the same reasoning `access_template_store.dart` gives for its own ungated reads. Same `_db` spelling as `HistoryViewStore` and `AccessTemplateStore`, so no ninth accessor |
 | `lib/providers/access_templates.dart:109` | `db: db.db` | `AppDatabase` | `accessTemplateStoreProvider` | `correct as-is` — the provider that hands `AccessTemplateStore` its handle, one line, no statement of its own. Same `db.db` spelling `accessRepositoryProvider` and `auditSinkProvider` already use, so no ninth accessor |
 | `lib/providers/audit_trail.dart:53` | `db: db.db` | `AppDatabase` | `auditTrailStoreProvider` | `correct as-is` — the provider that hands the **read-only** `AuditTrailStore` its handle, one line, no statement of its own. It is on this table because it names the `.db` accessor, not because it writes: the file contains no Drift statement at all, and `test/providers/audit_trail_test.dart` asserts on the source text that it holds no audit sink and performs no permission check. The enforcement is the route gate `kRaisedRoutes['/advanced/audit-trail']` (05-07), on the same reasoning `lib/core/audit_trail_store.dart` gives above. Same `db.db` spelling `accessRepositoryProvider`, `auditSinkProvider` and `accessTemplateStoreProvider` already use, so no ninth accessor |
-| `packages/tfc_dart/lib/core/database_drift.g.dart` (176 occurrences) | generated `_$AppDatabase` boilerplate | — | drift codegen | `not widget-reachable` — regenerated from `database_drift.dart`, which is searched above; collapsed by the script and counted |
+| `packages/tfc_relay_local/lib/src/collect/timescale_sink.dart:296, 297` | `AppDatabase.spawn(dbConfig)` / `AppDatabase.create(dbConfig)` | connection lifecycle | `TimescaleSink._openProduction`, at gateway start-up | `not widget-reachable` — builds the pool and writes nothing, the same verdict and the same reason as `lib/providers/database.dart:17-29`. The gateway takes a Postgres advisory lock **before** the pool is built, so a second gateway on the same database never holds so much as a pool slot |
+| `packages/tfc_relay_local/lib/src/data/timescale_reader.dart:563, 713, 777` | `db.db.customSelect(sql, variables: [...])` | reads | the `timeseries.*` handlers, through `_PolicyTimeseries` | `correct as-is` — on this table because it names the `.db` accessor, not because it writes: the file contains no `into(`, no `update(`, no `delete(`, no `customUpdate(` and no `customStatement(`, and `freeze_test.dart` pins it as one of the two files in that package allowed to import the database layer at all. Reads over the pipe are filtered by `PolicyStateMan.canSee` rather than gated, on the same reasoning `audit_trail_store.dart` gives above; spec §11's deferral of read permissions applies to the relay too |
+| `packages/tfc_relay_local/lib/src/data/preference_store.dart:517` | `db.db.customUpdate(...)` | `flutter_preferences` | `PreferenceStore.clear(allowList:)` | `session-gated (relay policy)` — the same call as 2.2's row, reported twice because it is the one line in the relay that is both a raw statement and a `.db` accessor. **No ninth spelling**: the receiver is written `db.db`, which is the third of the seven this section already lists. What *is* new is where the handle comes from — a `DatabaseSupplier` (`timescale_reader.dart:107`, a `Database? Function()`) borrowed per call rather than held as a field, because the sink reconnects and swaps its instance and a pinned one is stale after the first. A new *source* of an old spelling, which this section reports for the same reason it reports a new spelling |
+| `packages/tfc_dart/lib/core/database_drift.g.dart` (176 occurrences at the first two runs, 192 at the third) | generated `_$AppDatabase` boilerplate | — | drift codegen | `not widget-reachable` — regenerated from `database_drift.dart`, which is searched above; collapsed by the script and counted |
 
 **Seven accessor spellings at the 2026-08-29 run — `adb`, `dbWrap.db`,
 `db.db`, `dbWrapper.db`, `_tsDb!.db`, `database!.db` and
@@ -156,6 +229,19 @@ are covered above. The eighth is a guard this phase added rather than a store
 this phase missed, which is the distinction this section exists to make
 visible: a new spelling is reported either way, and the reader decides which
 kind it is.
+
+**No ninth at the 2026-09-05 re-run.** The relay reaches the handle through
+`db.db`, the third of the eight, and the only thing that changed is that the
+`db` in front of it is the return value of a `DatabaseSupplier` rather than a
+field. Two disambiguations, because both are names this document now carries
+twice: the relay's `HistoryViewStore`
+(`packages/tfc_relay_local/lib/src/data/history_view_store.dart`) is a
+different class from the app's `HistoryViewStore`
+(`lib/core/guarded_history_views.dart`) — the first serves the wire, the second
+is plan 03-10's guard — and the relay's `PreferenceStore` is not
+`packages/tfc_dart/lib/core/preferences.dart`'s `Preferences`, it is a
+`PreferencesApi` **over** it. Both pairs write the same tables in the same
+Postgres.
 
 ### 2.4 `SharedPreferencesAsync()` constructed rather than injected (script §4 — 12 hits at the 2026-08-29 run, **1** at the 2026-08-30 re-run)
 
@@ -201,7 +287,7 @@ that arithmetic is the whole content of the two rows.
 | `lib/providers/theme.dart:15, 22, 44, 51` | `await SharedPreferences.getInstance()` | device-local | the theme and colour-scheme notifiers | `left open: device-local UI state, and inside \`lib/providers/\`` — see §3.6. Passes the check on the **directory** rule, not an allow-list entry; a copy of these four lines anywhere else fails the build |
 | `lib/pages/dbus_login.dart:124, 141` | `await SharedPreferences.getInstance()` | device-local | the D-Bus login form | `left open: spec §2 excludes changing this file` — see §3.7. The **one** allow-list entry in the check, carrying that reason inline. Removing the entry makes the build fail on these two lines, which is how the entry was confirmed to be doing work |
 
-### 2.6 Secure storage (script §6 — 33 hits at the 2026-08-29 run, 35 at the 2026-08-30 re-run)
+### 2.6 Secure storage (script §6 — 33 hits at the 2026-08-29 run, 35 at the 2026-08-30 re-run, 37 at the 2026-09-05 re-run)
 
 | File and line | Call | Store | Reached from | Verdict |
 |---|---|---|---|---|
@@ -211,19 +297,27 @@ that arithmetic is the whole content of the two rows.
 | `lib/core/secure_storage/macos.dart:118, 139, 144`, `lib/core/secure_storage/other.dart:24`, `packages/tfc_dart/lib/core/secure_storage/linux.dart:47` | `_storage.write(key:, value:)` | OS keychain | the platform implementations behind `MySecureStorage` | `left open: secure storage is outside both guards` — see §3.4 |
 | `packages/tfc_dart/lib/core/secure_storage/secure_storage.dart:10-30`, `packages/tfc_dart/lib/core/secure_storage/interface.dart:1`, `packages/tfc_dart/lib/tfc_dart_core.dart:22`, `centroid-hmi/lib/main.dart:244` | the singleton, the interface, the barrel export of the interface, and the one `setInstance` at boot | — | — | `not widget-reachable` — type declarations, an export line, and one boot-time platform selection; no key is written |
 | `packages/tfc_dart/lib/core/access/guarded_preferences.dart:436, 650` | `MySecureStorage get secureStorage => _inner.secureStorage` | — | anything holding the guarded object | `left open: secure storage is outside both guards` — the same hole as §3.4, reached through the decorator's own forwarding getter. Two hits because the checked path and `systemWrites` each forward it |
+| `packages/tfc_relay_local/lib/src/data/preference_store.dart:71, 182` | the `MySecureStorage` import, and `final class NoSecretStorage implements MySecureStorage` | **nothing — every member throws** | the gateway's composition root installs it before building `Preferences` | `correct as-is` — and the one row in this section that is a *closure* of §3.4 rather than another instance of it. `Preferences.create` asks `SecureStorage.getInstance()` unconditionally and the Linux default builds an `AwsSecureStorage` over the OS keychain; a headless gateway has no keyring, and worse, a keychain reachable from the pipe would be remote retrieval of the secure store. So the gateway installs a store whose `read`, `write` and `delete` all throw (SEC-01), the `PreferencesApi` this package implements omits the `secret:` parameter entirely, and `preference_store_test.dart` greps the source for the word `secret` because the obvious future edit is to add it back "for symmetry". A type that cannot hold the secret cannot leak it, done by construction rather than by convention |
 
-### 2.7 File writes (script §7 — 3 hits)
+### 2.7 File writes (script §7 — 3 hits at the first two runs, 4 at the 2026-09-05 re-run)
 
 | File and line | Call | Store | Reached from | Verdict |
 |---|---|---|---|---|
 | `lib/pages/key_repository.dart:1886` | `file.writeAsString(jsonString)` | filesystem | key-mapping export, `/advanced/key-repository` | `route-gated (Phase 2)` — `configure` |
 | `lib/pages/server_config.dart:2923` | `.writeAsString(...convert(envelope))` | filesystem | server-config export, `/advanced/server-config` | `route-gated (Phase 2)` — `administer` |
 | `packages/centroidx_upgrader/lib/src/manager_launcher.dart:159` | `staged.writeAsBytes(bytes)` | filesystem | `managerLauncher.launchForUpdate(...)` at `centroid-hmi/lib/main.dart:369` | `left open: the update path is ungated` — see §3.5 |
+| `packages/tfc_stateman_contract/lib/src/faults/os_level.dart:468` | `rules.writeAsString(pfRulesetWithDummynet(baseRuleset: …, pipe: …))` | filesystem — a file under `Directory.systemTemp.createTemp('dummynet_spike')` | `installDummynet(...)`, from a fault-injection test run by hand on a developer's macOS machine | `test-kit only (dev dependency)` — the fourth file write in the tree, and the one that is not the app's. It is worth a sentence because it is the only hit in this whole sweep that runs under `sudo`: the file is a pf ruleset **added to** the system's rather than replacing it, every command is an argv vector handed straight to `Process.run` with no shell in between, the one caller-supplied value that lands next to `sudo` is checked against `netemShapeableDevices` before it goes in the list (threat T-02-14), and teardown — `:535`'s directory delete, `pfctl -f` of the original ruleset, `dnctl` flush — is registered the moment the install succeeds. It reaches no plant and no station |
 
-**Nothing further found** in this section: three file writes in the whole tree,
-all three identified, two of them already behind a raised route.
+**Nothing further found** in this section: four file writes in the whole tree,
+all four identified, two of them already behind a raised route and the fourth
+in a package no shipped binary links.
 
-### 2.8 D-Bus — network and hostname (script §8 — 31 hits at the 2026-08-29 run, 34 at the 2026-08-30 re-run)
+### 2.8 D-Bus — network and hostname (script §8 — 31 hits at the 2026-08-29 run, 34 at the 2026-08-30 re-run, 45 at the 2026-09-05 re-run)
+
+**No relay row in this section, and that is a result rather than an omission.**
+All forty-five hits are in the ten files already tabled below; the eleven new
+ones are further lines in `ip_settings.dart`, `network_manager_ops.dart` and
+`system_clock.dart` that arrived from main. The gateway speaks no D-Bus at all.
 
 | File and line | Call | Store | Reached from | Verdict |
 |---|---|---|---|---|
@@ -239,7 +333,7 @@ all three identified, two of them already behind a raised route.
 | `lib/dbus/generated/login1.dart:1140-1563` | `callSetUserLinger`, `callSetRebootParameter`, `callSetRebootToFirmwareSetup`, `callSetRebootToBootLoaderMenu`, `callSetRebootToBootLoaderEntry`, `callSetWallMessage` | systemd-logind | **no caller anywhere in the tree** | `not widget-reachable` — same |
 | `lib/dbus/generated/operations.dart:88` | `callSetMode` declaration | — | the binding `tfc_operations.dart` calls | `correct as-is` — a generated binding; the call site is the row above |
 
-### 2.9 Writes through the injected preferences interface (script §9 — 76 + 17 hits at the 2026-08-29 run, 89 + 18 at the 2026-08-30 re-run)
+### 2.9 Writes through the injected preferences interface (script §9 — 76 + 17 hits at the 2026-08-29 run, 89 + 18 at the 2026-08-30 re-run, 126 + 24 at the 2026-09-05 re-run)
 
 These are **not bypasses**. They are the surface plan 03-01 classifies, and the
 reason they are enumerated is that neither a construction search nor a Drift
@@ -283,6 +377,12 @@ in §5.
 | `packages/tfc_dart/lib/core/alarm.dart:303` | `preferences.setString('alarm_man_config', ...)` | preferences | `addAlarm`/`removeAlarm`/`updateAlarm`, behind the `configure`-gated alarm editor. **Not** `ackAlarm` | `guarded by 03-06` |
 | `packages/tfc_mcp_server/lib/src/tools/read_toggles.dart:38, 114` | `prefs.setString(McpConfig.kPrefKey, ...)`, `local.setString(...)` | preferences and device-local | an MCP tool call, in the HMI process | `left open: reached over MCP, not from a widget` — see §3.2 |
 | `packages/tfc_mcp_server/lib/src/services/config_service.dart:64` | `_prefCache.clear()` | — | `invalidateCache()` | `not widget-reachable` — `_prefCache` is a `TtlCache` (`config_service.dart:45`), not a preferences store. A false positive of section 9b's receiver-spelling filter, recorded rather than quietly dropped |
+| `packages/tfc_relay_server/lib/src/policy/policy_state_man.dart:993, 999, 1005, 1013, 1020` | the five `set*` members on `_PolicyPreferences`, each calling `requireOperate(...)` before delegating to `_source.set*` — and `remove` and `clear` beside them | `flutter_preferences` | every `preferences.*` frame on the wire | `correct as-is` — this **is** the relay's preference guard, the same shape as `guarded_preferences.dart`'s five rows below. All seven mutators ask the gate; `clear` asks it **and then refuses an unrestricted clear outright**, because the permission needed to wipe `key_mappings` was otherwise the permission needed to set a theme (10-REVIEW CR-02). The reads above them are ungated by design. What the gate asks is `Identity.role == Role.operate` for every key alike, which is where it and `kPrefAccessRules` disagree — §3.12 |
+| `packages/tfc_relay_server/lib/src/data_handlers.dart:688, 704, 732, 745, 778` | `source.preferences.set*(key, raw)` | `flutter_preferences` | the `preferences.setBool` / `setInt` / `setDouble` / `setString` / `setStringList` methods on the session's peer | `session-gated (relay policy)` — `source` is the session's `PolicyStateMan`, so the row above is what these five reach. The key is **whatever the client sent**, which makes this the relay's counterpart of `lib/widgets/preferences.dart`'s raw editor — except that the app's raw editor is behind an `administer` route and this one is behind `operate`. See §3.12 and §5 |
+| `packages/tfc_relay_local/lib/src/data/preference_store.dart:425, 429, 433, 437, 441` and `:525` | `(await _load()).set*(key, value)`, and `prefs.clear(allowList:)` after the durable delete | `flutter_preferences` — **the same table and the same rows the HMI writes** | `_PolicyPreferences`, from the five handlers above | `session-gated (relay policy)` — the store the relay's guard delegates through, and the reason `correct as-is` would be the wrong verdict here: a reader who found this file by grepping for `flutter_preferences` needs to be told that the check above it is **not** `GuardedPreferences` and does not consult `kPrefAccessRules`. `_load()` goes through `Preferences.create` and never the public constructor, because a hand-built `Preferences` answers "no keys" to a store that at SVN holds 675,890 bytes (TRAP 8) |
+| `packages/tfc_stateman_contract/lib/src/channel/served_state_man.dart:672, 679, 690, 697, 703` and `:710, 716` | `api.preferences.set*(params[…])`, `.remove(...)`, `.clear(allowList:)` | whatever the suite pointed it at | the harness peer's method table | `test-kit only (dev dependency)` — the shape `data_handlers.dart` copied rather than imported; see 2.1 |
+| `packages/tfc_stateman_contract/lib/src/data_services_contract.dart:390, 396, 403, 413, 422, 480, 481, 551` and `:444, 483` | `prefs.set*`, `prefs.remove`, `prefs.clear(allowList:)` inside contract checks | whatever implementation the suite is run against | the shared contract suite | `test-kit only (dev dependency)` — assertions, run by `dart test` in five packages. The keys are the suite's own literals (`svn.chart.maxPoints`, `svn.weigher.tolerance`, `svn.site.name`, `svn.page.recent`), which is why they resolve against nothing in §5 |
+| `packages/tfc_stateman_contract/lib/testing/broken_browse.dart:177, 180, 184, 188, 192` | `_honest.set*(key, value)` | **nothing** — the honest fake's `Map` | `test/sabotage_browse_test.dart` | `test-kit only (dev dependency)` — a **deliberately damaged** implementation, and it is the writes that are the honest half of it: this variant stores every preference correctly and simply never announces the change, which is the shipped defect it reproduces ("a preferences backend whose change stream was declared, wired to nothing, and never noticed because the page that reads it also writes it"). Sabotage that failed everything would prove nothing about any individual check |
 
 ### 2.10 Two rows that exist because of this phase's design
 
@@ -647,6 +747,102 @@ What would settle it either way: decide whether the clock is `administer`
 (most of `/advanced` is) or stays an operator affordance, then either raise
 the route or split the clock section onto a page that is already raised.
 
+### 3.12 The relay is a third enforcement point, and it grades the same rows differently
+
+This entry exists because the 2026-09-05 re-run found seventeen files whose
+guard this document had no word for, and because writing seventeen rows without
+writing this would have made the vocabulary look like it had always fitted.
+
+**The model, in one paragraph.** A relay write starts as a JSON-RPC frame on a
+`wss://` socket. `RelaySession` registers every method through one seam, `_on`,
+which applies the handshake gate: a frame arriving before `hello` reaches no
+handler at all. `hello` hands the client's token to a `TokenValidator`, which
+either refuses the connection or returns an `Identity{stationId, role}` — a
+**station**, deliberately never a person, because what the plant has is panels
+bolted to walls with a token mounted beside each one. `RelaySession` then builds
+one `PolicyStateMan` per session and hands *that* — never the shared plant
+source — to every handler object, so a handler added later cannot reach around
+the policy because there is no unwrapped source in scope to reach for. Inside
+it, `requireOperate` refuses unless `identity != null && identity.role ==
+Role.operate`, fails closed on a null identity, and throws a `forbidden` whose
+message says the call definitively had no effect and must not be retried.
+
+**So the honest phrase for these rows is "the relay's session role check
+rather than a route guard", and that is what `session-gated (relay policy)`
+means.** It is a real guard, at a real seam, with a fail-closed default. It is
+not one of this milestone's plans, it is not `kRaisedRoutes`, and it is not in
+the app's process.
+
+**Three things it does not do, named so the verdict is not read as more than
+it is.**
+
+1. **It grades by station role, not by key.** Seven mutators on
+   `_PolicyPreferences` ask one question — `role == operate` — for every key
+   alike. `kPrefAccessRules` grades the same rows: `key_mappings` and
+   `page_editor_data` are `configure`, `collector_config` is `administer`.
+   These are the **same rows in the same `flutter_preferences` table in the
+   same Postgres** — `preference_store.dart` writes through `tfc_dart`'s own
+   `Preferences`, which is what `GuardedPreferences` decorates on the app side.
+   So a station the gateway calls `operate` may `setString('key_mappings', …)`
+   over the pipe, and an operator standing at a panel holding only `operate`
+   may not. The relay's own reasoning is written down and is not careless — a
+   `view` station re-pointing the plant's tag map is at least as consequential
+   as one writing a motor setpoint, so `operate` is reused verbatim as the safe
+   floor rather than a second policy surface being invented for behaviour
+   nobody has asked for. What that reasoning does not appear to know is that a
+   grading for these exact keys **already exists**, twelve inches away in
+   `kPrefAccessRules`. That is the disagreement, and it is the useful kind of
+   finding: not a hole, a seam between two guards that answer differently about
+   one table.
+2. **It writes no audit row.** Every write the app's guards allow or refuse
+   produces a row in `audit_entry` naming who, what, where and whether it was
+   allowed. The relay writes none: `policy_state_man.dart` says so in as many
+   words about history views — "no idempotency id, no three-state outcome and
+   no audit trail" — and the same is true of the preference mutators. A refusal
+   at the gateway leaves nothing behind, which is the property §3.3's closure
+   calls "the one kind of guard nobody can audit afterwards".
+3. **`createHistoryView` is deliberately ungated, and unbounded.** Four of the
+   five history-view mutators take `requireOperate`; the fifth does not, on the
+   stated argument that "creating a view of your own costs nobody anything"
+   where "deleting one destroys work that was not yours". The argument is
+   sound about *authority* and silent about *volume*: a `view`-role station may
+   create history views without limit, in a shared table, and
+   `addHistoryViewPeriod` — the row factory the same review bounded — is gated
+   while its parent is not. It is recorded here rather than raised as a bypass
+   because it is a written decision with a reason beside it, which is a
+   different thing from an unenumerated hole.
+
+**The permissive default, stated because it changes what the rows above are
+worth today.** `RelayServer`'s `validator` parameter defaults to
+`PermissiveTokenValidator`, which mints `Role.operate` for every peer that
+completes the handshake, and the gateway's composition root
+(`packages/tfc_relay_local/lib/src/gateway_config.dart`, the `RelayServer(...)`
+call) passes no `validator` at all. A real deployment gets real identities the
+other way: `ServerConfig.auth.token_file` in the gateway's config file makes
+`RelayServer.start()` load a `FileTokenValidator` before the port is opened,
+and the constructor refuses a configuration carrying both. So **the gate is
+live code with a fail-closed default and its own revocation sweep; whether it
+distinguishes anybody is a property of the deployment's config file.** The
+class is named for what it does rather than for what it lacks precisely so a
+gateway still running one is legible in a config diff, and `exposureWarning`
+logs before the bind.
+
+**What closing each of the three would take.** For (1): a
+`canWritePreference(String key, Identity)` on `KeyPolicy` fed from the same
+table `kPrefAccessRules` is, which is a change to policy *data* rather than to
+plumbing — the whole point of the hiding architecture — plus a decision about
+how a station role maps onto seven `AccessGroup`s, which is the part nobody has
+made. For (2): an audit sink in the gateway, which needs a store and a schema
+this process does not have; `policy_state_man.dart` already names the absence
+as the blocker for its own third option on hidden-key saves. For (3): a quota,
+or the gate, and the two have different costs — the gate stops a `view` station
+building its own chart, the quota does not.
+
+**None of this is a `left open` row**, and the reason is worth stating: the
+rows are `session-gated (relay policy)` because a guard genuinely stands there.
+This entry is what stops that verdict being read as "and it agrees with the
+app's".
+
 ## 4. Is there a fifth?
 
 **Yes.** Spec §6's four are each owned by a plan in this phase. Beyond them the
@@ -776,12 +972,55 @@ to a counted `[generated]` line by design and therefore never emits as a
 accessor spelling that is not a guard this phase added, and no site whose
 verdict this document cannot state.
 
+### 4.3b What the 2026-09-05 re-run found
+
+Recorded in the shape of §4.3a, and for the same reason.
+
+Seventeen files carried hits with no row, and every one is in the five relay
+packages. Grouped by what they turned out to be:
+
+| Files | Hits | What they turned out to be |
+|---|---|---|
+| `data_handlers.dart`, `policy_state_man.dart` | 25 | the gateway's handler bodies and the policy decorator above them — the guard and the seam it sits at (§3.12) |
+| `history_view_store.dart`, `preference_store.dart`, `timescale_reader.dart`, `timescale_sink.dart` | 25 | the gateway's stores: two write, one only reads, one only opens the pool |
+| `client_sub_apis.dart`, `state_man_api.dart` | 10 | the client's proxy and the wire interface's declarations — no store in either |
+| `collection_runner.dart`, `collection_plan_resolver.dart`, `opcua_upstream_link.dart` | 4 | broad-grep false positives: an in-memory health publisher, a local `Map`, an OPC UA client teardown |
+| the six `tfc_stateman_contract` files | 44 | a test kit whose code lives in `lib/` so five packages' tests can import it |
+
+**No unguarded write path was found in the relay.** Every wire-reachable
+mutator passes `PolicyStateMan`, which fails closed on a null identity, and
+every handler is registered through the one seam that applies the handshake
+gate. That is the answer to the question this document exists to ask, and it is
+recorded as a result rather than left to be inferred from an absence of alarm.
+
+**Three things were found that are not that**, and all three are in §3.12: the
+relay grades `flutter_preferences` rows by station role where `kPrefAccessRules`
+grades them by key, so `key_mappings` takes `operate` over the pipe and
+`configure` at a panel; no relay write produces an audit row; and
+`createHistoryView` is ungated and unquotaed while its four siblings are gated.
+The first is the one worth somebody's decision.
+
+**What the run says about this document rather than about the tree.** The
+seventeen files had no rows because the vocabulary had no term for them, not
+because anybody skipped them — the previous run predates the relay branch. That
+is a different failure from §4.1 F's, and a milder one: F was a file the grep
+found and a human did not write down, this was a file the grep found and the
+five available verdicts all misdescribed. The mechanical check caught both,
+which is the argument for it either way.
+
 ### 4.4 What §5 checked and did not find
 
 The rule this document is meant to enforce — *a key the app writes in normal
 operation may not rest on the `administer` default* — is satisfied. Every one of
-the thirty-odd key expressions in §5 is matched by an explicit rule. There is no
-finding of that shape to raise here.
+the thirty-odd key expressions **the app** writes is matched by an explicit
+rule. There is no finding of that shape to raise here.
+
+The 2026-09-05 re-run added five relay rows to §5 that the rule does not reach,
+and the reason is not that they slipped past it: the gateway is a different
+process and does not consult `kPrefAccessRules` at all. The rule as written is
+about a key falling through to a default; the relay's keys do not fall through
+to anything, they are graded by station role. §3.12 is the finding, and §5's
+own closing paragraph says which of the two claims each row supports.
 
 There is a related risk that is **not** a rule violation and is named anyway,
 because it is the same failure with a different cause: five keys are written at
@@ -844,6 +1083,22 @@ from one behind a Save button.
 | `lib/core/preferences.dart:54-84` | `key` (a parameter) | pass-through — `SharedPreferencesWrapper` delegates the caller's key | n/a | the caller's | n/a |
 | `tfc_dart/core/preferences.dart:344-585` | `key` / `entry.key` (parameters) | pass-through — the cache fan-out inside `Preferences` | n/a | the caller's | n/a |
 | `config_service.dart:64` | `_prefCache.clear()` | **not a preference key** — `_prefCache` is a `TtlCache` (`:45`) | n/a | n/a | n/a |
+| `data_handlers.dart:688, 704, 732, 745, 778` | `key` (`params['key'].asString`) | **cannot be resolved** — whatever key the client sent | **none: `kPrefAccessRules` is not consulted in this process** | the relay's flat `operate` | over the pipe, behind `requireOperate` (§3.12) |
+| `policy_state_man.dart:993, 1005, 1013, 1020` | `key` (a parameter) | pass-through, gated then delegated | same | same | same |
+| `preference_store.dart:425-441, 525` | `key` (a parameter) | pass-through — the store delegates the caller's key to `tfc_dart`'s `Preferences` | same | same | same |
+| `served_state_man.dart:672-716`, `broken_browse.dart:177-192` | `key` (a parameter) | pass-through, in the test kit | n/a | n/a | `test-kit only` |
+| `data_services_contract.dart:390-551` | `_prefKey`, `_clearedKey`, `'svn.chart.maxPoints'`, `'svn.weigher.tolerance'`, `'svn.site.name'`, `'svn.page.recent'` | the contract suite's own literals | **no rule, and none is wanted** — these keys exist only inside a test run | n/a | `test-kit only` |
+
+**The relay's five rows are the exception this table did not have before, and
+they are an honest one rather than an unresolvable one.** The app's key
+expressions resolve to a rule because the app consults `kPrefAccessRules`; the
+relay's do not resolve at all, because the gateway does not consult that table
+— it asks one question about the station's role and asks it for every key.
+Listing them as "unresolved" would read as an omission somebody could go and
+fix by adding rules. They are not unresolved: they are graded by a **different
+policy**, in a different process, and §3.12 is where the two are compared. The
+one row that matters concretely is `key_mappings`, which this table already
+grades `configure` and which the pipe serves at `operate`.
 
 **One key is written outside section 9 and belongs in this table anyway.**
 `server_config_envelope` (`lib/core/server_config_db.dart:55`) is written
@@ -895,6 +1150,20 @@ Three deliberate limits inside the search itself:
 generated binding with no caller, a `TtlCache` rather than a store — and the
 reasoning is checkable by the next reader. That is not the same as a proof, and
 this document does not claim it is.
+
+**It searches one repository, and since 2026-09-05 that repository holds two
+programs.** The relay packages are a separate Dart backend; the script sweeps
+them because its roots are `packages/*/lib`, and the rows for them are as good
+as the rows for the app. Two limits follow and neither is fixable by a wider
+grep. A `session-gated (relay policy)` verdict is a statement about the code,
+and what the gate *distinguishes* depends on a token file named in a gateway
+config that is not in this repository at all — §3.12 says so and names the
+default. And `test-kit only (dev dependency)` rests on the dependency graph as
+declared today: it is checked by `handler_table_test.dart`'s sweep of the
+server's production sources and by five `dev_dependencies` entries, so a
+package promoting `tfc_stateman_contract` out of dev would make six rows wrong
+at once. That is a real hazard and the honest mitigation is that it would be
+one line in one `pubspec.yaml`, visible in a diff.
 
 No sentence here says the enumeration is complete. The entire reason this
 document exists is that the last such claim was wrong: §6 named three, a fourth
