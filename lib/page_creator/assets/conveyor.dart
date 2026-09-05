@@ -19,6 +19,7 @@ import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
 import '../../widgets/state_value_builder.dart';
 import '../../widgets/panes/setpoint_field.dart';
+import '../../widgets/tag_access_guard.dart';
 import 'auger_conveyor_painter.dart';
 import 'helper/atv320_diagnostics.dart';
 import 'sensor.dart' show SensorConfig, SensorFbPane, SensorFbState;
@@ -2762,22 +2763,33 @@ class _ConveyorState extends ConsumerState<Conveyor>
                     : const PaneStatus.stopped('Clear'),
                 pressed ? 'pressed' : 'clear');
           }
-          return SensorFbPane(
-            config: SensorConfig(detectionKey: edgeKey, tag: title),
-            state: fb,
-            subtitleOverride: 'Safety edge · FB_Sensor',
-            // Copy-on-write like every other pane here: clone, set one
-            // member, write the whole struct back.
-            onWrite: (field, value) {
-              final messenger = ScaffoldMessenger.maybeOf(context);
-              final newValue = DynamicValue.from(dynValue);
-              newValue[field] = value;
-              stateMan.write(edgeKey, newValue).catchError((Object e) {
-                messenger?.showSnackBar(
-                  SnackBar(content: Text('Write to $edgeKey failed: $e')),
-                );
-              });
-            },
+          // `Consumer` for the `ref` that `writeTag` needs, exactly as the
+          // drive pane below does. The safety-edge pane arrived with the
+          // wagon work after this milestone's write-path sweep had already
+          // run, so its `onWrite` was the one remaining ungated `.write(` in
+          // `lib/` — `kUncaughtAccessDeniedWriteSites` caught it at 1.
+          return Consumer(
+            builder: (context, ref, _) => SensorFbPane(
+              config: SensorConfig(detectionKey: edgeKey, tag: title),
+              state: fb,
+              subtitleOverride: 'Safety edge · FB_Sensor',
+              // Copy-on-write like every other pane here: clone, set one
+              // member, write the whole struct back. The field goes on as the
+              // **member**, so a template can require a different permission
+              // for each one.
+              onWrite: (field, value) {
+                final messenger = ScaffoldMessenger.maybeOf(context);
+                final newValue = DynamicValue.from(dynValue);
+                newValue[field] = value;
+                writeTag(ref, stateMan, edgeKey, newValue, member: field)
+                    .catchError((Object e) {
+                  messenger?.showSnackBar(
+                    SnackBar(content: Text('Write to $edgeKey failed: $e')),
+                  );
+                  return false;
+                });
+              },
+            ),
           );
         },
       ),
@@ -2832,16 +2844,55 @@ class _ConveyorState extends ConsumerState<Conveyor>
             child: SelectableText(error.toString()),
           ),
         ),
-        builder: (context, stateMan, dynValue) {
+        // A `Consumer` rather than this State's own `ref`: the pane lives in
+        // the overlay, not in this widget's subtree, so a rebuild of the
+        // conveyor would not rebuild it. Watching from here is what makes a
+        // sign-in take the lock off a setpoint field while the pane is open.
+        builder: (context, stateMan, dynValue) => Consumer(
+          builder: (context, ref, _) {
 
             /// Copy-on-write helper — every command follows the same shape:
             /// clone the current value, set one field, write the whole thing
             /// back. Preserved verbatim from the dialog this replaced.
+            ///
+            /// The field is passed on as the **member**, and that is the whole
+            /// of spec §7b on this pane: one key carries `p_cmd_JogFwd` and
+            /// `p_cfg_ManualFreq`, and a template says they need different
+            /// permissions. Routing this through `writeTag` without the member
+            /// would compile, pass a shallow test, and gate nothing.
             void write(String field, Object? value) {
               final newValue = DynamicValue.from(dynValue);
               newValue[field] = value;
-              stateMan.write(driveKey, newValue);
+              writeTag(ref, stateMan, driveKey, newValue, member: field);
             }
+
+            /// Whether this session may write [member] of this drive.
+            ///
+            /// `stateMan` is passed rather than left to `stateManProvider`:
+            /// the key may name a variable, and the handle in hand is the one
+            /// the write is about to go through.
+            ///
+            /// [driveKey], not `widget.config.key` — a conveyor carries up to
+            /// four drives (the belt, the wagon motor and the two safety
+            /// scanners, see `_paneDriveKeys`) and this pane is opened for one
+            /// of them. Gating on the conveyor's own key would consult the
+            /// belt's template while the operator is looking at the wagon
+            /// motor: the wrong answer, arrived at silently.
+            bool allowed(String member) => tagWriteAllowed(
+                  ref,
+                  driveKey,
+                  member: member,
+                  stateMan: stateMan,
+                );
+
+            /// What a tap on a locked setpoint does: prompt, record, and write
+            /// nothing. Never a disabled field — see `SetpointField.locked`.
+            VoidCallback lockedTap(String member) => () => guardTagWrite(
+                  ref,
+                  driveKey,
+                  member: member,
+                  stateMan: stateMan,
+                );
 
             final jogFwd = dynValue['p_stat_JogFwd'].asBool;
             final jogBwd = dynValue['p_stat_JogBwd'].asBool;
@@ -3048,6 +3099,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
                             parse: double.tryParse,
                             suffix: 'Hz',
                             onSubmitted: (v) => write('p_cfg_ManualFreq', v),
+                            locked: !allowed('p_cfg_ManualFreq'),
+                            onLockedTap: lockedTap('p_cfg_ManualFreq'),
                           ),
                       ],
                     ),
@@ -3081,6 +3134,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
                             parse: double.tryParse,
                             suffix: 'Hz',
                             onSubmitted: (v) => write('p_cfg_AutoFreq', v),
+                            locked: !allowed('p_cfg_AutoFreq'),
+                            onLockedTap: lockedTap('p_cfg_AutoFreq'),
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -3093,6 +3148,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
                             parse: double.tryParse,
                             suffix: 'Hz',
                             onSubmitted: (v) => write('p_cfg_CleaningFreq', v),
+                            locked: !allowed('p_cfg_CleaningFreq'),
+                            onLockedTap: lockedTap('p_cfg_CleaningFreq'),
                           ),
                         ),
                       ],
@@ -3101,7 +3158,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
                 ],
               ),
             );
-        },
+          },
+        ),
       ),
     );
   }

@@ -318,6 +318,21 @@ const int kMaxRetentionDays = 3650;
 /// legitimately need.
 const Duration kMinRetentionDuration = Duration(minutes: 1);
 
+/// Tables the retention machinery must never be pointed at.
+///
+/// These are the access-control tables from schema v6. `audit_entry` is the
+/// audit trail — append-only, never pruned — and `app_user` / `app_role` are
+/// the identities the trail refers to; a swept role table turns every historic
+/// row into a name with nothing behind it.
+///
+/// [Database.registerRetentionPolicy] refuses any of these by name. See that
+/// method for why the refusal lives there rather than in a test.
+const Set<String> kRetentionExemptTables = {
+  'audit_entry',
+  'app_user',
+  'app_role',
+};
+
 // https://docs.tigerdata.com/api/latest/data-retention/add_retention_policy/
 @json.JsonSerializable(explicitToJson: true)
 class RetentionPolicy {
@@ -844,8 +859,39 @@ class Database {
     }
   }
 
+  /// Installs [retention] for [tableName], unless [tableName] is one the
+  /// retention machinery may never touch.
+  ///
+  /// This method exists for time-series: a collected tag's table is bounded by
+  /// dropping chunks older than the policy. The audit trail is the opposite
+  /// kind of table — append-only, never pruned — and if it were ever swept by
+  /// this the trail would be worthless, which is the one failure mode an audit
+  /// trail cannot recover from.
+  ///
+  /// The name arriving here is a free string: the single call site is
+  /// `collector.dart`, passing `entry.name ?? entry.key` from the collector
+  /// config. So a test asserting that today's config *happens* not to name
+  /// `audit_entry` would hold only until somebody named a key that. Refusing
+  /// here is what makes it structural, and refusing at this point rather than
+  /// deeper is deliberate: [_applyRetentionPolicy] is also reachable from
+  /// [_createTimeseriesTable], but that path is gated on
+  /// `retentionPolicies.containsKey`, so keeping the name out of the map keeps
+  /// it out of every path.
+  ///
+  /// It refuses rather than throws, following [_applyRetentionPolicy]
+  /// immediately below: a misconfigured collect entry must not stop the
+  /// collector starting, and a table with no retention policy simply keeps
+  /// everything — the safe direction to fail in.
   Future<void> registerRetentionPolicy(
       String tableName, RetentionPolicy retention) async {
+    if (kRetentionExemptTables.contains(tableName)) {
+      logger.e('Retention policy for "$tableName" refused: it is append-only '
+          'and never pruned, and this machinery deletes rows. No policy has '
+          'been installed and none ever will be. If a collected key is named '
+          '"$tableName", rename it — the collector config, not this guard, is '
+          'what needs fixing.');
+      return;
+    }
     retentionPolicies[tableName] = retention;
     // We will actually create the table when the first data point is inserted,
     // because we need to know the type of the value column beforehand

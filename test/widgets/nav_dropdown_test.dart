@@ -1,9 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/access_routes.dart';
 import 'package:tfc/models/menu_item.dart';
+import 'package:tfc/providers/access.dart';
+import 'package:tfc/widgets/access_lock_badge.dart';
 import 'package:tfc/widgets/nav_dropdown.dart';
 import 'package:tfc/widgets/panes/side_pane.dart';
 import 'package:tfc/route_registry.dart';
+import 'package:tfc_access/tfc_access.dart';
+import 'package:tfc_dart/core/access/access_repository.dart';
 import 'package:beamer/beamer.dart';
 
 /// A minimal BeamLocation for testing.
@@ -86,51 +92,210 @@ class _NavDropdownLocation extends BeamLocation<BeamState> {
   List<Pattern> get pathPatterns => ['/test'];
 }
 
-/// Wraps a [NavDropdown] in the minimal widget tree needed for Beamer context.
-Widget buildTestNavDropdown(MenuItem menuItem) {
-  final routerDelegate = BeamerDelegate(
-    locationBuilder: (routeInformation, _) => _NavDropdownLocation(menuItem),
-  );
+/// The delegate [buildTestNavDropdown] builds by default, exposed so a test
+/// can read where a tap navigated to.
+BeamerDelegate buildTestNavDelegate(MenuItem menuItem) => BeamerDelegate(
+      locationBuilder: (routeInformation, _) => _NavDropdownLocation(menuItem),
+    );
 
-  return BeamerProvider(
-    routerDelegate: routerDelegate,
-    child: MaterialApp.router(
+/// Wraps a [NavDropdown] in the minimal widget tree needed for Beamer context.
+///
+/// The `ProviderScope` is above `MaterialApp.router`, and so above the root
+/// navigator's overlay — which is where `showMenu(useRootNavigator: true)`
+/// puts the popup. Without it the [AccessLockBadge] on each leaf entry has no
+/// container to read. The real app is the same shape: `runApp(ProviderScope(…))`
+/// at `centroid-hmi/lib/main.dart:343`.
+///
+/// [overrides] is empty by default and that is safe for a menu of unraised
+/// paths: the badge short-circuits on `operate` before watching anything, so
+/// no access provider is ever built. A test that uses a raised path must
+/// override both `accessSessionProvider` and `accessRepositoryProvider` — an
+/// unoverridden repository reaches `databaseProvider` and the station
+/// keychain.
+Widget buildTestNavDropdown(
+  MenuItem menuItem, {
+  List<Override> overrides = const [],
+  BeamerDelegate? delegate,
+}) {
+  final routerDelegate = delegate ?? buildTestNavDelegate(menuItem);
+
+  return ProviderScope(
+    overrides: overrides,
+    child: BeamerProvider(
       routerDelegate: routerDelegate,
-      routeInformationParser: BeamerParser(),
+      child: MaterialApp.router(
+        routerDelegate: routerDelegate,
+        routeInformationParser: BeamerParser(),
+      ),
     ),
   );
 }
 
 /// Same as [buildTestNavDropdown] but wraps in a nested Navigator with a
 /// shared HeroController to reproduce BUG-002.
-Widget buildTestNavDropdownWithNestedNavigator(MenuItem menuItem) {
-  final routerDelegate = BeamerDelegate(
-    locationBuilder: (routeInformation, _) => _NavDropdownLocation(menuItem),
-  );
+Widget buildTestNavDropdownWithNestedNavigator(
+  MenuItem menuItem, {
+  List<Override> overrides = const [],
+}) {
+  final routerDelegate = buildTestNavDelegate(menuItem);
 
-  return BeamerProvider(
-    routerDelegate: routerDelegate,
-    child: MaterialApp.router(
+  return ProviderScope(
+    overrides: overrides,
+    child: BeamerProvider(
       routerDelegate: routerDelegate,
-      routeInformationParser: BeamerParser(),
-      builder: (context, child) {
-        return HeroControllerScope(
-          controller: HeroController(),
-          child: Navigator(
-            onGenerateRoute: (_) => MaterialPageRoute(
-              builder: (_) => Scaffold(
-                body: Align(
-                  alignment: Alignment.bottomCenter,
-                  child: NavDropdown(menuItem: menuItem),
+      child: MaterialApp.router(
+        routerDelegate: routerDelegate,
+        routeInformationParser: BeamerParser(),
+        builder: (context, child) {
+          return HeroControllerScope(
+            controller: HeroController(),
+            child: Navigator(
+              onGenerateRoute: (_) => MaterialPageRoute(
+                builder: (_) => Scaffold(
+                  body: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: NavDropdown(menuItem: menuItem),
+                  ),
                 ),
               ),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     ),
   );
 }
+
+/// The same shape as [_NavDropdownLocation], but the dropdown is given the
+/// height of a real navigation bar.
+///
+/// `TopLevelNavIndicator` is a `Column` with no height constraint, so under a
+/// bare `Align` it fills the screen and the button's top edge lands at y = 0.
+/// `NavDropdown` then computes `availableHeight = buttonPos.dy - 8`, clamps it
+/// to zero and opens a popup 16 px tall: the entries are laid out but scrolled
+/// out of the visible window, so they cannot be tapped. Harmless for the
+/// bug-regression tests above, which only read text, and fatal for a test that
+/// has to tap an entry.
+class _NavBarLocation extends BeamLocation<BeamState> {
+  final MenuItem menuItem;
+  _NavBarLocation(this.menuItem)
+      : super(RouteInformation(uri: Uri.parse('/test')));
+
+  /// Matches the app's own bottom bar closely enough for the popup arithmetic.
+  static const double barHeight = 80.0;
+
+  @override
+  List<BeamPage> buildPages(BuildContext context, BeamState state) {
+    return [
+      BeamPage(
+        key: const ValueKey('test'),
+        child: Scaffold(
+          body: Align(
+            alignment: Alignment.bottomCenter,
+            child: SizedBox(
+              height: barHeight,
+              child: NavDropdown(menuItem: menuItem),
+            ),
+          ),
+        ),
+      ),
+    ];
+  }
+
+  @override
+  List<Pattern> get pathPatterns => ['/test', '/dashboard', '/advanced/*'];
+}
+
+/// A menu with a raised leaf, the exempt leaf, an unraised leaf and a section
+/// header — the four cases the badge has to tell apart in one popup.
+MenuItem _accessTestMenuItem() {
+  return MenuItem(
+    label: 'Advanced',
+    icon: Icons.settings,
+    children: [
+      MenuItem(label: 'Config', icon: Icons.folder, isSection: true, children: [
+        MenuItem(
+            label: 'Page Editor',
+            icon: Icons.edit,
+            path: '/advanced/page-editor'),
+        MenuItem(
+            label: 'Server Config', icon: Icons.dns, path: kServerConfigRoute),
+      ]),
+      MenuItem(label: 'Dashboard', icon: Icons.home, path: '/dashboard'),
+    ],
+  );
+}
+
+/// A repository that answers nothing; the badge only asks whether one exists.
+class _StubRepository extends Fake implements AccessRepository {}
+
+Future<AccessRepository?> _presentRepository() async => _StubRepository();
+Future<AccessRepository?> _absentRepository() async => null;
+
+/// Resolves immediately, so no frame in these tests is a race against the real
+/// controller chain.
+class _FixedSession extends AccessSessionController {
+  _FixedSession(this._session);
+
+  final AccessSession _session;
+
+  @override
+  Future<AccessSession> build() async => _session;
+
+  @override
+  Future<AccessSignInResult> signIn(String username, String password) async =>
+      AccessSignInResult.ok;
+
+  @override
+  Future<void> signOut() async {}
+
+  @override
+  void poke() {}
+}
+
+List<Override> _accessOverrides({
+  AccessSession? session,
+  Future<AccessRepository?> Function() repository = _presentRepository,
+}) =>
+    [
+      accessSessionProvider.overrideWith(() => _FixedSession(
+          session ?? AccessSession.anonymous(const {AccessGroup.operate}))),
+      accessRepositoryProvider.overrideWith((ref) => repository()),
+    ];
+
+/// The badge tests' host: a [NavDropdown] in a bar-height slot, under a
+/// `ProviderScope` that is above the root navigator's overlay.
+Widget _buildTestNavBar({
+  required List<Override> overrides,
+  required BeamerDelegate delegate,
+}) {
+  return ProviderScope(
+    overrides: overrides,
+    child: BeamerProvider(
+      routerDelegate: delegate,
+      child: MaterialApp.router(
+        routerDelegate: delegate,
+        routeInformationParser: BeamerParser(),
+      ),
+    ),
+  );
+}
+
+BeamerDelegate _buildTestNavBarDelegate(MenuItem menuItem) => BeamerDelegate(
+      locationBuilder: (routeInformation, _) => _NavBarLocation(menuItem),
+    );
+
+/// The [AccessLockBadge] inside the popup row labelled [label].
+Finder _badgeFor(String label) => find.descendant(
+      of: find.widgetWithText(PopupMenuItem<void>, label),
+      matching: find.byType(AccessLockBadge),
+    );
+
+/// The lock glyph inside the popup row labelled [label].
+Finder _lockFor(String label) => find.descendant(
+      of: find.widgetWithText(PopupMenuItem<void>, label),
+      matching: find.byIcon(Icons.lock_outline),
+    );
 
 void main() {
   setUp(() {
@@ -138,6 +303,15 @@ void main() {
     final registry = RouteRegistry();
     registry.menuItems.clear();
     registry.addMenuItem(_testMenuItem());
+    // The registry is process-wide and outlives a test file, so the raised
+    // routes are declared here and cleared below rather than left lying about
+    // for whatever suite runs next.
+    registry.clearRouteGroups();
+    installRaisedRoutes();
+  });
+
+  tearDown(() {
+    RouteRegistry().clearRouteGroups();
   });
 
   group('NavDropdown', () {
@@ -368,6 +542,126 @@ void main() {
       });
     });
 
+    group('the lock badge on leaf entries', () {
+      setUp(() {
+        final registry = RouteRegistry();
+        registry.menuItems.clear();
+        registry.addMenuItem(_accessTestMenuItem());
+      });
+
+      /// Opens the Advanced popup with the given access state.
+      Future<void> openMenu(
+        WidgetTester tester, {
+        AccessSession? session,
+        Future<AccessRepository?> Function() repository = _presentRepository,
+        BeamerDelegate? delegate,
+      }) async {
+        await tester.pumpWidget(_buildTestNavBar(
+          overrides:
+              _accessOverrides(session: session, repository: repository),
+          delegate: delegate ?? _buildTestNavBarDelegate(_accessTestMenuItem()),
+        ));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Advanced'));
+        await tester.pumpAndSettle();
+      }
+
+      testWidgets('a raised entry the session cannot open is hidden',
+          (tester) async {
+        await openMenu(tester);
+
+        expect(find.widgetWithText(PopupMenuItem<void>, 'Page Editor'),
+            findsNothing,
+            reason: 'an entry this session cannot open is left out of the '
+                'menu rather than shown wearing a lock');
+        expect(find.widgetWithText(PopupMenuItem<void>, 'Server Config'),
+            findsNothing,
+            reason: 'with a repository present the exemption is inert and '
+                'Server Config needs administer like anything else');
+        expect(find.widgetWithText(PopupMenuItem<void>, 'Dashboard'),
+            findsOneWidget,
+            reason: 'an unraised entry is unaffected');
+      });
+
+      testWidgets(
+          'with the repository unavailable, Server Config alone stays visible',
+          (tester) async {
+        await openMenu(tester, repository: _absentRepository);
+
+        expect(find.widgetWithText(PopupMenuItem<void>, 'Server Config'),
+            findsOneWidget,
+            reason: 'the page that configures the database must not be '
+                'hidden by the database being unavailable — that is the one '
+                'route out of the outage');
+        expect(find.widgetWithText(PopupMenuItem<void>, 'Page Editor'),
+            findsNothing,
+            reason: 'the others stay hidden through an outage');
+      });
+
+      testWidgets('a hidden entry is not in the menu to be tapped',
+          (tester) async {
+        final delegate = _buildTestNavBarDelegate(_accessTestMenuItem());
+        await openMenu(tester, delegate: delegate);
+
+        expect(find.text('Page Editor'), findsNothing,
+            reason: 'there is no row left to tap; the AccessGate on the route '
+                'is still what refuses anyone who reaches the path directly, '
+                'so hiding is presentation and never the enforcement point');
+      });
+
+      testWidgets('an unraised entry occupies zero width', (tester) async {
+        await openMenu(tester);
+
+        expect(_badgeFor('Dashboard'), findsOneWidget);
+        expect(tester.getSize(_badgeFor('Dashboard')), Size.zero,
+            reason: 'every ordinary menu row in the app must lay out exactly '
+                'as it did before this phase');
+        expect(_lockFor('Dashboard'), findsNothing);
+      });
+
+      testWidgets('section headers get no badge at all', (tester) async {
+        await openMenu(tester);
+
+        expect(_badgeFor('Config'), findsNothing,
+            reason: 'a section groups, it does not route');
+        expect(find.byType(AccessLockBadge), findsNWidgets(1),
+            reason: 'only Dashboard is still in the menu; the two raised '
+                'entries are hidden, and a hidden row carries no badge');
+      });
+
+      testWidgets('an ordinary row keeps the height the popup is sized from',
+          (tester) async {
+        await openMenu(tester);
+
+        final row = tester.getSize(find.ancestor(
+          of: find.text('Dashboard'),
+          matching: find.byType(PopupMenuItem<void>),
+        ));
+        expect(row.height, NavDropdown.itemHeight,
+            reason: 'menuHeight is computed as totalItems * itemHeight before '
+                'the popup opens; a badge that added vertical size would '
+                'break that arithmetic');
+      });
+
+      testWidgets('a session holding everything sees no lock anywhere',
+          (tester) async {
+        await openMenu(
+          tester,
+          session: AccessSession(
+            user: const AuthenticatedUser(
+                username: 'jon', roleName: 'Engineering'),
+            groups: AccessGroup.values.toSet(),
+            expiresAt: DateTime.utc(2026, 8, 29, 12),
+          ),
+        );
+
+        expect(find.byIcon(Icons.lock_outline), findsNothing);
+        for (final label in ['Page Editor', 'Server Config', 'Dashboard']) {
+          expect(tester.getSize(_badgeFor(label)), Size.zero,
+              reason: '$label must be laid out as it was before this phase');
+        }
+      });
+    });
   });
 }
 

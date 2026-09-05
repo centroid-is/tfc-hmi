@@ -954,7 +954,8 @@ Future<void> showEditorAssetContextMenu(
 
 /// Opens the chat overlay and sends a debug diagnostic message for [asset].
 ///
-/// No-op when MCP is not available (TFC_USER not set). Otherwise:
+/// No-op in a build with chat compiled out ([kChatEnabled] false).
+/// Otherwise:
 /// 1. Opens the chat overlay IMMEDIATELY with a loading placeholder
 /// 2. Resolves PLC context for all asset keys (if PlcContextService available)
 /// 3. Reads live tag values from StateMan for all asset keys

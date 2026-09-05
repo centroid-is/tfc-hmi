@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:tfc_access/tfc_access.dart' show AccessDenied;
 import 'package:tfc_mcp_server/tfc_mcp_server.dart' show TechDocIndex;
 
 import 'section_detector.dart';
@@ -266,6 +267,12 @@ class TechDocUploadService {
         if (modified) {
           await prefsReader.setString('page_editor_data', jsonEncode(data));
         }
+      } on AccessDenied {
+        // A refused write is not a malformed layout. Without this arm the
+        // blanket catch below swallows the guard's refusal and the delete
+        // carries on as though the cleanup had succeeded — which is the one
+        // failure mode a guard must never have.
+        rethrow;
       } catch (_) {
         // If page_editor_data isn't valid JSON, skip cleanup.
       }

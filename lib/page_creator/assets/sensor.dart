@@ -18,6 +18,7 @@ import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
 import '../../widgets/state_value_builder.dart';
 import '../../widgets/panes/setpoint_field.dart';
+import '../../widgets/tag_access_guard.dart';
 import 'sensor_painter.dart';
 
 part 'sensor.g.dart';
@@ -751,31 +752,44 @@ class _SensorState extends ConsumerState<Sensor> {
               );
             }
 
-            return SensorFbPane(
-              config: widget.config,
-              state: fb,
-              trendTile: trendTile,
-              // Copy-on-write, mirroring the conveyor pane: clone the struct,
-              // set one member, write the whole thing back. The `p_stat_*`
-              // members ride along unchanged and the FB overwrites them on the
-              // next scan.
-              //
-              // A rejected write is reported rather than swallowed. The only
-              // feedback a setpoint has is the field itself, and on the next
-              // PLC update that field snaps back to the old value — without
-              // this the operator sees their entry silently undone with no
-              // reason given. The messenger is resolved before the await so
-              // nothing reaches for a disposed context afterwards.
-              onWrite: (field, value) {
-                final messenger = ScaffoldMessenger.maybeOf(context);
-                final newValue = DynamicValue.from(dynValue);
-                newValue[field] = value;
-                stateMan.write(key, newValue).catchError((Object e) {
-                  messenger?.showSnackBar(
-                    SnackBar(content: Text('Write to $key failed: $e')),
-                  );
-                });
-              },
+            // A `Consumer` rather than this State's own `ref`: the pane lives
+            // in the overlay, not in this widget's subtree, and its `ref` must
+            // outlive nothing it does not own.
+            return Consumer(
+              builder: (context, ref, _) => SensorFbPane(
+                config: widget.config,
+                state: fb,
+                trendTile: trendTile,
+                // Copy-on-write, mirroring the conveyor pane: clone the struct,
+                // set one member, write the whole thing back. The `p_stat_*`
+                // members ride along unchanged and the FB overwrites them on the
+                // next scan.
+                //
+                // `field` is the member the template's rules are written
+                // against — `SensorFbFields`' constants, which are the PLC's
+                // own `p_cfg_*` names and not the labels beside them.
+                //
+                // A rejected write is reported rather than swallowed. The only
+                // feedback a setpoint has is the field itself, and on the next
+                // PLC update that field snaps back to the old value — without
+                // this the operator sees their entry silently undone with no
+                // reason given. A tap-time refusal no longer arrives here at
+                // all: `writeTag` answers false, having already prompted, and
+                // this `catchError` is left for the comms failure it was
+                // written for.
+                onWrite: (field, value) {
+                  final messenger = ScaffoldMessenger.maybeOf(context);
+                  final newValue = DynamicValue.from(dynValue);
+                  newValue[field] = value;
+                  writeTag(ref, stateMan, key, newValue, member: field)
+                      .catchError((Object e) {
+                    messenger?.showSnackBar(
+                      SnackBar(content: Text('Write to $key failed: $e')),
+                    );
+                    return false;
+                  });
+                },
+              ),
             );
         },
       ),

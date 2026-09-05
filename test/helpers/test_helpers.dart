@@ -37,17 +37,23 @@ class FakeSecureStorage implements MySecureStorage {
   }
 }
 
-/// Creates a test [Preferences] backed by in-memory storage (no database).
+/// Creates a test [Preferences] backed by in-memory storage.
+///
+/// [database] is null by default, which is what almost every test wants. Pass
+/// one where the test needs a write to land in a real `flutter_preferences`
+/// row — the server-config publish path reads back through
+/// `ServerConfigDb.fetch`, which goes to the database rather than the cache.
 Future<Preferences> createTestPreferences({
   KeyMappings? keyMappings,
   StateManConfig? stateManConfig,
+  Database? database,
 }) async {
   // The secret cache is static (process-wide) so stale entries from a
   // previous test would shadow this test's fresh FakeSecureStorage contents.
   Preferences.clearSecretCache();
   DatabaseConfig.clearPrefsCache();
   final secureStorage = FakeSecureStorage();
-  final prefs = Preferences(database: null, secureStorage: secureStorage);
+  final prefs = Preferences(database: database, secureStorage: secureStorage);
 
   // Pre-populate key_mappings
   final km = keyMappings ?? KeyMappings(nodes: {});
@@ -102,12 +108,23 @@ StateManConfig sampleStateManConfig() {
 /// with [ProviderScope] overrides for [preferencesProvider].
 /// The key list's own scrollable.
 ///
-/// The key repository page no longer scrolls as a whole: the list builds
-/// lazily so cards outside the viewport do not exist, and tests must scroll
-/// this to reach them. Text fields contain Scrollables too, but those run
-/// horizontally.
-final Finder keyListScrollable = find.byWidgetPredicate(
-    (w) => w is Scrollable && w.axisDirection == AxisDirection.down);
+/// The key list builds lazily, so cards outside the viewport do not exist and
+/// tests must scroll this to reach them. Text fields contain Scrollables too,
+/// but those run horizontally.
+///
+/// **Identified by its controller, not by being the only one.** It used to be
+/// enough to ask for the one downward Scrollable on the page. Two more can now
+/// be on screen at once: the whole-page fallback that
+/// `KeyRepositoryContent.minContentHeight` engages on a short window — which
+/// the access-templates section made reachable at the 800x600 test surface —
+/// and the templates list itself. Neither has a `controller`; the key list is
+/// built with `_listController` in both its reorderable and its filtered
+/// branch, so this predicate names the list rather than counting on there
+/// being nothing else that scrolls.
+final Finder keyListScrollable = find.byWidgetPredicate((w) =>
+    w is Scrollable &&
+    w.axisDirection == AxisDirection.down &&
+    w.controller != null);
 
 /// Scrolls the key list back to the top so the first cards are built again.
 Future<void> scrollKeyListToTop(WidgetTester tester) async {

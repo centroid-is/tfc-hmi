@@ -15,6 +15,7 @@ import 'package:tfc_dart/core/state_man.dart';
 import '../../providers/state_man.dart';
 import '../../widgets/dynamic_value.dart';
 import '../../widgets/memo_stream_builder.dart';
+import '../../widgets/tag_access_guard.dart';
 
 part 'schneider.g.dart';
 
@@ -279,13 +280,49 @@ class _SchneiderATV320 extends ConsumerWidget {
   }
 }
 
+/// The single member of [after] that differs from [before], or null when none
+/// or several do.
+///
+/// The ATV320 pane writes the whole parameter struct back, so the member a
+/// template's rules are written against is invisible at the write. This reads
+/// it at the **edit**, where `DynamicValueWidget` hands back the value it was
+/// rendered from with exactly one member replaced.
+///
+/// Compared by rendered form rather than by `==`: `DynamicValue` defines no
+/// equality, so two structurally identical values are never equal and an
+/// identity comparison would report every member as changed — and therefore
+/// answer null on every real edit. `toString` walks the whole value, which is
+/// what makes a nested parameter answer with the top-level member containing
+/// it, and the top level is what a template names.
+///
+/// **Null is the safe answer, not a failure.** It asks about the key as a
+/// whole — a template's `*` row — which can only be broader than the member
+/// rule, never narrower. Top-level and named so the answer is pinned by
+/// `schneider_changed_member_test.dart` rather than trusted: a member that
+/// does not match the struct's key silently means "unrestricted".
+String? atv320ChangedMember(DynamicValue before, DynamicValue after) {
+  if (!before.isObject || !after.isObject) return null;
+  String? changed;
+  for (final entry in after.asObject.entries) {
+    if (!before.contains(entry.key)) return null;
+    if (before[entry.key].toString() == entry.value.toString()) continue;
+    if (changed != null) return null;
+    changed = entry.key;
+  }
+  return changed;
+}
+
 /// The drive's parameter surface.
 ///
 /// A docked pane rather than a dialog: commissioning an ATV320 means reading
 /// a parameter, watching what the motor does, then reading the next one — and
 /// the old modal covered the very mimic that shows it. `Write` stays pinned
 /// in the footer so it cannot scroll out of reach of a long parameter list.
-class _ATV320ConfigPane extends StatefulWidget {
+///
+/// A `ConsumerStatefulWidget` rather than a plain one, because `Write` asks
+/// `writeTag` whether this session may set the parameter it is about to send,
+/// and that question needs a `WidgetRef`.
+class _ATV320ConfigPane extends ConsumerStatefulWidget {
   final String configKey;
   final StateMan stateMan;
 
@@ -295,11 +332,26 @@ class _ATV320ConfigPane extends StatefulWidget {
   });
 
   @override
-  State<_ATV320ConfigPane> createState() => _ATV320ConfigPaneState();
+  ConsumerState<_ATV320ConfigPane> createState() => _ATV320ConfigPaneState();
 }
 
-class _ATV320ConfigPaneState extends State<_ATV320ConfigPane> {
+class _ATV320ConfigPaneState extends ConsumerState<_ATV320ConfigPane> {
   DynamicValue? _pendingConfigValue;
+
+  /// Which member [_pendingConfigValue] changes, or null when that cannot be
+  /// told — and it is the member a template's rules are written against.
+  ///
+  /// This pane writes the **whole** parameter struct back, so the member is
+  /// not visible at the write. It is visible at the edit: [DynamicValueWidget]
+  /// is rebuilt from the live value every frame and hands back that same value
+  /// with exactly one member replaced, so the member is whichever one differs
+  /// from what was rendered. Captured there rather than recomputed here,
+  /// because "what was rendered" is gone by the time `Write` is pressed.
+  ///
+  /// Null when nothing or more than one member differs. That asks about the
+  /// key as a whole — a template's `*` row — which is the answer that cannot
+  /// be wrong, only broader.
+  String? _pendingMember;
 
   /// browseName -> {displayName, description} from OPC UA browse
   Map<String, ({String? displayName, String? description})>? _fieldMeta;
@@ -374,9 +426,27 @@ class _ATV320ConfigPaneState extends State<_ATV320ConfigPane> {
     final pending = _pendingConfigValue;
     if (pending == null) return;
     try {
-      await widget.stateMan.write(widget.configKey, pending);
+      // The member the edit changed, so a template can say that this one
+      // parameter needs `device` while the rest of the struct does not. A
+      // whole-struct write with no member asks only the key-level rule, and on
+      // a drive that is the difference between "commission the motor" and
+      // "nudge one setpoint".
+      final wrote = await writeTag(
+        ref,
+        widget.stateMan,
+        widget.configKey,
+        pending,
+        member: _pendingMember,
+      );
       if (!mounted) return;
-      setState(() => _pendingConfigValue = null);
+      // A refusal keeps the edit. The operator has been told what permission
+      // is missing; throwing their parameter away as well would mean typing it
+      // again after signing in.
+      if (!wrote) return;
+      setState(() {
+        _pendingConfigValue = null;
+        _pendingMember = null;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Configuration updated successfully')),
       );
@@ -417,12 +487,18 @@ class _ATV320ConfigPaneState extends State<_ATV320ConfigPane> {
               child: Text('No configuration data available'),
             );
           }
+          final rendered = _enrichWithDescriptions(snapshot.data!);
           return PaneSection(
             title: 'Parameters',
             child: DynamicValueWidget(
-              value: _enrichWithDescriptions(snapshot.data!),
+              value: rendered,
               onSubmitted: (newValue) {
-                setState(() => _pendingConfigValue = newValue);
+                setState(() {
+                  _pendingConfigValue = newValue;
+                  // The member is only knowable here, against the value that
+                  // was on screen — see [_pendingMember].
+                  _pendingMember = atv320ChangedMember(rendered, newValue);
+                });
               },
             ),
           );

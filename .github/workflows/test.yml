@@ -47,6 +47,18 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    # Spec §6's invariant: nothing outside lib/providers/ may construct a
+    # device-local preferences store, because such a store is not wrapped by
+    # GuardedPreferences — its writes pass no check and leave no audit row.
+    # A grep over source, so it runs before the toolchain is even installed and
+    # a violation costs ten seconds instead of forty minutes. Linux only: the
+    # result is a property of the source and identical on all three runners,
+    # and git-bash's grep on Windows is a different build with no upside.
+    - name: Check the preferences construction invariant
+      if: runner.os == 'Linux'
+      shell: bash
+      run: bash scripts/check-preferences-construction.sh
+
     - name: Set up Flutter
       uses: ./.github/actions/setup-flutter
 
@@ -83,7 +95,8 @@ jobs:
   # `flutter-test` runs `flutter test test/` from the repo root, which resolves
   # to the ROOT package's test/ directory and never descends into
   # centroid-hmi/. So centroid-hmi/test/navigation_test.dart — 15 tests over
-  # the app's menu shape, god-mode gating and route fallbacks, including the
+  # the app's menu shape, the unconditional Advanced menu and route
+  # fallbacks, including the
   # redirect that stops a deleted Home from dead-ending `/` — had never run in
   # CI. centroid-hmi is also built by four separate build workflows
   # (centroid-hmi.yml, linux.yml, macos.yml, windows.yml) and not one of them
@@ -236,6 +249,32 @@ jobs:
       working-directory: packages/tfc_mcp_server
       run: |
         dart pub get
+        dart test
+
+  # packages/tfc_access holds the access vocabulary -- groups, roles, sessions
+  # and the audit contract. Pure Dart: no database, no Docker, no Flutter, so
+  # setup-dart, the same shape as tfc-mcp-server-test above.
+  #
+  # Added with the package rather than after it, because a new package without
+  # a job is a package nothing runs -- which is exactly how jbtm's 227 tests
+  # sat red on main for five months. Its purity suite is the load-bearing part:
+  # it is the only thing that fails the build when somebody gives tfc_access a
+  # dependency on tfc_dart and quietly drags open62541 into the relay server.
+  tfc-access-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dart-lang/setup-dart@v1
+
+    - name: Test tfc_access
+      working-directory: packages/tfc_access
+      run: |
+        dart pub get
+        dart analyze
         dart test
 
   # The updater. Its tests existed but no workflow ran them, so the component

@@ -83,6 +83,38 @@ class PaneStatus {
       : color = Colors.grey,
         icon = Icons.help_outline;
 
+  /// The session in force may not write this equipment's controls.
+  ///
+  /// Three colour decisions, written down because each one is a rule somebody
+  /// would otherwise have to guess at:
+  ///
+  /// **Not orange.** In this repo orange means forced/override and — since
+  /// plan 01-08 — an elevated session. A locked pane is the *opposite* of
+  /// elevated, and painting the two alike would make the one colour an
+  /// operator most needs to trust mean both "somebody has taken control" and
+  /// "nobody may".
+  ///
+  /// **Not red.** Red is the plant's fault colour and only fault red may be
+  /// saturated. A pane whose controls are shut is not faulted: the equipment
+  /// is fine and the permission is missing. `access_lock_badge.dart` and the
+  /// denial prompt make the same call for the same reason.
+  ///
+  /// **`Colors.blueGrey`, not `HmiStateColors`, and that is not an
+  /// oversight.** The repo rule is that equipment-state colours come from the
+  /// `HmiStateColors` theme extension and never from raw `Colors.*`. Every
+  /// constructor in this class predates that rule and is `const`, which means
+  /// it has no `BuildContext` and cannot read a theme extension at all.
+  /// Following the idiom here keeps `PaneStatus` internally consistent;
+  /// quietly doing the same thing without saying so is how a rule becomes
+  /// folklore. Moving the whole class onto `HmiStateColors` is a change to all
+  /// six siblings and to `PaneStatusChip`, and it belongs in its own plan.
+  ///
+  /// It shares `stopped`'s family deliberately — a locked pane is a quiet
+  /// state, not an alarming one — and is told apart by the lock and the label.
+  const PaneStatus.locked([this.label = 'Locked'])
+      : color = Colors.blueGrey,
+        icon = Icons.lock_outline;
+
   @override
   bool operator ==(Object other) =>
       other is PaneStatus &&

@@ -10,13 +10,19 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:logger/logger.dart';
 import 'package:tfc_mcp_server/src/database/server_database.dart';
 import 'package:tfc_mcp_server/src/interfaces/tech_doc_index.dart';
 import 'package:tfc_mcp_server/src/services/drift_tech_doc_index.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
     show TechDocSummary, TechDocSection;
 
+import 'package:tfc_access/tfc_access.dart';
+
+import 'package:tfc/core/guarded_knowledge_stores.dart'
+    show kKnowledgeWriteGroup;
 import 'package:tfc/drawings/drawing_overlay.dart';
+import 'package:tfc/providers/access.dart';
 import 'package:tfc/providers/tech_doc.dart';
 import 'package:tfc/tech_docs/tech_doc_library_section.dart';
 import 'package:tfc/tech_docs/tech_doc_section_detail_panel.dart';
@@ -131,6 +137,71 @@ Widget _buildLibraryWidget({
   );
 }
 
+/// An [accessSessionProvider] that answers one fixed session and never calls
+/// the database.
+///
+/// The repository-wide idiom for pinning a session in a widget test —
+/// `test/pages/history_view_guard_test.dart:144`,
+/// `test/providers/access_templates_test.dart:67` and four more all declare the
+/// same three lines locally, so this is a copy on purpose rather than a shared
+/// helper nobody owns.
+class _FixedSession extends AccessSessionController {
+  _FixedSession(this._session);
+
+  final AccessSession _session;
+
+  @override
+  Future<AccessSession> build() async => _session;
+}
+
+/// A session that does **not** hold [kKnowledgeWriteGroup]: nobody signed in,
+/// holding `operate` only.
+AccessSession _readerSession() =>
+    AccessSession.anonymous(const {AccessGroup.operate});
+
+/// A signed-in session that **does** hold [kKnowledgeWriteGroup].
+AccessSession _writerSession() => const AccessSession(
+      user: AuthenticatedUser(username: 'jon', roleName: 'Engineer'),
+      groups: {AccessGroup.operate, kKnowledgeWriteGroup},
+    );
+
+/// An **anonymous** session that nonetheless holds [kKnowledgeWriteGroup].
+///
+/// Not a hypothetical. `AccessSession.anonymous`
+/// (`packages/tfc_access/lib/src/access_session.dart:47`) builds its groups
+/// from the `Operator` role, and that row is customer data -- its own doc
+/// comment warns that ticking a group there "silently grants it to every panel
+/// on the floor with nobody signed in". Tick `configure`, which is what
+/// [kKnowledgeWriteGroup] resolves to, and this is the session every station in
+/// the plant is running.
+AccessSession _anonymousWriterSession() =>
+    AccessSession.anonymous(const {AccessGroup.operate, kKnowledgeWriteGroup});
+
+/// Drive the rename affordance the way a user does: double-tap the name cell,
+/// type over it, submit.
+Future<void> _renameViaUi(
+  WidgetTester tester, {
+  required String from,
+  required String to,
+}) async {
+  final cell = find.text(from);
+  expect(cell, findsOneWidget);
+  await tester.tap(cell);
+  // Longer than kDoubleTapMinTime (40ms) and shorter than kDoubleTapTimeout
+  // (300ms), so the name cell's double-tap recognizer wins the arena instead of
+  // the row's select tap.
+  await tester.pump(const Duration(milliseconds: 50));
+  await tester.tap(cell);
+  await tester.pumpAndSettle();
+
+  final field = find.widgetWithText(TextField, from);
+  expect(field, findsOneWidget,
+      reason: 'double-tap should have opened the rename field');
+  await tester.enterText(field, to);
+  await tester.testTextInput.receiveAction(TextInputAction.done);
+  await tester.pumpAndSettle();
+}
+
 /// Suppress RenderFlex overflow errors (common in narrow test widths).
 void suppressOverflow() {
   final origHandler = FlutterError.onError;
@@ -187,8 +258,13 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Widget renders — upload button won't show without TFC_USER, but
-      // the empty state and column headers should be present.
+      // The widget renders, without the upload row. This harness overrides no
+      // access session, so the write affordance resolves on
+      // `kSessionWhileLoading` (`lib/providers/access_policy.dart:183`) — the
+      // strict floor, seeded-Operator groups only, which does not hold
+      // `kKnowledgeWriteGroup` (`AccessGroup.configure`). That, and not any
+      // ambient process state, is why the button is absent here. What must be
+      // present for a reader either way is the empty state and the headers.
       expect(find.text('No resources found'), findsOneWidget);
       expect(find.text('Name'), findsOneWidget);
     });
@@ -221,9 +297,171 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Progress message is shown only when TFC_USER is set (write enabled).
-      // Without TFC_USER the upload row is hidden, so just verify no crash.
+      // The progress message lives inside the upload row, which only a session
+      // holding `kKnowledgeWriteGroup` sees. This harness overrides no session
+      // either, so the guard again resolves on the `kSessionWhileLoading`
+      // floor and the row — progress indicator included — is hidden. All this
+      // test can therefore prove is that an upload in flight does not break the
+      // widget for somebody who may not upload. The affordance itself is
+      // asserted on both sides of the gate in "GOLD 1b" below.
       expect(find.byType(TechDocLibrarySection), findsOneWidget);
+    });
+  });
+
+  // =========================================================================
+  // 1b. Write affordance — both sides of the session gate
+  // =========================================================================
+  //
+  // The upload row is convenience; `kKnowledgeWriteGroup` at the store level
+  // (`lib/core/guarded_knowledge_stores.dart:84`) is the security boundary. The
+  // two have to agree or the UI lies about what the signed-in user may do, so
+  // the rule is asserted here in both directions.
+  //
+  // The deny side was already true before this group existed — but incidentally,
+  // because the harness happens to build no session. A regression that hid the
+  // upload row from *everyone* would have passed every assertion in this file.
+  // That is what the allow-side test closes.
+  group('GOLD 1b — Upload affordance vs the access session', () {
+    testWidgets('hidden for a session that does not hold configure',
+        (tester) async {
+      suppressOverflow();
+      await tester.pumpWidget(_buildLibraryWidget(
+        index: index,
+        extraOverrides: [
+          accessSessionProvider
+              .overrideWith(() => _FixedSession(_readerSession())),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(TechDocLibrarySection), findsOneWidget);
+      expect(find.text('Upload PDF'), findsNothing);
+      expect(find.text('Upload PLC Project'), findsNothing);
+    });
+
+    testWidgets('appears for a session holding kKnowledgeWriteGroup',
+        (tester) async {
+      suppressOverflow();
+      await tester.pumpWidget(_buildLibraryWidget(
+        index: index,
+        extraOverrides: [
+          accessSessionProvider
+              .overrideWith(() => _FixedSession(_writerSession())),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Upload PDF'), findsOneWidget);
+      expect(find.text('Upload PLC Project'), findsOneWidget);
+    });
+  });
+
+  // =========================================================================
+  // 1c. Write attribution — an anonymous session that may write
+  // =========================================================================
+  //
+  // `_isWriteEnabled` gates the affordance on `kKnowledgeWriteGroup`, and an
+  // anonymous session can hold it: `AccessSession.anonymous` takes its groups
+  // from the customer-editable `Operator` role
+  // (`packages/tfc_access/lib/src/access_session.dart:47`). On a station where
+  // an admin ticked `configure` there, the rename/upload/delete/replace
+  // affordances render for a panel with nobody signed in — so the write behind
+  // them has to land, attributed to the same `'anonymous'` marker every other
+  // guard in this repo records, rather than being refused by a UI that already
+  // offered it.
+  group('GOLD 1c — Writes under an anonymous session holding configure', () {
+    testWidgets('rename lands in the DB instead of being refused',
+        (tester) async {
+      suppressOverflow();
+      final ids = await _seedDocs(index);
+
+      await tester.pumpWidget(_buildLibraryWidget(
+        index: index,
+        extraOverrides: [
+          accessSessionProvider
+              .overrideWith(() => _FixedSession(_anonymousWriterSession())),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      await _renameViaUi(
+        tester,
+        from: 'PT100 Sensor Datasheet',
+        to: 'PT100 Rev9 Datasheet',
+      );
+
+      final docs = await index.getSummary();
+      expect(
+        docs.firstWhere((d) => d.id == ids[1]).name,
+        'PT100 Rev9 Datasheet',
+        reason: 'the configured policy permits this write',
+      );
+    });
+
+    testWidgets('the audit line is signed anonymous, not a placeholder name',
+        (tester) async {
+      suppressOverflow();
+      // `auditTechDocOperation` only logs — it writes no audit row — so the
+      // recorded name is only observable through the logger. `addLogListener`
+      // is a static hook the package already offers, so pinning it costs
+      // production code nothing.
+      final messages = <String>[];
+      void listener(LogEvent e) => messages.add(e.message.toString());
+      Logger.addLogListener(listener);
+      addTearDown(() => Logger.removeLogListener(listener));
+
+      await _seedDocs(index);
+      await tester.pumpWidget(_buildLibraryWidget(
+        index: index,
+        extraOverrides: [
+          accessSessionProvider
+              .overrideWith(() => _FixedSession(_anonymousWriterSession())),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      await _renameViaUi(
+        tester,
+        from: 'PT100 Sensor Datasheet',
+        to: 'PT100 Rev9 Datasheet',
+      );
+
+      final audit = messages.firstWhere(
+        (m) => m.contains('TechDoc audit:') && m.contains('on doc='),
+        orElse: () => '<no audit line logged>',
+      );
+      expect(audit, contains('by anonymous'));
+    });
+
+    testWidgets('a signed-in writer is still attributed by username',
+        (tester) async {
+      suppressOverflow();
+      final messages = <String>[];
+      void listener(LogEvent e) => messages.add(e.message.toString());
+      Logger.addLogListener(listener);
+      addTearDown(() => Logger.removeLogListener(listener));
+
+      await _seedDocs(index);
+      await tester.pumpWidget(_buildLibraryWidget(
+        index: index,
+        extraOverrides: [
+          accessSessionProvider
+              .overrideWith(() => _FixedSession(_writerSession())),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      await _renameViaUi(
+        tester,
+        from: 'PT100 Sensor Datasheet',
+        to: 'PT100 Rev9 Datasheet',
+      );
+
+      final audit = messages.firstWhere(
+        (m) => m.contains('TechDoc audit:') && m.contains('on doc='),
+        orElse: () => '<no audit line logged>',
+      );
+      expect(audit, contains('by jon'));
     });
   });
 

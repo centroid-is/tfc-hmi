@@ -34,6 +34,7 @@ abstract final class MutedColors {
 
   static const Color runningGreen = Color(0xFF8DA28A);
   static const Color manualOchre = Color(0xFFB09F72);
+  static const Color forcedOrange = Color(0xFFC2793F);
   static const Color cleanBlue = Color(0xFF8197AC);
   static const Color stoppedGray = Color(0xFF8E8E8E);
   static const Color stoppedGrayDark = Color(0xFF636363);
@@ -53,6 +54,7 @@ class HmiStateColors extends ThemeExtension<HmiStateColors> {
     required this.grey,
     required this.red,
     required this.violet,
+    required this.orange,
     required this.onState,
   });
 
@@ -74,6 +76,12 @@ class HmiStateColors extends ThemeExtension<HmiStateColors> {
   /// The scheme's violet — unreadable/unrecognized state by convention.
   final Color violet;
 
+  /// The scheme's orange — forced/override by repo convention, and reused for
+  /// an elevated session. The two are the same idea: the panel is not in its
+  /// normal state and somebody should be able to see that from across the
+  /// room.
+  final Color orange;
+
   /// Text/glyphs drawn on top of any of the state colors above.
   final Color onState;
 
@@ -84,6 +92,7 @@ class HmiStateColors extends ThemeExtension<HmiStateColors> {
     grey: SolarizedColors.base1,
     red: SolarizedColors.red,
     violet: SolarizedColors.magenta,
+    orange: SolarizedColors.orange,
     onState: SolarizedColors.base3,
   );
 
@@ -94,6 +103,7 @@ class HmiStateColors extends ThemeExtension<HmiStateColors> {
     grey: SolarizedColors.base01,
     red: SolarizedColors.red,
     violet: SolarizedColors.magenta,
+    orange: SolarizedColors.orange,
     onState: SolarizedColors.base3,
   );
 
@@ -104,6 +114,7 @@ class HmiStateColors extends ThemeExtension<HmiStateColors> {
     grey: MutedColors.stoppedGray,
     red: MutedColors.alarmRed,
     violet: MutedColors.unknownViolet,
+    orange: MutedColors.forcedOrange,
     onState: MutedColors.onState,
   );
 
@@ -114,6 +125,7 @@ class HmiStateColors extends ThemeExtension<HmiStateColors> {
     grey: MutedColors.stoppedGrayDark,
     red: MutedColors.alarmRed,
     violet: MutedColors.unknownViolet,
+    orange: MutedColors.forcedOrange,
     onState: MutedColors.onState,
   );
 
@@ -133,6 +145,7 @@ class HmiStateColors extends ThemeExtension<HmiStateColors> {
     Color? grey,
     Color? red,
     Color? violet,
+    Color? orange,
     Color? onState,
   }) {
     return HmiStateColors(
@@ -142,6 +155,7 @@ class HmiStateColors extends ThemeExtension<HmiStateColors> {
       grey: grey ?? this.grey,
       red: red ?? this.red,
       violet: violet ?? this.violet,
+      orange: orange ?? this.orange,
       onState: onState ?? this.onState,
     );
   }
@@ -156,6 +170,7 @@ class HmiStateColors extends ThemeExtension<HmiStateColors> {
       grey: Color.lerp(grey, other.grey, t)!,
       red: Color.lerp(red, other.red, t)!,
       violet: Color.lerp(violet, other.violet, t)!,
+      orange: Color.lerp(orange, other.orange, t)!,
       onState: Color.lerp(onState, other.onState, t)!,
     );
   }

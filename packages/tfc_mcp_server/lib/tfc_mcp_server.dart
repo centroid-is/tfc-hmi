@@ -22,8 +22,6 @@ export 'src/interfaces/node_browser.dart';
 export 'src/interfaces/screen_capturer.dart';
 export 'src/interfaces/empty_readers.dart';
 export 'src/interfaces/server_alias_provider.dart';
-export 'src/identity/operator_identity.dart';
-export 'src/identity/env_operator_identity.dart';
 export 'src/audit/audit_log_service.dart';
 export 'src/safety/safety_scanner.dart';
 export 'src/safety/risk_gate.dart';

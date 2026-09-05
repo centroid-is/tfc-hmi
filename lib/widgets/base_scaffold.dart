@@ -12,11 +12,17 @@ import 'package:beamer/beamer.dart';
 import 'package:logger/logger.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'nav_dropdown.dart';
+import 'access_denied_prompt.dart';
+import 'access_status_action.dart';
+import '../core/startup_url.dart';
 import '../models/menu_item.dart';
+import '../providers/preferences.dart';
 import '../route_registry.dart';
+import '../providers/access.dart';
 import '../providers/theme.dart';
 import '../providers/alarm.dart';
 import '../providers/nav_alarm.dart';
+import 'package:tfc_access/tfc_access.dart' show AccessSession;
 import 'package:tfc_dart/core/alarm.dart';
 import 'alarm.dart';
 import 'nav_alarm_badge.dart';
@@ -103,6 +109,10 @@ class BaseScaffold extends ConsumerStatefulWidget {
 /// The gutter matters on a top-level page, where there is no back arrow and the
 /// time would otherwise sit flush against the window edge.
 const double _clockWidth = 116;
+
+/// Breathing room either side of the app-bar access action, so the back arrow,
+/// the sign-in control and the clock are not flush against one another.
+const double kAccessStatusActionGap = 8;
 
 class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
   // Static, not per-build: `Logger()` constructs a filter, a printer and an
@@ -279,8 +289,43 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
         });
   }
 
+  /// Beams back to the station's startup page — the sign-out return.
+  ///
+  /// An anonymous session must not be left staring at a raised page it
+  /// cannot reach from its own menu; the kiosk answer is the boot answer,
+  /// resolved by the same [resolveStartupPath] validation `main.dart` runs,
+  /// so a startup page deleted since it was picked falls back to `/` here
+  /// exactly as it does at boot.
+  ///
+  /// Reading the device-local store is an await; the scaffold can unmount
+  /// (this very beam unmounts it) and the session can re-elevate during it,
+  /// so both are re-checked after.
+  Future<void> _returnToStartupPage() async {
+    final stored = await readStartupUrl(ref.read(localPreferencesProvider));
+    if (!mounted) return;
+    if (ref.read(accessSessionProvider).valueOrNull?.isElevated ?? false) {
+      return;
+    }
+    final target =
+        resolveStartupPath(stored, menuItems: RouteRegistry().menuItems);
+    final beamer = Beamer.of(context);
+    if (beamer.configuration.uri.path == target) return;
+    beamer.beamToNamed(target);
+  }
+
   @override
   Widget build(BuildContext context) {
+    // The sign-out return, and the inactivity expiry's too: both paths end at
+    // the same elevated-to-anonymous transition, so one listener covers the
+    // app-bar button and the timer alike. Registered in build — riverpod
+    // re-registers it per rebuild and removes it on unmount.
+    ref.listen<AsyncValue<AccessSession>>(accessSessionProvider,
+        (previous, next) {
+      final wasElevated = previous?.valueOrNull?.isElevated ?? false;
+      final isElevated = next.valueOrNull?.isElevated ?? false;
+      if (wasElevated && !isElevated) unawaited(_returnToStartupPage());
+    });
+
     // Retrieve the provider (if any)
     final globalLeftProvider = _tryGetGlobalAppBarLeftWidgetProvider(context);
 
@@ -293,6 +338,25 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
     final navAlarmLevels =
         ref.watch(navigationAlarmsProvider).valueOrNull ?? const {};
     final navCurrentPath = currentBeamPath(context);
+
+    // How much of the bar the right-hand cluster needs — see the centre
+    // region's margin comment below. Read off the session rather than fixed,
+    // so an anonymous panel keeps the centre width it had before the sign-in
+    // affordance existed. A loading or errored session reads as anonymous,
+    // the same degradation AccessStatusAction itself applies.
+    final accessElevated =
+        ref.watch(accessSessionProvider).valueOrNull?.isElevated ?? false;
+    // The access action sits in the left cluster, between the back arrow and
+    // the clock, so it widens the left margin rather than the right. Its width
+    // is what moves: ~48px for the sign-in icon button while anonymous, up to
+    // kAccessStatusActionMaxWidth once somebody is signed in. The clock rides
+    // that change -- it is the cost of grouping identity with the navigation
+    // controls, and it is deliberate.
+    final appBarLeftMargin = 48.0 +
+        (accessElevated ? kAccessStatusActionMaxWidth : 48.0) +
+        (kAccessStatusActionGap * 2) +
+        _clockWidth;
+    const appBarRightMargin = 280.0;
 
     return Scaffold(
       appBar: _isFullscreen
@@ -310,11 +374,12 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                     // with aspect ratio ~4.2 => ~210px wide, plus 16px right
                     // padding, plus ~48px theme toggle IconButton = ~274px.
                     // Use 280 for a small safety buffer.
-                    // Left margin: ~48px back-arrow IconButton plus the clock,
-                    // which is [_clockWidth] wide.
+                    // Left margin: the back arrow, the access action and the
+                    // clock -- see appBarLeftMargin above, which is the one
+                    // that changes with the session.
                     Positioned.fill(
-                      left: 48 + _clockWidth,
-                      right: 280,
+                      left: appBarLeftMargin,
+                      right: appBarRightMargin,
                       child: Align(
                         alignment: Alignment.center,
                         child: _buildAlarmBanner(context, ref),
@@ -352,6 +417,22 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                                 context.beamBack();
                               }),
                             ),
+                          // Sign in when nobody is; who is signed in, in
+                          // orange, when somebody is. Between the back arrow
+                          // and the clock, so identity reads with the
+                          // navigation controls rather than beside the logo.
+                          //
+                          // The padding is what separates three controls that
+                          // would otherwise sit flush against each other and
+                          // the screen edge; the clock carries the same 8px
+                          // inside its own SizedBox. kAccessStatusActionGap
+                          // is counted into appBarLeftMargin above, so the
+                          // centre banner keeps clear of it.
+                          const Padding(
+                            padding: EdgeInsets.symmetric(
+                                horizontal: kAccessStatusActionGap),
+                            child: AccessStatusAction(),
+                          ),
                           SizedBox(
                             width: _clockWidth,
                             child: Padding(
@@ -371,7 +452,7 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                         ],
                       ),
                     ),
-                    // RIGHT SIDE: Theme toggle and SVG icon.
+                    // RIGHT SIDE: access status, SVG icon and theme toggle.
                     Align(
                       alignment: Alignment.centerRight,
                       child: Row(
@@ -430,7 +511,24 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                 ),
               ),
             ),
-      body: widget.body,
+      // Pointer-down feeds the inactivity monitor: touching the panel keeps an
+      // elevated session alive. Translucent so the listener observes without
+      // consuming — a Listener that swallowed pointers would break every asset
+      // on the page. `poke()` is a no-op while anonymous and is guarded
+      // against a pointer arriving before the session has resolved, so an
+      // unauthenticated panel and a cold start both pay nothing.
+      body: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (_) =>
+            ref.read(accessSessionProvider.notifier).poke(),
+        // The denial prompt, mounted in the one place every page passes
+        // through. It passes the body straight back and contributes NO render
+        // object of its own -- not a Stack child, which would re-constrain the
+        // body that Scaffold hands `_BodyBoxConstraints`, and not a zero-size
+        // sibling either. The pixel budget here is zero: this file is in four
+        // Phase 2 goldens and several Phase 1 ones.
+        child: AccessDeniedPrompt(child: widget.body),
+      ),
       floatingActionButton: _isFullscreen
           ? FloatingActionButton(
               mini: true,

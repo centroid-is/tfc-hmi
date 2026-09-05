@@ -16,6 +16,7 @@ import 'package:rxdart/rxdart.dart';
 
 import 'common.dart';
 import '../../providers/state_man.dart';
+import '../../widgets/tag_access_guard.dart';
 import 'package:tfc/converter/color_converter.dart';
 import 'graph.dart';
 
@@ -530,7 +531,14 @@ class _NumberWriteDialogState extends ConsumerState<_NumberWriteDialog> {
     } else {
       dv.value = parsed as double;
     }
-    await sm.write(key, dv);
+    // No member: this writes the whole key, which is a scalar.
+    final wrote = await writeTag(ref, sm, key, dv);
+
+    // Refused: the prompt is already up, saying which permission is missing.
+    // The dialog stays open with the typed value still in the field, so
+    // signing in leaves the operator a field to press Enter in rather than a
+    // value that was already sent on their behalf.
+    if (!wrote) return;
 
     if (mounted) Navigator.of(context).pop();
   }

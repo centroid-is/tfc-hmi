@@ -185,7 +185,11 @@ Widget buildEditorUnderTest(PageManager manager, {ThemeData? theme}) {
 
 /// Per-test setup the editor needs before it will pump.
 void setUpEditorEnvironment() {
-  // The asset canvas constructs SharedPreferencesAsync directly.
+  // The asset canvas reads the device-local store, which sits on this
+  // platform instance. Still required after 03-11 moved the construction into
+  // `createDeviceLocalPreferences()`: checked by removing this line, which
+  // fails every editor test with "Bad state: The SharedPreferencesAsyncPlatform
+  // instance must be set."
   SharedPreferencesAsyncPlatform.instance =
       InMemorySharedPreferencesAsync.empty();
 

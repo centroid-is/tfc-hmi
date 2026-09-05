@@ -16,6 +16,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
 import 'package:cryptography/cryptography.dart' as crypto;
 import 'package:cryptography_flutter/cryptography_flutter.dart' as crypto_fl;
+import 'package:tfc_access/tfc_access.dart';
 
 import '../core/server_config_db.dart';
 import '../widgets/base_scaffold.dart';
@@ -40,15 +41,22 @@ const _certPlaceholder = "todo";
 class SecureEnvelope {
   static final Random _rng = Random.secure();
   static const String aadStr = 'centroid-v1';
-  static const int _kdfIterations =
-      200000; // tune per device; higher = slower/stronger
 
-  /// Test hook: production-strength PBKDF2 takes tens of seconds per
-  /// derivation in the debug-mode test VM, which turns any test that
-  /// encrypts into a minutes-long run. Decrypt reads the iteration count
-  /// out of the envelope, so envelopes made with this set still round-trip.
+  /// Forwarders onto the one hook, which lives with the one derivation in
+  /// `package:tfc_access`. There is deliberately no storage here: two hooks is
+  /// how a suite ends up running real 200k-iteration derivations somewhere
+  /// nobody noticed. These exist so existing tests — and any future caller
+  /// that knows this name — keep working unchanged.
+  ///
+  /// The ignores are the point rather than a wart: these two lines *are* the
+  /// test hook, so reaching a @visibleForTesting member from them is exactly
+  /// what they are for. Any other use in lib/ should still be flagged.
   @visibleForTesting
-  static int? kdfIterationsForTest;
+  // ignore: invalid_use_of_visible_for_testing_member
+  static int? get kdfIterationsForTest => Pbkdf2Kdf.iterationsForTest;
+  @visibleForTesting
+  // ignore: invalid_use_of_visible_for_testing_member
+  static set kdfIterationsForTest(int? v) => Pbkdf2Kdf.iterationsForTest = v;
 
   static List<int> _rand(int n) =>
       List<int>.generate(n, (_) => _rng.nextInt(256));
@@ -60,22 +68,21 @@ class SecureEnvelope {
     required String compiledPrefix,
     required String exportPostfix,
   }) async {
-    // Ensure fast native backends where available
+    // Ensure fast native backends where available. This stays on the Flutter
+    // side: cryptography_flutter is a plugin, and tfc_access is pure Dart.
+    // Cryptography.instance is process-global, so the shared Pbkdf2Kdf below
+    // picks this up anyway.
     crypto.Cryptography.instance =
         crypto_fl.FlutterCryptography.defaultInstance;
 
     final passphrase = '$compiledPrefix$exportPostfix';
 
-    final iterations = kdfIterationsForTest ?? _kdfIterations;
+    final iterations = Pbkdf2Kdf.iterations;
     final salt = _rand(16);
-    final kdf = crypto.Pbkdf2(
-      macAlgorithm: crypto.Hmac.sha256(),
+    final key = await Pbkdf2Kdf.deriveKey(
+      passphrase: passphrase,
+      salt: salt,
       iterations: iterations,
-      bits: 256,
-    );
-    final key = await kdf.deriveKey(
-      secretKey: crypto.SecretKey(utf8.encode(passphrase)),
-      nonce: salt, // salt
     );
 
     final algo = crypto.AesGcm.with256bits();
@@ -112,6 +119,8 @@ class SecureEnvelope {
     required String compiledPrefix,
     required String postfix,
   }) async {
+    // As in encrypt: the accelerator belongs to the Flutter package, and the
+    // shared Pbkdf2Kdf inherits it through the process-global instance.
     crypto.Cryptography.instance =
         crypto_fl.FlutterCryptography.defaultInstance;
 
@@ -124,14 +133,13 @@ class SecureEnvelope {
     final tag = base64Decode(envelope['tag_b64']);
     final aad = utf8.encode(envelope['aad'] as String);
 
-    final kdf = crypto.Pbkdf2(
-      macAlgorithm: crypto.Hmac.sha256(),
+    // The count comes out of the envelope, not from the current default: an
+    // envelope written at 10 iterations must still open after the default
+    // changes. This is why the shared derivation takes iterations at all.
+    final key = await Pbkdf2Kdf.deriveKey(
+      passphrase: passphrase,
+      salt: salt,
       iterations: iterations,
-      bits: 256,
-    );
-    final key = await kdf.deriveKey(
-      secretKey: crypto.SecretKey(utf8.encode(passphrase)),
-      nonce: salt,
     );
 
     final algo = crypto.AesGcm.with256bits();
@@ -3308,14 +3316,24 @@ class _ImportExportCardState extends ConsumerState<ImportExportCard> {
         exportPostfix: password,
       );
 
-      await ServerConfigDb.publish(
-        db.db,
-        StoredServerConfig(
-          savedAt: DateTime.now(),
-          savedBy: Platform.localHostname,
-          envelope: envelope,
-        ),
-      );
+      // Through the guarded store, not through Drift: replacing the whole
+      // server configuration is an `administer` write and belongs in the
+      // trail like any other.
+      final prefs = await ref.read(preferencesProvider.future);
+      try {
+        await ServerConfigDb.publish(
+          prefs,
+          StoredServerConfig(
+            savedAt: DateTime.now(),
+            savedBy: Platform.localHostname,
+            envelope: envelope,
+          ),
+        );
+      } on AccessDenied {
+        // The shared denial listener already prompts; a second dialog here
+        // would be two prompts for one refused action.
+        return;
+      }
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

@@ -19,6 +19,7 @@ import 'package:tfc_dart/core/state_man.dart';
 import '../../providers/state_man.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
+import '../../widgets/tag_access_guard.dart' show writeTag;
 import 'el2912.dart';
 import 'el9222.dart';
 import 'ep_box.dart';
@@ -1157,8 +1158,21 @@ class _BeckhoffEL9222 extends ConsumerWidget {
   /// would never be acknowledged. A clear that fails is reported rather than
   /// swallowed for the same reason — it is a real maintenance condition, not
   /// a cosmetic one.
+  ///
+  /// The one write in this file that names a struct member: `p_cmd_Reset` is
+  /// a member of the terminal's status struct, so the permission question is
+  /// asked about that member rather than about the whole key. A template
+  /// binding the struct can therefore lock the reset while leaving the rest
+  /// of it readable and writable.
+  ///
+  /// **A refused rise sends no fall.** `set` answers false when the write was
+  /// refused, and the rising edge returning false skips the pulse and the
+  /// falling edge with it. Without that, one refused press would produce two
+  /// refusals, two audit rows and — on a key whose binding changed mid-pulse
+  /// — a lone falling edge the terminal never saw the rise of.
   Future<void> _reset(
     BuildContext context,
+    WidgetRef ref,
     StateMan stateMan,
     int channel,
   ) async {
@@ -1172,32 +1186,41 @@ class _BeckhoffEL9222 extends ConsumerWidget {
     // with.
     const readTimeout = Duration(seconds: 5);
 
-    Future<void> set(bool level) async {
+    Future<bool> set(bool level) async {
       final latest = await stateMan.read(key).timeout(readTimeout);
       final next = DynamicValue.from(latest);
       next[member] = level;
-      await stateMan.write(key, next);
+      return writeTag(ref, stateMan, key, next, member: member);
     }
 
+    // Refused and failed are not the same thing, and the falling edge is
+    // where they part. A refusal means nothing was written, so there is
+    // nothing to clear; a failure may have left the bit high, which is the
+    // latched switch the `finally` exists for. A bare `return` would have
+    // run the `finally` anyway and sent the fall of an edge that never rose.
+    var refused = false;
     try {
-      await set(true);
+      refused = !await set(true);
+      if (refused) return;
       await Future<void>.delayed(kEl9222ResetPulse);
     } catch (e) {
       messenger?.showSnackBar(
         SnackBar(content: Text('Reset of channel $channel failed: $e')),
       );
     } finally {
-      try {
-        await set(false);
-      } catch (e) {
-        messenger?.showSnackBar(
-          SnackBar(
-            content: Text(
-              'Channel $channel reset is stuck on — clear it before the next '
-              'trip: $e',
+      if (!refused) {
+        try {
+          await set(false);
+        } catch (e) {
+          messenger?.showSnackBar(
+            SnackBar(
+              content: Text(
+                'Channel $channel reset is stuck on — clear it before the '
+                'next trip: $e',
+              ),
             ),
-          ),
-        );
+          );
+        }
       }
     }
   }
@@ -1239,7 +1262,8 @@ class _BeckhoffEL9222 extends ConsumerWidget {
                     id: _paneId,
                     title: config.nameOrId,
                     stream: _paneStream(stateMan),
-                    onReset: (channel) => _reset(context, stateMan, channel),
+                    onReset: (channel) =>
+                        _reset(context, ref, stateMan, channel),
                   );
                 },
                 child: IO8Widget(

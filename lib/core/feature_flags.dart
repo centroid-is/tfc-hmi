@@ -5,7 +5,7 @@
 /// are `true` so development builds and the test suite exercise every
 /// feature; deployment builds opt out explicitly, e.g.:
 ///
-///     flutter build linux --dart-define=TFC_CHAT=false
+///     flutter build linux --dart-define=CENTROIDX_CHAT=false
 library;
 
 /// Whether the in-app AI chat is compiled into the app: the chat overlay
@@ -15,7 +15,7 @@ library;
 /// The MCP SSE server and the proposal review UI are deliberately NOT gated
 /// by this flag — external MCP agents and operator proposal approval keep
 /// working when chat is off.
-const bool kChatEnabled = bool.fromEnvironment('TFC_CHAT', defaultValue: true);
+const bool kChatEnabled = bool.fromEnvironment('CENTROIDX_CHAT', defaultValue: true);
 
 /// Whether the knowledge features are compiled into the app: the Knowledge
 /// Base page (tech-doc library + PLC code browsing), the drawings overlay,
@@ -30,4 +30,4 @@ const bool kChatEnabled = bool.fromEnvironment('TFC_CHAT', defaultValue: true);
 /// a native plugin registered from the pubspec, so its native library still
 /// ships in flag-off builds — only the Dart code is tree-shaken.
 const bool kKnowledgeEnabled =
-    bool.fromEnvironment('TFC_KNOWLEDGE', defaultValue: true);
+    bool.fromEnvironment('CENTROIDX_KNOWLEDGE', defaultValue: true);

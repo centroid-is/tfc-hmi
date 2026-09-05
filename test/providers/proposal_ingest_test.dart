@@ -19,7 +19,7 @@ import 'package:tfc/providers/proposal_state.dart';
 /// As with `proposal_feedback_relay_test.dart`, the important thing here is
 /// what is NOT mounted. `chatLifecycleProvider` used to be the only listener
 /// on the bridge's proposal stream, and it only runs when the in-app chat is
-/// compiled in -- which shipped builds are not (`TFC_CHAT=false`). Staging
+/// compiled in -- which shipped builds are not (`CENTROIDX_CHAT=false`). Staging
 /// has to happen off `mcpServerLifecycleProvider`, the one `main.dart` mounts
 /// unconditionally, or a proposal made by an external client is dropped while
 /// the tool still reports success.

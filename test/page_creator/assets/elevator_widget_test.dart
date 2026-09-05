@@ -15,7 +15,8 @@
 ///      flutter run -d macos
 ///    (or the device the developer normally uses).
 ///
-/// 2. Open the page editor (TFC_GOD).
+/// 2. Open the page editor (always listed under Advanced; opening it needs a
+///    signed-in session holding `configure`).
 ///
 /// 3. Confirm "Elevator" appears in the asset palette under category
 ///    "Visualization" (CONTEXT 'Schema & Registration' lock — closes

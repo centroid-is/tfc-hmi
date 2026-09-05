@@ -6,6 +6,13 @@ const proposalRoutes = <String, String>{
   'alarm_create': '/advanced/alarm-editor',
   'alarm_update': '/advanced/alarm-editor',
   'key_mapping': '/advanced/key-repository',
+  // Templates and bindings are edited from the access-templates section of
+  // the key repository, and applied through the same `users`-gated store the
+  // section's own controls use. One type for all four operations —
+  // create/update/delete/bind — because `_op` already carries which, and a
+  // second type for bindings would mean a second banner, a second accept and
+  // a second place for the gate to be got wrong.
+  'access_template': '/advanced/key-repository',
   'page': '/advanced/page-editor',
   'asset': '/advanced/page-editor',
   'asset_update': '/advanced/page-editor',
@@ -95,6 +102,7 @@ class PendingProposal {
       case 'alarm_update':
         return 'Alarm Editor';
       case 'key_mapping':
+      case 'access_template':
         return 'Key Repository';
       case 'page':
         return 'Page Editor';
@@ -130,6 +138,13 @@ class PendingProposal {
         return ProposalOp.update;
       case 'delete':
         return ProposalOp.delete;
+      // `bind` has no ProposalOp of its own. It creates a binding row, or
+      // replaces one, or removes one, depending on what each entry in the
+      // list says — so it is reported as a create, which is what the banner's
+      // label needs and the closest true word for a sweep. The section reads
+      // `_op` itself and does not go through this getter.
+      case 'bind':
+        return ProposalOp.create;
     }
     if (proposalType.endsWith('_update')) return ProposalOp.update;
     return ProposalOp.create;
@@ -164,6 +179,7 @@ String describeProposalFeedback(
   String typeLabel(String type) => switch (type) {
         'alarm' || 'alarm_create' || 'alarm_update' => 'alarm',
         'key_mapping' => 'key mapping',
+        'access_template' => 'access template',
         'page' => 'page',
         'asset' => 'asset',
         'asset_update' => 'asset update',

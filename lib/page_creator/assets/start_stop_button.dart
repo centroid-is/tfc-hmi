@@ -10,6 +10,7 @@ import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 
 import 'common.dart';
 import '../../providers/state_man.dart';
+import '../../widgets/tag_access_guard.dart';
 
 part 'start_stop_button.g.dart';
 
@@ -175,10 +176,21 @@ class _StartStopPillButtonState extends ConsumerState<StartStopPillButton> {
     );
   }
 
-  Future<void> _writePulse(String key, bool value) async {
-    if (widget.config.runKey == StartStopPillButtonConfig.previewStr) return;
+  /// Writes one half of a pulse.
+  ///
+  /// **False only on a refusal** — the prompt is up by then and nothing was
+  /// sent. The preview, which has no PLC behind it, answers true: there was
+  /// nothing to refuse, and the caller's behaviour must not change with it.
+  ///
+  /// No member: each of the four command keys is its own BOOL node, so the
+  /// question is about the key as a whole.
+  Future<bool> _writePulse(String key, bool value) async {
+    if (widget.config.runKey == StartStopPillButtonConfig.previewStr) {
+      return true;
+    }
     final client = await ref.read(stateManProvider.future);
-    await client.write(key, DynamicValue(value: value, typeId: NodeId.boolean));
+    return writeTag(
+        ref, client, key, DynamicValue(value: value, typeId: NodeId.boolean));
   }
 
   void _onTapDown(_Segment seg) async {
@@ -201,9 +213,20 @@ class _StartStopPillButtonState extends ConsumerState<StartStopPillButton> {
     if (key == null || key.isEmpty) return;
     _activeWriteKey = key;
     try {
-      await _writePulse(key, true);
+      if (!await _writePulse(key, true)) {
+        // Refused at the tap. No pulse went out, so the release must not send
+        // its half either — a lone falling edge is a command the PLC never
+        // saw the start of, and a second refusal would write a second audit
+        // row for one press.
+        _activeWriteKey = null;
+        return;
+      }
       _log.d('press -> $seg ($key)');
     } catch (e, st) {
+      // Kept: this catches the comms failure it was written for. A refusal
+      // can no longer reach it — `writeTag` answers false instead of throwing
+      // — and removing a catch that still guards a real failure mode to make
+      // a grep look tidier would be the wrong trade.
       _log.e('press write failed', error: e, stackTrace: st);
     }
   }

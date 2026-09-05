@@ -3,7 +3,6 @@ import 'package:test/test.dart';
 
 import 'package:tfc_mcp_server/src/audit/audit_log_service.dart';
 import 'package:tfc_mcp_server/src/database/server_database.dart';
-import 'package:tfc_mcp_server/src/identity/env_operator_identity.dart';
 import 'package:tfc_mcp_server/src/tools/ping_tool.dart';
 import 'package:tfc_mcp_server/src/tools/tool_registry.dart';
 import '../helpers/mock_mcp_client.dart';
@@ -32,18 +31,12 @@ void main() {
       );
     }
 
-    test(
-        '1. Tool call with valid identity creates audit record pending then success',
-        () async {
-      final env = {'TFC_USER': 'op1'};
-      final identity =
-          EnvOperatorIdentity(environmentProvider: () => env);
+    test('1. Tool call creates audit record pending then success', () async {
       final auditService = AuditLogService(db);
       mcpServer = createMcpServer();
 
       final registry = ToolRegistry(
         mcpServer: mcpServer,
-        identity: identity,
         auditLogService: auditService,
       );
 
@@ -59,7 +52,9 @@ void main() {
         // Check audit record in DB
         final records = await db.select(db.auditLog).get();
         expect(records, hasLength(1));
-        expect(records.first.operatorId, equals('op1'));
+        // This row records that the MCP server ran a tool, not that a
+        // person authorized one -- the person's name is on the approval row.
+        expect(records.first.operatorId, equals(kMcpAuditOperator));
         expect(records.first.tool, equals('ping'));
         expect(records.first.status, equals('success'));
       } finally {
@@ -68,53 +63,13 @@ void main() {
     });
 
     test(
-        '2. Tool call without identity (TFC_USER not set) returns error and creates NO audit record',
-        () async {
-      final env = <String, String>{};
-      final identity =
-          EnvOperatorIdentity(environmentProvider: () => env);
-      final auditService = AuditLogService(db);
-      mcpServer = createMcpServer();
-
-      final registry = ToolRegistry(
-        mcpServer: mcpServer,
-        identity: identity,
-        auditLogService: auditService,
-      );
-
-      registerPingTool(registry);
-
-      final client = await MockMcpClient.connect(mcpServer);
-      try {
-        final result = await client.callTool('ping', {});
-
-        // Should return an error
-        expect(result.isError, isTrue);
-
-        // Error should mention TFC_USER
-        final text = (result.content.first as TextContent).text;
-        expect(text, contains('TFC_USER'));
-
-        // No audit records should exist
-        final records = await db.select(db.auditLog).get();
-        expect(records, isEmpty);
-      } finally {
-        await client.close();
-      }
-    });
-
-    test(
         '3. Tool call that throws creates audit record with status failed and error message',
         () async {
-      final env = {'TFC_USER': 'op1'};
-      final identity =
-          EnvOperatorIdentity(environmentProvider: () => env);
       final auditService = AuditLogService(db);
       mcpServer = createMcpServer();
 
       final registry = ToolRegistry(
         mcpServer: mcpServer,
-        identity: identity,
         auditLogService: auditService,
       );
 
@@ -147,15 +102,11 @@ void main() {
     test(
         '4. Audit record contains correct tool name and JSON-encoded arguments',
         () async {
-      final env = {'TFC_USER': 'op1'};
-      final identity =
-          EnvOperatorIdentity(environmentProvider: () => env);
       final auditService = AuditLogService(db);
       mcpServer = createMcpServer();
 
       final registry = ToolRegistry(
         mcpServer: mcpServer,
-        identity: identity,
         auditLogService: auditService,
       );
 
@@ -176,15 +127,11 @@ void main() {
 
     test('7. Ping tool uses domain-oriented design (CORE-03 demonstration)',
         () async {
-      final env = {'TFC_USER': 'op1'};
-      final identity =
-          EnvOperatorIdentity(environmentProvider: () => env);
       final auditService = AuditLogService(db);
       mcpServer = createMcpServer();
 
       final registry = ToolRegistry(
         mcpServer: mcpServer,
-        identity: identity,
         auditLogService: auditService,
       );
 

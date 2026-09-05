@@ -9,18 +9,26 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:logger/logger.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:tfc_access/tfc_access.dart' show AccessDenied;
+import 'package:tfc_dart/core/preferences.dart' show PreferencesApi;
 import 'package:tfc_dart/core/fuzzy_match.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
-    show TechDocIndex, TechDocSummary, PlcAssetSummary, DriftPlcCodeIndex;
+    show TechDocIndex, TechDocSummary, PlcAssetSummary;
 
 import '../chat/ai_context_action.dart';
 import '../core/feature_flags.dart';
+import '../core/guarded_knowledge_stores.dart'
+    show GuardedPrefsReader, PlcCodeIndexExtras, kKnowledgeWriteGroup;
 import '../plc/plc_code_upload_dialog.dart';
 import '../plc/plc_detail_panel.dart';
-import '../providers/mcp_bridge.dart'
-    show isMcpChatAvailable, isMcpWriteEnabled;
+import '../providers/access.dart'
+    show accessSessionProvider, stationNameProvider;
+import '../providers/access_policy.dart'
+    show RefAuditSink, reportAccessDenial, sessionInForce;
 import '../providers/plc.dart';
+// The adapter below has no `ref`, so it calls the factory. Importing the
+// provider file is what keeps it inside spec §6's one-construction-site rule.
+import '../providers/preferences.dart' show createDeviceLocalPreferences;
 import '../providers/scaffold_messenger_key.dart';
 import '../providers/tech_doc.dart';
 import 'tech_doc_audit.dart';
@@ -44,6 +52,9 @@ Then provide a summary of what this document covers and how it relates to the sy
 
 final _logger = Logger(printer: SimplePrinter(printTime: false));
 
+/// The `who` recorded when nobody is signed in.
+const String _anonymousWho = 'anonymous';
+
 /// Knowledge Base section showing tech docs and PLC code in a unified list.
 ///
 /// Renders as an ExpansionTile with a master-detail layout:
@@ -51,7 +62,8 @@ final _logger = Logger(printer: SimplePrinter(printTime: false));
 /// - Right: Section detail panel when a document is selected
 ///
 /// All write operations go through [auditTechDocOperation] (locked decision).
-/// TFC_USER gates write operations (upload, rename, delete, replace).
+/// Write operations (upload, rename, delete, replace) need
+/// [kKnowledgeWriteGroup] -- the one place that answer lives.
 class TechDocLibrarySection extends ConsumerStatefulWidget {
   const TechDocLibrarySection({super.key, this.embedded = true});
 
@@ -84,9 +96,55 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     super.dispose();
   }
 
-  bool get _isWriteEnabled => isMcpWriteEnabled();
+  /// Whether this session may write to the knowledge base.
+  ///
+  /// Literally the store guard's own predicate -- `guarded_knowledge_stores`
+  /// asks `session.can(kKnowledgeWriteGroup)` before every one of its eleven
+  /// writes -- so the button and the write it offers cannot disagree.
+  ///
+  /// `watch`, not `read`: this getter feeds `build`, and the upload affordance
+  /// has to appear when somebody signs in and go away when the session times
+  /// out, without a restart. `base_scaffold.dart:248` is the precedent; the
+  /// `ref.read`-only rule in `access_policy.dart` is about *providers* holding
+  /// connections, not about widgets.
+  ///
+  /// `?? false` while the session loads or errors, rather than resolving
+  /// through `sessionInForce`: no narrower, since `kSessionWhileLoading` does
+  /// not hold [kKnowledgeWriteGroup] either, and it answers without awaiting a
+  /// chain that reaches the database.
+  bool get _isWriteEnabled =>
+      ref.watch(accessSessionProvider).valueOrNull?.can(kKnowledgeWriteGroup) ??
+      false;
 
-  String get _currentUser => io.Platform.environment['TFC_USER'] ?? 'operator';
+  /// Who a write is attributed to: the signed-in username, or [_anonymousWho].
+  ///
+  /// This used to read a process environment variable and fall back to a fixed
+  /// placeholder, so an unattended panel signed its audit rows with a name
+  /// nobody holds -- the sharpest instance of the defect this milestone
+  /// removes. The session is the only identity in this system, so it is the
+  /// only thing that may sign a row.
+  ///
+  /// [_anonymousWho] when nobody is signed in, because that is what every guard
+  /// in this repo already records for an unattended station -- allowed and
+  /// denied, reads and writes alike (`guarded_knowledge_stores.dart:254` puts
+  /// it on every row it builds, and six other files declare the same const).
+  /// "Nobody was signed in" is a true and useful thing to record; refusing here
+  /// instead would record nothing at all.
+  ///
+  /// That case is reachable, not theoretical. `AccessSession.anonymous`
+  /// (`packages/tfc_access/lib/src/access_session.dart`) builds its groups from
+  /// the customer-editable `Operator` role, so an admin who ticks `configure`
+  /// on that row hands [kKnowledgeWriteGroup] to every panel on the floor with
+  /// nobody signed in. On such a station the affordances render and the writes
+  /// the configured policy permits must go through. [_isWriteEnabled] still
+  /// gates them, so an anonymous session *without* `configure` never reaches
+  /// this getter.
+  ///
+  /// `read`, not `watch`: this answers "who is signing this write" once, at the
+  /// instant of the write. Only [_isWriteEnabled] has to stay live.
+  String get _writeUser =>
+      ref.read(accessSessionProvider).valueOrNull?.user?.username ??
+      _anonymousWho;
 
   @override
   Widget build(BuildContext context) {
@@ -182,7 +240,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
         ),
         const SizedBox(height: 8),
 
-        // Upload buttons + progress (TFC_USER only)
+        // Upload buttons + progress (kKnowledgeWriteGroup only)
         if (_isWriteEnabled) ...[
           Wrap(
             spacing: 8,
@@ -334,7 +392,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
           child: Row(
             children: [
-              // Name column (editable if TFC_USER and editing)
+              // Name column (editable if kKnowledgeWriteGroup and editing)
               Expanded(
                 flex: 3,
                 child: _editingDocId == doc.id
@@ -420,7 +478,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     final items = <PopupMenuEntry<String>>[];
 
     // "Chat about this" — only when MCP chat is available.
-    if (kChatEnabled && isMcpChatAvailable()) {
+    if (kChatEnabled) {
       items.add(const PopupMenuItem(
         value: 'chat',
         child: ListTile(
@@ -586,7 +644,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
       // Phase 1: Store blob + name in DB.
       final docId = await auditTechDocOperation<int>(
         action: TechDocAuditAction.upload,
-        user: _currentUser,
+        user: _writeUser,
         docId: null,
         docName: name,
         operation: () => index.storeDocument(
@@ -619,6 +677,13 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
         // Doc exists with 0 sections — acceptable degradation.
         // User can replace the doc to retry extraction.
       }
+    } on AccessDenied {
+      // A refusal is not a failed upload. Undo the optimistic row and clear the
+      // progress indicator, but leave the message to `AccessDeniedPrompt` — an
+      // "Upload failed: AccessDenied" snackbar reads like a fault.
+      if (!mounted) return;
+      _removePending(name);
+      ref.read(techDocUploadProgressProvider.notifier).state = null;
     } catch (e) {
       // Blob store failed.
       _logger.e('Upload failed for $name: $e');
@@ -643,14 +708,21 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     final index = ref.read(techDocIndexProvider);
     if (index == null) return;
 
-    await auditTechDocOperation<void>(
-      action: TechDocAuditAction.rename,
-      user: _currentUser,
-      docId: docId,
-      docName: newName,
-      operation: () => index.renameDocument(docId, newName),
-      logger: _logger,
-    );
+    try {
+      await auditTechDocOperation<void>(
+        action: TechDocAuditAction.rename,
+        user: _writeUser,
+        docId: docId,
+        docName: newName,
+        operation: () => index.renameDocument(docId, newName),
+        logger: _logger,
+      );
+    } on AccessDenied {
+      // The guard has already published the refusal; `AccessDeniedPrompt` is
+      // what says what is missing. Without this arm the exception escapes an
+      // async callback and shows up as an unhandled error instead.
+      return;
+    }
 
     ref.invalidate(dbTechDocsProvider);
   }
@@ -662,7 +734,13 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     final index = ref.read(plcCodeIndexProvider);
     if (index == null) return;
 
-    await index.renameAsset(oldAssetKey, newName);
+    try {
+      await index.renameAsset(oldAssetKey, newName);
+    } on AccessDenied {
+      // See `_performRename`. Everything below is the page reacting to a
+      // rename that did not happen.
+      return;
+    }
 
     // Update selection if this asset was selected.
     if (ref.read(selectedPlcAssetProvider) == oldAssetKey) {
@@ -695,22 +773,29 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
       return;
     }
 
-    await auditTechDocOperation<void>(
-      action: TechDocAuditAction.replace,
-      user: _currentUser,
-      docId: doc.id,
-      docName: doc.name,
-      operation: () => service.replaceDocument(
+    try {
+      await auditTechDocOperation<void>(
+        action: TechDocAuditAction.replace,
+        user: _writeUser,
         docId: doc.id,
-        pdfBytes: bytes,
-        onProgress: (p) {
-          if (mounted) {
-            ref.read(techDocUploadProgressProvider.notifier).state = p;
-          }
-        },
-      ),
-      logger: _logger,
-    );
+        docName: doc.name,
+        operation: () => service.replaceDocument(
+          docId: doc.id,
+          pdfBytes: bytes,
+          onProgress: (p) {
+            if (mounted) {
+              ref.read(techDocUploadProgressProvider.notifier).state = p;
+            }
+          },
+        ),
+        logger: _logger,
+      );
+    } on AccessDenied {
+      // Clear the progress indicator the replace started, or it spins for ever
+      // on a refusal. `AccessDeniedPrompt` is what explains the refusal.
+      ref.read(techDocUploadProgressProvider.notifier).state = null;
+      return;
+    }
 
     // Update PDF cache with new bytes so viewing is instant.
     ref.read(pdfBytesCacheProvider).put(doc.id, bytes);
@@ -742,9 +827,9 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
       return;
     }
 
-    // Use SharedPreferencesWrapper as PrefsReader for deleteAndCleanAssets.
-    // For now, use direct SharedPreferences access.
-    final prefsReader = _SharedPrefsReader();
+    // The device-local reader, behind the knowledge-base guard: the cleanup
+    // rewrites `page_editor_data`, which asks for `configure`.
+    final prefsReader = ref.read(guardedPageLayoutPrefsProvider);
 
     // Evict from local PDF cache.
     ref.read(pdfBytesCacheProvider).remove(doc.id);
@@ -760,17 +845,31 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     // No invalidate needed — pendingDeleteIdsProvider is watched by
     // techDocListProvider, so the list rebuilds automatically.
 
-    await auditTechDocOperation<void>(
-      action: TechDocAuditAction.delete,
-      user: _currentUser,
-      docId: doc.id,
-      docName: doc.name,
-      operation: () => service.deleteAndCleanAssets(
+    try {
+      await auditTechDocOperation<void>(
+        action: TechDocAuditAction.delete,
+        user: _writeUser,
         docId: doc.id,
-        prefsReader: prefsReader,
-      ),
-      logger: _logger,
-    );
+        docName: doc.name,
+        operation: () => service.deleteAndCleanAssets(
+          docId: doc.id,
+          prefsReader: prefsReader,
+        ),
+        logger: _logger,
+      );
+    } on AccessDenied {
+      // The row was hidden optimistically for a delete that was refused. Put
+      // it back, or the document stays invisible until the page is rebuilt.
+      // The guard has already published the refusal, so `AccessDeniedPrompt`
+      // is what says why — a snackbar here would be a second message.
+      if (mounted) {
+        ref.read(pendingDeleteIdsProvider.notifier).state = ref
+            .read(pendingDeleteIdsProvider)
+            .where((id) => id != doc.id)
+            .toList();
+      }
+      return;
+    }
 
     // DB delete done — refresh from DB, then clear pending flag.
     // Order matters: invalidate first so the DB re-query runs while
@@ -842,7 +941,8 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
         child: Row(
           children: [
-            // Name column with code icon (editable if TFC_USER and editing)
+            // Name column with code icon (editable if kKnowledgeWriteGroup
+            // and editing)
             Expanded(
               flex: 3,
               child: _editingPlcAssetKey == plc.assetKey
@@ -918,7 +1018,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     final items = <PopupMenuEntry<String>>[];
 
     // "Chat about this" — only when MCP chat is available.
-    if (kChatEnabled && isMcpChatAvailable()) {
+    if (kChatEnabled) {
       items.add(const PopupMenuItem(
         value: 'chat',
         child: ListTile(
@@ -1010,10 +1110,23 @@ Then provide a summary of what this PLC code controls and how it is structured.'
   /// messenger key for snackbar feedback.
   void _reindexPlcAsset(PlcAssetSummary plc) {
     final index = ref.read(plcCodeIndexProvider);
-    if (index == null || index is! DriftPlcCodeIndex) {
+    if (index == null) {
       globalScaffoldMessengerKey.currentState?.showSnackBar(
         const SnackBar(
           content: Text('Re-index unavailable — database not connected'),
+        ),
+      );
+      return;
+    }
+    // `PlcCodeIndexExtras`, not the concrete `DriftPlcCodeIndex`:
+    // `plcCodeIndexProvider` returns the guard, and the old check would have
+    // reported a database fault this station does not have. Unreachable while
+    // the provider returns the guard, which is the only implementer —
+    // `knowledge_guard_wiring_test.dart` asserts that.
+    if (index is! PlcCodeIndexExtras) {
+      globalScaffoldMessengerKey.currentState?.showSnackBar(
+        const SnackBar(
+          content: Text('Re-index unavailable — this index cannot re-index'),
         ),
       );
       return;
@@ -1033,7 +1146,7 @@ Then provide a summary of what this PLC code controls and how it is structured.'
 
   /// Performs the actual reindex work. Lifecycle-independent.
   Future<void> _doReindex(
-    DriftPlcCodeIndex index,
+    PlcCodeIndexExtras index,
     String assetKey,
     StateController<TechDocUploadProgress?> progressNotifier,
   ) async {
@@ -1051,6 +1164,13 @@ Then provide a summary of what this PLC code controls and how it is structured.'
           ),
         ),
       );
+    } on AccessDenied {
+      // The guard has already published the refusal to
+      // `accessDenialsProvider`, so `AccessDeniedPrompt` (mounted in
+      // `BaseScaffold`) is what tells the operator what is missing. A
+      // "Re-index failed: AccessDenied" snackbar would be a second message for
+      // one action, and a worse one — it reads like a fault.
+      progressNotifier.state = null;
     } catch (e) {
       _logger.e('Re-index failed for $assetKey: $e');
 
@@ -1096,7 +1216,15 @@ Then provide a summary of what this PLC code controls and how it is structured.'
       ref.read(selectedPlcAssetProvider.notifier).state = null;
     }
 
-    await index.deleteAssetIndex(plc.assetKey);
+    try {
+      await index.deleteAssetIndex(plc.assetKey);
+    } on AccessDenied {
+      // The guard has already published the refusal, so `AccessDeniedPrompt`
+      // is what tells the operator what is missing. Everything below this is
+      // the page reacting to a deletion that did not happen — including a
+      // snackbar claiming the index was deleted.
+      return;
+    }
     ref.invalidate(plcAssetSummaryProvider);
 
     if (mounted) {
@@ -1155,9 +1283,38 @@ Then provide a summary of what this PLC code controls and how it is structured.'
   }
 }
 
+/// The raw device-local reader `deleteAndCleanAssets` writes through.
+///
+/// A provider rather than a bare constructor call so that tests can substitute
+/// an in-memory store and observe what the guard above it did or did not write.
+/// Nothing else should read this: the page reads
+/// [guardedPageLayoutPrefsProvider].
+final pageLayoutPrefsProvider = Provider<PrefsReader>((ref) =>
+    _SharedPrefsReader());
+
+/// [pageLayoutPrefsProvider] behind the knowledge-base guard.
+///
+/// `deleteAndCleanAssets` rewrites `page_editor_data` when a technical document
+/// is deleted, and before plan 03-13 it did so for whoever was standing at the
+/// panel. `GuardedPrefsReader` checks `configure` on `setString` and records a
+/// row; `getString` passes through.
+///
+/// Declared here rather than assembled on the widget state because
+/// `sessionInForce`, `RefAuditSink` and `reportAccessDenial` all need a
+/// provider `Ref`, and a `ConsumerState`'s `ref` is a `WidgetRef` — the same
+/// reason plan 03-10 put `historyViewStoreProvider` in `history_view.dart`.
+final guardedPageLayoutPrefsProvider = Provider<PrefsReader>((ref) =>
+    GuardedPrefsReader(
+      inner: ref.watch(pageLayoutPrefsProvider),
+      session: () => sessionInForce(ref),
+      audit: RefAuditSink(ref),
+      station: ref.read(stationNameProvider),
+      onDenied: (denial) => reportAccessDenial(ref, denial),
+    ));
+
 /// Adapter from SharedPreferences to [PrefsReader] for deleteAndCleanAssets.
 class _SharedPrefsReader implements PrefsReader {
-  final SharedPreferencesAsync _prefs = SharedPreferencesAsync();
+  final PreferencesApi _prefs = createDeviceLocalPreferences();
 
   @override
   Future<String?> getString(String key) async {

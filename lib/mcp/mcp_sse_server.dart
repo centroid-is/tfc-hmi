@@ -7,7 +7,6 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         McpDatabase,
         StateReader,
         AlarmReader,
-        OperatorIdentity,
         DrawingIndex,
         PlcCodeIndex,
         TechDocIndex,
@@ -38,7 +37,6 @@ class McpSseServer {
     required StateReader stateReader,
     required AlarmReader alarmReader,
     required McpDatabase database,
-    required OperatorIdentity identity,
     McpToolToggles toggles = McpToolToggles.allEnabled,
     DrawingIndex? drawingIndex,
     PlcCodeIndex? plcCodeIndex,
@@ -58,7 +56,6 @@ class McpSseServer {
     final server = StreamableMcpServer(
       serverFactory: (sessionId) {
         final tfcServer = TfcMcpServer(
-          identity: identity,
           database: database,
           stateReader: stateReader,
           alarmReader: alarmReader,

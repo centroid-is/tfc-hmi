@@ -15,6 +15,8 @@ MenuItem _$MenuItemFromJson(Map<String, dynamic> json) => MenuItem(
           const [],
       path: json['path'] as String?,
       isSection: json['is_section'] as bool? ?? false,
+      requiredGroup:
+          $enumDecodeNullable(_$AccessGroupEnumMap, json['required_group']),
     );
 
 Map<String, dynamic> _$MenuItemToJson(MenuItem instance) => <String, dynamic>{
@@ -23,4 +25,16 @@ Map<String, dynamic> _$MenuItemToJson(MenuItem instance) => <String, dynamic>{
       'icon': const IconDataConverter().toJson(instance.icon),
       'children': instance.children,
       'is_section': instance.isSection,
+      if (_$AccessGroupEnumMap[instance.requiredGroup] case final value?)
+        'required_group': value,
     };
+
+const _$AccessGroupEnumMap = {
+  AccessGroup.operate: 'operate',
+  AccessGroup.setpoints: 'setpoints',
+  AccessGroup.device: 'device',
+  AccessGroup.force: 'force',
+  AccessGroup.configure: 'configure',
+  AccessGroup.administer: 'administer',
+  AccessGroup.users: 'users',
+};

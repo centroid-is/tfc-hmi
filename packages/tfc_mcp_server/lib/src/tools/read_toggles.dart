@@ -53,7 +53,7 @@ Future<McpToolToggles> readTogglesFromPreferences(PreferencesApi prefs) async {
 ///
 /// The MCP config is device-local, so a subprocess cannot read it from
 /// the shared database; the spawning HMI passes the toggles along instead.
-const kMcpTogglesEnvVar = 'TFC_MCP_TOGGLES';
+const kMcpTogglesEnvVar = 'CENTROIDX_MCP_TOGGLES';
 
 /// Parses [McpToolToggles] from the [kMcpTogglesEnvVar] JSON payload.
 ///

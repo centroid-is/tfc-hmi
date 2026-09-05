@@ -1402,6 +1402,13 @@ packages:
       relative: true
     source: path
     version: "2025.2.0"
+  tfc_access:
+    dependency: transitive
+    description:
+      path: "../packages/tfc_access"
+      relative: true
+    source: path
+    version: "0.1.0"
   tfc_dart:
     dependency: transitive
     description:

@@ -11,9 +11,9 @@ import 'package:mcp_dart/mcp_dart.dart';
 import 'package:test/test.dart';
 
 import 'package:tfc_mcp_server/src/database/server_database.dart';
-import 'package:tfc_mcp_server/src/identity/env_operator_identity.dart';
 import 'package:tfc_mcp_server/src/interfaces/empty_readers.dart';
 import 'package:tfc_mcp_server/src/server.dart';
+import 'package:tfc_mcp_server/tfc_mcp_server.dart' show kMcpAuditOperator;
 import '../helpers/mock_mcp_client.dart';
 
 void main() {
@@ -21,15 +21,12 @@ void main() {
     late ServerDatabase db;
     late TfcMcpServer server;
     late MockMcpClient client;
-    late Map<String, String> env;
 
     setUp(() async {
-      env = <String, String>{'TFC_USER': 'test_integrator'};
       db = ServerDatabase.inMemory();
       await db.customStatement('SELECT 1');
 
       server = TfcMcpServer(
-        identity: EnvOperatorIdentity(environmentProvider: () => env),
         database: db,
         stateReader: EmptyStateReader(),
         alarmReader: EmptyAlarmReader(),
@@ -182,21 +179,15 @@ void main() {
       expect(text, contains('Pump 3 Overcurrent'));
     });
 
-    test('identity gate blocks calls when TFC_USER unset', () async {
-      env.remove('TFC_USER');
-      final result = await client.callTool('ping', {});
-      expect(result.isError, isTrue);
-      final text = (result.content.first as TextContent).text;
-      expect(text, contains('TFC_USER'));
-    });
-
     test('audit trail records successful tool calls', () async {
       await client.callTool('ping', {'message': 'audit test'});
 
       final records = await db.select(db.auditLog).get();
       expect(records, hasLength(1));
       expect(records.first.tool, equals('ping'));
-      expect(records.first.operatorId, equals('test_integrator'));
+      // This row records that the MCP server ran a tool, not that a person
+      // authorized one -- the person's name is on the approval row.
+      expect(records.first.operatorId, equals(kMcpAuditOperator));
       expect(records.first.status, equals('success'));
     });
 

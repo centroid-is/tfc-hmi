@@ -6,7 +6,6 @@ import 'package:test/test.dart';
 
 import 'package:tfc_mcp_server/src/audit/audit_log_service.dart';
 import 'package:tfc_mcp_server/src/database/server_database.dart';
-import 'package:tfc_mcp_server/src/identity/env_operator_identity.dart';
 import 'package:tfc_mcp_server/src/interfaces/screen_capturer.dart';
 import 'package:tfc_mcp_server/src/server.dart';
 import 'package:tfc_mcp_server/src/tools/screenshot_tools.dart';
@@ -116,9 +115,6 @@ void main() {
     );
     final registry = ToolRegistry(
       mcpServer: mcpServer,
-      identity: EnvOperatorIdentity(
-        environmentProvider: () => {'TFC_USER': 'op1'},
-      ),
       auditLogService: AuditLogService(db),
     );
     registerScreenshotTools(registry, capturer);
@@ -318,7 +314,9 @@ void main() {
         final records = await db.select(db.auditLog).get();
         expect(records, hasLength(1));
         expect(records.first.tool, 'screenshot_window');
-        expect(records.first.operatorId, 'op1');
+        expect(records.first.operatorId, kMcpAuditOperator,
+            reason: 'Phase 7 attributes every MCP action to the one MCP '
+                'identity; there is no per-env operator any more');
         expect(records.first.status, 'success');
       } finally {
         await client.close();
@@ -420,9 +418,6 @@ void main() {
       McpToolToggles toggles = McpToolToggles.allEnabled,
     }) {
       return TfcMcpServer(
-        identity: EnvOperatorIdentity(
-          environmentProvider: () => {'TFC_USER': 'op1'},
-        ),
         database: db,
         stateReader: MockStateReader(),
         alarmReader: MockAlarmReader(),

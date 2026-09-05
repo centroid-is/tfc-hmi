@@ -18,6 +18,7 @@ import 'graph.dart';
 import '../../widgets/graph.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
+import '../../widgets/tag_access_guard.dart';
 
 part 'analog_box.g.dart';
 
@@ -791,11 +792,14 @@ class _AnalogBoxPaneLoaderState extends ConsumerState<_AnalogBoxPaneLoader> {
   Widget build(BuildContext context) {
     final combined = _combinedStream();
 
+    // No member: every key this pane writes is a scalar analog node, so the
+    // question is about the key as a whole. A refused write prompts and
+    // returns without reaching the PLC.
     Future<void> write(String key, double val) async {
       final sm = await ref.read(stateManProvider.future);
       final curr = await sm.read(key);
       curr.value = val;
-      await sm.write(key, curr);
+      await writeTag(ref, sm, key, curr);
     }
 
     // Trend tile — only when the page author opted the trend in. The small

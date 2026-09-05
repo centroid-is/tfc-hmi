@@ -6,11 +6,13 @@ import 'package:json_annotation/json_annotation.dart';
 
 import 'package:tfc/page_creator/assets/button.dart';
 import 'package:tfc/page_creator/assets/common.dart';
+import 'package:tfc_dart/core/preferences.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc/providers/preferences.dart';
 import 'package:tfc/widgets/dynamic_value.dart';
 import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:tfc/widgets/state_value_builder.dart';
+import 'package:tfc/widgets/tag_access_guard.dart';
 import 'package:tfc_dart/converter/dynamic_value_converter.dart';
 
 import 'package:open62541/open62541.dart' show DynamicValue;
@@ -93,6 +95,41 @@ class Recipe {
 
   factory Recipe.fromJson(Map<String, dynamic> json) => _$RecipeFromJson(json);
   Map<String, dynamic> toJson() => _$RecipeToJson(this);
+}
+
+/// The recipe list for [bucket], seeding an empty one when the station has
+/// none.
+///
+/// **The seed goes through [systemWrites] and that is not a convenience.**
+/// This runs on the *read* path: it fires whenever any session merely opens a
+/// recipes asset, not once at startup. `<bucket>.recipes` is a `setpoints`
+/// key, so on the guarded store an anonymous operator looking at a recipe
+/// would be refused and shown a denial prompt for doing nothing but looking.
+/// Writing an empty default because storage is empty is the app initialising
+/// itself, not a person changing a recipe.
+///
+/// [writeRecipes] — the Save button — is deliberately not given the same
+/// treatment. See it.
+Future<List<Recipe>> readRecipes(
+    Preferences prefs, Preferences systemWrites, String bucket) async {
+  final prefKey = '$bucket.recipes';
+  if (!(await prefs.containsKey(prefKey))) {
+    await systemWrites.setString(prefKey, jsonEncode(<Recipe>[]));
+  }
+  final str = await prefs.getString(prefKey);
+  final decoded = jsonDecode(str ?? '[]') as List<dynamic>;
+  return decoded.map((item) => Recipe.fromJson(item)).toList();
+}
+
+/// Saves [recipes] for [bucket], **through the guarded store**.
+///
+/// A person changed a recipe. `<bucket>.recipes` is a `setpoints` key and this
+/// is the write the Shift Leader requirement is about: it must be checked and
+/// it must land in the audit trail with a name against it. It shares a key
+/// with [readRecipes]' seed and must never share its path.
+Future<void> writeRecipes(
+    Preferences prefs, String bucket, List<Recipe> recipes) async {
+  await prefs.setString('$bucket.recipes', jsonEncode(recipes));
 }
 
 class _RecipesConfigEditor extends StatefulWidget {
@@ -262,23 +299,19 @@ class _RecipesState extends ConsumerState<Recipes> {
   final _newRecipeNameController = TextEditingController();
 
   Future<List<Recipe>> _getRecipes() async {
-    final prefs = await ref.read(preferencesProvider.future);
-    final prefKey = '${widget.config.recipesBucket}.recipes';
-    if (!(await prefs.containsKey(prefKey))) {
-      var recipes = <Recipe>[];
-      await prefs.setString(prefKey, jsonEncode(recipes));
-    }
-    final str = await prefs.getString(prefKey);
-    final decoded = jsonDecode(str ?? '[]') as List<dynamic>;
-    final recipes = decoded.map((item) => Recipe.fromJson(item)).toList();
-
-    return recipes;
+    return readRecipes(
+      await ref.read(preferencesProvider.future),
+      await ref.read(systemPreferencesProvider.future),
+      widget.config.recipesBucket,
+    );
   }
 
   Future<void> _saveRecipes(List<Recipe> recipes) async {
-    final prefs = await ref.watch(preferencesProvider.future);
-    final prefKey = '${widget.config.recipesBucket}.recipes';
-    await prefs.setString(prefKey, jsonEncode(recipes));
+    await writeRecipes(
+      await ref.read(preferencesProvider.future),
+      widget.config.recipesBucket,
+      recipes,
+    );
   }
 
   void _addRecipe(String name, List<Recipe> recipes, DynamicValue data,
@@ -448,15 +481,26 @@ class _RecipesState extends ConsumerState<Recipes> {
                                     // rewrites every other line with whatever
                                     // this dialog last read -- one reason
                                     // per-line keys are preferable.
+                                    //
+                                    // **Neither branch names a member, and
+                                    // that is the honest answer rather than a
+                                    // shortcut.** Sending a recipe replaces
+                                    // every member of the line at once, and
+                                    // the legacy branch replaces every line of
+                                    // the array; there is no one member being
+                                    // set. So the question asked is about the
+                                    // key as a whole, which is what a
+                                    // template's `*` row answers.
                                     final chosen = DynamicValue.from(
                                         recipes[selectedRecipeIndex!].value);
                                     if (widget.config.perLineKeys) {
-                                      await stateMan.write(_activeKey, chosen);
+                                      await writeTag(
+                                          ref, stateMan, _activeKey, chosen);
                                     } else {
                                       final newValue = DynamicValue.from(data);
                                       newValue[selectedLine] = chosen;
-                                      await stateMan.write(
-                                          _activeKey, newValue);
+                                      await writeTag(
+                                          ref, stateMan, _activeKey, newValue);
                                     }
                                   },
                             child: Text('Send values ->'),

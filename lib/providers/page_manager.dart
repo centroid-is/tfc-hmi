@@ -31,6 +31,10 @@ Future<PageManager> pageManager(Ref ref) async {
   final pageManager = PageManager(
     pages: {},
     prefs: prefs,
+    // The seed write in `load()` only. `save()` stays on the guarded object,
+    // because the page editor's save is a person editing pages and is exactly
+    // what `configure` is for — see `PageManager.bootstrapPrefs`.
+    bootstrapPrefs: await ref.watch(systemPreferencesProvider.future),
   );
 
   await pageManager.load();

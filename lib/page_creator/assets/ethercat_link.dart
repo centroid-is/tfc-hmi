@@ -28,6 +28,7 @@ import 'ethercat_link_pane.dart';
 import 'ethercat_link_painter.dart';
 import 'link_anchors.dart';
 import 'link_geometry.dart';
+import '../../widgets/tag_access_guard.dart' show writeTag;
 
 part 'ethercat_link.g.dart';
 
@@ -346,15 +347,22 @@ class _EtherCatLinkState extends ConsumerState<EtherCatLink> {
     final sm = await ref.read(stateManProvider.future);
     const readTimeout = Duration(seconds: 5);
 
-    Future<void> set(bool level) async {
+    /// True when the write went out. A refusal answers false rather than
+    /// throwing, which is what lets the pulse below suppress its falling
+    /// edge — one refused press has to be one refusal, not two.
+    Future<bool> set(bool level) async {
       final latest = await sm.read(key).timeout(readTimeout);
       final next = DynamicValue.from(latest);
       next[LinkFields.resetCounters] = level;
-      await sm.write(key, next);
+      return writeTag(ref, sm, key, next,
+          member: LinkFields.resetCounters);
     }
 
     try {
-      await set(true);
+      // Nothing in the PLC clears this bit, so the HMI owns both edges — and
+      // a refused rising edge must not be followed by a falling one that
+      // prompts a second time about a pulse that never started.
+      if (!await set(true)) return;
       await Future<void>.delayed(_resetPulse);
     } catch (e) {
       messenger?.showSnackBar(

@@ -1,11 +1,10 @@
-import 'package:mcp_dart/mcp_dart.dart';
 import 'package:test/test.dart';
 
 import 'package:tfc_mcp_server/src/database/server_database.dart';
-import 'package:tfc_mcp_server/src/identity/env_operator_identity.dart';
 import 'package:tfc_mcp_server/src/interfaces/drawing_index.dart';
 import 'package:tfc_mcp_server/src/server.dart';
 import 'package:tfc_mcp_server/src/tools/tool_toggles.dart';
+import 'package:tfc_mcp_server/tfc_mcp_server.dart' show kMcpAuditOperator;
 import '../helpers/mock_alarm_reader.dart';
 import '../helpers/mock_drawing_index.dart';
 import '../helpers/mock_mcp_client.dart';
@@ -49,15 +48,10 @@ void main() {
     });
 
     TfcMcpServer createWiredServer({
-      Map<String, String>? env,
       bool includeDrawings = true,
       McpToolToggles? toggles,
     }) {
-      final identity = EnvOperatorIdentity(
-        environmentProvider: () => env ?? {'TFC_USER': 'op1'},
-      );
       return TfcMcpServer(
-        identity: identity,
         database: db,
         stateReader: stateReader,
         alarmReader: alarmReader,
@@ -66,14 +60,14 @@ void main() {
       );
     }
 
-    test('1. All 27 expected tools are registered', () async {
+    test('1. All 31 expected tools are registered', () async {
       final server = createWiredServer();
       final client = await MockMcpClient.connect(server.mcpServer);
       try {
         final tools = await client.listTools();
         final toolNames = tools.map((t) => t.name).toSet();
 
-        // All 27 expected tools (17 read + 9 write + proposal status)
+        // All 31 expected tools (18 read + 13 write)
         expect(toolNames, containsAll([
           // Read tools
           'ping',
@@ -81,7 +75,6 @@ void main() {
           'get_tag_value',
           'list_alarms',
           'get_alarm_detail',
-          'get_alarm_tree',
           'query_alarm_history',
           'list_pages',
           'list_assets',
@@ -93,6 +86,8 @@ void main() {
           'get_drawing_page',
           'query_trend_data',
           'diagnose_asset',
+          'list_access_templates',
+          'list_unbound_keys',
           // Write tools
           'create_alarm',
           'update_alarm',
@@ -103,16 +98,19 @@ void main() {
           'propose_page',
           'propose_asset',
           'update_asset',
+          'create_access_template',
+          'update_access_template',
+          'delete_access_template',
+          'bind_key_access_template',
         ]));
 
-        expect(toolNames, hasLength(26));
+        expect(toolNames, hasLength(32));
       } finally {
         await client.close();
       }
     });
 
-    test('2. Calling list_tags with valid identity creates audit record',
-        () async {
+    test('2. Calling list_tags creates an audit record', () async {
       final server = createWiredServer();
       final client = await MockMcpClient.connect(server.mcpServer);
       try {
@@ -124,7 +122,9 @@ void main() {
         // Verify audit record was created
         final records = await db.select(db.auditLog).get();
         expect(records, hasLength(1));
-        expect(records.first.operatorId, equals('op1'));
+        // This row records that the MCP server ran a tool, not that a
+        // person authorized one -- the person's name is on the approval row.
+        expect(records.first.operatorId, equals(kMcpAuditOperator));
         expect(records.first.tool, equals('list_tags'));
         expect(records.first.status, equals('success'));
       } finally {
@@ -167,25 +167,6 @@ void main() {
       }
     });
 
-    test('4. Identity gate: no TFC_USER returns error and no audit record',
-        () async {
-      final server = createWiredServer(env: {});
-      final client = await MockMcpClient.connect(server.mcpServer);
-      try {
-        final result = await client.callTool('list_tags', {});
-
-        expect(result.isError, isTrue);
-        final text = (result.content.first as TextContent).text;
-        expect(text, contains('TFC_USER'));
-
-        // No audit record
-        final records = await db.select(db.auditLog).get();
-        expect(records, isEmpty);
-      } finally {
-        await client.close();
-      }
-    });
-
     test('5. Drawing tools always registered (DriftDrawingIndex fallback)',
         () async {
       // Even without an explicit DrawingIndex, DriftDrawingIndex is used
@@ -196,8 +177,8 @@ void main() {
         final tools = await client.listTools();
         final toolNames = tools.map((t) => t.name).toSet();
 
-        // All 26 tools are registered (drawing tools always present)
-        expect(toolNames, hasLength(26));
+        // All 32 tools are registered (drawing tools always present)
+        expect(toolNames, hasLength(32));
         expect(toolNames, contains('search_drawings'));
         expect(toolNames, contains('get_drawing_page'));
       } finally {
