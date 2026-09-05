@@ -1019,6 +1019,18 @@ void main() {
         ('bare_random.dart', '  final r = Random(7);'),
         ('secure_random.dart', '  final r = Random.secure();'),
         ('wall_clock.dart', '  final at = DateTime.now();'),
+        // The UTC-native spelling, and the one a Dart 3 author reaches for.
+        // 11-04 sabotage 2 aged the freshness verdict on the wall clock INSIDE
+        // the checker and produced a fully green ninety-second arm — 718,480
+        // judged readings, zero violations — because wall and monotonic agree
+        // on a machine nobody is stepping. Freeze 9 was the ONLY thing that
+        // caught it. So for that failure class this sweep is not one line of
+        // defence among several; it is the whole of it, and a needle it does
+        // not carry is a hole with nothing behind it. Written
+        // `DateTime.timestamp().difference(_epoch)` the same sabotage passed
+        // the sweep and the milestone would have shipped claiming a monotonic
+        // anchor it did not have.
+        ('utc_wall_clock.dart', '  final at = DateTime.timestamp();'),
       ]) {
         final planted = _plant(name, line);
         final hits = soakDeterminismOffenders(planted);
@@ -1453,7 +1465,17 @@ List<String> nonDeterministicLines(String source) {
       if (!_isAnyComment(lines[i]) &&
           (_bareRandom.hasMatch(lines[i]) ||
               lines[i].contains('Random.secure') ||
-              lines[i].contains('DateTime.now()')))
+              lines[i].contains('DateTime.now()') ||
+              // Dart's OTHER wall clock, and the one this sweep would have
+              // waved through. `DateTime.timestamp()` is the UTC-native form
+              // of `DateTime.now().toUtc()`; it appears nowhere in the
+              // repository today, which is what made this a gap rather than a
+              // breach. It matters because freeze 9 was the ONLY thing that
+              // caught 11-04 sabotage 2 — a wall-clock-aged freshness verdict
+              // that left the ninety-second arm fully green over 718,480
+              // judged readings — so for that failure class the sweep is the
+              // whole defence rather than one layer of it.
+              lines[i].contains('DateTime.timestamp(')))
         'line ${i + 1}: ${lines[i].trim()}',
   ];
 }

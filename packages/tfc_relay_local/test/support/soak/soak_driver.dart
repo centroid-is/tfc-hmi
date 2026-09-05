@@ -8,8 +8,25 @@
 /// which panel writes, which alias goes down — all of it arrives here as a
 /// `SoakEvent` arm and none of it is decided here. That is what makes a repro
 /// log a reproduction rather than a summary, and it is why this file contains
-/// no draw at all: `Random(` and `DateTime.now()` are both swept out of the
-/// soak trees by freeze 9.
+/// no draw at all: `Random(`, `DateTime.now()` and `DateTime.timestamp(` are
+/// all swept out of the soak trees by freeze 9.
+///
+/// **The trees, and the composed run is wider than the trees.** Freeze 9's
+/// scopes are `test/soak/` and `test/support/soak/`. The pipe this driver
+/// stands up reaches six wall-clock sites one directory up, outside both:
+/// `fake_upstream_link.dart:337` (the `at:` stamp on every `WriteApplied`,
+/// which crosses the wire to the panel), `:421` (`_lastDeathAt`, published as
+/// `UpstreamLinkDriver.lastDeathAt`), and four wait-loop deadlines in
+/// `gate_b_fixture.dart` (`:80`, `:82`, `:746`, `:748`).
+///
+/// **None of them feeds a verdict today, and that was checked rather than
+/// assumed:** `terminal_state.dart` stamps everything from
+/// `SoakWriteRecord.at`, which is `_playClock.elapsed`, and no checker reads
+/// `WriteApplied.at` or `lastDeathAt`. The two fixture files are shared with
+/// gate B, so widening the sweep to them would put a soak freeze in charge of
+/// a file gate B owns. What a future checker must not do is age a verdict on
+/// one of those six — that would be a wall-clock verdict freeze 9 passes, and
+/// it is the exact class 11-04 sabotage 2 belongs to.
 ///
 /// **What it composes is what ships.** Phase 10's CR-01 is the standing lesson:
 /// its timeseries family was dead in the shipping gateway because the one
