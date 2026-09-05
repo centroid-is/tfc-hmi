@@ -81,12 +81,12 @@ void main() {
       }
     });
 
-    test('schema version is 8', () async {
+    test('schema version is 6', () async {
       final db = AppDatabase.inMemoryForTest();
       addTearDown(() => db.close());
       // Read off an open database rather than grepped out of the source: the
       // value the migrator actually compares `from` against.
-      expect(db.schemaVersion, 8);
+      expect(db.schemaVersion, 6);
     });
 
     test('creates the access_key_binding template_name index', () async {
@@ -189,13 +189,18 @@ void main() {
     });
   });
 
-  group('v6 -> v7 upgrade', () {
+  group('v5 -> v6 upgrade', () {
     // A temp *file* database, not an in-memory one: the upgrade has to survive
     // a close and a reopen, and `NativeDatabase.memory()` hands out a new empty
     // database every open. Same reconstruction trick as
-    // `access_schema_test.dart` — build the current schema, drop what v7 added
-    // and rewind `user_version`, rather than checking in a v6 file that would
-    // rot the first time an unrelated table changed.
+    // `access_schema_test.dart` — build the current schema, drop what the
+    // access milestone added and rewind `user_version`, rather than checking
+    // in a v5 file that would rot the first time an unrelated table changed.
+    //
+    // **v5 is the only starting state there is.** These two tables arrived as
+    // v7 during development and squash-merged into the single v6 arm, so no
+    // database is ever at v6-without-templates; a suite simulating that state
+    // would be testing a branch that cannot execute.
     late Directory tempDir;
     late File dbFile;
 
@@ -208,40 +213,30 @@ void main() {
       if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
     });
 
-    /// Builds a database at v6: the v7 tables and index removed, and
-    /// `user_version` rewound so the next open runs `onUpgrade(6, 7)`.
-    Future<void> makeV6Database() async {
+    /// Builds a database at v5: every access table removed and `user_version`
+    /// rewound, so the next open runs `onUpgrade(5, 6)`.
+    Future<void> makeV5Database() async {
       final db = AppDatabase.forTest(
         DatabaseConfig(),
         NativeDatabase(dbFile, logStatements: false),
       );
       await db.customSelect('SELECT 1').getSingle();
 
-      // Rows from the v6 world that must survive: an alarm, an audit entry,
-      // an app_user, and an app_role edited away from its seeded value.
+      // A row from the v5 world that must survive. Only an alarm: at v5 none
+      // of the access tables exist, so nothing else can pre-date the upgrade.
       await db.customStatement(
         "INSERT INTO alarm (uid, title, description, rules) "
-        "VALUES ('pre-v7', 'CN04 jam', 'Belt CN04 jammed', '[]')",
-      );
-      await db.customStatement(
-        "UPDATE app_role SET groups = '[\"operate\",\"setpoints\"]' "
-        "WHERE name = 'Operator'",
-      );
-      await db.customStatement(
-        "INSERT INTO app_user (username, role_name, password_hash, salt, created_at) "
-        "VALUES ('jon', 'Engineering', 'hash', 'salt', '2026-08-30T08:00:00.000')",
-      );
-      await db.customStatement(
-        "INSERT INTO audit_entry (at, who, station, role_name, surface, "
-        "item_key, group_required, allowed, action_id) "
-        "VALUES ('2026-08-30T08:00:00.000', 'jon', 'SVN-NES-OT-CL02', "
-        "'Engineering', 'auth', 'session.login', 'operate', 1, 'a1')",
+        "VALUES ('pre-v6', 'CN04 jam', 'Belt CN04 jammed', '[]')",
       );
 
-      await db.customStatement('DROP INDEX $_bindingIndex');
+      // Dropped in FK order — app_user references app_role — and without
+      // explicit index drops, because SQLite takes a table's indexes with it.
       await db.customStatement('DROP TABLE access_key_binding');
       await db.customStatement('DROP TABLE access_template');
-      await db.customStatement('PRAGMA user_version = 6');
+      await db.customStatement('DROP TABLE audit_entry');
+      await db.customStatement('DROP TABLE app_user');
+      await db.customStatement('DROP TABLE app_role');
+      await db.customStatement('PRAGMA user_version = 5');
       await db.close();
     }
 
@@ -256,27 +251,28 @@ void main() {
     }
 
     test('gains both tables', () async {
-      await makeV6Database();
+      await makeV5Database();
       final db = await reopen();
       addTearDown(() => db.close());
 
       final tables = await _tableNames(db);
       for (final table in _v7Tables) {
         expect(tables, contains(table),
-            reason: 'v7 table "$table" should be created by the upgrade');
+            reason: 'table "$table" should be created by the upgrade');
       }
     });
 
     test('gains the binding index', () async {
-      await makeV6Database();
+      await makeV5Database();
       final db = await reopen();
       addTearDown(() => db.close());
 
       expect(await _indexNames(db), contains(_bindingIndex));
     });
 
-    test('both new tables are empty — Phase 4 ships no templates', () async {
-      await makeV6Database();
+    test('both new tables are empty — the milestone ships no templates',
+        () async {
+      await makeV5Database();
       final db = await reopen();
       addTearDown(() => db.close());
 
@@ -288,49 +284,31 @@ void main() {
     });
 
     test('keeps every pre-existing row', () async {
-      await makeV6Database();
+      await makeV5Database();
       final db = await reopen();
       addTearDown(() => db.close());
 
       final alarms = await db
-          .customSelect("SELECT * FROM alarm WHERE uid = 'pre-v7'")
+          .customSelect("SELECT * FROM alarm WHERE uid = 'pre-v6'")
           .get();
       expect(alarms, hasLength(1));
       expect(alarms.first.read<String>('title'), 'CN04 jam');
-
-      final users = await db.customSelect('SELECT * FROM app_user').get();
-      expect(users, hasLength(1));
-      expect(users.first.read<String>('username'), 'jon');
-
-      final audit = await db.customSelect('SELECT * FROM audit_entry').get();
-      expect(audit, hasLength(1),
-          reason: 'the trail is append-only and never pruned; a migration is '
-              'not an exception');
-      expect(audit.first.read<String>('item_key'), 'session.login');
     });
 
-    test('does not re-seed the roles', () async {
-      await makeV6Database();
-      final db = await reopen();
-      addTearDown(() => db.close());
+    // The roles are seeded by the same arm that creates `app_role`, so there
+    // is no upgrade path on which a commissioned role could be reset — the
+    // state that made "does not re-seed" a live risk cannot occur. What can
+    // still happen is a second station opening a shared Postgres database and
+    // running the seed against rows that exist; that idempotency is asserted
+    // directly in `access_schema_test.dart` through `seedAccessRolesForTest`.
 
-      final roles = await db.customSelect('SELECT * FROM app_role').get();
-      expect(roles, hasLength(4));
-      final operator =
-          roles.firstWhere((r) => r.read<String>('name') == 'Operator');
-      expect(operator.read<String>('groups'), '["operate","setpoints"]',
-          reason: '_seedAccessRoles() belongs to the from < 6 branch. Calling '
-              'it again from from < 7 is how a commissioned role gets reset '
-              'back to the seed under an operator who never touched it');
-    });
-
-    test('leaves schema version at 7', () async {
-      await makeV6Database();
+    test('leaves schema version at 6', () async {
+      await makeV5Database();
       final db = await reopen();
       addTearDown(() => db.close());
 
       final row = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(row.read<int>('user_version'), 8);
+      expect(row.read<int>('user_version'), 6);
     });
   });
 }

@@ -123,13 +123,13 @@ class AppUser extends Table {
   DateTimeColumn get createdAt => dateTime()();
   DateTimeColumn get lastLoginAt => dateTime().nullable()();
 
-  /// Schema v8: a station account's sessions never expire.
+  /// A station account's sessions never expire.
   ///
   /// The panel-PC flag — the freezer display signs in once as its area
   /// account and lives signed in. On the USER rather than the station so a
   /// human signing in on the same panel keeps the inactivity window. The
   /// default is false: every account is a person until somebody says
-  /// otherwise, and the v8 migration backfills existing rows the same way.
+  /// otherwise, which is also what an account carried over from v5 gets.
   BoolColumn get stationAccount =>
       boolean().withDefault(const Constant(false))();
 }
@@ -190,7 +190,7 @@ class AuditEntry extends Table {
 }
 
 // ---------------------------------------------------------------------------
-// Access template tables (schema v7). See docs/access-control-spec.md §7b.
+// Access template tables (schema v6). See docs/access-control-spec.md §7b.
 // ---------------------------------------------------------------------------
 
 /// A named set of rules mapping a struct member — or the whole key — to an
@@ -352,7 +352,7 @@ class HistoryViewPeriod extends Table {
   AppRole,
   AppUser,
   AuditEntry,
-  // Access template tables (schema v7):
+  // Access template tables (schema v6):
   AccessTemplateTable,
   AccessKeyBindingTable,
 ])
@@ -461,7 +461,7 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
   }
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 6;
 
   /// The `audit_entry` indexes, created outside Drift because Drift's
   /// `@TableIndex` cannot express `DESC` and every one of these is a
@@ -513,7 +513,7 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
 
   /// Create the [_accessBindingIndexStatements] indexes.
   ///
-  /// Called from `onCreate` and from the `from < 7` upgrade branch, on both
+  /// Called from `onCreate` and from the `from < 6` upgrade branch, on both
   /// backends — the statements are identical on each, so they live in one
   /// place rather than being copied into both arms.
   Future<void> _createAccessBindingIndexes(Migrator m) async {
@@ -648,12 +648,31 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
                   'CREATE TABLE IF NOT EXISTS plc_block_call (id SERIAL PRIMARY KEY, caller_block_id INTEGER NOT NULL REFERENCES plc_code_block(id), callee_block_name TEXT NOT NULL, line_number INTEGER)');
             }
           }
-          // Schema v6: access control — roles, users and the audit trail.
+          // Schema v6: access control — roles, users, the audit trail, the
+          // access templates and the bindings that point keys at them.
+          //
+          // **One arm for the whole milestone, on purpose.** It was developed
+          // as v6, v7 and v8 and squash-merged as one commit, so no database
+          // anywhere was ever left at 6 or 7: every station running a release
+          // build is at v5 and arrives here once. Keeping the three arms would
+          // have meant shipping two branches that can never execute, plus an
+          // `ADD COLUMN` whose only job was to reach a shape `createTable`
+          // already produces — which is exactly the duplicate-column abort
+          // that guard existed to dodge. A station that ran a pre-release
+          // build of this milestone is the one exception; see the note in the
+          // PR, and `__schema`/`user_version` can simply be set to 6.
+          //
+          // The tables go up together because there is no state in which one
+          // is useful without the others: a binding with no template table to
+          // read resolves to nothing, and a template nothing can bind to is
+          // inert.
           if (from < 6) {
             if (native) {
               await m.createTable(appRole);
               await m.createTable(appUser);
               await m.createTable(auditEntry);
+              await m.createTable(accessTemplateTable);
+              await m.createTable(accessKeyBindingTable);
             } else {
               // PostgreSQL: raw `IF NOT EXISTS` DDL rather than
               // `m.createTable`, following the v5 branch immediately above and
@@ -663,60 +682,22 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
               // be safe to run twice — otherwise the second station aborts the
               // migration and leaves the database half-upgraded.
               //
-              // Datetimes are TEXT on both backends: this database sets
-              // `DriftDatabaseOptions(storeDateTimeAsText: true)` (see the
-              // `options` override) and the root `build.yaml` sets
-              // `store_date_time_values_as_text: true`.
-              await m.database.customStatement(
-                  'CREATE TABLE IF NOT EXISTS app_role (name TEXT PRIMARY KEY, groups TEXT NOT NULL, seeded BOOLEAN NOT NULL DEFAULT FALSE)');
-              await m.database.customStatement(
-                  'CREATE TABLE IF NOT EXISTS app_user (username TEXT PRIMARY KEY, role_name TEXT NOT NULL REFERENCES app_role(name), password_hash TEXT NOT NULL, salt TEXT NOT NULL, created_at TEXT NOT NULL, last_login_at TEXT)');
-              await m.database.customStatement(
-                  'CREATE TABLE IF NOT EXISTS audit_entry (id SERIAL PRIMARY KEY, at TEXT NOT NULL, who TEXT NOT NULL, station TEXT NOT NULL, role_name TEXT NOT NULL, surface TEXT NOT NULL, item_key TEXT NOT NULL, member TEXT, old_value TEXT, new_value TEXT, group_required TEXT NOT NULL, allowed BOOLEAN NOT NULL, origin TEXT NOT NULL DEFAULT \'operator\', action_id TEXT NOT NULL, reason TEXT)');
-            }
-            await _createAuditIndexes(m);
-            await _seedAccessRoles();
-          }
-          // Schema v7: access templates and the bindings that point keys at
-          // them. Both tables in one branch — there is no state in which one
-          // exists and the other does not, because a binding without a
-          // template table to read is a key that resolves to nothing and a
-          // template nothing can bind to is inert.
-          //
-          // Neither `_seedAccessRoles()` nor `_createAuditIndexes()` is called
-          // here: they belong to `from < 6`, and re-running the seed from a
-          // later branch is how an edited role gets reset back to its seeded
-          // group set under an operator who never touched it.
-          if (from < 7) {
-            if (native) {
-              await m.createTable(accessTemplateTable);
-              await m.createTable(accessKeyBindingTable);
-            } else {
-              // PostgreSQL: raw `IF NOT EXISTS` DDL rather than
-              // `m.createTable`, following the v5 and v6 branches above and
-              // not the spec's simplification that `m.createTable` covers both
-              // backends. Several SVN stations share one Postgres database and
-              // every one of them runs this branch when it opens, so running
-              // it twice must not error — otherwise the second station aborts
-              // the migration and leaves the database half-upgraded.
-              //
               // **No test executes this arm.** Not one in `test/core/`, which
               // can only open SQLite, and none in `test/integration/` either.
-              // The `from < 6` arm immediately above is in exactly the same
-              // position: Phase 1 recorded that on 2026-08-28 in
+              // Phase 1 recorded that on 2026-08-28 in
               // `.planning/phases/01-identity-and-audit/deferred-items.md` §1
-              // and it is still open. What stands behind these two statements
-              // is a read against the v6 arm's wording and the source-derived
-              // column-parity tests in
-              // `test/core/access_key_binding_table_test.dart`, which compare
-              // these string literals against the drift tables and nothing
+              // and it is still open. What stands behind these statements is a
+              // read against the drift tables and the source-derived
+              // column-parity tests in `access_schema_test.dart` and
+              // `access_key_binding_table_test.dart`, which compare these
+              // string literals against the table definitions and nothing
               // more — they do not connect to Postgres and they cannot see a
               // wrong type or a statement that fails at runtime. The first
               // thing that will actually run this is a station.
               //
-              // Datetimes are TEXT on both backends, as in the v6 arm: this
-              // database sets `DriftDatabaseOptions(storeDateTimeAsText: true)`
-              // and the root `build.yaml` sets
+              // Datetimes are TEXT on both backends: this database sets
+              // `DriftDatabaseOptions(storeDateTimeAsText: true)` (see the
+              // `options` override) and the root `build.yaml` sets
               // `store_date_time_values_as_text: true`.
               //
               // `template_name` has no `REFERENCES access_template(name)`, and
@@ -724,46 +705,19 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
               // a reader would expect: see [AccessKeyBindingTable.templateName]
               // for why a dangling binding has to be storable.
               await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS app_role (name TEXT PRIMARY KEY, groups TEXT NOT NULL, seeded BOOLEAN NOT NULL DEFAULT FALSE)');
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS app_user (username TEXT PRIMARY KEY, role_name TEXT NOT NULL REFERENCES app_role(name), password_hash TEXT NOT NULL, salt TEXT NOT NULL, created_at TEXT NOT NULL, last_login_at TEXT, station_account BOOLEAN NOT NULL DEFAULT FALSE)');
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS audit_entry (id SERIAL PRIMARY KEY, at TEXT NOT NULL, who TEXT NOT NULL, station TEXT NOT NULL, role_name TEXT NOT NULL, surface TEXT NOT NULL, item_key TEXT NOT NULL, member TEXT, old_value TEXT, new_value TEXT, group_required TEXT NOT NULL, allowed BOOLEAN NOT NULL, origin TEXT NOT NULL DEFAULT \'operator\', action_id TEXT NOT NULL, reason TEXT)');
+              await m.database.customStatement(
                   'CREATE TABLE IF NOT EXISTS access_template (name TEXT PRIMARY KEY, rules TEXT NOT NULL, updated_at TEXT NOT NULL)');
               await m.database.customStatement(
                   'CREATE TABLE IF NOT EXISTS access_key_binding (key_name TEXT PRIMARY KEY, template_name TEXT NOT NULL, updated_at TEXT NOT NULL)');
             }
-          }
-          // Schema v8: `app_user.station_account` — a station account's
-          // sessions never expire. Existing rows backfill to FALSE: every
-          // account created before v8 is a person.
-          if (from < 8) {
-            if (native) {
-              // Idempotent by inspection, because SQLite has no `ADD COLUMN
-              // IF NOT EXISTS`: a database below v6 just had the table
-              // created by `m.createTable`, which always builds the LATEST
-              // shape, so the column can already be there — and adding it
-              // again aborts the whole migration. Checked against the actual
-              // table rather than against `from`, so the guard keeps holding
-              // however the table got its shape.
-              final cols = await m.database
-                  .customSelect("PRAGMA table_info('app_user')")
-                  .get();
-              final present =
-                  cols.any((r) => r.read<String>('name') == 'station_account');
-              if (!present) {
-                await m.addColumn(appUser, appUser.stationAccount);
-              }
-            } else {
-              // Unconditional on Postgres: the v6 arm's raw DDL string is
-              // frozen at its v6 shape, so even a below-v6 database arrives
-              // here without the column — and `IF NOT EXISTS` absorbs the
-              // rerun either way.
-              // PostgreSQL: `IF NOT EXISTS` for the same shared-database
-              // reason as the v6 and v7 arms — several stations run this on
-              // one database and the second one through must not abort. The
-              // same standing caveat as those arms applies: no test executes
-              // this statement; what stands behind it is the SQLite arm's
-              // test and this string's parity with the drift column.
-              await m.database.customStatement(
-                  'ALTER TABLE app_user ADD COLUMN IF NOT EXISTS station_account BOOLEAN NOT NULL DEFAULT FALSE');
-            }
+            await _createAuditIndexes(m);
             await _createAccessBindingIndexes(m);
+            await _seedAccessRoles();
           }
         },
       );

@@ -78,15 +78,15 @@ void main() {
       }
     });
 
-    // The version pin moves with the schema even though this file is about
-    // v6's tables: `schemaVersion` is a property of the database, not of the
-    // migration this suite covers. v7 (`access_template`,
-    // `access_key_binding`) is covered by `access_template_table_test.dart`;
-    // v8 (`app_user.station_account`) by `station_account_column_test.dart`.
-    test('schema version is 8', () async {
+    // The access milestone is one version, not three: it was developed as v6,
+    // v7 and v8 and squash-merged, so `access_template` /
+    // `access_key_binding` (`access_template_table_test.dart`) and
+    // `app_user.station_account` (`station_account_column_test.dart`) all
+    // arrive in the same v6 arm this suite covers.
+    test('schema version is 6', () async {
       final db = AppDatabase.inMemoryForTest();
       addTearDown(() => db.close());
-      expect(db.schemaVersion, 8);
+      expect(db.schemaVersion, 6);
     });
 
     test('seeds exactly four roles', () async {
@@ -264,10 +264,10 @@ void main() {
 
       final row =
           await db.customSelect('PRAGMA user_version').getSingle();
-      expect(row.read<int>('user_version'), 8,
+      expect(row.read<int>('user_version'), 6,
           reason: 'a v5 database opens straight to the current version — '
-              'onUpgrade(5, 8) runs the from < 6 branch this suite covers and '
-              'every later branch after it');
+              'onUpgrade(5, 6) runs the one access branch, which is the whole '
+              'milestone');
     });
   });
 
