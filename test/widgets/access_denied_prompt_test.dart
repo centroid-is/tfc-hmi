@@ -1015,13 +1015,15 @@ const Set<String> _kStateManWriteReceivers = {
 /// than filtered by a pattern so a new one fails the classification test
 /// instead of quietly joining either side.
 ///
-/// `binding` and `slot` are upstream #459's bulk property editor: both write
+/// `b` is a `StringBuffer` in `newAssetId()`. `binding` and `slot` are
+/// upstream #459's bulk property editor: both write
 /// onto an asset's **config object in memory**, which the editor then saves
 /// through `PageManager` — a `configure`-classified preference behind a
 /// `configure`-gated route. Neither is a plant write and neither reaches a
 /// `StateMan`; the check that keeps this honest is that the census reads the
 /// receiver name from the source rather than trusting this comment.
 const Set<String> _kOtherWriteReceivers = {
+  'b',
   'binding',
   'buffer',
   'builder',

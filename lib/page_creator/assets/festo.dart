@@ -22,6 +22,8 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:rxdart/rxdart.dart';
 import 'package:tfc_dart/core/state_man.dart';
 
+import '../../widgets/tag_access_guard.dart' show writeTag;
+
 import '../../painter/festo/vtug.dart';
 import '../../providers/state_man.dart';
 import '../../theme.dart' show HmiStateColors;
@@ -280,7 +282,11 @@ class _FestoVTUGState extends ConsumerState<_FestoVTUG> {
     // a disposed context is how that turns into a crash.
     final messenger = ScaffoldMessenger.maybeOf(context);
     try {
-      await stateMan.write(key, next);
+      // Resolved at the tap like every other command write: a refusal
+      // prompts, writes nothing, and throws nothing on the operator's path.
+      // No member — both command words move in one struct write, and the
+      // guard's own diff asks per member from the baseline.
+      await writeTag(ref, stateMan, key, next);
     } catch (e) {
       messenger?.showSnackBar(
         SnackBar(content: Text('Valve terminal write failed: $e')),
