@@ -1233,21 +1233,42 @@ final class SoakDriver
     if (_disposed) return;
     _disposed = true;
     stop();
-    for (final held in _subscriptions.values) {
-      await held.cancel();
+    // **Every step in a `finally`, and the journal in the outermost one.**
+    // The ordering argument above is only safe if nothing before the journal
+    // can throw, and plenty can: cancelling subscriptions on clients a redial
+    // replaced, `fixture.dispose()` awaiting five panel disposals and a server
+    // close and five `proxy.shutdown()`s — on sockets the storm has been
+    // shutting down all run — and a recursive delete of the token directory.
+    // A `FaultProxy.shutdown()` throwing there used to skip `_journal.close()`
+    // entirely, leaving `metrics.jsonl` and `events.jsonl` holding whatever
+    // `IOSink` buffering had not flushed: the last checkpoints and the last
+    // applied events, which are exactly what a trip at minute 34 is diagnosed
+    // from. `_disposed` is set at the top so a second call is a no-op, and
+    // `addTearDown(driver.dispose)` is the only caller, so nobody retried.
+    try {
+      try {
+        for (final held in _subscriptions.values) {
+          await held.sub.cancel();
+        }
+        _subscriptions.clear();
+        for (final watch in _writeWatches) {
+          await watch.cancel();
+        }
+        _writeWatches.clear();
+        _watchedClients.clear();
+      } finally {
+        await _fixture?.dispose();
+      }
+    } finally {
+      try {
+        final dir = _tokenDir;
+        if (dir != null && dir.existsSync()) dir.deleteSync(recursive: true);
+      } finally {
+        // Last, and with no timeout: the artifact is the only thing a failed
+        // run leaves behind.
+        await _journal?.close();
+      }
     }
-    _subscriptions.clear();
-    for (final watch in _writeWatches) {
-      await watch.cancel();
-    }
-    _writeWatches.clear();
-    _watchedClients.clear();
-    await _fixture?.dispose();
-    final dir = _tokenDir;
-    if (dir != null && dir.existsSync()) dir.deleteSync(recursive: true);
-    // Last, and with no timeout: the artifact is the only thing a failed run
-    // leaves behind.
-    await _journal?.close();
   }
 
   // ---------------------------------------------------------------- internals
@@ -1256,8 +1277,31 @@ final class SoakDriver
   final List<Timer> _tickers = <Timer>[];
   final List<Timer> _recoveries = <Timer>[];
   final List<Future<void>> _inFlight = <Future<void>>[];
-  final Map<String, StreamSubscription<DynamicValue>> _subscriptions =
-      <String, StreamSubscription<DynamicValue>>{};
+  /// Live storm-opened subscriptions, by `panel|key`, **with the client that
+  /// holds them**.
+  ///
+  /// The client is half the key in effect: [GateBFixture.redial] replaces a
+  /// panel's `RemoteStateMan` outright and a handle filed against the old one
+  /// names a subscription on a disposed object. The driver rebuilds
+  /// `panelViews`, `panelResyncViews` and `panelLogs` per call for exactly
+  /// this reason; this map was the one that did not, so a later
+  /// `PanelSubscribe` reported "already held" about a dead client and a later
+  /// `PanelUnsubscribe` reported "dropped" for cancelling nothing.
+  final Map<String, ({RemoteStateMan client, StreamSubscription<DynamicValue> sub})>
+      _subscriptions = <String, ({RemoteStateMan client, StreamSubscription<DynamicValue> sub})>{};
+
+  /// The live subscription under [handle], dropping it if the client that
+  /// opened it has since been replaced.
+  StreamSubscription<DynamicValue>? _liveSubscription(
+      String handle, RemoteStateMan current) {
+    final held = _subscriptions[handle];
+    if (held == null) return null;
+    if (identical(held.client, current)) return held.sub;
+    // The old client is disposed, so its subscription is already dead; drop
+    // the handle rather than cancelling into a closed object.
+    _subscriptions.remove(handle);
+    return null;
+  }
   final Set<int> _revoked = <int>{};
   Completer<void>? _finished;
   Timer? _pending;
@@ -1572,6 +1616,15 @@ final class SoakDriver
     final now = clock.elapsed;
     if (connected >= populationFloor) {
       _belowFloorSince = null;
+      // **Reset with the stretch, or the comment below is false.** It says
+      // "one violation per breach"; a flag set once and never cleared is one
+      // per RUN. A revocation whose restore lands late trips the floor at
+      // +05:00 and is recorded; a reaper regression that takes three panels at
+      // +22:00 then records nothing, and the second breach is the interesting
+      // one. The run is already red from the first, so this costs forensics
+      // rather than the verdict — but it costs the second breach its trip
+      // record and its schedule offset.
+      _floorBreachReported = false;
       return;
     }
     final since = _belowFloorSince ??= now;
@@ -1924,12 +1977,35 @@ final class SoakDriver
         // one announcement for however many keys.
         final link = fixture.linkFor(alias);
         final before = link.inner.statusNotifications;
+        // **Asked of the link rather than assumed.** The generator guards
+        // `upstreamEpochBump` against a down alias and `upstreamLinkDown`
+        // against a second down; it has no rule for this kind, so the draw can
+        // and does land on an alias that is already disconnected — where every
+        // key is already bad-quality from `disconnectUpstream`'s own
+        // `applyLinkLoss` and `announceLinkState` re-announces a state nothing
+        // changed. This arm had the before/after numbers in hand and returned
+        // `fired` regardless, which is the storm quietly narrowing itself
+        // while `events.jsonl` says it widened.
+        if (link.inner.state == UpstreamLinkState.disconnected) {
+          return SoakApplyOutcome.fizzled(
+              event.kind,
+              'FakeUpstreamLink.applyLinkLoss+announceLinkState',
+              '$alias was already disconnected, so every key it carries was '
+                  'already bad-quality and this degraded nothing');
+        }
         link.inner.applyLinkLoss();
         link.inner.announceLinkState();
+        final after = link.inner.statusNotifications;
+        if (after == before) {
+          return SoakApplyOutcome.fizzled(
+              event.kind,
+              'FakeUpstreamLink.applyLinkLoss+announceLinkState',
+              '$alias announced nothing new ($before), so no panel saw a '
+                  'degrade');
+        }
         return SoakApplyOutcome.fired(
             event.kind, 'FakeUpstreamLink.applyLinkLoss+announceLinkState',
-            note: '$alias, announcements $before -> '
-                '${link.inner.statusNotifications}');
+            note: '$alias, announcements $before -> $after');
 
       case UpstreamSlowResolve(:final alias, :final latency):
         final link = fixture.linkFor(alias);
@@ -2028,8 +2104,9 @@ final class SoakDriver
         final opened = <String>[];
         for (final key in keys) {
           final handle = '$panel|$key';
-          if (_subscriptions.containsKey(handle)) continue;
-          _subscriptions[handle] = client.subscribe(key).listen((_) {});
+          if (_liveSubscription(handle, client) != null) continue;
+          _subscriptions[handle] =
+              (client: client, sub: client.subscribe(key).listen((_) {}));
           opened.add(key);
         }
         if (opened.isEmpty) {
@@ -2043,10 +2120,13 @@ final class SoakDriver
 
       case PanelUnsubscribe(:final panel, :final keys):
         final dropped = <String>[];
+        final client = fixture.panels[_indexOfPanel(panel)].client;
         for (final key in keys) {
-          final held = _subscriptions.remove('$panel|$key');
-          if (held == null) continue;
-          await held.cancel();
+          final handle = '$panel|$key';
+          final live = _liveSubscription(handle, client);
+          if (live == null) continue;
+          _subscriptions.remove(handle);
+          await live.cancel();
           dropped.add(key);
         }
         if (dropped.isEmpty) {
