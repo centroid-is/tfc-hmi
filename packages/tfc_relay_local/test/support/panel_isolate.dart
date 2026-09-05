@@ -434,9 +434,15 @@ Future<void> panelEntryPoint(Map<String, Object?> spec) async {
         // Release the hold before disposing, so a graceful shutdown puts a 0
         // on the tag itself rather than leaving it to the reaper — which is
         // the difference the F26 arms are measuring against.
-        if (controller != null) {
-          await controller.release().then((_) {}, onError: (Object _) {});
-          await controller.dispose();
+        // Captured into a final local before the first `await`. `controller`
+        // is a mutable local the message handler closes over, so the promotion
+        // from `!= null` is discarded across an await — sound, and rejected by
+        // newer analyzers than the one Flutter bundles (CI's `setup-dart` runs
+        // a newer stable, which is why this passed locally and failed there).
+        final held = controller;
+        if (held != null) {
+          await held.release().then((_) {}, onError: (Object _) {});
+          await held.dispose();
         }
         await client.dispose();
         answer = 'gone';
