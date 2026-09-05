@@ -13,12 +13,18 @@
 /// and 188 → 193 MB at twelve, with the internal queue peaking at 1.26 and
 /// 1.29 MB.
 ///
-/// **The bound is high-water plus one socket buffer, not high-water.** The
-/// peak overshoots [highWaterBytes] by up to ~2.3x because `dart:io` has
-/// already handed over a chunk by the time the pause takes effect. An
-/// assertion belongs at roughly 4 MiB; one written at exactly 1 MiB is
-/// measuring the kernel's buffer-sizing heuristics and will fail on a machine
-/// that sizes them differently.
+/// **The bound is high-water plus one socket buffer, not high-water**, and
+/// "one socket buffer" is not a constant. `dart:io` reads a POSIX socket with
+/// `available()`, so a single chunk is however much the kernel let that
+/// connection's receive buffer grow: measured at 1.59 MB on macOS loopback
+/// with the default 408 KB buffer, and at 5.57 MB with `SO_RCVBUF` raised to
+/// 4 MiB. Linux autotunes to `tcp_rmem`'s maximum — 6 MiB on a GitHub runner,
+/// half of it usable payload — and Windows reads a fixed 64 KiB. So an
+/// assertion written at any constant is a reading of one machine's kernel: the
+/// 4 MiB one this file used to recommend passed on macOS and failed on ubuntu
+/// at 4.21–4.33 MB. Assert [peakPendingBytes] against
+/// `highWaterBytes + largestChunkBytes` instead, which is the invariant the
+/// code enforces rather than a number somebody observed.
 ///
 /// **Why this is the phase keystone.** Latency, throttle, blackhole and
 /// backpressure are all decisions about *when and whether* a queued chunk is
@@ -133,6 +139,7 @@ final class DelayLine {
   StreamSubscription<List<int>>? _source;
   int _pendingBytes = 0;
   int _peakPendingBytes = 0;
+  int _largestChunkBytes = 0;
 
   /// Bytes of the head chunk already written.
   ///
@@ -355,6 +362,26 @@ final class DelayLine {
   /// garbage collection.
   int get peakPendingBytes => _peakPendingBytes;
 
+  /// The largest single chunk this line's source has ever handed it.
+  ///
+  /// The other half of the memory bound, and the half nothing in this process
+  /// chooses. `dart:io` reads a POSIX socket with `available()` — the whole
+  /// kernel receive queue in one call, uncapped — so the chunk that crosses
+  /// [highWaterBytes] and triggers the pause is as large as the kernel let the
+  /// receive buffer grow. Measured on macOS loopback: 1.59 MB at the default
+  /// buffer of 408 KB, and 5.57 MB with `SO_RCVBUF` raised to 4 MiB. Windows
+  /// reads a fixed 64 KiB (`ClientSocket::IssueReadLocked`), so the same rig
+  /// overshoots by three orders of magnitude less there.
+  ///
+  /// Exposed because it turns the bounded-memory criterion from a number
+  /// somebody calibrated into the invariant the code actually enforces:
+  /// [peakPendingBytes] is strictly below `highWaterBytes + largestChunkBytes`,
+  /// because the pause is applied synchronously in `_onData` the moment the
+  /// queue reaches the mark, and nothing else can arrive until the queue drains
+  /// to [lowWaterBytes]. A test asserting that is measuring the queue's policy;
+  /// a test asserting a constant is measuring the runner's kernel.
+  int get largestChunkBytes => _largestChunkBytes;
+
   /// Whether the line is currently refusing to read from its source.
   bool get sourcePaused => _paused;
 
@@ -427,6 +454,7 @@ final class DelayLine {
     _pending.addLast((bytes: chunk, releaseAtMicros: releaseAtMicros));
     _pendingBytes += chunk.length;
     if (_pendingBytes > _peakPendingBytes) _peakPendingBytes = _pendingBytes;
+    if (chunk.length > _largestChunkBytes) _largestChunkBytes = chunk.length;
     if (!_paused && _pendingBytes >= highWaterBytes) {
       _paused = true;
       _source?.pause();

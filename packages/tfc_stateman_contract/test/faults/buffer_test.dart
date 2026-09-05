@@ -46,13 +46,23 @@ const _payloadBytes = 4096;
 /// not about how long the test host was willing to wait.
 const _barrierTrips = 3;
 
-/// The ceiling the withheld queue must stay under.
+/// The coarse ceiling the withheld queue must stay under.
 ///
-/// 4 MiB, the figure `delay_line.dart` documents: the peak overshoots the
-/// 1 MiB high-water mark by up to ~2.3x because `dart:io` has already handed
-/// over a chunk by the time the pause takes effect, so an assertion written at
-/// exactly 1 MiB would be measuring the kernel's buffer-sizing heuristics.
-const _boundBytes = 4 * 1024 * 1024;
+/// The bound that means something is the relational one the arm asserts first:
+/// the peak stays below the high-water mark plus the largest chunk the proxy's
+/// source ever handed it, because the pause is applied synchronously the moment
+/// the queue reaches the mark. That number is not a constant — `dart:io` reads
+/// a POSIX socket with `available()`, so one chunk is as large as the kernel
+/// let that connection's receive buffer grow, which is ~3 MiB on ubuntu, ~0.4
+/// MB on macOS and a fixed 64 KiB on Windows. The 4 MiB this file used to
+/// assert was the macOS reading; ubuntu peaked at 4 325 694 on the first CI run
+/// and the arm failed for a property it does not test.
+///
+/// 16 MiB, matching `delay_line_test.dart`'s `_rssCeiling` and derived there:
+/// above every plausible kernel receive buffer plus the 1 MiB high-water, and
+/// far enough below Finding 7's 4463 MB that the unbounded implementation
+/// trips it within the first tenth of a second of the window.
+const _rssCeiling = 16 * 1024 * 1024;
 
 /// How long the firehose runs against a withheld direction.
 ///
@@ -268,16 +278,26 @@ Future<void> main() async {
 
     print('withheld firehose: sent $sent bytes in '
         '${deadline.elapsedMilliseconds} ms, proxy peak pending '
-        '${proxy.peakPendingBytes} bytes');
+        '${proxy.peakPendingBytes} bytes, largest chunk '
+        '${proxy.largestChunkBytes} against a high-water of '
+        '$defaultHighWaterBytes');
 
-    expect(proxy.peakPendingBytes, lessThan(_boundBytes),
-        reason: 'the withheld queue grew past the bound. Withholding must '
-            'happen inside the same queue the high-water pause watches — a '
-            'buffer of its own would be exactly the unbounded sink plan 02-02 '
-            'removed, reintroduced by the one mode whose job is to hold bytes '
-            '(T-02-24). What stops it is that the withheld bytes still count '
-            'toward pendingBytes, so the source is paused and the upstream '
-            'feels the backpressure');
+    expect(
+        proxy.peakPendingBytes,
+        lessThan(defaultHighWaterBytes + proxy.largestChunkBytes),
+        reason: 'the withheld queue grew past the high-water mark plus the one '
+            'chunk that can cross it. Withholding must happen inside the same '
+            'queue the high-water pause watches — a buffer of its own would be '
+            'exactly the unbounded sink plan 02-02 removed, reintroduced by the '
+            'one mode whose job is to hold bytes (T-02-24). What stops it is '
+            'that the withheld bytes still count toward pendingBytes, so the '
+            'source is paused and the upstream feels the backpressure');
+    expect(proxy.peakPendingBytes, lessThan(_rssCeiling),
+        reason: 'the withheld queue reached ${proxy.peakPendingBytes} bytes '
+            'against a ceiling of $_rssCeiling. If this fails while the '
+            'assertion above passes, the queue is obeying its policy and the '
+            'kernel handed it one chunk larger than any receive buffer the '
+            'ceiling was derived against');
     expect(proxy.peakPendingBytes, greaterThan(0),
         reason: 'nothing was ever pending, so the firehose never reached the '
             'withheld direction and the bound above was measured against an '
